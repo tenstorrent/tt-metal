@@ -268,3 +268,222 @@ Tests:
             num_packets: 40000
             destination:
               device: [0, [0, 0]] # Destination is physical chip 1
+
+  ## MULTI-MESH VC0+VC1+VC2 TESTS (run with tt-run + multi-mesh rank binding) ###
+
+  # Cross-mesh traffic exercises VC1, use_vc2 enables VC2
+  - name: "MultiMeshVC0VC1VC2CrossMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      # VC0 cross-mesh: mesh0 chip0 -> mesh1 chip0
+      - device: [0, 0]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [1, 0]
+      # VC2 intra-mesh: mesh0 chip0 -> mesh0 chip1
+      - device: [0, 0]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, 1]
+
+  # Bidirectional cross-mesh VC0 + bidirectional intra-mesh VC2
+  - name: "MultiMeshVC0VC1VC2BidirectionalCrossMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      # VC0 cross-mesh: mesh0 -> mesh1
+      - device: [0, 0]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [1, 0]
+      # VC0 cross-mesh: mesh1 -> mesh0
+      - device: [1, 0]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, 0]
+      # VC2 intra-mesh: mesh0 chip0 -> mesh0 chip1
+      - device: [0, 0]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, 1]
+      # VC2 intra-mesh: mesh0 chip1 -> mesh0 chip0
+      - device: [0, 1]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, 0]
+
+  # VC2 traffic on both meshes simultaneously (no VC0 senders)
+  - name: "MultiMeshVC2OnlyCrossMeshIntraMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      # VC2 on mesh0: chip0 -> chip1
+      - device: [0, 0]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, 1]
+      # VC2 on mesh1: chip0 -> chip1
+      - device: [1, 0]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [1, 1]
+
+  ## MULTI-WORKER CONCURRENT VC TESTS ###
+
+  # 4 concurrent senders, 2 on VC0 and 2 on VC2, bidirectional
+  - name: "MultiWorkerVC0VC2FourSenderConcurrent"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
+      - device: [0, [0, 1]]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]]
+      - device: [0, [0, 1]]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]]
+
+  # 6 concurrent senders across 3 chips, each sends on VC0 and VC2 to its neighbor
+  - name: "MultiWorkerVC0VC2SixSenderStress"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
+      - device: [0, [0, 1]]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 2]]
+      - device: [0, [0, 1]]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 2]]
+      - device: [0, [0, 2]]
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
+      - device: [0, [0, 2]]
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]]
