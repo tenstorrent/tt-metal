@@ -179,8 +179,11 @@ create_program_dram_sharded(
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
-    // unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    // unnecessary overhead for reconfigs are added.
+    // L1 accumulation is disabled when fp32_dest_acc_en is true due to a known
+    // packer pipeline limitation where format conversion order conflicts with
+    // accumulation when FP32 dest registers are active (see issue #28800).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1 && !fp32_dest_acc_en;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
