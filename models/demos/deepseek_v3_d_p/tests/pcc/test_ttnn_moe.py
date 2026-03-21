@@ -71,14 +71,12 @@ def create_shared_expert_weights(
     emb_dim: int,
     hidden_dim: int,
     seed: int = 123,
-) -> tuple[dict, dict]:
+) -> dict:
     """
-    Create random weights for shared expert in both formats.
+    Create random weights for shared expert in HF format.
 
-    Returns:
-        Tuple of (torch_weights, ttnn_weights):
-        - torch_weights: HF format (out_features, in_features) for TorchExpert
-        - ttnn_weights: TTNN format (in_features, out_features) for TtSharedExpert
+    TtSharedExpert._create_sharded_weight_from_torch handles the transpose
+    from HF format to TTNN format internally.
 
     Args:
         emb_dim: Embedding dimension
@@ -86,25 +84,18 @@ def create_shared_expert_weights(
         seed: Random seed
 
     Returns:
-        Tuple of (torch_weights, ttnn_weights)
+        Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
     """
     torch.manual_seed(seed)
 
     # HF format: (out_features, in_features)
-    torch_weights = {
+    weights = {
         "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
         "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
         "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
     }
 
-    # TTNN format: (in_features, out_features) - transpose of HF
-    ttnn_weights = {
-        "gate_proj": torch_weights["gate_proj"].T.contiguous(),
-        "up_proj": torch_weights["up_proj"].T.contiguous(),
-        "down_proj": torch_weights["down_proj"].T.contiguous(),
-    }
-
-    return torch_weights, ttnn_weights
+    return weights
 
 
 @pytest.mark.parametrize(
@@ -230,7 +221,8 @@ def test_ttnn_moe(
         profiler.start("torch_weights_creation")
         logger.debug("Creating expert weights...")
         all_routed_weights = create_torch_expert_weights(total_experts, emb_dim, hidden_dim, seed=42)
-        shared_weights_torch, shared_weights_ttnn = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
+        # Shared expert weights in HF format - TtSharedExpert handles transpose internally
+        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
         # Pass all routed expert weights - TtRoutedExpert distributes them across devices
         # (each device gets unique expert weights, not replicated)
         ttnn_routed_weights = all_routed_weights
@@ -238,8 +230,7 @@ def test_ttnn_moe(
     else:
         # When run_pcc_check=False, pass None to use internal random weight allocation
         all_routed_weights = None
-        shared_weights_torch = None
-        shared_weights_ttnn = None
+        shared_expert_weights = None
         ttnn_routed_weights = None
 
     # ========================================
@@ -298,7 +289,7 @@ def test_ttnn_moe(
             expert_dispatch_table=expert_dispatch_table,
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
-            shared_expert_weights=shared_weights_torch,
+            shared_expert_weights=shared_expert_weights,
         )
 
         torch_output, torch_intermediates = torch_moe(
@@ -397,7 +388,7 @@ def test_ttnn_moe(
         num_links=num_links,
         topology=topology,
         routed_expert_weights=ttnn_routed_weights,
-        shared_expert_weights=shared_weights_ttnn,
+        shared_expert_weights=shared_expert_weights,
         # activations_dtype=ttnn.bfloat8_b,
         # weights_dtype=ttnn.bfloat4_b,
         activations_dtype=ttnn.bfloat16,
