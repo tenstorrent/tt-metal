@@ -110,15 +110,8 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {
     // Validations
-    const auto& reference_shard = tensor_shards.front();
     TT_FATAL(!tensor_shards.empty(), "At least one tensor shard must be provided");
-    for (const auto& shard : tensor_shards) {
-        TT_FATAL(shard.storage_type() == StorageType::DEVICE, "All tensor shards must be on device");
-        TT_FATAL(
-            shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
-    }
-
-    auto mesh_buffer = reference_shard.device_storage().get_mesh_buffer_leak_ownership();
+    const auto& reference_shard = tensor_shards.front();
     TT_FATAL(
         std::all_of(
             tensor_shards.begin(),
