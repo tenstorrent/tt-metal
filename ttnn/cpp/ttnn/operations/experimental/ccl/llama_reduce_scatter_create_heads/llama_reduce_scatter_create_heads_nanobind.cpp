@@ -31,7 +31,7 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
                 topology (ttnn.Topology): Communication topology for the reduce-scatter stage.
-                num_links (number, optional): the number of links. Defaults to `3`.
+                num_links (number, optional): the number of links. Defaults to the maximum available.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -66,7 +66,7 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("topology"),
             nb::kw_only(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("num_heads"),
             nb::arg("num_kv_heads"),
             nb::arg("memory_config") = nb::none(),
