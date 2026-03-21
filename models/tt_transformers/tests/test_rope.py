@@ -5,7 +5,7 @@
 import torch
 
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
-from models.tt_transformers.tt.rope import RotaryEmbedding, rotary_embedding_factory
+from models.tt_transformers.tt.rope import RotaryEmbedding, compute_gather_cos_sin, rotary_embedding_factory
 
 
 class TestRope:
@@ -139,6 +139,24 @@ class TestRope:
         # Make sure we actually ran the scaling
         assert max_cos_diff > 1e-6, f"Cos values are the same as non scaled. Max diff = {max_cos_diff}"
         assert max_sin_diff > 1e-6, f"Sin values are the same as non scaled. Max diff = {max_sin_diff}"
+
+    def test_partial_rotary_padding(self):
+        dhead = 8
+        rotary_dim = 4
+        max_seq_len = 64
+
+        cos, sin = compute_gather_cos_sin(
+            dhead=dhead,
+            end=2 * max_seq_len,
+            theta=10000.0,
+            rope_scaling=None,
+            rotary_dim=rotary_dim,
+        )
+
+        assert cos.shape[-1] == dhead
+        assert sin.shape[-1] == dhead
+        assert torch.allclose(cos[..., rotary_dim:], torch.ones_like(cos[..., rotary_dim:]))
+        assert torch.allclose(sin[..., rotary_dim:], torch.zeros_like(sin[..., rotary_dim:]))
 
 
 if __name__ == "__main__":
