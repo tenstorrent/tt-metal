@@ -117,7 +117,7 @@ public:
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
-
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
@@ -138,32 +138,23 @@ public:
 
     bool close() override;
     void enable_program_cache() override;
-    program_cache::detail::ProgramCache& get_program_cache() override;
-
-    SubDeviceManagerId get_active_sub_device_manager_id() const override;
-    SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
-
-    bool is_mmio_capable() const override;
-
-    // Program cache management (public API)
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
+    program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
-
-    // Sub-device management (public API)
-    SubDeviceManagerId create_sub_device_manager(
-        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId get_active_sub_device_manager_id() const override;
+    SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
-
-    // Ethernet connectivity (public API)
-    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
+    bool is_mmio_capable() const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

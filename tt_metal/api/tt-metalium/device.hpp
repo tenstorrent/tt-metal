@@ -128,21 +128,14 @@ public:
     // Program cache interface. Synchronize with worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
+    virtual void clear_program_cache() = 0;
+    virtual void disable_and_clear_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
+    virtual std::size_t num_program_cache_entries() = 0;
 
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
-    virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
-
-    virtual bool is_mmio_capable() const = 0;
-
-    // Program cache management (public API)
-    virtual void clear_program_cache() = 0;
-    virtual void disable_and_clear_program_cache() = 0;
-    virtual std::size_t num_program_cache_entries() = 0;
-
-    // Sub-device management (public API)
     virtual SubDeviceManagerId create_sub_device_manager(
         ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
@@ -150,10 +143,12 @@ public:
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;
+    virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
     virtual void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
 
-    // Ethernet connectivity (public API)
+    virtual bool is_mmio_capable() const = 0;
+
     virtual std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const = 0;
 };
 
