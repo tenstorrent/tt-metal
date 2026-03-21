@@ -135,8 +135,6 @@ def _skip_unless_4x2_mesh(bh_2d_mesh_device):
 
 
 # Expected placements for 4x2 mesh (mla_tp=2, moe_tp=8)
-_PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]
-_PLACEMENTS_SHARD_NONE_0 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
 _PLACEMENTS_SHARD_0_1 = [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
 _PLACEMENTS_REPLICATE = [ttnn.PlacementReplicate()]
 
@@ -162,19 +160,19 @@ def _assert_layer_on_device_with_topology(
     fid = id(layer.q_a_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1)
+        _assert_topology(layer.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # o_proj_gate_mm_norms
     _assert_on_device(layer.o_proj.fused_tensor)
     fid = id(layer.o_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.o_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1)
+        _assert_topology(layer.o_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # kv_b12
     _assert_on_device(layer.kv_b1_proj.fused_tensor)
     fid = id(layer.kv_b1_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        _assert_topology(layer.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_0)
+        _assert_topology(layer.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # gate_up
     _assert_on_device(layer.shared_gate_proj.fused_tensor)
     fid = id(layer.shared_gate_proj.fused_tensor)
