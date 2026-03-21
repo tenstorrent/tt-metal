@@ -606,12 +606,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    // stats input
+    // stats input (cb_max_in for deferred norm restore).
     auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
-    // previous block output as input
+    // previous block output as input (cb_prev_out for deferred norm restore).
     auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
                             .set_page_size(tt::CBIndex::c_7, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
@@ -698,6 +698,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
                                    .set_page_size(tt::CBIndex::c_12, signal_page_size);
         CreateCircularBuffer(program, core_grid, c_signal_config);
+
+        // Restore-done signal CB (c_13): compute signals writer after K0 that restore CBs are popped.
+        // Writer waits for this before issue_restore_reads, avoiding cb_reserve_back blocking on occupied CBs.
+        auto c_restore_done_config =
+            CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_13, tt::DataFormat::UInt16}})
+                .set_page_size(tt::CBIndex::c_13, signal_page_size);
+        CreateCircularBuffer(program, core_grid, c_restore_done_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();

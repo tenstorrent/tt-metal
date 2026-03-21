@@ -500,13 +500,17 @@ void kernel_main() {
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
 
                 // 1. Complete restore + intra-ring prefetch (ring_iter > 0 only)
+                constexpr uint32_t cb_restore_done = tt::CBIndex::c_13;
                 if (!single_q_chunk && ring_iter > 0) {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
 
                     // Intra-ring prefetch: issue reads for Q[q+1] during Q[q]'s K-loop.
-                    // Barrier on Q[q+1]'s trid — its save completed at least one K-loop ago.
+                    // Wait for compute to signal that restore CBs are popped (after K1 of Q[q]),
+                    // then barrier on Q[q+1]'s trid and issue reads.
                     const uint32_t next_q = global_q_chunk + 1;
                     if (next_q < global_q_end) {
+                        cb_wait_front(cb_restore_done, 1);
+                        cb_pop_front(cb_restore_done, 1);
                         const uint32_t next_q_index = next_q - global_q_start;
                         noc_async_write_barrier_with_trid(q_trid(next_q_index));
                         const uint32_t nb_next = next_q / (NH * num_q_chunks);
@@ -543,7 +547,13 @@ void kernel_main() {
 
                 // 2. Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
                 // Reads fly during Q[N-1]'s K-loop + save drain.
+                // On ring_iter > 0, wait for restore-done signal (restore CBs occupied until K1).
+                // On ring_iter == 0, no restore occurred so CBs are free — skip signal wait.
                 if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
+                    if (ring_iter > 0) {
+                        cb_wait_front(cb_restore_done, 1);
+                        cb_pop_front(cb_restore_done, 1);
+                    }
                     noc_async_write_barrier_with_trid(TRID_FIRST);
                     const uint32_t gq0 = global_q_start;
                     const uint32_t nb0 = gq0 / (NH * num_q_chunks);

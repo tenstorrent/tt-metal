@@ -1529,6 +1529,16 @@ void sdpa_ring_v2(
                     q_cur = {original_prev.sum, original_prev.max, original_prev.out};
                 }
             }
+
+            // After K0 (KV_chunks_processed == 1), restore staging CBs are fully popped.
+            // On ring_iter > 0, is_first=false so K0 runs SALAD correction which pops
+            // prev.max, prev.sum (lines above), and prev.out (row-by-row in salad_correct_row).
+            // Signal writer that it's safe to issue_restore_reads for the next Q-chunk.
+            constexpr uint32_t cb_restore_done = tt::CBIndex::c_13;
+            if (restore_from_staging && KV_chunks_processed == 1) {
+                cb_reserve_back(cb_restore_done, 1);
+                cb_push_back(cb_restore_done, 1);
+            }
         }
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop
