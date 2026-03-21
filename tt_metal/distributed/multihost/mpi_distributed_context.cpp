@@ -7,6 +7,7 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <numeric>
 #include <string>
+#include <unistd.h>
 #include <vector>
 #include <tt_stl/assert.hpp>
 
@@ -308,6 +310,71 @@ bool MPIRequest::active() const { return !done_; }
 
 /* -------------------------- MPIContext ---------------------------------- */
 
+// ---------------------------------------------------------------------------
+// Fast-exit helpers for non-MPI fatal errors
+//
+// Two mechanisms work together to prevent a hanging rank from stalling the
+// whole job when a non-MPI error occurs (e.g. ESTALE during JIT compilation,
+// OOM, any unhandled C++ exception):
+//
+//  1. std::set_terminate — fires for any uncaught C++ exception or explicit
+//     std::terminate() call.  Revokes MPI_COMM_WORLD so blocked ranks receive
+//     ERR_REVOKED, then calls _exit(70) to bypass all atexit handlers.
+//
+//  2. MPI_Finalize watchdog — the atexit handler that calls MPI_Finalize is
+//     collective: if one rank crashed or was killed without calling it, every
+//     other rank hangs there forever.  We arm a SIGALRM before calling
+//     MPI_Finalize; if it doesn't return within MPI_FINALIZE_TIMEOUT_SECS the
+//     alarm fires, we log, and _exit(70).
+//
+// Together these cover the cases ULFM can't: a rank that is alive-but-stuck
+// (e.g. blocked in Python teardown while holding an MPI_Finalize call).
+// ---------------------------------------------------------------------------
+
+// Seconds to wait for MPI_Finalize before assuming a remote rank is dead.
+// Chosen to be well under a typical CI step timeout but long enough for
+// legitimate slow-finalize scenarios (large communicator teardown).
+static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
+
+// SIGALRM handler: MPI_Finalize watchdog fired — another rank is dead/stuck.
+// async-signal-safe: only write() and _exit() are called.
+static void mpi_finalize_alarm_handler(int /*sig*/) {
+    static const char msg[] =
+        "[ULFM] MPI_Finalize watchdog: another rank appears dead or stuck. "
+        "Exiting 70 to unblock the job.\n";
+    (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    // Note: MPIX_Comm_revoke is NOT async-signal-safe; skip it here.
+    // _exit skips all atexit handlers (including the MPI_Finalize atexit),
+    // avoiding a second hang.
+    _exit(70);
+}
+
+// std::terminate handler: catches uncaught C++ exceptions and explicit
+// std::terminate() calls (e.g. exceptions thrown in thread-pool workers).
+// Revokes MPI_COMM_WORLD so surviving ranks detect the failure via ULFM,
+// then calls _exit(70) to bypass MPI_Finalize.
+//
+// To switch to fault-tolerant mode: remove this handler and instead set
+// FailurePolicy::FAULT_TOLERANT on your MPIContext, then catch
+// MPIRankFailureException in your collective loops.
+static void mpi_terminate_handler() {
+#if OMPI_HAS_ULFM
+    // Revoke so that any rank blocked in a collective receives ERR_REVOKED
+    // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
+    // This is best-effort: MPI_COMM_WORLD may already be revoked or
+    // MPI may not be initialized yet.
+    MPIX_Comm_revoke(MPI_COMM_WORLD);
+#endif
+    static const char msg[] =
+        "================================================================\n"
+        "FATAL: std::terminate called in MPI context\n"
+        "  Cause  : uncaught exception or explicit std::terminate()\n"
+        "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting 70\n"
+        "================================================================\n";
+    (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    _exit(70);
+}
+
 inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
@@ -317,8 +384,35 @@ inline void init_env(int& argc, char**& argv) {
             TT_THROW("MPI_Init_thread failed");
         }
 
-        // Ensure MPI_Finalize is called when the program exits
-        std::atexit([] { MPI_Finalize(); });
+        // Install the terminate handler so that any uncaught exception
+        // (including those thrown in thread-pool workers via std::async)
+        // revokes the world communicator and calls _exit(70) rather than
+        // letting the process hang in teardown.
+        std::set_terminate(mpi_terminate_handler);
+
+        // Ensure MPI_Finalize is called when the program exits.
+        // Guard with a watchdog: if MPI_Finalize does not return within
+        // MPI_FINALIZE_TIMEOUT_SECS, another rank is presumed dead/stuck
+        // and we exit instead of hanging the job.
+        //
+        // Switching to fault-tolerant mode: replace the atexit below with
+        // an explicit call site that handles MPIRankFailureException from
+        // MPI_Finalize (not yet possible — MPI_Finalize does not throw).
+        // For now, the watchdog is the pragmatic solution.
+        std::atexit([] {
+            int finalized = 0;
+            MPI_Finalized(&finalized);
+            if (finalized) {
+                return;  // already called (e.g. explicit finalize earlier)
+            }
+            // Arm the watchdog before entering the collective.
+            // If it fires, mpi_finalize_alarm_handler calls _exit(70).
+            signal(SIGALRM, mpi_finalize_alarm_handler);
+            alarm(MPI_FINALIZE_TIMEOUT_SECS);
+            MPI_Finalize();
+            alarm(0);  // disarm — finalize completed normally
+            signal(SIGALRM, SIG_DFL);
+        });
     });
 }
 

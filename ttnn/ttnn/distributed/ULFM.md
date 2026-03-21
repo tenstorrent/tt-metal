@@ -2,12 +2,14 @@
 
 User Level Failure Mitigation (ULFM) is an MPI extension that lets surviving ranks **detect and react to** remote rank failures instead of hanging forever at the next collective. Without it, a single segfault or OOM on one node stalls every other node until a system timeout kills the job.
 
-tt-metal uses a four-layer defence to turn "hang until timeout" into "detect, log, exit fast":
+tt-metal uses a multi-layer defence to turn "hang until timeout" into "detect, log, exit fast":
 
 1. **C++ ULFM detection** — catches failures at the MPI call site
-2. **ORTE/PRRTE abort-on-non-zero** — catches crashes that happen before any MPI call
-3. **Process-level timeout** — last-resort watchdog
-4. **Python mpi4py wrapper** — ULFM support for Python-level collectives
+2. **`std::set_terminate` handler** — catches uncaught C++ exceptions including JIT/thread-pool failures
+3. **`MPI_Finalize` watchdog** — 30-second SIGALRM; prevents atexit from hanging if a remote rank died before calling finalize
+4. **ORTE/PRRTE abort-on-non-zero** — catches crashes that exit non-zero before any MPI call
+5. **Process-level timeout** — last-resort `TT_RUN_TIMEOUT` watchdog
+6. **Python mpi4py wrapper** — ULFM support for Python-level collectives
 
 
 ## How It Works
@@ -26,7 +28,38 @@ Every MPI call in `MPIContext` goes through the `MPI_CHECK_CTX` macro. When Open
 
 Under `FAST_FAIL` (the default), the process calls `_exit(70)` immediately — no destructors, no `MPI_Finalize`, no deadlock risk. Under `FAULT_TOLERANT`, it throws `MPIRankFailureException` so application code can attempt recovery.
 
-### Layer 2 — ORTE/PRRTE Abort on Non-Zero Exit
+### Layer 2 — `std::set_terminate` Handler
+
+File: `tt_metal/distributed/multihost/mpi_distributed_context.cpp`
+
+Layer 1 only fires when MPI itself returns an error code. Non-MPI fatal errors — filesystem ESTALE during JIT compilation, OOM, exceptions in thread-pool workers — kill the rank without going through an MPI call. The surviving ranks hang at the next collective forever.
+
+`init_env()` installs a `std::set_terminate` handler via `std::set_terminate(mpi_terminate_handler)`. This fires for:
+- Any uncaught C++ exception (including ones thrown in `std::async`/thread-pool workers)
+- Explicit `std::terminate()` calls
+
+The handler calls `MPIX_Comm_revoke(MPI_COMM_WORLD)` (if ULFM is available) to unblock surviving ranks, then calls `_exit(70)`.
+
+**Limitation**: exceptions caught by Python/pybind11 are not "uncaught" in the C++ sense and won't trigger this handler. Layer 3 covers that case.
+
+### Layer 3 — `MPI_Finalize` Watchdog
+
+File: `tt_metal/distributed/multihost/mpi_distributed_context.cpp`
+
+The most common hang pattern: a rank hits a non-MPI error (e.g. ESTALE), the exception is caught by pytest/pybind11, pytest runs test teardown, the rank's process eventually exits normally, and the `atexit` handler calls `MPI_Finalize()`. `MPI_Finalize` is a collective — it blocks waiting for all other ranks to also call it. The other ranks are still running normally and are nowhere near `MPI_Finalize`. The job hangs for the entire CI step timeout (often 30–60 minutes).
+
+The atexit handler now arms a `SIGALRM` watchdog before calling `MPI_Finalize`:
+
+```cpp
+signal(SIGALRM, mpi_finalize_alarm_handler);
+alarm(MPI_FINALIZE_TIMEOUT_SECS);  // default: 30 seconds
+MPI_Finalize();
+alarm(0);  // disarm if finalize completed normally
+```
+
+If `MPI_Finalize` does not complete within 30 seconds, `SIGALRM` fires and calls `_exit(70)`.
+
+### Layer 4 — ORTE/PRRTE Abort on Non-Zero Exit
 
 File: `ttnn/ttnn/distributed/ttrun.py`
 
@@ -37,15 +70,15 @@ If a rank crashes (segfault, unhandled exception) before ever entering an MPI co
 
 `ttrun.py` detects the OpenMPI major version at runtime via `_detect_openmpi_major_version()` and sets the correct flag.
 
-### Layer 3 — Process-Level Timeout
+### Layer 5 — Process-Level Timeout
 
 File: `ttnn/ttnn/distributed/ttrun.py`
 
 Set `TT_RUN_TIMEOUT=<seconds>` in the environment. `ttrun.py` calls `proc.wait(timeout=N)` and on expiry sends `SIGKILL` then exits with code 124.
 
-This catches anything Layers 1 and 2 miss — infinite loops, deadlocks in non-MPI code, ranks stuck in device I/O.
+This catches anything Layers 1–4 miss — infinite loops, deadlocks in non-MPI code, ranks stuck in device I/O.
 
-### Layer 4 — Python mpi4py Wrapper
+### Layer 6 — Python mpi4py Wrapper
 
 File: `ttnn/ttnn/distributed/mpi_fault.py`
 
