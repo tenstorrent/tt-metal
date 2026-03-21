@@ -45,7 +45,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     CoreCoord ccl_core_grid_offset,
-    bool use_column_major_ccl) {
+    bool use_column_major_ccl,
+    bool is_causal,
+    bool is_balanced) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
@@ -68,6 +70,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         topology,
         subdevice_id,
         ccl_core_grid_offset,
+        is_causal,
+        is_balanced,
         scale,
         compute_kernel_config,
         strategy);
@@ -324,11 +328,13 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const ring_joint_doc = R"doc(
-        RingJointAttention operation that efficiently performs non-causal attention over two
-        sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
-        Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
-        then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
-        and one for the joint Q/K/V chunk.
+        RingJointAttention operation supports both:
+
+        - efficient non-causal attention over two sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
+          Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
+          then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
+          and one for the joint Q/K/V chunk.
+        - funtional causal attention over a single set of query, key and value tensors with the option of handling zig-zag load balancing across devices.
 
         This op handles optional padding via an attention mask to omit padded tokens from
         both the "original" and "joint" sequences.
@@ -363,6 +369,8 @@ void bind_sdpa(nb::module_& mod) {
             use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
                 This places CCL workers in a column (useful when reserving the last column for CCL).
                 If False (default), uses row-major allocation. Defaults to False.
+            is_causal (bool): Whether to use causal attention masking. Defaults to False.
+            is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -397,7 +405,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("ccl_core_grid_offset"),
-        nb::arg("use_column_major_ccl") = false);
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("is_causal").noconvert() = false,
+        nb::arg("is_balanced").noconvert() = false);
 
     const auto* const mla_doc =
         R"doc(

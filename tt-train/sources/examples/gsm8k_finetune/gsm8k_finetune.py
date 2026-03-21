@@ -32,7 +32,7 @@ from ttml.common.utils import (
     initialize_device,
     build_logits_mask,
     no_grad,
-    get_tt_metal_home,
+    get_tt_metal_runtime_root,
 )
 from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
@@ -87,9 +87,7 @@ def gsm8k_collate_fn(
     input_ids_np = data_np.reshape(batch_size, 1, 1, max_sequence_length)
 
     # labels: shift left by 1 for next-token prediction
-    labels_np = np.full(
-        (batch_size, max_sequence_length), eos_token_id, dtype=np.uint32
-    )
+    labels_np = np.full((batch_size, max_sequence_length), eos_token_id, dtype=np.uint32)
     labels_np[:, :-1] = input_ids_np[:, 0, 0, 1:]
 
     # loss_mask: 0 for prompt tokens and padding, 1 elsewhere, then normalised
@@ -104,15 +102,9 @@ def gsm8k_collate_fn(
         loss_mask_np *= (batch_size * max_sequence_length) / total_weight
 
     return Batch(
-        input_ids=ttml.autograd.Tensor.from_numpy(
-            input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        ),
-        labels=ttml.autograd.Tensor.from_numpy(
-            labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        ),
-        loss_mask=ttml.autograd.Tensor.from_numpy(
-            loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-        ),
+        input_ids=ttml.autograd.Tensor.from_numpy(input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
+        labels=ttml.autograd.Tensor.from_numpy(labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
+        loss_mask=ttml.autograd.Tensor.from_numpy(loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
     )
 
 
@@ -157,9 +149,7 @@ def generate_text_tt(
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     # Preallocate once
-    padded_prompt_tokens = np.full(
-        (1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32
-    )
+    padded_prompt_tokens = np.full((1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32)
 
     with no_grad():
         for _ in range(max_gen_tokens):
@@ -173,9 +163,7 @@ def generate_text_tt(
 
             # Refill buffer (fully) to avoid stale ids
             padded_prompt_tokens[...] = pad_token_id
-            padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
-                window, dtype=np.uint32
-            )
+            padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(window, dtype=np.uint32)
 
             # [1,1,1,T] -> TT tensor
             padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
@@ -189,21 +177,11 @@ def generate_text_tt(
 
             # Sample: next tokens for all positions [1,1,T,1]
             # With temperature=0.0 this behaves like argmax/greedy.
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
-            )
+            next_token_tensor = ttml.ops.sample.sample_op(logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor)
 
             # Take the token at the last active position in the current window
-            next_token_idx = (
-                max_sequence_length - 1
-                if len(prompt_tokens) > max_sequence_length
-                else len(window) - 1
-            )
-            next_token = int(
-                next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
-                    next_token_idx
-                ][0]
-            )
+            next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(window) - 1
+            next_token = int(next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[next_token_idx][0])
 
             if next_token == tokenizer.eos_token_id:
                 break
@@ -212,9 +190,7 @@ def generate_text_tt(
             prompt_tokens.append(next_token)
 
         # Decode once at the end
-        out = tokenizer.decode(
-            prompt_tokens if return_with_prompt else generated_tokens
-        )
+        out = tokenizer.decode(prompt_tokens if return_with_prompt else generated_tokens)
 
     model.train()
 
@@ -289,9 +265,7 @@ def validate(
             val_file.write(f"Generated Answer: {gen_text}\n")
             val_file.write("\n====================================\n")
 
-        val_file.write(
-            f"Last validation loss: {float(np.mean(cur_val_losses)):.4f}\n\n\n"
-        )
+        val_file.write(f"Last validation loss: {float(np.mean(cur_val_losses)):.4f}\n\n\n")
 
     tt_model.train()
     return np.mean(cur_val_losses)
@@ -327,9 +301,7 @@ def tokenize_dataset(data, tokenizer: AutoTokenizer) -> TokenizedDataset:
     X = [sample["question"] for sample in data]
     y = [sample["answer"] for sample in data]
 
-    tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)[
-        "input_ids"
-    ]
+    tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)["input_ids"]
     return TokenizedDataset(tok(X), tok(y))
 
 
@@ -343,14 +315,10 @@ def train():
     # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
-    yaml_config = load_config(
-        CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
-    )
+    yaml_config = load_config(CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs")
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
-    override_config_path = (
-        f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
-    )
+    override_config_path = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml"
 
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
@@ -375,9 +343,7 @@ def train():
     # initialize device
     device_config = DeviceConfig(yaml_config)
     ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
-        ttml.autograd.DistributedConfig(
-            enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp
-        )
+        ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
     )
     # no need to initialize device if #devices=1
     if device_config.total_devices() > 1:
@@ -411,12 +377,8 @@ def train():
 
     # Load dataset
     print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset(
-        "gsm8k", "main", split="train", ignore_verifications=True
-    )
-    testing_data = datasets.load_dataset(
-        "gsm8k", "main", split="test", ignore_verifications=True
-    )
+    training_data = datasets.load_dataset("gsm8k", "main", split="train", ignore_verifications=True)
+    testing_data = datasets.load_dataset("gsm8k", "main", split="test", ignore_verifications=True)
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)
@@ -463,6 +425,9 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
+    mask_np = build_causal_mask(max_sequence_length)
+    causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -470,6 +435,7 @@ def train():
         config=sft_config,
         optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
+        attention_mask=causal_mask,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")
