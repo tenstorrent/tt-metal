@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t sync_cb_id = get_compile_time_arg_val(7);
     constexpr bool skip_ptr_update = get_compile_time_arg_val(8);
+    constexpr bool enable_sender_barrier = get_compile_time_arg_val(9);
 
     // Runtime args
     // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores
@@ -67,7 +68,7 @@ void kernel_main() {
                 }
             }
 
-            if (t == num_tensors - 1) {
+            if (enable_sender_barrier && t == num_tensors - 1) {
                 experimental::remote_cb_sender_barrier(remote_cb_id);
             }
         }
