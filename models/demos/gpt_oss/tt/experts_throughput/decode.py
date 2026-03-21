@@ -416,9 +416,11 @@ def decode_forward(
     if config.use_experimental_all_reduce:
         output_all_reduced = apply_allreduce(output, mesh_config, ccl_manager, config.hidden_size)
     else:
+        # cluster_axis=1 (row direction) has fewer physical Ethernet links than cluster_axis=0.
+        # rms_norm.py uses num_links=1 for cluster_axis=1; use same value here.
         output_all_reduced = ttnn.all_reduce(
             output,
-            num_links=4,
+            num_links=1,
             topology=ttnn.Topology.Ring,
             cluster_axis=1,
             memory_config=memory_config,
