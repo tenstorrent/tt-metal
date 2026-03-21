@@ -360,13 +360,24 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> get_core_page_ran
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
+    // Single-pass: determine size and populate in one go using the buffer page mapping directly
+    // This avoids the O(n*m) nested loop by using the already-structured mapping
+    std::vector<uint32_t> max_device_page_per_core(output_cores.size(), 0);
     for (auto mapped_page : output_buffer_page_mapping) {
-        auto& cur_output_core_to_vector_input_core_page = output_core_to_vector_input_core_page[mapped_page.core_id];
+        max_device_page_per_core[mapped_page.core_id] =
+            std::max(max_device_page_per_core[mapped_page.core_id], mapped_page.device_page);
+    }
+
+    // Resize all vectors once
+    for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
+        output_core_to_vector_input_core_page[core_id].resize(max_device_page_per_core[core_id] + 1);
+    }
+
+    // Populate using the structured mapping - O(n) instead of O(n*m)
+    for (auto mapped_page : output_buffer_page_mapping) {
         auto [input_core, input_core_page] = host_page_to_input_core_mapping[mapped_page.host_page];
-        if (cur_output_core_to_vector_input_core_page.size() <= mapped_page.device_page) {
-            cur_output_core_to_vector_input_core_page.resize(mapped_page.device_page + 1);
-        }
-        cur_output_core_to_vector_input_core_page[mapped_page.device_page] = {input_core, input_core_page};
+        output_core_to_vector_input_core_page[mapped_page.core_id][mapped_page.device_page] = {
+            input_core, input_core_page};
     }
     auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
     return ret_map;
@@ -453,9 +464,14 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         }
     }
 
+    // Pre-calculate invalid mappings to avoid repeated calculation
+    std::vector<uint32_t> invalid_mapping_input_vec(num_rows + 1);
+    std::vector<uint32_t> invalid_mapping_output_vec(num_rows + 1);
     for (uint32_t i = 1; i <= num_rows; i++) {
         invalid_mapping_input[total_page_number * i] = (i - 1) * num_invalid_pages_input;
         invalid_mapping_output[total_page_number * i] = (i - 1) * num_invalid_pages_output;
+        invalid_mapping_input_vec[i] = (i - 1) * num_invalid_pages_input;
+        invalid_mapping_output_vec[i] = (i - 1) * num_invalid_pages_output;
     }
 
     // Create mapping of input base host pages to their cores
@@ -463,10 +479,12 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
         uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
-        uint32_t next_total =
-            ((base_start_page + num_input_pages_per_row) / num_input_pages_per_row) * total_page_number;
+        uint32_t row_idx = (base_start_page + num_input_pages_per_row) / num_input_pages_per_row;
+        uint32_t next_total = row_idx * total_page_number;
         next_total = std::max(next_total, total_page_number);
-        base_start_page = base_start_page - invalid_mapping_input[next_total];
+        uint32_t invalid_offset =
+            row_idx <= num_rows ? invalid_mapping_input_vec[row_idx] : invalid_mapping_input_vec[num_rows];
+        base_start_page = base_start_page - invalid_offset;
         uint32_t valid_pages = std::min(next_total - base_start_page, input_pages_per_original);
         for (uint32_t i = 0; i < valid_pages; i++) {
             host_page_to_input_core_mapping[base_start_page + i] = {core, device_base_start + i};
@@ -481,10 +499,12 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
         uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
 
-        uint32_t next_total =
-            ((base_start_page + num_output_pages_per_row) / num_output_pages_per_row) * total_page_number;
+        uint32_t row_idx = (base_start_page + num_output_pages_per_row) / num_output_pages_per_row;
+        uint32_t next_total = row_idx * total_page_number;
         next_total = std::max(next_total, total_page_number);
-        base_start_page = base_start_page - invalid_mapping_output[next_total];
+        uint32_t invalid_offset =
+            row_idx <= num_rows ? invalid_mapping_output_vec[row_idx] : invalid_mapping_output_vec[num_rows];
+        base_start_page = base_start_page - invalid_offset;
         uint32_t valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
         for (uint32_t i = 0; i < valid_pages; i++) {
             host_page_to_output_core_mapping[base_start_page + i] = {core, device_base_start + i};
@@ -495,23 +515,38 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
+    // Build a fast lookup map from CoreCoord to core_id to avoid O(n*m) lookups
+    std::unordered_map<CoreCoord, uint32_t> core_to_id;
+    core_to_id.reserve(output_cores.size());
     for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
-        auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
+        core_to_id[output_cores[core_id]] = core_id;
+    }
 
-        // Find all host pages that map to this output core
-        for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
-            if (host_page_to_output_core_mapping[host_page].first == output_cores[core_id]) {
-                // This host page belongs to current output core
-                // Get corresponding input core and page
-                auto input_mapping = host_page_to_input_core_mapping[host_page];
+    // Single pass to calculate max device_page per core - O(n)
+    std::vector<uint32_t> max_device_page_per_core(output_cores.size(), 0);
+    for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
+        auto it = core_to_id.find(host_page_to_output_core_mapping[host_page].first);
+        if (it != core_to_id.end()) {
+            uint32_t core_id = it->second;
+            uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
+            max_device_page_per_core[core_id] = std::max(max_device_page_per_core[core_id], device_page);
+        }
+    }
 
-                // Add to vector if needed
-                uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
-                if (cur_output_core_pages.size() <= device_page) {
-                    cur_output_core_pages.resize(device_page + 1);
-                }
-                cur_output_core_pages[device_page] = input_mapping;
-            }
+    // Resize all vectors once
+    for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
+        if (max_device_page_per_core[core_id] > 0) {
+            output_core_to_vector_input_core_page[core_id].resize(max_device_page_per_core[core_id] + 1);
+        }
+    }
+
+    // Single pass to populate - O(n) instead of O(n*m)
+    for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
+        auto it = core_to_id.find(host_page_to_output_core_mapping[host_page].first);
+        if (it != core_to_id.end()) {
+            uint32_t core_id = it->second;
+            uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
+            output_core_to_vector_input_core_page[core_id][device_page] = host_page_to_input_core_mapping[host_page];
         }
     }
 
@@ -695,13 +730,20 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
         physical_core_coords.push_back(physical_input_core.y);
     }
 
+    // Calculate the page range mapping ONCE for all cores instead of recalculating for each core
+    bool diff_page_size = input.buffer()->page_size() != output.buffer()->page_size();
+    auto output_core_to_page_range_pair_diff =
+        diff_page_size ? detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input)
+                       : std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>>{};
+    auto output_core_to_page_range_pair_same = !diff_page_size
+                                                   ? detail::get_core_page_ranges(input.buffer(), output.buffer())
+                                                   : std::unordered_map<CoreCoord, std::vector<detail::PageStride>>{};
+
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
-        if (input.buffer()->page_size() != output.buffer()->page_size()) {
-            auto output_core_to_page_range_pair =
-                detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+        if (diff_page_size) {
+            const auto& page_stride_vector = output_core_to_page_range_pair_diff.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
@@ -718,8 +760,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         } else {
-            auto output_core_to_page_range_pair = detail::get_core_page_ranges(input.buffer(), output.buffer());
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+            const auto& page_stride_vector = output_core_to_page_range_pair_same.at(core);
             runtime_args_0 = detail::get_runtime_args_for_given_ranges(
                 physical_core_coords,
                 page_stride_vector,
@@ -737,7 +778,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 input.buffer()->address(),
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
-        };
+        }
 
         tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
         tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
