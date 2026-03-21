@@ -44,6 +44,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
@@ -185,7 +186,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
+        int clock_freq_mhz = get_tt_npu_clock(device->impl().get_devices()[0]);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -259,7 +260,7 @@ int main(int argc, char** argv) {
                 }
                 auto write_size = num_reqs_at_a_time * 512;
                 auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
-                tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, cb_addr, sliced_input);
+                tt_metal::detail::WriteToDeviceL1(device->impl().get_devices()[0], core, cb_addr, sliced_input);
                 input_offset += (num_tiles_per_core) * 512;
             }
         }
@@ -286,7 +287,7 @@ int main(int argc, char** argv) {
 
             if (use_device_profiler) {
                 unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                    device->impl().get_devices()[0], mesh_workload.get_programs().begin()->second);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
                 log_info(
@@ -487,7 +488,7 @@ bool validation(
 
             std::vector<uint32_t> result_vec;
             tt_metal::detail::ReadFromDeviceL1(
-                device->get_devices()[0], core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
+                device->impl().get_devices()[0], core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
             auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto sliced_input = slice_vec(
                 input_bf16,

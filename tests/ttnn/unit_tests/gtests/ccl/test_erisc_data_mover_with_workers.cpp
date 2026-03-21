@@ -41,6 +41,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -149,7 +150,7 @@ void generate_receiver_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Just want a dummy DF
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -241,7 +242,7 @@ void generate_sender_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     std::vector<uint32_t> sender_worker_reader_compile_args{
         num_pages_total,  //
@@ -598,7 +599,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
         sender_program,
-        sender_mesh_device->get_devices()[0],
+        sender_mesh_device->impl().get_devices()[0],
         local_chip_edm_builder,
         eth_sender_core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -607,7 +608,7 @@ bool RunWriteBWTest(
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
         receiver_program,
-        receiver_mesh_device->get_devices()[0],
+        receiver_mesh_device->impl().get_devices()[0],
         remote_chip_edm_builder,
         eth_receiver_core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -713,7 +714,7 @@ int TestEntrypoint(
     N300TestDevice test_fixture;
 
     const auto& mesh_device_0 = test_fixture.devices_.at(0);
-    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->impl().get_devices()[0];
 
     const auto& active_eth_cores = device_0->device_internal().get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();

@@ -1216,7 +1216,7 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // Identify the MMIO device in the mesh
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (cluster.get_associated_mmio_device(dev->id()) == dev->id()) {
                 mmio_device_ = dev;
                 break;
@@ -1228,7 +1228,7 @@ protected:
         }
 
         // Next, identify a remote device associated with the MMIO device
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (dev != mmio_device_ && (cluster.get_associated_mmio_device(dev->id()) == mmio_device_->id())) {
                 remote_device_ = dev;
                 break;

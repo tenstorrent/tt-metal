@@ -29,7 +29,7 @@ void VerifyIssuesOnAllCores(
     bool expect_issue,
     const IssueChecker& has_issue,
     const std::string& issue_type) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto device_id = device->id();
 
     for (uint32_t x = grid_start.x; x <= grid_end.x; ++x) {
@@ -406,7 +406,7 @@ void RunMcastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto device_id = device->id();
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 

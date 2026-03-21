@@ -193,7 +193,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
-    for (const auto* device : mesh_device_->get_devices()) {
+    for (const auto* device : mesh_device_->impl().get_devices()) {
         read_descriptors_.emplace(
             device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
     }
@@ -206,7 +206,7 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
     }
 
     int device_idx = 0;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         if (device_idx) {
             TT_FATAL(
                 this->dispatch_core_ == device->device_internal().virtual_program_dispatch_core(this->id_),
@@ -233,7 +233,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         MeshEvent(sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
 
     // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             device->id(),
@@ -291,7 +291,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     uint32_t num_virtual_eth_cores = 0;
 
     if (mcast_go_signals) {
-        num_workers += mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        num_workers += mesh_device_->device_internal().num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     }
     if (unicast_go_signals) {
         // Issue #19729: Running MeshWorkloads on Active Eth cores is supported through multiple workarounds
@@ -318,7 +318,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         if (sysmem_manager.get_bypass_mode()) {
             capture_expected_worker_count_reset_cmd(expected_num_workers_completed, sub_device_id);
         } else {
-            for (auto* device : mesh_device_->get_devices()) {
+            for (auto* device : mesh_device_->impl().get_devices()) {
                 program_dispatch::reset_expected_num_workers_completed_on_device(
                     device, sub_device_id, expected_num_workers_completed, id());
             }
@@ -952,7 +952,7 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         TT_FATAL(
             !device->device_internal().sysmem_manager().get_bypass_mode(),
             "Cannot reset worker state during trace capture");
@@ -960,7 +960,7 @@ void FDMeshCommandQueue::reset_worker_state(
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
             device->device_internal().sysmem_manager(),
@@ -1023,7 +1023,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    for (auto& device : mesh_device_->get_devices()) {
+    for (auto& device : mesh_device_->impl().get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
             write_go_signal(
                 id_,
@@ -1161,7 +1161,7 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         buffer->num_pages(),
         buffer->address());
 
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         trace_dispatch::issue_trace_commands(
             mesh_device_,
             device->device_internal().sysmem_manager(),
@@ -1199,7 +1199,7 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
 
     trace_id_ = trace_id;
     trace_ctx_ = ctx;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         device->device_internal().sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
     }
 
@@ -1221,7 +1221,7 @@ void FDMeshCommandQueue::record_end() {
         config_buffer_mgr_reset_);
 
     ordered_mesh_trace_md_.clear();
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         device->device_internal().sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
     }
 
@@ -1232,7 +1232,7 @@ void FDMeshCommandQueue::record_end() {
 }
 
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     return local_devices.at(0)->device_internal().sysmem_manager();
 }
 
@@ -1266,7 +1266,7 @@ int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
 
 void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
     uint32_t previous_expected_workers, SubDeviceId sub_device) {
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         auto& sysmem_manager = device->device_internal().sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager.get_issue_queue_write_ptr(id_);
         program_dispatch::reset_expected_num_workers_completed_on_device(
@@ -1293,14 +1293,14 @@ void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
 void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
     if (in_use_) {
         size_t num_sub_devices = mesh_device_->device_internal().num_sub_devices();
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto* device : mesh_device_->impl().get_devices()) {
             TT_FATAL(
                 !device->device_internal().sysmem_manager().get_bypass_mode(),
                 "Cannot reset worker state during trace capture");
         }
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto* device : mesh_device_->impl().get_devices()) {
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,
                 device->device_internal().sysmem_manager(),
@@ -1329,7 +1329,7 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
     if (in_use_) {
         auto lock = lock_api_function_();
         uint32_t current_event = reference_sysmem_manager().get_current_event(id_);
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto* device : mesh_device_->impl().get_devices()) {
             TT_ASSERT(
                 device->device_internal().sysmem_manager().get_last_completed_event(id_) == current_event,
                 "Current event must be equal to last completed event");

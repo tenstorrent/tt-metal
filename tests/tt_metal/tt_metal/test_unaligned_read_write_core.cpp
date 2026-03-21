@@ -41,7 +41,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     bool pass = true;
 
     try {

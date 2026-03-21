@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstring>
@@ -80,7 +81,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
-                    device->get_devices()[0], dram_channel, dram_addr, src_vec);
+                    device->impl().get_devices()[0], dram_channel, dram_addr, src_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -99,7 +100,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
-                    device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
+                    device->impl().get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

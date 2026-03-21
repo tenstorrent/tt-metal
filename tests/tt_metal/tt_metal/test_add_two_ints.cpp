@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 // Result is read from L1
 ////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, AddTwoInts) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     uint32_t l1_unreserved_base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     Program program = CreateProgram();

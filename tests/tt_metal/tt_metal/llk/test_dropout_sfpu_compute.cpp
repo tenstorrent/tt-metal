@@ -115,7 +115,7 @@ bool test_dropout_standalone(
         Program program = CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* const device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->impl().get_devices()[0];
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;

@@ -81,8 +81,8 @@ bool eth_direct_sender_receiver_kernels(
     const CoreCoord& eth_receiver_core,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0,
     uint32_t num_bytes_per_send = 16) {
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
-    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
     bool pass = true;
     log_info(
         tt::LogTest,
@@ -192,8 +192,8 @@ bool send_over_eth(
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
-    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
     log_debug(
         tt::LogTest,
         "Running direct send test with sender chip {} core {}, receiver chip {} core {}, sending {} bytes",
@@ -314,8 +314,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     auto send_cores = device_0->device_internal().get_ethernet_sockets(device_1->id());
     auto receiver_cores = device_1->device_internal().get_ethernet_sockets(device_0->id());
@@ -356,8 +356,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     auto send_cores = device_1->device_internal().get_ethernet_sockets(device_0->id());
     auto receiver_cores = device_0->device_internal().get_ethernet_sockets(device_1->id());
@@ -398,8 +398,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     auto send_cores = device_1->device_internal().get_ethernet_sockets(device_0->id());
     auto receiver_cores = device_0->device_internal().get_ethernet_sockets(device_1->id());
@@ -488,8 +488,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -547,8 +547,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -609,9 +609,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     const size_t dst_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
@@ -670,7 +670,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -783,7 +783,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -825,8 +825,8 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
     srand(0);
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->device_internal().get_active_ethernet_cores(true)) {
@@ -852,7 +852,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
 
         // gotcha: devices_ are mesh devices. Mesh device IDs are not the same as actual device IDs needed in the
         // cluster
-        auto* send_device = send_chip->get_devices()[0];
+        auto* send_device = send_chip->impl().get_devices()[0];
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                 send_device->id(), sender_core)) {
             continue;
@@ -890,8 +890,8 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
     srand(0);
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->device_internal().get_active_ethernet_cores(true)) {
@@ -961,9 +961,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }

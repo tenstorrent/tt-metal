@@ -120,7 +120,6 @@ public:
 
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
@@ -169,8 +168,6 @@ public:
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
-    // Returns the devices in the mesh in row-major order.
-    std::vector<IDevice*> get_devices() const;
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
         "28-02-2026.")]]

@@ -46,7 +46,7 @@ namespace basic_tests {
 // wrap issue queue)
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (auto& mesh_device : devices_) {
-        log_info(tt::LogTest, "Running On Device {}", mesh_device->get_devices()[0]->id());
+        log_info(tt::LogTest, "Running On Device {}", mesh_device->impl().get_devices()[0]->id());
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
             mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};

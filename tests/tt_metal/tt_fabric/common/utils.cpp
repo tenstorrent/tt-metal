@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -36,7 +37,8 @@ bool find_device_with_neighbor_in_multi_direction(
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
     for (const auto& device : devices) {
-        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+        src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->impl().get_devices()[0]->id());
         if (incoming_direction.has_value()) {
             if (control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).empty()) {
                 // This potential source will not have the requested incoming direction, skip
@@ -69,7 +71,7 @@ bool find_device_with_neighbor_in_multi_direction(
             }
         }
         if (connection_found) {
-            src_physical_device_id = device->get_devices()[0]->id();
+            src_physical_device_id = device->impl().get_devices()[0]->id();
             dst_fabric_node_ids_by_dir = std::move(temp_end_fabric_node_ids_by_dir);
             dst_physical_device_ids_by_dir = std::move(temp_physical_end_device_ids_by_dir);
             break;
@@ -88,12 +90,13 @@ bool find_device_with_neighbor_in_direction(
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
     for (const auto& device : devices) {
-        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+        src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->impl().get_devices()[0]->id());
 
         // Get neighbours within a mesh in the given direction
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
         if (!neighbors.empty()) {
-            src_physical_device_id = device->get_devices()[0]->id();
+            src_physical_device_id = device->impl().get_devices()[0]->id();
             dst_fabric_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
             dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
             return true;

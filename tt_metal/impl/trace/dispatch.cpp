@@ -130,7 +130,7 @@ void issue_trace_commands(
         auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+            expected_num_workers += device->device_internal().num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
             expected_num_workers += device->device_internal().num_virtual_eth_cores(id);

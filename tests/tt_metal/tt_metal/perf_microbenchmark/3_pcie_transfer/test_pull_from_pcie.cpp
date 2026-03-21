@@ -41,6 +41,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -266,7 +267,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], logical_core, l1_unreserved_base, go_signal);
+        tt_metal::detail::WriteToDeviceL1(device->impl().get_devices()[0], logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
         tt_metal::Program program = tt_metal::Program();
@@ -398,7 +399,7 @@ int main(int argc, char** argv) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
                     for (int i = 0; i < num_write_ptr_updates; i++) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-                            &val_to_write, tt_cxy_pair(device->get_devices()[0]->id(), physical_core), reg_addr);
+                            &val_to_write, tt_cxy_pair(device->impl().get_devices()[0]->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
                         num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
                         if (num_reg_writes == num_reg_entries) {
@@ -412,7 +413,7 @@ int main(int argc, char** argv) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         read_hex_vec.data(),
                         sizeof(uint32_t),
-                        tt_cxy_pair(device->get_devices()[0]->id(), physical_core),
+                        tt_cxy_pair(device->impl().get_devices()[0]->id(), physical_core),
                         reg_addr);
                 }
 
@@ -421,7 +422,8 @@ int main(int argc, char** argv) {
             }
 
             auto t_end = std::chrono::steady_clock::now();
-            tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], logical_core, l1_unreserved_base, done_signal);
+            tt_metal::detail::WriteToDeviceL1(
+                device->impl().get_devices()[0], logical_core, l1_unreserved_base, done_signal);
 
             t1.join();
 

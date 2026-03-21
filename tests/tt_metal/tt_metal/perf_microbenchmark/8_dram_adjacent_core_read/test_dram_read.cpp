@@ -45,6 +45,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using namespace tt;
@@ -214,7 +215,7 @@ bool validation(
     for (auto core : all_cores) {
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
+            device->impl().get_devices()[0], core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
 
         uint32_t num_datum_per_block = block_h * block_w * num_datum_per_slice;
         uint32_t tensor_slice_stride = core_id * num_datum_per_slice;

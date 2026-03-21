@@ -20,6 +20,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "test_host_kernel_common.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -135,7 +136,7 @@ public:
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
+            tt::tt_metal::detail::LaunchProgram(device->impl().get_devices()[0], program, false);
         } else {
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
@@ -154,7 +155,7 @@ public:
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             // Wait for the program to finish
-            tt::tt_metal::detail::WaitProgramDone(device->get_devices()[0], program);
+            tt::tt_metal::detail::WaitProgramDone(device->impl().get_devices()[0], program);
         } else {
             // Wait for all programs on cq to finish
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();

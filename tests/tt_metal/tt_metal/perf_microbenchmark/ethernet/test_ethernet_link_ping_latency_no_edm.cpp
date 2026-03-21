@@ -10,6 +10,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -243,7 +244,7 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    const auto& active_eth_cores = device_0->get_devices()[0]->device_internal().get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     ChipId device_id = std::numeric_limits<ChipId>::max();
@@ -252,16 +253,16 @@ int main(int argc, char** argv) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
-        if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
+        if (cluster.is_ethernet_link_up(device_0->impl().get_devices()[0]->id(), *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) =
-                device_0->get_devices()[0]->device_internal().get_connected_ethernet_core(*eth_sender_core_iter);
+                device_0->impl().get_devices()[0]->device_internal().get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;
     } while (device_id == std::numeric_limits<ChipId>::max() ||
-             !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
+             !test_fixture.devices_.at(device_id)->impl().get_devices()[0]->is_mmio_capable());
     TT_FATAL(device_id != std::numeric_limits<ChipId>::max(), "No valid receiver device found to connect to");
-    auto* receiver_device = test_fixture.devices_.at(device_id)->get_devices()[0];
+    auto* receiver_device = test_fixture.devices_.at(device_id)->impl().get_devices()[0];
     TT_FATAL(receiver_device->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 

@@ -100,7 +100,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
 
         // Writer core (source of the NOC writes) should have been flagged for writing to a locked buffer
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
@@ -203,7 +203,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
@@ -308,7 +308,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         // No write-to-locked issues should be reported (writes happen only when buffer is not locked)
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             ChipId chip_id = device->id();
             EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
                 << "Unexpected write-to-locked-buffer issue on writer core; writes were outside lock scope.";
@@ -398,7 +398,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
@@ -496,7 +496,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         distributed::Finish(mesh_device->mesh_command_queue());
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             ChipId chip_id = device->id();
             EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
                 << "Unexpected write-to-locked-CB issue on writer core; writes were outside lock scope.";
@@ -550,7 +550,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToLockedIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             auto issues = this->get_write_to_locked_issues(device->id(), virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
@@ -612,7 +612,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
                 << "Unexpected write-to-locked issue; NOC write targeted an unlocked region.";
         }
@@ -654,7 +654,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
+        for (IDevice* device : mesh_device->impl().get_devices()) {
             EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
                 << "Unexpected write-to-locked issue; kernel only locked and unlocked with no NOC writes.";
         }

@@ -45,7 +45,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
     constexpr uint32_t l1_address = 1000 * 1024;
     std::vector<uint32_t> init_values(16, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, l1_address, init_values);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], core, l1_address, init_values);
 
     const KernelHandle risc_math_kernel = experimental::quasar::CreateKernel(
         program,
@@ -59,7 +59,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
     std::vector<uint32_t> actual_values(16, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, l1_address, 16 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], core, l1_address, 16 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
@@ -93,7 +93,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
     constexpr uint32_t l1_address = 1000 * 1024;
     std::vector<uint32_t> init_values(4, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, l1_address, init_values);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], core, l1_address, init_values);
 
     const KernelHandle risc_math_kernel = experimental::quasar::CreateKernel(
         program,
@@ -107,7 +107,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
     std::vector<uint32_t> actual_values(4, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 

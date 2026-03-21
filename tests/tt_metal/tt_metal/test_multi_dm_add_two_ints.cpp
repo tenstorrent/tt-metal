@@ -34,7 +34,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();

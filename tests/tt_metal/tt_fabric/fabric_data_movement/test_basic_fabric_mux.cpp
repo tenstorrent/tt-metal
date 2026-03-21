@@ -267,9 +267,10 @@ void create_mux_kernel(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& dest_device,
     tt::tt_metal::Program& program_handle) {
-    const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+    const auto src_node_id =
+        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->impl().get_devices()[0]->id());
     const auto dst_node_id =
-        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->get_devices()[0]->id());
+        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->impl().get_devices()[0]->id());
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
         !available_links.empty(),
@@ -283,7 +284,7 @@ void create_mux_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        device->get_devices()[0],
+        device->impl().get_devices()[0],
         program_handle,
         mux_kernel_src,
         mux_logical_core,
@@ -360,9 +361,9 @@ void create_worker_kernel(
     if (test_config.is_2d_fabric) {
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto src_fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->impl().get_devices()[0]->id());
         const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(
-            worker_test_config.dest_device->get_devices()[0]->id());
+            worker_test_config.dest_device->impl().get_devices()[0]->id());
         const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         const auto forwarding_direction =
             control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -398,7 +399,7 @@ void create_worker_kernel(
     }
 
     create_kernel(
-        device->get_devices()[0],
+        device->impl().get_devices()[0],
         program_handle,
         std::string(worker_test_config.kernel_src),
         worker_logical_core,
@@ -613,14 +614,14 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         log_info(LogTest, "Waiting for senders to complete");
         for (const auto& device : devices) {
             for (const auto& [core, _] : device_senders_map[device]) {
-                wait_for_worker_completion(device->get_devices()[0], core);
+                wait_for_worker_completion(device->impl().get_devices()[0], core);
             }
         }
 
         log_info(LogTest, "Senders done, waiting for receivers to complete");
         for (const auto& device : devices) {
             for (const auto& [core, _] : device_receivers_map[device]) {
-                wait_for_worker_completion(device->get_devices()[0], core);
+                wait_for_worker_completion(device->impl().get_devices()[0], core);
             }
         }
 
@@ -628,7 +629,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         std::vector<uint32_t> mux_termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         for (auto i = 0; i < devices.size(); i++) {
             tt::tt_metal::detail::WriteToDeviceL1(
-                devices[i]->get_devices()[0],
+                devices[i]->impl().get_devices()[0],
                 worker_logical_cores[0],
                 mux_termination_signal_addresses[i],
                 mux_termination_signal);
@@ -650,11 +651,11 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     log_info(LogTest, "Programs done, validating results");
     for (const auto& device : devices) {
         for (const auto& [core, _] : device_senders_map[device]) {
-            validate_worker_results(device->get_devices()[0], core);
+            validate_worker_results(device->impl().get_devices()[0], core);
         }
 
         for (const auto& [core, _] : device_receivers_map[device]) {
-            validate_worker_results(device->get_devices()[0], core);
+            validate_worker_results(device->impl().get_devices()[0], core);
         }
     }
 }

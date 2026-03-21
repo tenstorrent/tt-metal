@@ -62,10 +62,10 @@ void validate_cb_address(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
-                auto address =
-                    program.impl().get_cb_base_addr(mesh_device->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                auto address = program.impl().get_cb_base_addr(
+                    mesh_device->impl().get_devices()[0], core_coord, tt::CoreType::WORKER);
                 tt::tt_metal::detail::ReadFromDeviceL1(
-                    mesh_device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+                    mesh_device->impl().get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = core_to_address_per_buffer_index.at(core_coord);
 
@@ -174,7 +174,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = this->devices_.at(id)->impl().get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -224,7 +224,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
         DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+        DeviceAddr l1_max_size = mesh_device->impl().get_devices()[0]->l1_size_per_core();
         DeviceAddr l1_bank_size = l1_max_size - l1_unreserved_base;
 
         // Allocate a MeshBuffer that consumes most of L1 bank 0 (top-down), leaving room for
@@ -353,7 +353,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
 
         auto buffer_size = cb_config.page_size;
         tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = this->devices_.at(id)->impl().get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -425,9 +425,9 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     auto address = program_.impl().get_cb_base_addr(
-                        this->devices_.at(id)->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                        this->devices_.at(id)->impl().get_devices()[0], core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        this->devices_.at(id)->get_devices()[0],
+                        this->devices_.at(id)->impl().get_devices()[0],
                         core_coord,
                         address,
                         cb_config_buffer_size,
@@ -460,9 +460,9 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     auto address = program_.impl().get_cb_base_addr(
-                        this->devices_.at(id)->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                        this->devices_.at(id)->impl().get_devices()[0], core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        this->devices_.at(id)->get_devices()[0],
+                        this->devices_.at(id)->impl().get_devices()[0],
                         core_coord,
                         address,
                         cb_config_buffer_size,
@@ -502,13 +502,13 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         uint32_t buffer_size = single_tile_size * num_tiles;
 
         tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = this->devices_.at(id)->impl().get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::DRAM};
 
         tt::tt_metal::InterleavedBufferConfig l1_config{
-            .device = this->devices_.at(id)->get_devices()[0],
+            .device = this->devices_.at(id)->impl().get_devices()[0],
             .size = buffer_size,
             .page_size = buffer_size,
             .buffer_type = tt::tt_metal::BufferType::L1};
@@ -568,7 +568,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         std::vector<uint32_t> input_cb_data;
         detail::ReadFromDeviceL1(
-            this->devices_.at(id)->get_devices()[0],
+            this->devices_.at(id)->impl().get_devices()[0],
             core,
             devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1),
             buffer_size,
@@ -592,7 +592,11 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         std::vector<uint32_t> second_cb_data;
         detail::ReadFromDeviceL1(
-            this->devices_.at(id)->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
+            this->devices_.at(id)->impl().get_devices()[0],
+            core,
+            global_cb_buffer->address(),
+            buffer_size,
+            second_cb_data);
         EXPECT_EQ(src_vec, second_cb_data);
     }
 }

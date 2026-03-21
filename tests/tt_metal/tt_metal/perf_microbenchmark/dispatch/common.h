@@ -982,7 +982,7 @@ protected:
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
         // mgr_ = &FDMeshCQTestAccessor::sysmem(*fdcq_);
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
         mgr_ = &device_->device_internal().sysmem_manager();  // Use Chip 0's SystemMemoryManager
 
         // Initialize common HW properties

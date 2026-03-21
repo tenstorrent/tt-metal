@@ -34,6 +34,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
@@ -132,7 +133,7 @@ int main(int argc, char** argv) {
         int device_id = 0;
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
+        int clock_freq_mhz = get_tt_npu_clock(device->impl().get_devices()[0]);
         auto grid_coord = device->compute_with_storage_grid_size();
         num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
         num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
@@ -212,7 +213,7 @@ int main(int argc, char** argv) {
 
             if (use_device_profiler) {
                 elapsed_cc = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                    device->impl().get_devices()[0], mesh_workload.get_programs().begin()->second);
                 elapsed_us.push_back((double)elapsed_cc / clock_freq_mhz);
                 log_info(LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
             }

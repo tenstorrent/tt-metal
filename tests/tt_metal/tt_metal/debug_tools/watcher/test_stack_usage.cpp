@@ -39,7 +39,7 @@ void RunOneTest(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, {});
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord coord = {0, 0};
     std::vector<uint32_t> compile_args{free};

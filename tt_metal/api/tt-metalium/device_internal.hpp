@@ -101,6 +101,9 @@ public:
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
 
+    // Worker Cores
+    virtual uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
+
     // NOC Transaction Info
     virtual bool has_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;

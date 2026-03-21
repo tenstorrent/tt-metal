@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 // Validates data integrity: DRAM -> Reader -> CB -> Writer -> DRAM (src == dst)
 TEST_F(MeshDispatchFixture, DataflowCb) {
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = mesh_device->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

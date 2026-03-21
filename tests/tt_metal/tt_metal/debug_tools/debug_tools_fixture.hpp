@@ -377,7 +377,7 @@ public:
         KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         detail::CompileProgram(device, program_);
 
         // Find compiled kernel and extract format string from it to compare with expected_format_message

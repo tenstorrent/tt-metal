@@ -46,7 +46,7 @@ struct hlk_args_t {
 
 TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
     bool pass = true;
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     try {
         tt_metal::Program program = tt_metal::CreateProgram();

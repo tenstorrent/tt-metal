@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -59,7 +60,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Write runtime args
     auto get_first_arg =
         [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
-            return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
+            return (uint32_t)mesh_device->impl().get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
         };
     auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
                              CoreCoord& core,
@@ -82,7 +83,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
@@ -136,7 +137,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
 
         // Run the test on each device
         for (auto& device : devices_) {
-            log_info(LogTest, "Running on device {}", device->get_devices()[0]->id());
+            log_info(LogTest, "Running on device {}", device->impl().get_devices()[0]->id());
             RunTest(device);
         }
 

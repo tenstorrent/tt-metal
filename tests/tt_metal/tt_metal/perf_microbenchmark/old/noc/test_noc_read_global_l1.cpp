@@ -37,6 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -329,7 +330,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
                     tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                        device->impl().get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                     int tensors_idx = (single_read || one_buffer_share) ? (0) : ((r * num_cores_c) + c);

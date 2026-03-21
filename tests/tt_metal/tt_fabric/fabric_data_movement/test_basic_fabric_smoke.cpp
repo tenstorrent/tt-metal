@@ -30,6 +30,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -49,8 +50,8 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto sender_device = devices[0];
     auto receiver_device = devices[1];
 
-    auto src_physical_device_id = sender_device->get_devices()[0]->id();
-    auto dst_physical_device_id = receiver_device->get_devices()[0]->id();
+    auto src_physical_device_id = sender_device->impl().get_devices()[0]->id();
+    auto dst_physical_device_id = receiver_device->impl().get_devices()[0]->id();
 
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
@@ -147,7 +148,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+        sender_device->impl().get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -155,7 +156,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         CoreType::WORKER);
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+        receiver_device->impl().get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

@@ -248,7 +248,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 }  // namespace
 
 TEST_F(MeshDispatchFixture, CompileProgramInLoop) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     ClearKernelCache(BuildEnvManager::get_instance()
                          .get_device_build_env(dev->device_internal().build_id())
@@ -277,7 +277,7 @@ TEST_F(MeshDispatchFixture, CompileProgramInLoop) {
 }
 
 TEST_F(MeshDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     ClearKernelCache(BuildEnvManager::get_instance()
                          .get_device_build_env(dev->device_internal().build_id())
@@ -307,7 +307,7 @@ TEST_F(MeshDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
 }
 
 TEST_F(MeshDispatchFixture, CompileProgramWithModifiedProgram) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_hit = {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, true}};

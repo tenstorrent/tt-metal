@@ -1471,9 +1471,6 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const { return pimpl_->co
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return pimpl_->worker_cores(core_type, sub_device_id);
 }
-uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return pimpl_->num_worker_cores(core_type, sub_device_id);
-}
 const std::unique_ptr<Allocator>& MeshDevice::allocator() const { return pimpl_->allocator(); }
 const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
     return pimpl_->allocator(sub_device_id);
@@ -1541,7 +1538,6 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(ChipId connected_chip_id
     return pimpl_->get_ethernet_sockets(connected_chip_id);
 }
 
-std::vector<IDevice*> MeshDevice::get_devices() const { return pimpl_->get_devices(); }
 IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }
 tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {

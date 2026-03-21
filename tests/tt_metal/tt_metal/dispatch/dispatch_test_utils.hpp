@@ -11,6 +11,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -112,7 +113,7 @@ inline void verify_kernel_coordinates(
     const tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::SubDeviceId sub_device_id,
     uint32_t cb_addr) {
-    for (const auto& device : mesh_device->get_devices()) {
+    for (const auto& device : mesh_device->impl().get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
 
@@ -130,7 +131,7 @@ inline void verify_kernel_coordinates(
         for (const auto& logical_coord : cr) {
             const auto& virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, core_type);
             CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
-            for (const auto& device : mesh_device->get_devices()) {
+            for (const auto& device : mesh_device->impl().get_devices()) {
                 auto read_coords_raw = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
                 auto* read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());

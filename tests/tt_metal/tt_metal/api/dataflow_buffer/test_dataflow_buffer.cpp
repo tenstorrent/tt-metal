@@ -61,7 +61,7 @@ void execute_program_and_verify(
     EXPECT_EQ(rdback_dram, input);
 
     // Execute using slow dispatch (DFBs not yet supported in MeshWorkload path)
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 
     std::vector<uint32_t> output;

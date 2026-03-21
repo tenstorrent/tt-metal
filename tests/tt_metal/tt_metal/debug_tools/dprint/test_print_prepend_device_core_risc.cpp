@@ -39,7 +39,7 @@ void UpdateGoldenOutput(
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
     const std::string& device_core_risc =
-        std::to_string(mesh_device->get_devices()[0]->id()) + ":(x=?,y=?):" + risc + ": ";
+        std::to_string(mesh_device->impl().get_devices()[0]->id()) + ":(x=?,y=?):" + risc + ": ";
 
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
@@ -63,7 +63,7 @@ void RunTest(
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CreateKernel(
         program_,
@@ -131,11 +131,11 @@ TEST_F(DPrintMeshFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->get_devices()[0]->device_internal().get_active_ethernet_cores(true).empty()) {
+        if (mesh_device->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true).empty()) {
             log_info(
                 tt::LogTest,
                 "Skipping device {} due to no active ethernet cores...",
-                mesh_device->get_devices()[0]->id());
+                mesh_device->impl().get_devices()[0]->id());
             continue;
         }
         this->RunTestOnDevice(

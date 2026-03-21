@@ -35,6 +35,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -182,7 +183,7 @@ int main(int argc, char** argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
                 tt_metal::detail::WriteToDeviceL1(
-                    device->get_devices()[0], core, activations_addr, packed_tensors[(r * num_cores_c) + c]);
+                    device->impl().get_devices()[0], core, activations_addr, packed_tensors[(r * num_cores_c) + c]);
             }
         }
 
@@ -192,7 +193,7 @@ int main(int argc, char** argv) {
                 CoreCoord core = {(size_t)c, (size_t)r};
                 std::vector<uint32_t> result_vec;
                 tt_metal::detail::ReadFromDeviceL1(
-                    device->get_devices()[0], core, activations_addr, total_tiles_size_bytes, result_vec);
+                    device->impl().get_devices()[0], core, activations_addr, total_tiles_size_bytes, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 if (tensors[(r * num_cores_c) + c].get_values() != result_bfp16) {
                     log_error(LogTest, "{}/{} - value read from l1 is wrong", r, c);
@@ -250,7 +251,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
                     tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                        device->impl().get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto sliced_tensor =
                         slice_vec(tensors[(r * num_cores_c) + c].get_values(), (Nt - cb_tiles) * 1024, (Nt * 1024) - 1);

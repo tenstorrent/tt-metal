@@ -94,7 +94,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     )";
 
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto device = mesh_device->impl().get_devices()[0];
         const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
             const ChipId device_id = device->id();

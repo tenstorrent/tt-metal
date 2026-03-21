@@ -2770,8 +2770,9 @@ void reset_worker_dispatch_state_on_device(
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i];
         if (reset_launch_msg_state) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                    device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            expected_num_workers +=
+                device->device_internal().num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
+                device->device_internal().num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(

@@ -277,8 +277,8 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
     std::shared_ptr<distributed::MeshDevice> mesh_device = env.create_mesh_device(mesh_device_config);
     log_info(tt::LogTest, "Created silicon mesh device with shape {}", mesh_device->shape().dims());
 
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+    ASSERT_EQ(mock_mesh_device_bh_1->impl().get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_bh_2->impl().get_devices().size(), 2);
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
@@ -307,8 +307,8 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
     auto mock_mesh_device_bh_2 = mock_env_bh_2.create_mesh_device(mock_mesh_device_config_bh_2);
     log_info(tt::LogTest, "Created mock mesh device with shape {}", mock_mesh_device_bh_2->shape().dims());
 
-    ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
-    ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+    ASSERT_EQ(mock_mesh_device_bh_1->impl().get_devices().size(), 1);
+    ASSERT_EQ(mock_mesh_device_bh_2->impl().get_devices().size(), 2);
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
@@ -349,7 +349,7 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
 
         auto mock_mesh_shape = mock_env.get_system_mesh().shape();
         auto mock_mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(mock_mesh_shape));
-        if (mock_mesh_device->get_devices().size() != 2) {
+        if (mock_mesh_device->impl().get_devices().size() != 2) {
             _exit(3);
         }
 

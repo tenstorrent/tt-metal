@@ -17,6 +17,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -588,7 +589,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
-        int tt_npu_clock = get_tt_npu_clock(device->get_devices()[0]);
+        int tt_npu_clock = get_tt_npu_clock(device->impl().get_devices()[0]);
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
         uint64_t num_of_matmul_ops =
@@ -607,7 +608,7 @@ int main(int argc, char** argv) {
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
                 uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                    device->impl().get_devices()[0], mesh_workload.get_programs().begin()->second);
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -1462,7 +1463,7 @@ void prepare_inputs(
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
-            auto* target_device = device->get_devices()[0];
+            auto* target_device = device->impl().get_devices()[0];
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
             TT_FATAL(pass, "Failed to write in0 to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
@@ -1599,7 +1600,7 @@ bool validation(
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            auto* target_device = device->get_devices()[0];
+            auto* target_device = device->impl().get_devices()[0];
             tt_metal::detail::ReadFromDeviceL1(
                 target_device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);

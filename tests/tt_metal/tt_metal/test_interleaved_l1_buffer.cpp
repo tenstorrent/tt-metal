@@ -59,5 +59,6 @@ TEST_F(MeshDeviceSingleCardFixture, InterleavedL1Buffer) {
     int num_bank_pages_one = 258;
     int num_bank_pages_two = 378;
 
-    test_interleaved_l1_buffer_impl(devices_[0]->get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
+    test_interleaved_l1_buffer_impl(
+        devices_[0]->impl().get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
 }

@@ -48,10 +48,10 @@ uint32_t ReadRegFromDevice(
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t& regval) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->get_devices()[0]->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->impl().get_devices()[0]->id());
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
-        &regval, tt_cxy_pair(device->get_devices()[0]->id(), worker_core), address);
+        &regval, tt_cxy_pair(device->impl().get_devices()[0]->id(), worker_core), address);
     return regval;
 }
 
@@ -216,7 +216,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         tt_metal::Program program = tt_metal::CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
 
         CoreCoord logical_grid_size = mesh_device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
@@ -335,7 +335,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         uint32_t receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
         EXPECT_EQ(receiver_addr % 4, 0)
             << "Expected dest address to be 4B aligned to test noc_inline_dw_write alignment rule";
@@ -379,7 +379,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         uint32_t first_receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t second_receiver_addr =
             first_receiver_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -437,7 +437,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         uint32_t base_receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
         std::vector<uint32_t> readback(num_writes * sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, base_receiver_addr, readback);
@@ -492,7 +492,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         uint32_t receiver_addr0 = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t receiver_addr2 = receiver_addr0 + (num_writes_per_risc * l1_alignment);
         std::vector<uint32_t> readback(num_writes_total * l1_alignment / sizeof(uint32_t), 0);
@@ -566,7 +566,7 @@ void run_local_noc_stream_reg_inc(
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Set up program and command queue
     distributed::MeshWorkload workload;
@@ -644,7 +644,7 @@ TEST_F(MeshDeviceFixture, TensixTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no active ethernet cores on this device
     if (device->device_internal().get_active_ethernet_cores(true).empty()) {
@@ -659,7 +659,7 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
     if (device->device_internal().get_inactive_ethernet_cores().empty()) {

@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

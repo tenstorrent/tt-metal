@@ -195,7 +195,7 @@ bool cb_config_successful(
     // to read from
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
@@ -230,7 +230,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto eth_noc_xy = mesh_device->device_internal().ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -348,7 +348,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
@@ -415,7 +415,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -527,7 +527,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -913,7 +913,7 @@ bool test_increment_runtime_args_sanity(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -1040,7 +1040,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     constexpr uint32_t k_LoopPerDev = 100;
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     log_info(tt::LogTest, "Running On Device {} CQ{}", mesh_device->id(), cq_id);
 
     log_info(tt::LogTest, "Running On Device {} CQ{}", device->id(), cq_id);
@@ -1210,9 +1210,9 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         vector<uint32_t> cb_config_vector;
 
-        auto address = program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER);
+        auto address = program_.impl().get_cb_base_addr(device->impl().get_devices()[0], core_coord, CoreType::WORKER);
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+            device->impl().get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -1318,7 +1318,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
         GTEST_SKIP() << "Skipping test as this test requires 2 active ethernet cores";
     }
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
+        for (const auto& eth_core :
+             device->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,
@@ -1345,7 +1346,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        for (const auto& eth_core : mesh_device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
+        for (const auto& eth_core :
+             mesh_device->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             auto program = tt::tt_metal::CreateProgram();
             auto primary = CreateKernel(
                 program,
@@ -1386,7 +1388,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
 // 0 active eth cores, that's okay.
 TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
+        for (const auto& eth_core :
+             device->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1416,7 +1419,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
+        for (const auto& eth_core :
+             device->impl().get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1436,7 +1440,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCore
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_inactive_ethernet_cores()) {
+        for (const auto& eth_core : device->impl().get_devices()[0]->device_internal().get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1818,7 +1822,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
     GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
     for (const auto& device : devices_) {
-        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
+        if (!does_device_have_active_eth_cores(device->impl().get_devices()[0])) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
@@ -2408,7 +2412,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -2440,7 +2444,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -2468,7 +2472,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
 }
 
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
