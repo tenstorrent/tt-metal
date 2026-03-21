@@ -618,7 +618,7 @@ struct CclCommandHeader {
         } else if (std::holds_alternative<MulticastCommandDestArgs>(args)) {
             command_dest_args.multicast = std::get<MulticastCommandDestArgs>(args);
             this->dest_type = CclCommandDestType::CHIP_MULTICAST;
-        } else if (std::holds_alternative<LocalOnlyCommandDestArgs>(args)) {
+        } else {
             command_dest_args.local_only = std::get<LocalOnlyCommandDestArgs>(args);
             this->dest_type = CclCommandDestType::CHIP_LOCAL_ONLY;
         }
