@@ -89,6 +89,7 @@ FORCE_INLINE void run_loop_iteration(
 
 static constexpr uint32_t MAX_CHANNELS = 8;
 void kernel_main() {
+    set_l1_data_cache<false>();
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
