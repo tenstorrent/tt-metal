@@ -343,7 +343,7 @@ jobs:
           - name: fabric VC2 tests
             cmd: |
               TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_vc2_at_least_2x2_mesh.yaml
-              if [[ "${{ matrix.runner-group.runner-label }}" == "BH-LLMBox" ]]; then
+              if [[ "$RUNNER_LABEL" == "BH-LLMBox" ]]; then
                 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
                 tt-run --mpi-args "--allow-run-as-root" --rank-binding bh_4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_vc2_at_least_2x2_mesh.yaml
               fi
@@ -362,6 +362,7 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        RUNNER_LABEL: ${{ matrix.runner-group.runner-label }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - ${{ (!contains(matrix.runner-group.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
