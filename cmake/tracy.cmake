@@ -78,7 +78,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
+        cd ${TRACY_HOME}/csvexport/build/unix && CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} TRACY_NO_LTO=1 make -j ${numProcs} -f
         ${TRACY_HOME}/csvexport/build/unix/Makefile
 )
 ExternalProject_Add(
@@ -96,7 +96,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/capture/build/unix/capture-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
+        cd ${TRACY_HOME}/capture/build/unix && CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} TRACY_NO_LTO=1 make -j ${numProcs} -f
         ${TRACY_HOME}/capture/build/unix/Makefile
 )
 add_custom_target(
