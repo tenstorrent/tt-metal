@@ -149,22 +149,9 @@ def create_model_and_args(mesh_device, optimizations="performance"):
     return model, model_args
 
 
-# =============================================================================
-# Test fixtures
-# =============================================================================
-
-
-# todo)) just use the mesh_device from conftest.py
-@pytest.fixture(scope="module")
-def mesh_device(request):
-    """Mesh device fixture. Uses MESH_DEVICE env var or auto-detects."""
+def _requested_mesh_shape():
     device_name = os.environ.get("MESH_DEVICE", "N150")
-    device_params = request.config.getoption("--device-params", default=None)
-
-    num_devices = {"N150": 1, "N300": 2, "T3K": 8}.get(device_name, 1)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices))
-    yield mesh
-    ttnn.close_mesh_device(mesh)
+    return {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(device_name, (1, 1))
 
 
 # =============================================================================
@@ -180,6 +167,12 @@ def mesh_device(request):
         pytest.param("batch-32", id="batch-32"),
     ],
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [_requested_mesh_shape()], indirect=True)
 @pytest.mark.parametrize("optimizations", ["performance", "accuracy"])
 def test_llama3_8b(mesh_device, test_config, optimizations):
     """Main test function for TTTv2 Llama 3.1-8B."""
