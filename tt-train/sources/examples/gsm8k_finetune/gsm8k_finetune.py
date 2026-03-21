@@ -425,6 +425,9 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
+    mask_np = build_causal_mask(max_sequence_length)
+    causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -432,6 +435,7 @@ def train():
         config=sft_config,
         optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
+        attention_mask=causal_mask,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")
