@@ -94,7 +94,7 @@ SFTTrainer(
 | `lr_schedule` | `Callable[[int], float] \| None` | Custom `step -> lr` schedule. Overrides the default linear-warmup-then-constant. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `compute_loss_func` | `Callable \| None` | Custom `(logits, batch) -> loss` replacing the default masked cross-entropy. |
-| `loss_composer` | `Any \| None` | Mesh composer passed to `loss.to_numpy(composer=...)` for multi-device loss aggregation (see [DDP / Multi-device](#ddp--multi-device)). |
+| `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
 
 ### Methods
 
@@ -291,16 +291,17 @@ optimizer step. Set to `0.0` (default) to disable.
 ## DDP / Multi-device
 
 `SFTTrainer` supports distributed data-parallel (DDP) training without any
-DDP-specific configuration flags. Instead, three generic extension points are
-combined:
+DDP-specific configuration flags. Two extension points are combined:
 
 1. **Collate function** -- create batch tensors with a `shard_tensor_to_mesh_mapper`
    so that each device receives a slice of the global batch.
 2. **`on_before_optimizer_step` callback** -- call
    `ttml.core.distributed.synchronize_gradients` to all-reduce gradients before
    the optimiser step.
-3. **`loss_composer`** -- pass a `concat_mesh_to_tensor_composer` so that logged
-   loss values are aggregated across devices.
+
+Loss aggregation across devices is handled automatically via a default
+`concat_mesh_to_tensor_composer(device, 0)`.  Pass a custom `loss_composer`
+to the `SFTTrainer` constructor to override.
 
 ```python
 import ttml
@@ -316,7 +317,6 @@ autograd_ctx.initialize_parallelism_context(
 
 device = autograd_ctx.get_device()
 shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
 # -- gradient-sync callback --
 class DDPCallback(TrainerCallback):
@@ -329,8 +329,7 @@ def my_collate(examples, mapper=None):
 
 trainer = SFTTrainer(
     ...,
-    callbacks=[DDPCallback()],
-    loss_composer=loss_composer,
+    callbacks=[DDPCallback()]
 )
 trainer.train()
 ```

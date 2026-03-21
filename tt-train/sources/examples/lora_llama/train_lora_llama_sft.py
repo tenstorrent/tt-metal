@@ -9,7 +9,6 @@ loop to :class:`SFTTrainer`.  DDP support is wired externally via:
 
 * A collate function that shards batch tensors across the mesh.
 * An ``on_before_optimizer_step`` callback that synchronises gradients.
-* A ``loss_composer`` for aggregated loss logging.
 """
 
 import argparse
@@ -333,14 +332,12 @@ def main():
     else:
         autograd_ctx.open_device([1, 1], [0])
 
-    # ── DDP mappers / composer ────────────────────────────────────────────────
+    # ── DDP mapper ────────────────────────────────────────────────────────────
 
     mapper = None
-    loss_composer = None
     if use_ddp:
         device = autograd_ctx.get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-        loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     # ── Model ─────────────────────────────────────────────────────────────────
 
@@ -422,7 +419,6 @@ def main():
             "weight_decay": WEIGHT_DECAY,
         },
         callbacks=callbacks,
-        loss_composer=loss_composer,
     )
 
     summary(trainer.model)

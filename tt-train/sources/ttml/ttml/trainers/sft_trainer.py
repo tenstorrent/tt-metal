@@ -104,15 +104,17 @@ class SFTTrainer:
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
     :class:`~ttml.datasets.TTMLDataloader`.
 
-    Multi-device training (e.g. DDP) is supported by combining three
+    Multi-device training (e.g. DDP) is supported by combining two
     extension points:
 
     * A **collate function** that shards batch tensors across the mesh
       (via ``shard_tensor_to_mesh_mapper``).
     * The :meth:`~TrainerCallback.on_before_optimizer_step` callback to
       synchronise gradients before the optimiser step.
-    * The ``loss_composer`` constructor argument to aggregate loss values
-      across devices for logging.
+
+    Loss aggregation across devices is handled automatically via a default
+    ``concat_mesh_to_tensor_composer(device, 0)``.  Pass a custom
+    ``loss_composer`` to override.
 
     Example::
 
@@ -168,10 +170,8 @@ class SFTTrainer:
                 logic is bypassed entirely.
             loss_composer: Optional mesh composer passed to
                 ``loss.to_numpy(composer=...)`` when extracting scalar loss
-                values for logging.  For multi-device setups (e.g. DDP), pass
-                a ``concat_mesh_to_tensor_composer`` so that loss values are
-                aggregated across all devices.  ``None`` (default) leaves the
-                single-device behaviour unchanged.
+                values for logging. By default a `concat_mesh_to_tensor_composer` with dim=0 is used.
+                (Covers both single-device and multi-device DDP configurations.)
             attention_mask: Optional attention mask passed as the second
                 argument to ``model(input_ids, mask)``.  ``None`` (default)
                 lets the model generate a causal mask on the fly.
@@ -204,7 +204,7 @@ class SFTTrainer:
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
-        self._loss_composer = loss_composer
+        self._loss_composer = self._build_loss_composer(loss_composer)
 
     # ------------------------------------------------------------------
     # Public API
@@ -392,6 +392,13 @@ class SFTTrainer:
             return peak_lr
 
         return schedule
+
+    def _build_loss_composer(self, loss_composer: Optional[Any] = None):
+        """Create a mesh composer for aggregating loss across devices."""
+        if loss_composer is not None:
+            return loss_composer
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     @staticmethod
     def _enable_gradient_checkpointing(model: Any) -> None:
