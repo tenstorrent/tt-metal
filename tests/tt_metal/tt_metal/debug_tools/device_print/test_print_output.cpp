@@ -38,6 +38,15 @@ TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_single_uint_arg.cpp", messages, runtime_args);
 }
 
+TEST_F(DevicePrintOutputFixture, PrintFactorial) {
+    std::vector<uint32_t> runtime_args = {5};
+    std::vector<std::string> messages = {
+        "factorial(5) = 120",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
     std::vector<std::string> messages = {
         "int8_t: -8",
@@ -162,4 +171,44 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
                                                      << " times (expected " << 5 * device_counter << " times)";
         }
     }
+}
+
+TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
+    std::vector<std::string> messages = {
+        "No arguments",
+        "1 argument: 1",
+        "2 arguments: 1 2",
+        "3 arguments: 1 2 3",
+        "4 arguments: 1 2 3 4",
+        "5 arguments: 1 2 3 4 5",
+        "6 arguments: 1 2 3 4 5 6",
+        "7 arguments: 1 2 3 4 5 6 7",
+        "8 arguments: 1 2 3 4 5 6 7 8",
+        "9 arguments: 1 2 3 4 5 6 7 8 9",
+        "10 arguments: 1 2 3 4 5 6 7 8 9 10",
+        "11 arguments: 1 2 3 4 5 6 7 8 9 10 11",
+        "12 arguments: 1 2 3 4 5 6 7 8 9 10 11 12",
+        "13 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13",
+        "14 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14",
+        "15 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15",
+        "16 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16",
+        "17 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17",
+        "18 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+        "19 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19",
+        "20 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20",
+        "21 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21",
+        "22 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
+        "23 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23",
+        "24 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24",
+        "25 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25",
+        "26 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26",
+        "27 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27",
+        "28 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28",
+        "29 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29",
+        "30 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30",
+        "31 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31",
+        "32 arguments: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
 }
