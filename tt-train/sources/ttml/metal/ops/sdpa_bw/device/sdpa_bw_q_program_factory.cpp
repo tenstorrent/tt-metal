@@ -34,6 +34,7 @@ constexpr uint32_t kIntermediatesBufferIdx = 6U;
 
 // Writer runtime args
 constexpr uint32_t kGradQueryBufferIdx = 0;
+constexpr uint32_t kUScalerOutputBufferIdx = 1U;
 
 // Circular buffer indices
 constexpr auto kGradOutputCbIndex = tt::CBIndex::c_0;
@@ -50,6 +51,7 @@ constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_10;
 constexpr auto kGradScoresCbIndex = tt::CBIndex::c_11;
 constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_12;
 constexpr auto kGradQueryCbIndex = tt::CBIndex::c_13;
+constexpr auto kUScalerOutputCbIndex = tt::CBIndex::c_14;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
@@ -118,6 +120,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* attn_mask_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
     const tt::tt_metal::Buffer* grad_query_buffer,
+    const tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
     const uint32_t num_cores_y,
     const uint32_t num_rows_per_core_group_1,
@@ -161,6 +164,7 @@ void assign_per_core_runtime_args(
             core,
             {
                 grad_query_buffer->address(),  // grad_query buffer address
+                u_scaler_buffer->address(),    // u_scaler output buffer address
                 num_rows_per_core,             // rows to process in this kernel
                 num_rows_written               // starting row for this core
             });
@@ -189,6 +193,7 @@ void assign_per_core_runtime_args_balanced(
     const tt::tt_metal::Buffer* value_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
     const tt::tt_metal::Buffer* grad_query_buffer,
+    const tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
     const uint32_t num_cores_y,
     const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution) {
@@ -220,6 +225,7 @@ void assign_per_core_runtime_args_balanced(
             core,
             {
                 grad_query_buffer->address(),
+                u_scaler_buffer->address(),
                 num_pairs,
                 start_pair_idx,
             });
@@ -410,6 +416,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         create_circular_buffer(
             program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
+    [[maybe_unused]] auto cb_u_scaler_output =  // CBIndex::c_14
+        create_circular_buffer(
+            program,
+            all_cores,
+            kUScalerOutputCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer);
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -422,7 +437,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto* attn_mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
 
-    auto* grad_query_buffer = output.buffer();  // [grad_Q]
+    auto& [grad_query_output, u_scaler_output] = output;
+    auto* grad_query_buffer = grad_query_output.buffer();
+    auto* u_scaler_buffer = u_scaler_output.buffer();
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -475,6 +492,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,   // 1: sequence length in tiles
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(writer_compile_args);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
 
@@ -575,6 +593,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             value_buffer,
             intermediates_buffer,
             grad_query_buffer,
+            u_scaler_buffer,
             num_cores,
             num_cores_y,
             pair_distribution);
@@ -590,6 +609,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             attn_mask_buffer,
             intermediates_buffer,
             grad_query_buffer,
+            u_scaler_buffer,
             num_cores,
             num_cores_y,
             num_rows_per_core_group_1,
@@ -635,7 +655,9 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     const auto* intermediates_buffer = tensor_args.intermediates.buffer();
 
-    const auto* grad_query_buffer = tensor_return_value.buffer();  // [grad_Q]
+    auto& [grad_query_tensor, u_scaler_tensor] = tensor_return_value;
+    const auto* grad_query_buffer = grad_query_tensor.buffer();
+    const auto* u_scaler_buffer = u_scaler_tensor.buffer();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
@@ -655,10 +677,11 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             runtime_args[kIntermediatesBufferIdx] = intermediates_buffer->address();
         }
 
-        // Update output buffer for writer kernel
+        // Update output buffers for writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kGradQueryBufferIdx] = grad_query_buffer->address();
+            runtime_args[kUScalerOutputBufferIdx] = u_scaler_buffer->address();
         }
     }
 }

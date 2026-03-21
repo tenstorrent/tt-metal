@@ -16,12 +16,16 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     const ttnn::Tensor& grad_output;               // Gradient w.r.t. output
-    const ttnn::Tensor& attn_output;               // sdap forward output (needed for gradients)
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
     const ttnn::Tensor& value;                     // Input V (needed for gradients)
     const std::optional<ttnn::Tensor>& attn_mask;  // attention mask
     const ttnn::Tensor& intermediates;             // From forward pass (max_val,1/sum_exp values)
+
+    // When u_scaler is provided, attn_output is not needed (precomputed by Q kernel)
+    // When u_scaler is absent, attn_output must be provided (KV kernel computes u_scaler internally)
+    std::optional<ttnn::Tensor> attn_output;
+    std::optional<ttnn::Tensor> u_scaler;
 
     // Preallocated gradient tensors (optional)
     std::optional<ttnn::Tensor> preallocated_grad_key;

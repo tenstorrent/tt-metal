@@ -33,13 +33,14 @@ namespace ttnn::prim {
 
 ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_value_t ttml_sdpa_kv_bw(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
+    const std::optional<ttnn::Tensor>& u_scaler = std::nullopt,
+    const std::optional<ttnn::Tensor>& attn_output = std::nullopt,
     const float dropout_probability = 0.0F,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
