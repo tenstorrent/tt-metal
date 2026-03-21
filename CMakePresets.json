@@ -82,6 +82,39 @@
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
         "toolchainFile": "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
+      },
+      {
+        "name": "clang-tidy-kernels",
+        "inherits": "default",
+        "description": "Run Clang Tidy on kernel (device) code",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": {"value": "Debug"},
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--config-file=${sourceDir}/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "ENABLE_KERNEL_CLANG_TIDY": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        }
+      },
+      {
+        "name": "clang-tidy-kernels-fix",
+        "inherits": "clang-tidy-kernels",
+        "description": "Run Clang Tidy on kernel (device) code and apply fix-its",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels-fix",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--config-file=${sourceDir}/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy;--fix;--fix-errors;--fix-notes"}
+        }
+      },
+      {
+        "name": "clang-tidy-kernels-fix-parallel",
+        "inherits": "clang-tidy-kernels",
+        "description": "Run Clang Tidy on kernels in parallel, export fixes to YAML (apply with clang-apply-replacements)",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels-fix-parallel",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-kernels-fix-parallel/fixes;--config-file=${sourceDir}/tt_metal/jit_build/kernel_clang_tidy/.clang-tidy"}
+        }
       }
     ],
     "buildPresets": [
@@ -127,6 +160,24 @@
         "configurePreset": "clang-tidy-fix-parallel",
         "configuration": "RelWithDebInfo",
         "targets": ["all", "all_verify_interface_header_sets"],
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-kernels",
+        "configurePreset": "clang-tidy-kernels",
+        "targets": ["kernel_clang_tidy"],
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-kernels-fix",
+        "configurePreset": "clang-tidy-kernels-fix",
+        "targets": ["kernel_clang_tidy"],
+        "nativeToolOptions": ["-k0", "-j1"]
+      },
+      {
+        "name": "clang-tidy-kernels-fix-parallel",
+        "configurePreset": "clang-tidy-kernels-fix-parallel",
+        "targets": ["kernel_clang_tidy"],
         "nativeToolOptions": ["-k0"]
       }
     ]
