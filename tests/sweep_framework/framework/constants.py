@@ -10,21 +10,47 @@ in the sweep framework to ensure consistency and avoid duplication.
 """
 
 import re
+import os
 from typing import Tuple, Optional
 
 # Lead models are models that are prioritized for sweep testing.
 # These patterns are matched against the source path in traced operations
 # to identify which vectors belong to lead model workloads.
 #
+# Source of truth: model_tracer/sweep_manifest.yaml (targets with scope: lead_models)
+# This list is derived from the manifest at import time.
+# Fallback to hardcoded list if manifest is unavailable (e.g., in CI without checkout).
+#
 # Used by:
 #   - sweeps_parameter_generator.py: To filter vector generation for lead models only
-#   - master_config_loader.py: To filter configurations when loading from master JSON
-#
-# To add a new lead model, add the model directory name pattern here.
-# Example: "llama3" would match source paths containing "llama3"
-LEAD_MODELS = [
-    "deepseek_v3",
-]
+#   - master_config_loader_v2.py: To filter configurations when loading from master JSON
+
+
+def _load_lead_models_from_manifest():
+    """Derive LEAD_MODELS patterns from sweep_manifest.yaml lead_models targets."""
+    try:
+        import yaml
+
+        # Locate manifest relative to repo root (walk up from this file)
+        here = os.path.dirname(os.path.abspath(__file__))
+        for _ in range(6):
+            candidate = os.path.join(here, "model_tracer", "sweep_manifest.yaml")
+            if os.path.exists(candidate):
+                with open(candidate) as f:
+                    data = yaml.safe_load(f) or {}
+                patterns = [
+                    t["model"] for t in data.get("targets", []) if t.get("scope") == "lead_models" and "model" in t
+                ]
+                if patterns:
+                    return patterns
+            here = os.path.dirname(here)
+    except Exception:
+        pass
+    # Fallback
+    return ["deepseek_v3"]
+
+
+LEAD_MODELS = _load_lead_models_from_manifest()
 
 
 # =============================================================================

@@ -1,0 +1,69 @@
+# Sweep Manifest: declares which traces to reconstruct and logs all known traces.
+#
+# TARGETS
+# -------
+# Each entry resolves to one or more trace_run_ids from the registry.
+#
+# Resolution rules:
+#   - model: X              -> latest active trace per unique device_series matching X
+#   - model: X, hardware: H -> latest active trace where device_series=H matching X
+#   - model: X, trace_id: N -> exact trace N only (no resolution, ignores status)
+#   - trace_id: N           -> exact trace N directly
+#
+# scope values:
+#   - lead_models  : included in both lead_models and model_traced CI runs
+#   - model_traced : included in model_traced CI run only (default if omitted)
+#
+# CI usage:
+#   reconstruct-manifest manifest.yaml output.json lead_models   -> lead_models targets only
+#   reconstruct-manifest manifest.yaml output.json model_traced  -> all targets (lead + model_traced)
+#
+# REGISTRY
+# --------
+# Append-only log of all traces loaded into the DB.
+# Auto-appended by `load_ttnn_ops_data_v2.py load` with status: draft.
+# Promote to active manually when ready for testing.
+#
+# status values: active | draft | deprecated
+
+targets:
+  # ── Lead models (included in both lead_models and model_traced CI runs) ─────
+  - model: deepseek_v3
+    scope: lead_models
+
+  # ── Model traced only (all n300 models consolidated into one trace) ──────────
+  - trace_id: 538
+    scope: model_traced
+
+  # ── p150b ────────────────────────────────────────────────────────────────────
+  - trace_id: 1
+    scope: model_traced
+
+registry:
+  - trace_id: 1
+    status: active
+    models: [whisper]
+    hardware: {board_type: Wormhole, device_series: p150b, card_count: 1}
+    tt_metal_sha: null
+    config_count: 318
+    loaded_at: '2026-03-14'
+    notes: 'Migrated from ttnn_configuration_model'
+
+  - trace_id: 35
+    status: active
+    models: [deepseek_v3]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    tt_metal_sha: null
+    config_count: 323
+    loaded_at: '2026-03-14'
+    notes: 'Migrated from ttnn_configuration_model'
+
+  - trace_id: 538
+    status: active
+    models: [whisper, llama, phi, mistral, qwen, deepseek, stable_diffusion, vit,
+             segmentation, falcon7b, sentence_bert, efficientnetb0]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    tt_metal_sha: null
+    config_count: 7030
+    loaded_at: '2026-03-14'
+    notes: 'Consolidated n300 trace — all models (v2.5 migration)'

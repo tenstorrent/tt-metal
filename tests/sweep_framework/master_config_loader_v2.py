@@ -821,9 +821,12 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
-                4. None (degraded mode — empty configs)
+                2. TTNN_MASTER_JSON_PATH env var (set by CI per run type)
+                3. ttnn_operations_master_lead_models.json (manifest-based, lead_models scope)
+                4. ttnn_operations_master_model_traced.json (manifest-based, all scopes)
+                5. ttnn_operations_master_v2_reconstructed.json (legacy DB-reconstructed)
+                6. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                7. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
             override = MasterConfigLoader._master_file_override
@@ -837,17 +840,27 @@ class MasterConfigLoader:
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
-            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
 
-            if os.path.exists(reconstructed_v2_path):
-                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
-                master_file_path = reconstructed_v2_path
-            elif os.path.exists(default_trace_path):
-                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
-                master_file_path = default_trace_path
-            else:
-                master_file_path = None
+            # Env var override (set by CI for each run type)
+            env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+            if env_path and os.path.exists(env_path):
+                logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
+                master_file_path = env_path
+
+            # Resolution order for manifest-based JSONs (produced by reconstruct-manifest)
+            candidates = [
+                ("lead_models manifest", os.path.join(traced_dir, "ttnn_operations_master_lead_models.json")),
+                ("model_traced manifest", os.path.join(traced_dir, "ttnn_operations_master_model_traced.json")),
+                ("V2 reconstructed (legacy)", os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")),
+                ("fresh trace", os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")),
+            ]
+
+            if master_file_path is None:
+                for label, path in candidates:
+                    if os.path.exists(path):
+                        logger.info(f"✅ Using {label}: {path}")
+                        master_file_path = path
+                        break
 
         self.master_file_path = master_file_path
         self.master_data = None

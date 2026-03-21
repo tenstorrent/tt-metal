@@ -16,7 +16,60 @@ import hashlib
 import copy
 import os
 import re
+from datetime import date
+from pathlib import Path
+
 import psycopg2
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+# Default manifest path (relative to repo root)
+_DEFAULT_MANIFEST = "model_tracer/sweep_manifest.yaml"
+
+
+def _get_manifest_path(manifest_path=None):
+    """Resolve manifest path, defaulting to repo-relative location."""
+    if manifest_path:
+        return manifest_path
+    # Try relative to cwd first, then relative to this file's repo root
+    if os.path.exists(_DEFAULT_MANIFEST):
+        return _DEFAULT_MANIFEST
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent  # tests/sweep_framework -> repo root
+    candidate = repo_root / _DEFAULT_MANIFEST
+    if candidate.exists():
+        return str(candidate)
+    return _DEFAULT_MANIFEST
+
+
+def _require_yaml():
+    if yaml is None:
+        raise ImportError("PyYAML is required for manifest operations. " "Install it with: pip install pyyaml")
+
+
+def _load_manifest(manifest_path=None):
+    """Load the manifest YAML. Returns dict with 'targets' and 'registry' keys."""
+    _require_yaml()
+    path = _get_manifest_path(manifest_path)
+    if os.path.exists(path):
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+    data.setdefault("targets", [])
+    data.setdefault("registry", [])
+    return data, path
+
+
+def _save_manifest(data, path):
+    """Write manifest YAML back to disk."""
+    _require_yaml()
+    with open(path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
 
 # Connection string from environment (supports both CI and local env var names)
 NEON_URL = os.environ.get("TTNN_OPS_DATABASE_URL") or os.environ.get("NEON_CONNECTION_STRING")
@@ -378,10 +431,69 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
 
-def load_data():
-    """Main loading function."""
-    print(f"Loading JSON from {JSON_PATH}...")
-    with open(JSON_PATH) as f:
+def _has_trace_run_tables(cur):
+    """Check if trace_run tables exist in the schema."""
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'ttnn_ops_v2_5' AND table_name = 'trace_run'
+        )
+    """
+    )
+    return cur.fetchone()[0]
+
+
+def get_or_create_trace_run(cur, trace_run_cache, model_id, board_type, device_series, card_count, tt_metal_sha=None):
+    """Get or create a trace_run for this (model, hardware) combination.
+
+    Returns trace_run_id, or None if trace_run tables don't exist.
+    """
+    if not board_type:
+        board_type = "unknown"
+    if not device_series:
+        device_series = "unknown"
+
+    tr_key = (model_id, board_type, device_series, card_count, tt_metal_sha)
+    if tr_key not in trace_run_cache:
+        cur.execute(
+            """
+            INSERT INTO ttnn_ops_v2_5.trace_run
+                (model_id, board_type, device_series, card_count, tt_metal_sha)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING trace_run_id
+            """,
+            (model_id, board_type, device_series, card_count, tt_metal_sha),
+        )
+        trace_run_cache[tr_key] = cur.fetchone()[0]
+
+    return trace_run_cache[tr_key]
+
+
+def link_trace_run_config(cur, trace_run_id, config_id, execution_count):
+    """Link a configuration to a trace_run via trace_run_config."""
+    cur.execute(
+        """
+        INSERT INTO ttnn_ops_v2_5.trace_run_config (trace_run_id, configuration_id, execution_count)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (trace_run_id, configuration_id) DO UPDATE
+        SET execution_count = ttnn_ops_v2_5.trace_run_config.execution_count + EXCLUDED.execution_count
+        """,
+        (trace_run_id, config_id, execution_count),
+    )
+
+
+def load_data(json_path=None, tt_metal_sha=None):
+    """Main loading function.
+
+    Args:
+        json_path: Path to JSON file (defaults to JSON_PATH).
+        tt_metal_sha: Git SHA of tt-metal at trace time (optional).
+                      If None, attempts to detect from git.
+    """
+    json_path = json_path or JSON_PATH
+    print(f"Loading JSON from {json_path}...")
+    with open(json_path) as f:
         data = json.load(f)
 
     operations = data.get("operations", {})
@@ -396,10 +508,32 @@ def load_data():
     hardware_cache = {}
     mesh_config_cache = {}
     config_cache = {}  # config_hash -> config_id
+    trace_run_cache = {}  # (model_id, board_type, device_series, card_count, sha) -> trace_run_id
 
-    total_configs = 0
+    # Check if trace_run tables exist (additive migration may not have run yet)
+    has_trace_runs = _has_trace_run_tables(cur)
+    if has_trace_runs:
+        print("  trace_run tables detected — will populate trace_run + trace_run_config")
+    else:
+        print("  trace_run tables not found — populating ttnn_configuration_model only")
+        print("  (run migrate_v2_5_add_trace_runs.sql to enable trace_run support)")
+
+    # Auto-detect tt_metal_sha if not provided
+    if tt_metal_sha is None:
+        try:
+            import subprocess
+
+            result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                tt_metal_sha = result.stdout.strip()
+                print(f"  Detected tt-metal SHA: {tt_metal_sha[:12]}")
+        except Exception:
+            pass
+
+    new_configs = 0  # configs inserted for the first time this load
     total_args = 0
     total_model_links = 0
+    total_trace_run_links = 0  # all configs linked to trace_runs (new + pre-existing)
 
     for op_name, op_data in operations.items():
         # Insert operation
@@ -520,7 +654,7 @@ def load_data():
                         )
                         config_id = cur.fetchone()[0]
                         config_cache[config_hash] = config_id
-                        total_configs += 1
+                        new_configs += 1
 
                         # Insert arguments (only for new configs)
                         for i, arg in enumerate(arguments):
@@ -607,11 +741,47 @@ def load_data():
                     )
                     total_model_links += 1
 
+                    # Also link via trace_run if tables exist
+                    if has_trace_runs and board_type:
+                        ds = device_series
+                        if isinstance(ds, list):
+                            ds = ds[0] if ds else "unknown"
+                        trace_run_id = get_or_create_trace_run(
+                            cur,
+                            trace_run_cache,
+                            model_id,
+                            board_type,
+                            ds or "unknown",
+                            card_count or 1,
+                            tt_metal_sha,
+                        )
+                        link_trace_run_config(cur, trace_run_id, config_id, execution_count)
+                        total_trace_run_links += 1
+
         conn.commit()
         print(f"  Loaded {op_name}: {len(op_data.get('configurations', []))} JSON configs")
 
+    # Update config_count on trace_runs created during this load
+    if has_trace_runs and trace_run_cache:
+        for tr_id in trace_run_cache.values():
+            cur.execute(
+                """
+                UPDATE ttnn_ops_v2_5.trace_run
+                SET config_count = (
+                    SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config
+                    WHERE trace_run_id = %s
+                )
+                WHERE trace_run_id = %s
+                """,
+                (tr_id, tr_id),
+            )
+
     conn.commit()
-    print(f"\n✅ Loaded {total_configs} unique configurations, {total_args} arguments, {total_model_links} model links")
+    print(
+        f"\n✅ Loaded {total_trace_run_links} configurations ({new_configs} new, {total_trace_run_links - new_configs} pre-existing), {total_args} arguments, {total_model_links} model links"
+    )
+    if has_trace_runs:
+        print(f"   Trace runs created: {len(trace_run_cache)}, total configs tied to traces: {total_trace_run_links}")
 
     # Print stats
     cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_operation")
@@ -628,8 +798,79 @@ def load_data():
     print(f"   Arguments: {cur.fetchone()[0]}")
     cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_configuration_model")
     print(f"   Config-Model links: {cur.fetchone()[0]}")
+    if has_trace_runs:
+        cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run")
+        print(f"   Trace runs: {cur.fetchone()[0]}")
+        cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config")
+        print(f"   Trace-Config links: {cur.fetchone()[0]}")
 
     conn.close()
+
+    # Auto-append draft entries to manifest registry
+    if has_trace_runs and trace_run_cache and yaml is not None:
+        _append_manifest_drafts(trace_run_cache, model_cache)
+
+
+def _append_manifest_drafts(trace_run_cache, model_cache):
+    """Append draft registry entries to the manifest for newly created trace_runs."""
+    try:
+        data, path = _load_manifest()
+    except Exception as e:
+        print(f"  Warning: could not update manifest registry: {e}")
+        return
+
+    # Reverse model_cache: model_id -> list of model pattern names
+    model_id_to_names = {}
+    for (source_file, hf_model), mid in model_cache.items():
+        name = extract_model_family(source_file, hf_model) or (
+            hf_model.split("/")[-1] if hf_model else os.path.basename(source_file or "unknown").replace(".py", "")
+        )
+        model_id_to_names.setdefault(mid, set()).add(name)
+
+    existing_ids = {entry.get("trace_id") for entry in data["registry"]}
+    added = 0
+
+    for (model_id, board_type, device_series, card_count, sha), trace_run_id in trace_run_cache.items():
+        if trace_run_id in existing_ids:
+            continue
+
+        models = sorted(model_id_to_names.get(model_id, {"unknown"}))
+        entry = {
+            "trace_id": trace_run_id,
+            "status": "draft",
+            "models": models,
+            "hardware": {
+                "board_type": board_type,
+                "device_series": device_series,
+                "card_count": card_count,
+            },
+            "tt_metal_sha": sha,
+            "config_count": None,  # updated after commit
+            "loaded_at": str(date.today()),
+            "notes": "",
+        }
+        data["registry"].append(entry)
+        existing_ids.add(trace_run_id)
+        added += 1
+
+    if added:
+        # Fetch config counts for new entries
+        try:
+            conn = psycopg2.connect(NEON_URL)
+            cur = conn.cursor()
+            for entry in data["registry"]:
+                if entry.get("config_count") is None:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config WHERE trace_run_id = %s",
+                        (entry["trace_id"],),
+                    )
+                    entry["config_count"] = cur.fetchone()[0]
+            conn.close()
+        except Exception:
+            pass
+
+        _save_manifest(data, path)
+        print(f"  Appended {added} draft entries to manifest registry ({path})")
 
 
 # =============================================================================
@@ -957,6 +1198,399 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
         print(f"Saved to {output_path}")
 
     return result
+
+
+def reconstruct_from_trace_run(trace_run_id, output_path=None):
+    """Reconstruct JSON for a specific trace_run, matching the tracer's output format.
+
+    This produces output identical to what generic_ops_tracer.py would generate
+    for a fresh trace of the same model on the same hardware.
+
+    Args:
+        trace_run_id: ID of the trace_run to reconstruct.
+        output_path: Path to write the reconstructed JSON.
+
+    Returns:
+        Dict in the tracer's master JSON format.
+    """
+    print(f"Reconstructing JSON from trace_run {trace_run_id}...")
+    conn = psycopg2.connect(NEON_URL)
+    cur = conn.cursor()
+
+    # Fetch trace_run metadata
+    cur.execute(
+        """
+        SELECT
+            tr.trace_run_id, tr.board_type, tr.device_series, tr.card_count,
+            tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes,
+            m.ttnn_model_id, m.source_file, m.hf_model_identifier
+        FROM ttnn_ops_v2_5.trace_run tr
+        JOIN ttnn_ops_v2_5.ttnn_model m ON m.ttnn_model_id = tr.model_id
+        WHERE tr.trace_run_id = %s
+        """,
+        (trace_run_id,),
+    )
+    tr_row = cur.fetchone()
+    if not tr_row:
+        print(f"Trace run {trace_run_id} not found")
+        conn.close()
+        return None
+
+    (
+        _,
+        board_type,
+        device_series,
+        card_count,
+        tt_metal_sha,
+        traced_at,
+        config_count,
+        notes,
+        model_id,
+        source_file,
+        hf_model_identifier,
+    ) = tr_row
+
+    # Build source string (same format as tracer)
+    test_source = format_source(source_file, hf_model_identifier)
+
+    # Build machine_info (same format as tracer)
+    machine_info = {
+        "board_type": board_type,
+        "device_series": device_series,
+        "card_count": card_count,
+    }
+
+    # Fetch all configurations for this trace_run, grouped by operation
+    cur.execute(
+        """
+        SELECT
+            o.operation_name,
+            c.ttnn_configuration_id,
+            c.config_hash,
+            c.full_config_json,
+            c.mesh_config_id,
+            mc.mesh_shape,
+            mc.device_count,
+            trc.execution_count
+        FROM ttnn_ops_v2_5.trace_run_config trc
+        JOIN ttnn_ops_v2_5.ttnn_configuration c
+            ON c.ttnn_configuration_id = trc.configuration_id
+        JOIN ttnn_ops_v2_5.ttnn_operation o
+            ON o.ttnn_operation_id = c.operation_id
+        LEFT JOIN ttnn_ops_v2_5.ttnn_mesh_config mc
+            ON mc.ttnn_mesh_config_id = c.mesh_config_id
+        WHERE trc.trace_run_id = %s
+        ORDER BY o.operation_name, c.ttnn_configuration_id
+        """,
+        (trace_run_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    # Group by operation and build the tracer output format
+    result = {"operations": {}, "metadata": {}}
+    ops = {}
+
+    for (
+        op_name,
+        config_id,
+        config_hash,
+        full_config_json,
+        mesh_config_id,
+        mesh_shape,
+        device_count,
+        execution_count,
+    ) in rows:
+        if op_name not in ops:
+            ops[op_name] = []
+
+        # Use full_config_json for arguments (preserves exact original structure)
+        arguments = full_config_json.get("arguments", {}) if full_config_json else {}
+
+        # Build execution entry (same structure as tracer)
+        exec_machine_info = machine_info.copy()
+        if mesh_shape:
+            exec_machine_info["mesh_device_shape"] = mesh_shape
+            if device_count:
+                exec_machine_info["device_count"] = device_count
+
+        # Recompute config_hash using V2 normalization for consistency
+        recomputed_hash = compute_config_hash_v2(op_name, arguments, exec_machine_info)
+
+        config_dict = {
+            "config_hash": recomputed_hash,
+            "arguments": arguments,
+            "executions": [
+                {
+                    "source": test_source,
+                    "machine_info": exec_machine_info,
+                    "count": execution_count,
+                }
+            ],
+        }
+
+        ops[op_name].append(config_dict)
+
+    # Build final structure
+    for op_name in sorted(ops.keys()):
+        result["operations"][op_name] = {"configurations": ops[op_name]}
+
+    # Add metadata (matches tracer's metadata format)
+    total_configs = sum(len(op["configurations"]) for op in result["operations"].values())
+    result["metadata"] = {
+        "models": [test_source],
+        "unique_operations": len(result["operations"]),
+        "total_configurations": total_configs,
+        "trace_run_id": trace_run_id,
+        "board_type": board_type,
+        "device_series": device_series,
+        "card_count": card_count,
+        "tt_metal_sha": tt_metal_sha,
+        "traced_at": str(traced_at) if traced_at else None,
+    }
+
+    print(f"Reconstructed {len(result['operations'])} operations, {total_configs} configurations")
+
+    if output_path:
+        with open(output_path, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"Saved to {output_path}")
+
+    return result
+
+
+def list_trace_runs(model_filter=None):
+    """List all trace runs, optionally filtered by model.
+
+    Args:
+        model_filter: List of model patterns to filter by (e.g., ["deepseek_v3"]).
+    """
+    conn = psycopg2.connect(NEON_URL)
+    cur = conn.cursor()
+
+    query = """
+        SELECT
+            tr.trace_run_id,
+            m.source_file,
+            m.hf_model_identifier,
+            tr.board_type,
+            tr.device_series,
+            tr.card_count,
+            tr.tt_metal_sha,
+            tr.traced_at,
+            tr.config_count,
+            tr.notes
+        FROM ttnn_ops_v2_5.trace_run tr
+        JOIN ttnn_ops_v2_5.ttnn_model m ON m.ttnn_model_id = tr.model_id
+    """
+    params = []
+
+    if model_filter:
+        like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
+        query += f" WHERE {like_clauses}"
+        params = [f"%{p}%" for p in model_filter]
+
+    query += " ORDER BY tr.traced_at DESC"
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        print("No trace runs found")
+        return []
+
+    print(f"\n{'ID':>4}  {'Model':30}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Notes")
+    print("-" * 120)
+
+    for (
+        tr_id,
+        source_file,
+        hf_model,
+        board_type,
+        device_series,
+        card_count,
+        sha,
+        traced_at,
+        cfg_count,
+        notes,
+    ) in rows:
+        display_name = (hf_model.split("/")[-1] if hf_model else source_file or "?")[:30]
+        hw = f"{device_series} ({card_count}x)"
+        sha_short = sha[:12] if sha else "-"
+        traced = str(traced_at)[:19] if traced_at else "-"
+        print(
+            f"{tr_id:>4}  {display_name:30}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {notes or ''}"
+        )
+
+    return rows
+
+
+def resolve_manifest(manifest_path=None, scope=None):
+    """Resolve manifest targets to a list of trace_run_ids.
+
+    Resolution rules:
+      - model: X              -> latest active trace per unique device_series matching X
+      - model: X, hardware: H -> latest active trace where device_series=H matching X
+      - model: X, trace_id: N -> exact trace N (no resolution, ignores status)
+
+    Args:
+        manifest_path: Path to sweep_manifest.yaml (optional).
+        scope: Filter targets by scope.
+            - None / 'model_traced': all targets (lead_models + model_traced)
+            - 'lead_models': only targets with scope='lead_models'
+
+    Returns:
+        List of unique trace_run_id integers.
+    """
+    data, path = _load_manifest(manifest_path)
+    targets = data.get("targets", [])
+    registry = data.get("registry", [])
+
+    if not targets:
+        print("No targets in manifest")
+        return []
+
+    # Apply scope filter:
+    # - 'lead_models' scope -> only lead_models targets
+    # - 'model_traced' or None -> all targets (lead_models is a subset of model_traced)
+    if scope == "lead_models":
+        targets = [t for t in targets if t.get("scope") == "lead_models"]
+        if not targets:
+            print("No lead_models targets in manifest")
+            return []
+        print(f"Scope: lead_models ({len(targets)} targets)")
+    else:
+        print(f"Scope: model_traced ({len(targets)} targets — all scopes)")
+
+    resolved_ids = []
+
+    for target in targets:
+        model_pattern = target.get("model")
+        pinned_id = target.get("trace_id")
+        hw_filter = target.get("hardware")
+
+        if pinned_id is not None:
+            # Pinned: use directly, ignore status
+            resolved_ids.append(pinned_id)
+            continue
+
+        if not model_pattern:
+            print(f"  Warning: target has no 'model' or 'trace_id', skipping: {target}")
+            continue
+
+        # Filter registry to active entries matching model pattern
+        candidates = []
+        for entry in registry:
+            if entry.get("status") != "active":
+                continue
+            models = entry.get("models", [])
+            # Case-insensitive substring match against any model name in the entry
+            if not any(model_pattern.lower() in m.lower() for m in models):
+                continue
+            if hw_filter:
+                hw = entry.get("hardware", {})
+                if hw.get("device_series") != hw_filter:
+                    continue
+            candidates.append(entry)
+
+        if not candidates:
+            print(f"  Warning: no active traces match target {target}")
+            continue
+
+        # Group by device_series, pick latest (highest trace_id) per group
+        by_hw = {}
+        for entry in candidates:
+            ds = entry.get("hardware", {}).get("device_series", "unknown")
+            existing = by_hw.get(ds)
+            if existing is None or entry["trace_id"] > existing["trace_id"]:
+                by_hw[ds] = entry
+
+        for entry in by_hw.values():
+            resolved_ids.append(entry["trace_id"])
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for tid in resolved_ids:
+        if tid not in seen:
+            seen.add(tid)
+            unique.append(tid)
+
+    print(f"Resolved {len(targets)} targets to {len(unique)} trace_run_ids: {unique}")
+    return unique
+
+
+def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None):
+    """Reconstruct merged JSON from manifest targets.
+
+    Resolves targets to trace_run_ids, reconstructs each, merges configs
+    deduplicated by config_hash.
+
+    Args:
+        manifest_path: Path to sweep_manifest.yaml (optional).
+        output_path: Path to write the merged JSON (optional).
+        scope: 'lead_models' or 'model_traced' (None = all targets).
+
+    Returns:
+        Merged dict in the tracer's master JSON format.
+    """
+    trace_ids = resolve_manifest(manifest_path, scope=scope)
+    if not trace_ids:
+        print("Nothing to reconstruct")
+        return {"operations": {}, "metadata": {}}
+
+    # Reconstruct each trace
+    all_results = []
+    for tid in trace_ids:
+        result = reconstruct_from_trace_run(tid)
+        if result:
+            all_results.append(result)
+
+    if not all_results:
+        print("No traces could be reconstructed")
+        return {"operations": {}, "metadata": {}}
+
+    # Merge: union operations, deduplicate configs by config_hash
+    merged = {"operations": {}, "metadata": {"trace_run_ids": trace_ids, "models": []}}
+
+    seen_hashes = {}  # config_hash -> True (global dedup across all traces)
+    total_configs = 0
+    total_deduped = 0
+
+    for result in all_results:
+        # Merge metadata
+        for model in result.get("metadata", {}).get("models", []):
+            if model not in merged["metadata"]["models"]:
+                merged["metadata"]["models"].append(model)
+
+        # Merge operations
+        for op_name, op_data in result.get("operations", {}).items():
+            if op_name not in merged["operations"]:
+                merged["operations"][op_name] = {"configurations": []}
+
+            for config in op_data.get("configurations", []):
+                ch = config.get("config_hash")
+                total_configs += 1
+                if ch and ch in seen_hashes:
+                    total_deduped += 1
+                    continue
+                if ch:
+                    seen_hashes[ch] = True
+                merged["operations"][op_name]["configurations"].append(config)
+
+    # Update metadata
+    final_configs = sum(len(op["configurations"]) for op in merged["operations"].values())
+    merged["metadata"]["unique_operations"] = len(merged["operations"])
+    merged["metadata"]["total_configurations"] = final_configs
+
+    print(f"Merged {len(all_results)} traces: {final_configs} configs ({total_deduped} duplicates removed)")
+
+    if output_path:
+        with open(output_path, "w") as f:
+            json.dump(merged, f, indent=2)
+        print(f"Saved to {output_path}")
+
+    return merged
 
 
 def reconstruct_single_operation(operation_name, output_path=None):
@@ -1373,7 +2007,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == "load":
-            load_data()
+            json_path = sys.argv[2] if len(sys.argv) > 2 else None
+            sha = sys.argv[3] if len(sys.argv) > 3 else None
+            load_data(json_path=json_path, tt_metal_sha=sha)
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
             schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2_5"
@@ -1390,6 +2026,25 @@ if __name__ == "__main__":
             schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2_5"
             print(f"Using lead model patterns: {LEAD_MODELS}")
             reconstruct_from_db(output, schema, model_filter=LEAD_MODELS)
+        elif cmd == "reconstruct-trace":
+            if len(sys.argv) < 3:
+                print("Usage: python load_ttnn_ops_data_v2.py reconstruct-trace <trace_run_id> [output.json]")
+                sys.exit(1)
+            tr_id = int(sys.argv[2])
+            output = sys.argv[3] if len(sys.argv) > 3 else None
+            reconstruct_from_trace_run(tr_id, output)
+        elif cmd == "list-traces":
+            model_filter = sys.argv[2].split(",") if len(sys.argv) > 2 else None
+            list_trace_runs(model_filter)
+        elif cmd == "reconstruct-manifest":
+            manifest = sys.argv[2] if len(sys.argv) > 2 else None
+            output = sys.argv[3] if len(sys.argv) > 3 else None
+            scope = sys.argv[4] if len(sys.argv) > 4 else None
+            reconstruct_from_manifest(manifest, output, scope)
+        elif cmd == "resolve-manifest":
+            manifest = sys.argv[2] if len(sys.argv) > 2 else None
+            scope = sys.argv[3] if len(sys.argv) > 3 else None
+            resolve_manifest(manifest, scope)
         elif cmd == "reconstruct-op":
             if len(sys.argv) < 3:
                 print("Usage: python load_ttnn_ops_data_v2.py reconstruct-op <operation_name> [output.json]")
@@ -1416,13 +2071,23 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {cmd}")
             print("Usage:")
-            print("  python load_ttnn_ops_data_v2.py load                                        # Load JSON to DB")
+            print("  python load_ttnn_ops_data_v2.py load [json_path] [tt_metal_sha]              # Load JSON to DB")
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB"
             )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct-lead [output] [schema]           # Reconstruct lead models only"
             )
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-trace <id> [output.json]         # Reconstruct from trace_run"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-manifest [manifest] [output] [scope]  # Reconstruct from manifest"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py resolve-manifest [manifest] [scope]               # Show resolved trace IDs"
+            )
+            print("  python load_ttnn_ops_data_v2.py list-traces [model_filter]                   # List trace runs")
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct-op <name>                       # Reconstruct single op"
             )
