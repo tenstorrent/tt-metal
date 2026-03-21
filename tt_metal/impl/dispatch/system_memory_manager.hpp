@@ -6,8 +6,7 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
-#include <umd/device/tt_io.hpp>                     // for umd::Writer
+#include <umd/device/pcie/tlb_window.hpp>            // for tt::umd::TlbWindow
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
@@ -113,8 +112,8 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<umd::Writer> prefetch_q_writers;
-    std::vector<umd::Writer> completion_q_writers;
+    std::vector<tt::umd::TlbWindow*> prefetch_q_windows;
+    std::vector<tt::umd::TlbWindow*> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 
