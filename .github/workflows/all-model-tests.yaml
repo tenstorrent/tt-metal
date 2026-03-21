@@ -1,38 +1,45 @@
 name: "All Model Tests"
 
+run-name: >-
+  All Model Tests —
+  Tiers[${{ inputs.tier-1 && '1' || '' }}${{ inputs.tier-1 && inputs.tier-2 && ',' || '' }}${{ inputs.tier-2 && '2' || '' }}${{ (inputs.tier-1 || inputs.tier-2) && inputs.tier-3 && ',' || '' }}${{ inputs.tier-3 && '3' || '' }}]
+  Tests[${{ inputs.run-unit-tests && 'unit' || '' }}${{ inputs.run-unit-tests && inputs.run-e2e-tests && ',' || '' }}${{ inputs.run-e2e-tests && 'e2e' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests) && inputs.run-sweep-tests && ',' || '' }}${{ inputs.run-sweep-tests && 'sweep' || '' }}]
+  Model[${{ inputs.model || 'all' }}]
+  SKUs[${{ inputs.skus }}]
+
 on:
   workflow_dispatch:
     inputs:
-      # ── Tier selection (checkboxes) ───────────────────────────────
-      tier-1:
-        description: "Tier 1"
-        required: false
-        type: boolean
-        default: true
-      tier-2:
-        description: "Tier 2"
-        required: false
-        type: boolean
-        default: true
-      tier-3:
-        description: "Tier 3"
-        required: false
-        type: boolean
-        default: false
-
       # ── Test type selection (checkboxes) ──────────────────────────
       run-unit-tests:
-        description: "Unit tests"
+        description: "Model Unit tests"
         required: false
         type: boolean
         default: true
       run-e2e-tests:
-        description: "End-to-end tests"
+        description: "Model End-to-end tests"
         required: false
         type: boolean
         default: true
       run-sweep-tests:
-        description: "Sweep tests"
+        description: "Model Sweep tests"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Tier selection (checkboxes) ───────────────────────────────
+      tier-1:
+        description: "Tier 1 (Critical Models)"
+        required: false
+        type: boolean
+        default: true
+      tier-2:
+        description: "Tier 2 (Standard Models)"
+        required: false
+        type: boolean
+        default: true
+      tier-3:
+        description: "Tier 3 (Lower Priority Models)"
         required: false
         type: boolean
         default: false
@@ -46,7 +53,7 @@ on:
 
       # ── Other filters ─────────────────────────────────────────────
       model:
-        description: "Model filter (e.g. llama3.1-8b). Leave 'all' to run everything."
+        description: "Model filter — substring match (e.g. 'llama' matches llama3.1-8b, llama3.2-70b). See models/model_ci_tiers.md for the full list. Leave 'all' to run everything."
         required: false
         default: all
         type: string
@@ -146,12 +153,32 @@ jobs:
 
       - name: Check which tier/test-type combos have matching tests
         id: check
+        env:
+          ENABLED_SKUS: ${{ steps.resolve-skus.outputs.enabled-skus }}
+          MODEL_FILTER: ${{ inputs.model || 'all' }}
+          TIER_1: ${{ inputs.tier-1 }}
+          TIER_2: ${{ inputs.tier-2 }}
+          TIER_3: ${{ inputs.tier-3 }}
+          RUN_UNIT: ${{ inputs.run-unit-tests }}
+          RUN_E2E: ${{ inputs.run-e2e-tests }}
+          RUN_SWEEP: ${{ inputs.run-sweep-tests }}
         run: |
           python3 - <<'PYEOF'
           import yaml, os, sys
 
-          enabled_skus = "${{ steps.resolve-skus.outputs.enabled-skus }}".split(",")
-          model_filter = "${{ inputs.model || 'all' }}"
+          enabled_skus = os.environ["ENABLED_SKUS"].split(",")
+          model_filter = os.environ["MODEL_FILTER"]
+
+          # Which tiers and test types did the user select?
+          enabled_tiers = set()
+          if os.environ.get("TIER_1") == "true": enabled_tiers.add(1)
+          if os.environ.get("TIER_2") == "true": enabled_tiers.add(2)
+          if os.environ.get("TIER_3") == "true": enabled_tiers.add(3)
+
+          enabled_test_types = set()
+          if os.environ.get("RUN_UNIT") == "true": enabled_test_types.add("unit")
+          if os.environ.get("RUN_E2E") == "true": enabled_test_types.add("e2e")
+          if os.environ.get("RUN_SWEEP") == "true": enabled_test_types.add("sweep")
 
           # Map of test-type -> YAML file
           test_files = {
@@ -159,6 +186,12 @@ jobs:
               "e2e":   "tests/pipeline_reorg/models_e2e_tests.yaml",
               "sweep": "tests/pipeline_reorg/models_sweep_tests.yaml",
           }
+
+          def model_matches(test_model, filter_str):
+              """Substring match: 'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc."""
+              if filter_str == "all":
+                  return True
+              return filter_str.lower() in test_model.lower()
 
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
@@ -183,14 +216,15 @@ jobs:
                       # Check if any SKU matches both the enabled list and the tier
                       for sku_name, sku_cfg in skus.items():
                           if sku_name in enabled_skus and sku_cfg.get("tier") == tier:
-                              # Check model filter
-                              if model_filter == "all" or test.get("model") == model_filter:
+                              # Check model filter (substring match)
+                              if model_matches(test.get("model", ""), model_filter):
                                   found = True
                                   break
                       if found:
                           break
                   results[key] = "true" if found else "false"
-                  if found:
+                  # Only count toward any_tests if the user actually selected this tier and test type
+                  if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
 
           results["has-any-tests"] = "true" if any_tests else "false"
@@ -207,7 +241,20 @@ jobs:
               print(f"  {icon} {k} = {v}")
 
           if not any_tests:
-              print("\n::warning::No tests match the selected combination of tiers, test types, SKUs, and model filter. Nothing will run.")
+              missing = []
+              if not enabled_test_types:
+                  missing.append("test group")
+              if not enabled_tiers:
+                  missing.append("tier")
+              if not enabled_skus or enabled_skus == [""]:
+                  missing.append("SKU")
+              if not model_filter:
+                  missing.append("model")
+              if missing:
+                  print(f"\n::error::No tests to run. Please select at least one: {', '.join(missing)}.")
+              else:
+                  print(f"\n::error::No tests to run. No tests match the selected filters (tiers={sorted(enabled_tiers)}, test groups={sorted(enabled_test_types)}, SKUs={enabled_skus}, model={model_filter}).")
+              sys.exit(1)
           PYEOF
 
   # ── Build (only if at least one combo has tests) ─────────────────
