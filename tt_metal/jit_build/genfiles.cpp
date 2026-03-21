@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -201,6 +202,31 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
+
+    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
+    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en) {
+        bool has_fp8 = std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
+            return f == DataFormat::Fp8_e4m3;
+        });
+        if (has_fp8) {
+            for (size_t i = 0; i < src_formats.size(); i++) {
+                if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+                    continue;
+                }
+                switch (src_formats[i]) {
+                    case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                    case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                    case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                    case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                    default: break;
+                }
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
