@@ -91,9 +91,6 @@ With `--dry-run`, the transaction is rolled back and the summary shows what the 
 Each model gets a short, lowercase `model_name` derived from its source path or HF identifier when it is first inserted. If the loader reports a `model_name` uniqueness error, disambiguate with:
 
 ```bash
-# Recompute all model_names from current source_file / hf_model_identifier values
-python tests/sweep_framework/load_ttnn_ops_data_v2.py fix-model-names
-
 # Override a specific model's name
 python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
     --source-file "path/to/demo.py" --model-name custom_name
@@ -425,7 +422,6 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 | Command | Description |
 |---|---|
 | `load [json] [sha] [--dry-run]` | Load JSON into DB. Creates trace_run, appends draft to manifest. `--dry-run` previews without committing. |
-| `fix-model-names` | Recompute `model_name` for all models from their source_file / hf_model_identifier. |
 | `set-model-name --source-file P --model-name N` | Override a model's name. Also accepts `--hf-model` or `--model-id`. |
 | `delete-trace <id> [--yes]` | Delete a trace_run and any configs tied exclusively to it. Configs shared with other traces are kept. |
 | `reconstruct-manifest [manifest] [output] [scope]` | Resolve targets → reconstruct (filtered to target models) → merge. `scope`: `lead_models` or `model_traced` (default: all) |
@@ -433,10 +429,8 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 | `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run (all models) |
 | `list-traces [filter]` | List all trace_runs in DB |
 | `reconstruct [output] [schema] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
-| `reconstruct-lead [output] [schema]` | Reconstruct lead models only (legacy) |
 | `reconstruct-op <name> [output]` | Reconstruct a single operation |
 | `verify [original] [reconstructed]` | Compare two JSON files |
-| `duplicates [json] [op]` | Detect duplicate configs in a JSON file |
 | `find-lines <op> <i1,i2,...>` | Find line numbers for config indices in a JSON file |
 
 ---

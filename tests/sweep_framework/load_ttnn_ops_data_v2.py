@@ -338,8 +338,9 @@ def get_or_create_model(cur, model_cache, source_file, hf_model):
         )
         row = cur.fetchone()
         if row:
+            # Only set model_name when it's NULL to preserve set-model-name overrides.
             cur.execute(
-                "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW() WHERE ttnn_model_id = %s",
+                "UPDATE ttnn_ops_v5.ttnn_model SET model_name = COALESCE(model_name, %s), update_ts = NOW() WHERE ttnn_model_id = %s",
                 (model_name, row[0]),
             )
             model_cache[model_key] = row[0]
@@ -758,7 +759,8 @@ def _append_manifest_drafts(trace_run_cache):
             )
             trace_models_map[trace_run_id] = [r[0] for r in cur.fetchall()]
         conn.close()
-    except Exception:
+    except Exception as e:
+        print(f"  Warning: could not fetch hardware/model details for manifest: {e}")
         hw_map = {}
         trace_models_map = {}
 
@@ -826,12 +828,18 @@ def format_source(source_file, hf_model):
     return source_file
 
 
+def _validate_schema(schema):
+    """Validate schema name to prevent SQL injection (used in f-string queries)."""
+    if not re.match(r"^[a-zA-Z_]\w*$", schema):
+        raise ValueError(f"Invalid schema name: {schema!r}")
+
+
 def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=None):
     """Reconstruct ttnn_operations_master.json from the database.
 
     Args:
         output_path: Path to write the reconstructed JSON
-        schema: Database schema to use (default: "ttnn_ops_v5"; also supports "ttnn_ops_v2_5")
+        schema: Database schema to use (default: "ttnn_ops_v5")
         model_filter: List of model patterns to filter by (e.g., ["deepseek_v3"]).
                       Only configurations linked to models whose source_file contains
                       one of these patterns (case-insensitive) will be included.
@@ -855,6 +863,7 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=Non
     }
     """
     filter_desc = f", model_filter={model_filter}" if model_filter else ""
+    _validate_schema(schema)
     print(f"Reconstructing JSON from database (schema: {schema}{filter_desc})...")
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
@@ -1035,6 +1044,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema="ttnn_ops_
     Returns:
         Dict in the tracer's master JSON format.
     """
+    _validate_schema(schema)
     filter_desc = f", models={sorted(model_names)}" if model_names is not None else ""
     print(f"Reconstructing JSON from trace_run {trace_run_id} (schema: {schema}{filter_desc})...")
     conn = psycopg2.connect(NEON_URL)
