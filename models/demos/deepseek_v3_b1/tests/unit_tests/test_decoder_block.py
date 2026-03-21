@@ -1760,6 +1760,36 @@ def _run_decoder_and_validate_vs_trace(
     device_attn_output = ttnn_attention_output[sender_device_idx : sender_device_idx + 1, :].flatten()
     trace_post_mla_token = trace["post_mla"]
 
+    # ── AttentionBlock.golden vs trace ──
+    _, _, golden_attn_output = AttentionBlock.golden(
+        d["golden_torch_input"].float(),
+        d["golden_torch_gamma"].float(),
+        d["golden_torch_matmul_weights"].float(),
+        d["golden_torch_rmsnorm2_gamma"].float(),
+        d["golden_torch_matmul2_weights"].float(),
+        d["golden_torch_matmul3_weights"].float(),
+        d["golden_torch_sin"],
+        d["golden_torch_cos"],
+        d["golden_position_ids"],
+        d["golden_torch_dkv_matmul_weights"].float(),
+        d["golden_torch_dkv_rmsnorm_gamma"].float(),
+        d["golden_torch_kv_cache"].float(),
+        d["golden_scale"],
+        d["golden_torch_kv_b2_proj_weights"].float(),
+        d["golden_torch_o_proj_weights"].float(),
+        epsilon=epsilon,
+        num_qnope_heads=d["golden_total_qnope_heads"],
+        num_qrope_heads=d["golden_total_qrope_heads"],
+    )
+    golden_attn_flat = golden_attn_output.flatten().float()
+    golden_passing, golden_pcc = comp_pcc(trace_post_mla_token.float(), golden_attn_flat, 0.95)
+    golden_max_abs_diff = (trace_post_mla_token.float() - golden_attn_flat).abs().max().item()
+    logger.info(f"AttentionBlock.golden vs trace post_mla_residual: PCC={golden_pcc}, max_diff={golden_max_abs_diff}")
+
+    device_vs_golden_passing, device_vs_golden_pcc = comp_pcc(golden_attn_flat, device_attn_output.float(), 0.95)
+    device_vs_golden_max_diff = (golden_attn_flat - device_attn_output.float()).abs().max().item()
+    logger.info(f"Device attention vs golden: PCC={device_vs_golden_pcc}, max_diff={device_vs_golden_max_diff}")
+
     attn_passing, attn_pcc = comp_pcc(trace_post_mla_token.float(), device_attn_output.float(), 0.95)
     attn_max_abs_diff = (trace_post_mla_token.float() - device_attn_output.float()).abs().max().item()
     logger.info(f"Attention output PCC vs trace post_mla_residual: {attn_pcc}")
