@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -11,9 +12,9 @@ from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
 )
 from models.experimental.petr.reference.petr_head import PETRHead
-from models.experimental.petr.tt.ttnn_petr_head import ttnn_PETRHead
+from models.experimental.petr.tt.tt_petr_head import ttnn_PETRHead
 from models.experimental.petr.reference.petr_head import pos2posemb3d
-from models.experimental.petr.tt.common import create_custom_preprocessor_petr_head, move_to_device
+from models.experimental.petr.tt.model_preprocessing import create_custom_preprocessor_petr_head, move_to_device
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 
@@ -219,16 +220,18 @@ def test_petr_head(device, reset_seeds):
     logger.info("Running TTNN model...")
     ttnn_output = ttnn_model(mlvl_feats, img_metas, device=device)
 
-    # Convert outputs back to torch
-    ttnn_output["all_cls_scores"] = ttnn.to_torch(ttnn_output["all_cls_scores"])
-    ttnn_output["all_bbox_preds"] = ttnn.to_torch(ttnn_output["all_bbox_preds"])
+    # Convert TTNN tensors to PyTorch for PCC check
+    ttnn_output_torch = {
+        "all_cls_scores": ttnn.to_torch(ttnn_output["all_cls_scores"]),
+        "all_bbox_preds": ttnn.to_torch(ttnn_output["all_bbox_preds"]),
+    }
 
     # Verify outputs
-    passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
-    passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
+    passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output_torch["all_cls_scores"], pcc=0.99)
+    passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output_torch["all_bbox_preds"], pcc=0.99)
 
     logger.info(f"petr_head_cls_scores test: PCC={msg}")
     logger.info(f"petr_head_bbox_preds test: PCC={msg1}")
 
-    assert_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
-    assert_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
+    assert_with_pcc(output["all_cls_scores"], ttnn_output_torch["all_cls_scores"], pcc=0.99)
+    assert_with_pcc(output["all_bbox_preds"], ttnn_output_torch["all_bbox_preds"], pcc=0.99)
