@@ -40,6 +40,7 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
             (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
             (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
             (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+            (384, 768, (3, 1, 1)): (384, 64, 1, 16, 2),
         }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
