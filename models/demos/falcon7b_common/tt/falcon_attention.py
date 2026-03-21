@@ -276,7 +276,10 @@ class TtFalconAttentionPrefill(nn.Module):
         ###############
         ### SOFTMAX ###
         ###############
-        attn_weights = ttnn.scale_mask_softmax_in_place(attn_weights)
+        attn_weights = ttnn.scale_mask_softmax_in_place(
+            attn_weights,
+            program_config=ttnn.SoftmaxDefaultProgramConfig(recip_legacy_compat=True),
+        )
 
         ######################
         ### V CACHE UPDATE ###
@@ -421,7 +424,11 @@ class TtFalconAttentionPrefill(nn.Module):
             )
 
             softmax_program_config = self.model_config["SOFTMAX_OPTIMIZED_PROGCFG"](
-                grid_size, subblock_w, mm_output_height_shard_spec[0] // 32, mm_output_height_shard_spec[1] // 32
+                grid_size,
+                subblock_w,
+                mm_output_height_shard_spec[0] // 32,
+                mm_output_height_shard_spec[1] // 32,
+                recip_legacy_compat=True,
             )
             ### SOFTMAX ###
             mm_slices = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
@@ -643,7 +650,8 @@ class TtFalconAttentionDecode(nn.Module):
             )
             query_layer = ttnn.reshape(
                 query_layer,
-                (batch, 1, self.padded_local_heads, self.head_dim),  # Batch must be in dim 0 to match K cache
+                # Batch must be in dim 0 to match K cache
+                (batch, 1, self.padded_local_heads, self.head_dim),
             )
             query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
@@ -672,14 +680,16 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             attn_weights = ttnn.matmul(
                 query_layer,  # [batch, 1, padded_local_heads, head_dim]
-                key_layer_transposed,  # [batch, 1, head_dim, padded_layer_past_len]
+                # [batch, 1, head_dim, padded_layer_past_len]
+                key_layer_transposed,
                 program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
                     self.head_dim // 32, self.padded_local_heads // 32, padded_layer_past_len // 32
                 ),
                 memory_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                     self.padded_local_heads, padded_layer_past_len
                 ),
-                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                # Must be BFLOAT16
+                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],
                 compute_kernel_config=self.model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"],
             )
             query_layer.deallocate()
@@ -690,7 +700,8 @@ class TtFalconAttentionDecode(nn.Module):
                 key_layer_transposed,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                # Must be BFLOAT16
+                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],
             )
             query_layer.deallocate()
             key_layer_transposed.deallocate()
@@ -700,7 +711,8 @@ class TtFalconAttentionDecode(nn.Module):
                 key_layer_transposed,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                # Must be BFLOAT16
+                dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],
             )
             query_layer.deallocate()
             key_layer_transposed.deallocate(True)
@@ -718,7 +730,10 @@ class TtFalconAttentionDecode(nn.Module):
             ###############
             ### SOFTMAX ###
             ###############
-            attn_weights = ttnn.scale_mask_softmax_in_place(attn_weights)
+            attn_weights = ttnn.scale_mask_softmax_in_place(
+                attn_weights,
+                program_config=ttnn.SoftmaxDefaultProgramConfig(recip_legacy_compat=True),
+            )
         else:
             ###############
             ### SOFTMAX ###
@@ -732,6 +747,7 @@ class TtFalconAttentionDecode(nn.Module):
                     subblock_w=1,
                     block_h=self.padded_local_heads // 32,
                     block_w=padded_layer_past_len // 32,
+                    recip_legacy_compat=True,
                 ),
                 is_causal_mask=False,  # causal_mask=False will broadcast attention mask across all heads
             )
@@ -762,7 +778,8 @@ class TtFalconAttentionDecode(nn.Module):
         ########################
         if self.model_config["l1_sharded"]:
             attn_output = ttnn.matmul(
-                attn_weights,  # [batch, 1, padded_local_heads, padded_layer_past_len]
+                # [batch, 1, padded_local_heads, padded_layer_past_len]
+                attn_weights,
                 value_layer,  # [batch, 1, padded_layer_past_len, head_dim]
                 program_config=self.model_config["ATTN_BATCHED_MM_PROGCFG"](
                     padded_layer_past_len // 32,
@@ -799,7 +816,8 @@ class TtFalconAttentionDecode(nn.Module):
                     value_layer,
                     compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    # Must be BFLOAT16
+                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
                 )
             else:
                 attn_output = ttnn.experimental.group_attn_matmul(
@@ -807,7 +825,8 @@ class TtFalconAttentionDecode(nn.Module):
                     value_layer,
                     compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    # Must be BFLOAT16
+                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],
                 )
             attn_weights.deallocate(True)
             value_layer.deallocate()
