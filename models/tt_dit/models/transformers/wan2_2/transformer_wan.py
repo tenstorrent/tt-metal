@@ -215,11 +215,22 @@ class WanTransformerBlock(Module):
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
-
-        # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
-        # NOTE: higher precision compute config in addcmul may be needed for correctness
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
+        if self.ccl_manager.topology == ttnn.Topology.Linear:
+            spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+            # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+            # NOTE: higher precision compute config in addcmul may be needed for correctness
+            spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
+        else:
+            # Fused FFN + addcmul at the RS final write step (Phase 2).
+            # Both 'a' (spatial_1BND) and 'b' (c_gate_msa_1B1D) are already at [D/tp] size
+            # on each TP device — no AllGather or scatter matmul needed.
+            spatial_1BND = self.ffn.forward_fused_addcmul(
+                spatial_normed_1BND,
+                spatial_1BND,
+                c_gate_msa_1B1D,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+            )
 
         return spatial_1BND
 
