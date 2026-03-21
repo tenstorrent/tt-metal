@@ -1,0 +1,26 @@
+# --- Meshes ---------------------------------------------------------------
+# Unified 4x4 mesh spanning 2 vertically-stacked hosts
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] }  # Unified logical 4x4 mesh
+  host_topology   { dims: [ 2, 1 ] }  # 2 hosts stacked vertically
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+
+  # Single unified mesh instance
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+
+  # Connections are implicit based on device_topology [4,4] and host_topology [2,1]
+  # Vertical fabric connections between row 1 (host 0) and row 2 (host 1) are auto-configured
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
