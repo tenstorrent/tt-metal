@@ -26,12 +26,15 @@ CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::cre
     const uint32_t head_dim = operation_attributes.head_dim;
     const bool transpose_k = operation_attributes.transpose_k_heads;
 
+    // Validation
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be greater than 0, got {}", num_kv_heads);
+    TT_FATAL(head_dim > 0, "head_dim must be greater than 0, got {}", head_dim);
+    TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
+
     // Compute heads_per_group
     std::vector<uint32_t> heads_per_group = {num_q_heads / num_kv_heads, 1, 1};
     const uint32_t groups = num_kv_heads;
 
-    // Validation
-    TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
     TT_FATAL(heads_per_group.size() == 3, "heads_per_group size ({}) must equal 3", heads_per_group.size());
 
     const uint32_t total_heads_per_group =
