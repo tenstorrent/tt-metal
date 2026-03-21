@@ -10,7 +10,7 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX, TO_FROM_INT8
+from helpers.test_variant_parameters import RECONFIG_RUN_IDX, TO_FROM_INT8
 
 
 def generate_valid_formats(
@@ -79,7 +79,7 @@ def test_math_reconfig(
             TO_FROM_INT8(to_from_int8),
         ],
         runtimes=[
-            CONFIGURE_TEST_RUN_IDX(0),
+            RECONFIG_RUN_IDX(0),
         ],
         dest_acc=dest_acc,
     )
@@ -87,8 +87,19 @@ def test_math_reconfig(
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
 
-    # We needn't instance the TestConfig object once again, because we're changing only the runtime parameters
-    configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]
+    configuration = TestConfig(
+        "sources/state/reconfig/math_reconfig_test.cpp",
+        FormatConfig(
+            prev_a, prev_b, next_a, next_b, DataFormat.Float32
+        ),  # ikr, but there is no less painful way to do this right now
+        templates=[
+            TO_FROM_INT8(to_from_int8),
+        ],
+        runtimes=[
+            RECONFIG_RUN_IDX(1),
+        ],
+        dest_acc=dest_acc,
+    )
 
     configuration.run()
     actual = TensixState.fetch(TestConfig.TENSIX_LOCATION)

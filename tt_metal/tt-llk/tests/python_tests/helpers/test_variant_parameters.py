@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
+from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -816,14 +817,14 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
-class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
-    configure_test_run_idx: int = 0
+class RECONFIG_RUN_IDX(RuntimeParameter):
+    reconfig_run_idx: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t CONFIGURE_TEST_RUN_IDX = {self.configure_test_run_idx};"
+        return f"constexpr std::uint32_t RECONFIG_RUN_IDX = {self.reconfig_run_idx};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t CONFIGURE_TEST_RUN_IDX;", "I"
+        return "std::uint32_t RECONFIG_RUN_IDX;", "I"
 
 
 @dataclass
@@ -846,3 +847,72 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool HOST_IS_STREAM_CONSUMER;", "?"
+
+
+@dataclass
+class PACK_RECONFIG_TEMPLATES(TemplateParameter):
+    pack_src_format: DataFormat
+    pack_dst_format: DataFormat
+    pack_src_format_next: DataFormat
+    pack_dst_format_next: DataFormat
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr auto PACK_SRC_FORMAT =  static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{self.pack_src_format});",
+            f"constexpr auto PACK_DST_FORMAT =  static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{self.pack_dst_format});",
+            f"constexpr auto PACK_SRC_FORMAT_NEXT =  static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{self.pack_src_format_next});",
+            f"constexpr auto PACK_DST_FORMAT_NEXT =  static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{self.pack_dst_format_next});",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class PACK_RECONFIG_RUNTIMES(RuntimeParameter):
+    """Pack reconfig: first configure args (prev), then next configure args, matching _llk_pack_* parameter order."""
+
+    tile_size: int
+    face_r_dim: int
+    tile_c_dim: int
+    num_faces: int
+    partial_face: int
+    narrow_tile: int
+    tile_size_next: int
+    face_r_dim_next: int
+    tile_c_dim_next: int
+    num_faces_next: int
+    partial_face_next: int
+    narrow_tile_next: int
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr int TILE_SIZE = {self.tile_size};",
+            f"constexpr int FACE_R_DIM = {self.face_r_dim};",
+            f"constexpr int TILE_C_DIM = {self.tile_c_dim};",
+            f"constexpr int NUM_FACES = {self.num_faces};",
+            f"constexpr int PARTIAL_FACE = {self.partial_face};",
+            f"constexpr int NARROW_TILE = {self.narrow_tile};",
+            f"constexpr int TILE_SIZE_NEXT = {self.tile_size_next};",
+            f"constexpr int FACE_R_DIM_NEXT = {self.face_r_dim_next};",
+            f"constexpr int TILE_C_DIM_NEXT = {self.tile_c_dim_next};",
+            f"constexpr int NUM_FACES_NEXT = {self.num_faces_next};",
+            f"constexpr int PARTIAL_FACE_NEXT = {self.partial_face_next};",
+            f"constexpr int NARROW_TILE_NEXT = {self.narrow_tile_next};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        decls = [
+            "int TILE_SIZE;",
+            "int FACE_R_DIM;",
+            "int TILE_C_DIM;",
+            "int NUM_FACES;",
+            "int PARTIAL_FACE;",
+            "int NARROW_TILE;",
+            "int TILE_SIZE_NEXT;",
+            "int FACE_R_DIM_NEXT;",
+            "int TILE_C_DIM_NEXT;",
+            "int NUM_FACES_NEXT;",
+            "int PARTIAL_FACE_NEXT;",
+            "int NARROW_TILE_NEXT;",
+        ]
+        return "\n".join(decls), "i" * 12
