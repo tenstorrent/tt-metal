@@ -263,7 +263,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer.set_unload_set(self.transformer_2, self.tt_vae, self.tt_umt5_encoder)
                 self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
                 self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
 
@@ -1011,7 +1011,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             if output_type == "np":
-                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+                video = (-video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
             else:
                 video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:

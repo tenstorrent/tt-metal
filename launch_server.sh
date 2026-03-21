@@ -211,6 +211,20 @@ for arg in "$@"; do
 done
 
 # ---------------------------------------------------------------------------
+# Handle --no-warmup flag
+# ---------------------------------------------------------------------------
+for arg in "$@"; do
+    if [ "$arg" = "--no-warmup" ]; then
+        if [ "$MODEL" = "wan" ]; then
+            export WAN_SKIP_WARMUP=true
+            echo ""
+            echo "*** WAN NO-WARMUP MODE: Skipping warmup inference (one-off run) ***"
+        fi
+        break
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # Handle --dev flag
 # ---------------------------------------------------------------------------
 DEV_MODE=false

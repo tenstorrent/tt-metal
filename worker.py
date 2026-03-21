@@ -71,6 +71,12 @@ def setup_wan_worker_environment(worker_id: int, config):
     os.environ["TT_METAL_HOME"] = os.getcwd()
     os.environ["PYTHONPATH"] = os.getcwd()
 
+    # Ensure the DiT weight cache is set before WANRunner initializes so that
+    # _cache_root() in models/tt_dit/utils/cache.py returns a valid path and
+    # weights are loaded deterministically from disk (prevents DRAM OOM caused
+    # by fragmentation when weights are loaded from raw PyTorch state dicts).
+    os.environ["TT_DIT_CACHE_DIR"] = config.tt_dit_cache_dir
+
     # WAN needs the full 2x4 mesh (all 8 chips: 4 PCIe L + 4 ethernet R).
     # Do NOT restrict TT_VISIBLE_DEVICES — let UMD discover the full topology.
     # The shell may have set TT_VISIBLE_DEVICES to PCIe-only IDs; clear it here

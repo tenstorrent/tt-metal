@@ -6,6 +6,7 @@ import os
 import sys
 import uuid
 import time
+import queue
 import argparse
 import multiprocessing as mp
 from contextlib import asynccontextmanager
@@ -40,6 +41,11 @@ def parse_args():
         action="store_true",
         help="Enable dev mode (SDXL: 1 worker; SD35: fewer steps, no trace; WAN: fewer steps)",
     )
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        help="Skip warmup inference for WAN (useful for one-off runs where 2nd-inference speedup doesn't matter)",
+    )
     parser.add_argument("--workers", type=int, help="Override number of workers")
     parser.add_argument("--steps", type=int, help="Override number of inference steps")
     parser.add_argument("--guidance", type=float, help="Override guidance scale")
@@ -58,6 +64,9 @@ if args.dev:
         os.environ["SD35_DEV_MODE"] = "true"
     elif args.model == "wan":
         os.environ["WAN_DEV_MODE"] = "true"
+if args.no_warmup:
+    if args.model == "wan":
+        os.environ["WAN_SKIP_WARMUP"] = "true"
 
 # Build the appropriate config
 if args.model == "sd35":
@@ -315,25 +324,28 @@ async def generate_image(request: ImageRequest):
     while time.time() < timeout:
         try:
             result = result_queue.get(timeout=1)
+        except queue.Empty:
+            try:
+                error = error_queue.get_nowait()
+                logger.error(f"Worker error: {error}")
+            except queue.Empty:
+                pass
+            continue
 
-            if result["task_id"] == task_id:
+        if result["task_id"] == task_id:
+            try:
                 base64_images = [pil_to_base64(img) for img in result["images"]]
                 return ImageResponse(
                     images=base64_images,
                     inference_time=result["inference_time"],
                     model=model_label,
                 )
-            else:
-                # Result belongs to a different task — put it back
-                result_queue.put(result)
-
-        except Exception:
-            # Check error queue on timeout
-            try:
-                error = error_queue.get_nowait()
-                logger.error(f"Worker error: {error}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(f"Image encoding failed: {exc}")
+                raise HTTPException(status_code=500, detail=f"Image encoding failed: {exc}")
+        else:
+            # Result belongs to a different task — put it back
+            result_queue.put(result)
 
     raise HTTPException(status_code=408, detail="Request timeout")
 
@@ -365,18 +377,24 @@ async def generate_video(request: VideoRequest):
     while time.time() < timeout:
         try:
             result = result_queue.get(timeout=1)
+        except queue.Empty:
+            try:
+                error = error_queue.get_nowait()
+                logger.error(f"Worker error: {error}")
+            except queue.Empty:
+                pass
+            continue
 
-            if result["task_id"] == task_id:
+        if result["task_id"] == task_id:
+            try:
                 video_path = frames_to_mp4(result["images"], fps=config.fps)
                 try:
                     encoded_video = mp4_to_base64(video_path)
                 finally:
-                    # Clean up temp file after encoding
                     try:
                         os.remove(video_path)
                     except Exception:
                         pass
-
                 return VideoResponse(
                     video=encoded_video,
                     inference_time=result["inference_time"],
@@ -384,17 +402,12 @@ async def generate_video(request: VideoRequest):
                     num_frames=config.num_frames,
                     fps=config.fps,
                 )
-            else:
-                # Result belongs to a different task — put it back
-                result_queue.put(result)
-
-        except Exception:
-            # Check error queue on timeout
-            try:
-                error = error_queue.get_nowait()
-                logger.error(f"Worker error: {error}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(f"Video encoding failed: {exc}")
+                raise HTTPException(status_code=500, detail=f"Video encoding failed: {exc}")
+        else:
+            # Result belongs to a different task — put it back
+            result_queue.put(result)
 
     raise HTTPException(status_code=408, detail="Request timeout")
 
