@@ -239,9 +239,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
     ret_map.reserve(input_map.size());
 
     for (const auto& [core, page_strides] : input_map) {
-        if (page_strides.empty()) {
-            continue;
-        }
         std::vector<detail::CompressedStrideBlock> compressed_blocks;
         auto it = page_strides.cbegin();
         while (it != page_strides.cend()) {
@@ -701,7 +698,9 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
         if (input.buffer()->page_size() != output.buffer()->page_size()) {
             auto output_core_to_page_range_pair =
                 detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+            auto it_diff = output_core_to_page_range_pair.find(core);
+            std::vector<detail::CompressedStrideBlock> empty_diff_vector;
+            const auto& page_stride_vector = (it_diff != output_core_to_page_range_pair.end()) ? it_diff->second : empty_diff_vector;
             runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
@@ -719,7 +718,9 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 page_stride_vector.size());
         } else {
             auto output_core_to_page_range_pair = detail::get_core_page_ranges(input.buffer(), output.buffer());
-            const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
+            auto it_same = output_core_to_page_range_pair.find(core);
+            std::vector<detail::PageStride> empty_same_vector;
+            const auto& page_stride_vector = (it_same != output_core_to_page_range_pair.end()) ? it_same->second : empty_same_vector;
             runtime_args_0 = detail::get_runtime_args_for_given_ranges(
                 physical_core_coords,
                 page_stride_vector,
