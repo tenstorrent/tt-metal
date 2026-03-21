@@ -208,7 +208,11 @@ inline void mpi_check(int error_code, const char* call_text) {
 // Context-aware check: used in MPIContext member functions. Detects ULFM rank
 // failures and dispatches to handle_rank_failure with the active policy.
 inline void mpi_check_ctx(
-    int error_code, const char* call_text, MPI_Comm comm, int cached_rank, FailurePolicy policy) {
+    int error_code,
+    const char* call_text,
+    [[maybe_unused]] MPI_Comm comm,
+    int cached_rank,
+    [[maybe_unused]] FailurePolicy policy) {
     if (error_code == MPI_SUCCESS) {
         return;
     }
