@@ -1,0 +1,52 @@
+echo "################################################################################"
+echo "# NASA API Key Generation: MANUAL INTERVENTION REQUIRED                       #"
+echo "#                                                                              #"
+echo "# IMPORTANT: NASA API Keys are generated manually via their official website.  #"
+echo "# Automated generation through bash scripts is NOT supported and could violate #"
+echo "# terms of service. The following commands will guide you to the correct page. #"
+echo "#                                                                              #"
+echo "# Absolute Security and Efficiency Note:                                       #"
+echo "# The most secure and efficient method is direct interaction with the official #"
+echo "# NASA portal. This prevents credential exposure in scripts and ensures        #"
+echo "# adherence to API usage policies.                                             #"
+echo "################################################################################"
+echo ""
+
+# Attempt to open the NASA API Key registration page in the default web browser.
+# This command checks for common desktop environments' default browser openers.
+if command -v xdg-open >/dev/null 2>&1; then
+    echo "Opening NASA API Key request page in your default web browser..."
+    xdg-open "https://api.nasa.gov/index.html#apply-for-an-api-key"
+elif command -v open >/dev/null 2>&1; then # macOS specific
+    echo "Opening NASA API Key request page in your default web browser..."
+    open "https://api.nasa.gov/index.html#apply-for-an-api-key"
+elif command -v sensible-browser >/dev/null 2>&1; then # Debian/Ubuntu specific
+    echo "Opening NASA API Key request page in your default web browser..."
+    sensible-browser "https://api.nasa.gov/index.html#apply-for-an-api-key"
+else
+    echo "Could not automatically open a web browser."
+    echo "Please manually navigate to the following URL to generate your API Key:"
+    echo "https://api.nasa.gov/index.html#apply-for-an-api-key"
+fi
+
+echo ""
+echo "################################################################################"
+echo "# POST-LAUNCH MANUAL STEPS REQUIRED FOR NASA API KEY GENERATION:             #"
+echo "#                                                                              #"
+echo "# 1. Browser Action: On the NASA API website, locate the 'Apply for an API Key'#"
+echo "#    section. You will need to fill out a short registration form.             #"
+echo "# 2. Form Submission: Provide your First Name, Last Name, Email Address, and   #"
+echo "#    a brief description of your application.                                  #"
+echo "# 3. Email Retrieval: After submission, your API Key will be sent to the email #"
+echo "#    address you provided. Check your inbox (and spam/junk folders).           #"
+echo "# 4. Key Storage & Usage: Once obtained, store your NASA API Key securely.     #"
+echo "#    DO NOT hardcode it directly into your scripts or commit it to version    #"
+echo "#    control (e.g., Git). Recommended methods include:                         #"
+echo "#    - Environment Variables (e.g., export NASA_API_KEY='YOUR_KEY')            #"
+echo "#    - Secure Configuration Files (e.g., .env files, excluded from VCS)        #"
+echo "#                                                                              #"
+echo "# Example of how to set an environment variable (replace 'YOUR_NASA_API_KEY'): #"
+echo "export NASA_API_KEY='YOUR_NASA_API_KEY_HERE'"
+echo "echo \"NASA_API_KEY is set: \${NASA_API_KEY}\""
+echo "# Add the 'export' line to your shell profile (~/.bashrc, ~/.zshrc) for persistence. #"
+echo "################################################################################"
