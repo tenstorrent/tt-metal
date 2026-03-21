@@ -10,8 +10,7 @@
 --   2. trace_run links to ttnn_hardware by FK (normalized, not inline columns).
 --   3. trace_run_model is a derived junction table: which models appeared in
 --      a trace (materialized from trace_run_config → ttnn_configuration_model).
---   4. ttnn_argument retains per-tensor placement from v4.
---   5. full_config_json on ttnn_configuration is the source of truth; structured
+--   4. full_config_json on ttnn_configuration is the source of truth; structured
 --      columns are best-effort projections for fast filtering.
 --
 -- Drop and recreate schema

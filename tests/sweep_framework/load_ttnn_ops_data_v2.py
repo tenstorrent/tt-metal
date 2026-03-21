@@ -978,7 +978,7 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=Non
 
             # Use full_config_json for arguments (preserves exact original structure)
             if full_config_json:
-                arguments = full_config_json.get("arguments", [])
+                arguments = full_config_json.get("arguments", {})
             else:
                 arguments = []
 
@@ -1582,7 +1582,7 @@ def reconstruct_single_operation(operation_name, output_path=None):
         )
         source_rows = cur.fetchall()
 
-        arguments = full_config_json.get("arguments", []) if full_config_json else []
+        arguments = full_config_json.get("arguments", {}) if full_config_json else []
         config_dict = {"config_hash": config_hash, "arguments": arguments}
 
         executions = []

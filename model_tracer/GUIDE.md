@@ -441,11 +441,7 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 |---|---|
 | `model_tracer/generic_ops_tracer.py` | Trace models, produce master JSON |
 | `model_tracer/sweep_manifest.yaml` | Targets + trace registry (source of truth for CI) |
-| `model_tracer/create_ttnn_ops_schema_v5.sql` | `ttnn_ops_v5` schema DDL |
-| `model_tracer/migrate_v2_5_to_v5.sql` | One-time migration from `ttnn_ops_v2_5` → `ttnn_ops_v5` |
-| `model_tracer/update_model_names.sql` | Add `update_ts` to `ttnn_model`; run before adding UNIQUE constraint on `model_name` |
-| `model_tracer/drop_null_columns_v5.sql` | Drop all-null columns and `ttnn_argument` table |
-| `model_tracer/verify_v5.sql` | 8-test verification suite for `ttnn_ops_v5` data integrity |
+| `model_tracer/destructively_create_ttnn_ops_schema_v5.sql` | `ttnn_ops_v5` schema DDL |
 | `tests/sweep_framework/load_ttnn_ops_data_v2.py` | Load, reconstruct, manifest resolution |
 | `tests/sweep_framework/framework/constants.py` | `LEAD_MODELS` — derived from manifest at import time |
 | `tests/sweep_framework/master_config_loader_v2.py` | Loads master JSON for sweep vector generation |
