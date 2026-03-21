@@ -110,8 +110,8 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {
     // Validations
-    const auto& reference_shard = tensor_shards.front();
     TT_FATAL(!tensor_shards.empty(), "At least one tensor shard must be provided");
+    const auto& reference_shard = tensor_shards.front();
     TT_FATAL(
         std::all_of(
             tensor_shards.begin(),
