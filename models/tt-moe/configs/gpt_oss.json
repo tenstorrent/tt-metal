@@ -1,0 +1,53 @@
+{
+  "moe_block": {
+    "model_params": {
+      "model_type": "gpt_oss",
+      "num_experts": 128,
+      "num_experts_per_tok": 4,
+      "hidden_size": 2880,
+      "intermediate_size": 2880,
+      "sparsity_block_size": 32
+    },
+
+    "shared_expert_placement": "none",
+
+    "router": {
+      "type": "topk"
+    },
+
+    "experts": {
+      "distributed": true,
+      "shared": false,
+      "quantized": false,
+      "matmul_type": "sparse",
+      "activation": "clamped_swiglu",
+      "swiglu_alpha": 1.702,
+      "swiglu_limit": 7.0
+    },
+
+    "collective": {
+      "dispatch_topology": "Linear",
+      "combine_topology": "Linear",
+      "apply_all_reduce": true,
+      "all_reduce_axis": 1,
+      "cluster_axis": 0,
+      "memory_config": "DRAM"
+    },
+
+    "tensor_parallel": {
+      "enabled": true,
+      "axis": 1
+    },
+
+    "expert_parallel": {
+      "enabled": true,
+      "axis": 0
+    },
+
+    "replicated_batch_mode": false,
+
+    "synthetic_weight_generator": "synthetic_weights.gpt_oss_weights.generate_gpt_oss_synthetic_weights",
+    "layer_index": 0,
+    "module_prefix": "model.layers.0"
+  }
+}
