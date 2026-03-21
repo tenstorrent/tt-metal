@@ -1501,15 +1501,39 @@ class Generator(WarmupForwardMixin):
     def read_decode_output(self, tt_out, async_read=False):
         """
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
-
+        tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
         """
+        from models.common.sampling.tt_log_probs import LogProbsResult
+
+        def _read_logprobs_sync(lp):
+            """Non-async: .cpu() with no extra args, matching old behavior."""
+            if lp is None:
+                return None
+            if isinstance(lp, LogProbsResult):
+                return LogProbsResult(
+                    topk_logprobs_host=lp.topk_logprobs.cpu(),
+                    topk_indices_host=lp.topk_indices.cpu(),
+                    topk_logprobs=None,
+                    topk_indices=None,
+                )
+            return lp.cpu()
+
+        def _read_logprobs_async(lp):
+            """Async: .cpu(blocking=False) matching old behavior."""
+            if lp is None:
+                return None
+            if isinstance(lp, LogProbsResult):
+                return LogProbsResult(
+                    topk_logprobs_host=lp.topk_logprobs.cpu(blocking=False),
+                    topk_indices_host=lp.topk_indices.cpu(blocking=False),
+                    topk_logprobs=None,
+                    topk_indices=None,
+                )
+            return lp.cpu(blocking=False)
+
         if not async_read:
-            # output is a tuple of (tt_out_tok, tt_log_probs)
             if isinstance(tt_out[0], tuple):
-                return [
-                    (out[0].cpu(), out[1].cpu() if out[1] is not None else None)  # logits should never be None
-                    for out in tt_out
-                ]
+                return [(out[0].cpu(), _read_logprobs_sync(out[1])) for out in tt_out]
             elif isinstance(tt_out[0], ttnn.Tensor):
                 return [out.cpu() for out in tt_out]
 
@@ -1519,8 +1543,8 @@ class Generator(WarmupForwardMixin):
             if isinstance(tt_out[i], tuple):
                 outputs = (
                     tt_out[i][0].cpu(blocking=False),
-                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
-                )  # logits  # log-probs
+                    _read_logprobs_async(tt_out[i][1]),
+                )
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)
@@ -1535,7 +1559,10 @@ class Generator(WarmupForwardMixin):
         """
         Converts the input ttnn host tensors to a torch tensor.
         The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
+        For LogProbsResult (new path), returns the result as-is for vLLM to unpack.
         """
+        from models.common.sampling.tt_log_probs import LogProbsResult
+
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
@@ -1545,24 +1572,55 @@ class Generator(WarmupForwardMixin):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
-                log_probs_i = (
-                    self.model[i].process_output_decode(
-                        tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
+                lp = tt_out[i][1]
+                if isinstance(lp, LogProbsResult):
+                    # New path: convert LogProbsResult host tensors to torch [B, 32]
+                    composer = self.model[i].sampling.tt_sampling.log_probs_calculator._build_mesh_composer()
+                    topk_lp = ttnn.to_torch(
+                        lp.topk_logprobs_host if lp.topk_logprobs_host is not None else lp.topk_logprobs,
+                        mesh_composer=composer,
+                    )[0, 0, :max_batch_size_per_model, :].float()
+                    topk_idx = ttnn.to_torch(
+                        lp.topk_indices_host if lp.topk_indices_host is not None else lp.topk_indices,
+                        mesh_composer=composer,
+                    )[0, 0, :max_batch_size_per_model, :].to(torch.int32)
+                    logits.append(logits_i)
+                    log_probs.append((topk_lp, topk_idx))
+                elif lp is not None:
+                    # Old path: single logprob tensor
+                    log_probs_i = self.model[i].process_output_decode(
+                        lp, max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
                     )
-                    if tt_out[i][1] is not None
-                    else torch.ones(logits_i.shape)
-                )
-                logits.append(logits_i)
-                log_probs.append(log_probs_i)
+                    logits.append(logits_i)
+                    log_probs.append(log_probs_i)
+                else:
+                    logits.append(logits_i)
+                    log_probs.append(torch.ones(logits_i.shape))
             elif isinstance(tt_out[i], ttnn.Tensor):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
                 logits.append(logits_i)
-                # add dummy tensor for log_probs
                 log_probs.append(torch.ones(logits_i.shape))
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
+
+        # Check if any DP rank returned new-path tuples (topk_lp, topk_idx)
+        has_topk = any(isinstance(lp, tuple) for lp in log_probs)
+        if has_topk:
+            # New path: all DP ranks should have tuples. For ranks that
+            # returned a dummy tensor (e.g. sz=0), create matching dummy tuples.
+            normalized = []
+            for lp in log_probs:
+                if isinstance(lp, tuple):
+                    normalized.append(lp)
+                else:
+                    # Dummy: shape [B, 32] zeros to match tuple format
+                    B = lp.shape[0]
+                    normalized.append((torch.zeros(B, 32, dtype=torch.float32), torch.zeros(B, 32, dtype=torch.int32)))
+            all_lp = torch.cat([lp[0] for lp in normalized], 0)
+            all_idx = torch.cat([lp[1] for lp in normalized], 0)
+            return (torch.cat(logits, 0), (all_lp, all_idx))
         return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
     def _decode_forward_no_trace(
