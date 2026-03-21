@@ -653,6 +653,7 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     const DataType& input_dtype,
     const DataType& index_dtype,
     CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
+    TT_FATAL(total_number_of_cores != 0, "number of cores cannot be 0");
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
             // Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least two tiles per
