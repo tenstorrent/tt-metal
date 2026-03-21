@@ -80,6 +80,7 @@ SFTTrainer(
     callbacks=None,
     compute_loss_func=None,
     loss_composer=None,
+    attention_mask=None,
 )
 ```
 
@@ -95,6 +96,7 @@ SFTTrainer(
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `compute_loss_func` | `Callable \| None` | Custom `(logits, batch) -> loss` replacing the default masked cross-entropy. |
 | `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
+| `attention_mask` | `Any \| None` | Attention mask passed as the second argument to `model(input_ids, mask)`. `None` (default) lets the model generate a causal mask on the fly. |
 
 ### Methods
 
