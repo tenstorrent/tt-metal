@@ -433,7 +433,7 @@ def _get_layer_raw_tensors(
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
     """
     q_a = state_dict[_key(layer_idx, "self_attn.q_a_proj.weight")].T.contiguous()
-    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T.contiguous())
+    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T)
     kv_a = state_dict[_key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
     kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
     o_proj = state_dict[_key(layer_idx, "self_attn.o_proj.weight")].T.contiguous()

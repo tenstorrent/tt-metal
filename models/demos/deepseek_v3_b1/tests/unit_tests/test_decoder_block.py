@@ -649,9 +649,7 @@ def create_decoder_block_tensors(
         golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
         golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
         golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul2_weights = deinterleave_q_b_proj(
-            state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
-        )
+        golden_torch_matmul2_weights = deinterleave_q_b_proj(state_dict[_sd_key("self_attn.q_b_proj.weight")].T)
         golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
         golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
         golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
@@ -1086,7 +1084,7 @@ def test_decoder(
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
@@ -1491,7 +1489,7 @@ def test_decoder_mlp(
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
