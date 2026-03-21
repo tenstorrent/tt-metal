@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -42,31 +43,6 @@
 namespace tt::tt_metal {
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
-
-template <typename T>
-Tensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
-
-    size_t volume = spec.logical_shape().volume();
-
-    TT_FATAL(
-        !logical_matches_physical(spec),
-        "Logical matches physical, don't support that case, use Tensor::from_span instead!");
-
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-    }
-
-    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
-
-    auto res = Tensor(std::move(host_buffer), buffer_spec);
-    return to_dtype(res, spec.data_type());
-}
-
 }  // namespace
 
 Tensor::Tensor(
@@ -185,18 +161,13 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    if (!logical_matches_physical(spec)) {
-        // If the logical shape doesn't match the physical shape, we need to encode the data
-        // and write the result to a new buffer. This branch avoids the extra copy that
-        // would otherwise occur in the from_vector function call.
-        auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
-        res = to_dtype(res, spec.data_type());
-        if (device) {
-            res = res.to_device(device, spec.memory_config(), cq_id);
-        }
-        return res;
+    auto host_tensor = tensor_impl::host_tensor::from_span(buffer, spec, pad_value);
+    auto res = Tensor(std::move(host_tensor));
+    res = to_dtype(res, spec.data_type());
+    if (device) {
+        res = res.to_device(device, spec.memory_config(), cq_id);
     }
-    return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+    return res;
 }
 
 template <typename T>
@@ -205,10 +176,8 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    size_t volume = shape.volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    auto host_tensor = tensor_impl::host_tensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    return Tensor(std::move(host_tensor));
 }
 
 template <typename T>
@@ -218,24 +187,8 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
-    }
-
-    // Create host tensor with DataType matching buffer
-    auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
-
-    auto host_buffer =
-        logical_matches_physical(buffer_spec)
-            ? HostBuffer(std::move(buffer))
-            : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
-    auto res = Tensor(std::move(host_buffer), buffer_spec);
-    // Convert to datatype from original spec
+    auto host_tensor = tensor_impl::host_tensor::from_vector(std::move(buffer), spec, pad_value);
+    auto res = Tensor(std::move(host_tensor));
     res = to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
@@ -243,55 +196,11 @@ Tensor Tensor::from_vector(
     return res;
 }
 
-template <>
-std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    switch (cpu_tensor.dtype()) {
-        case DataType::BFLOAT16: {
-            auto buffer = host_buffer::get_as<bfloat16>(cpu_tensor);
-            std::vector<float> physical_data;
-            physical_data.reserve(buffer.size());
-            std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
-                return static_cast<float>(val);
-            });
-            if (logical_matches_physical(cpu_tensor.tensor_spec())) {
-                return physical_data;
-            }
-            return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), cpu_tensor.tensor_spec());
-        }
-        case DataType::FLOAT32: {
-            auto buffer = host_buffer::get_as<const float>(cpu_tensor);
-            return tensor_impl::decode_tensor_data(buffer, cpu_tensor.tensor_spec());
-        }
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            const auto& tile = cpu_tensor.tensor_spec().tile();
-            auto buffer = host_buffer::get_as<const uint32_t>(cpu_tensor);
-            std::vector<float> unpacked_data =
-                cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-            return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
-        }
-        default: {
-            TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.dtype());
-        }
-    }
-}
-
 template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    TT_FATAL(
-        this->dtype() == convert_to_data_type<T>(),
-        "Unsupported data type for to_vector: got {}, expected: {}",
-        this->dtype(),
-        convert_to_data_type<T>());
+    // Type support is checked by HostTensor::to_vector
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    auto data = host_buffer::get_as<const T>(cpu_tensor);
-    if (logical_matches_physical(cpu_tensor.tensor_spec())) {
-        return std::vector<T>(data.begin(), data.end());
-    }
-    return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
+    return tensor_impl::host_tensor::to_vector<T>(cpu_tensor.host_tensor());
 }
 
 // Instantiate explicitly for the supported types.
@@ -398,6 +307,7 @@ template Tensor Tensor::from_vector<uint32_t>(
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
 
+template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;

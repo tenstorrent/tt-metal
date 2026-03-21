@@ -162,6 +162,7 @@ target_sources(
         core/tensor/tensor.cpp
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
+        core/tensor/host_tensor_factory.cpp
         core/tensor/tensor_ops.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp

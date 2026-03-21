@@ -194,4 +194,30 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
     }
 }
 
+// ======================================================================================
+//                                  HostTensor Factory Functions
+// ======================================================================================
+// These functions create HostTensor objects without device involvement.
+// They are the underlying implementation for Tensor::from_xxx methods.
+
+namespace host_tensor {
+
+template <typename T>
+HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+HostTensor from_borrowed_data(
+    ttsl::Span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
+
+template <typename T>
+HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
+
+template <typename T>
+std::vector<T> to_vector(const HostTensor& tensor);
+
+}  // namespace host_tensor
+
 }  // namespace tt::tt_metal::tensor_impl
