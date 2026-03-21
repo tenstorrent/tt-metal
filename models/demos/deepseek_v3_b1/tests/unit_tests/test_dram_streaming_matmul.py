@@ -135,7 +135,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
 
     # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
     num_loop_iters = 100 if m == 1 else 1
-
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 

@@ -166,9 +166,9 @@ def get_decode_sdpa_configs(config, bsz, device, max_seq_len=256):
 
     sdpa_decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -218,13 +218,29 @@ def l1_width_sharded_memory(hidden_states):
 def get_high_perf_compute_config():
     """
     Get compute kernel config optimized for maximum core utilization and performance.
-    Uses HiFi4 for maximum precision in attention operations.
+    Uses HiFi4 for maximum precision in attention and FFN operations.
+    packer_l1_acc=False ensures FP32 accumulation is fully preserved in large matmuls
+    (e.g. FFN [seq, 768] x [768, 3072]) reducing per-step error in autoregressive loops.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,  # Upgraded from HiFi2 for better precision
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
+        packer_l1_acc=False,
+    )
+
+
+def get_prefill_attn_compute_config():
+    """
+    Get compute kernel config for prefill self-attention matmuls.
+    Disables packer_l1_acc so FP32 dest accumulation is fully effective;
+    this reduces rounding error in the growing QK^T and AV matmuls.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
 
 
@@ -408,6 +424,10 @@ class TTNNSpeechDecoderPrenet:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
+        # Ensure dtypes match before concat (speaker_embeddings_normalized may differ from hidden_states)
+        if speaker_embeddings_expanded.dtype != hidden_states.dtype:
+            speaker_embeddings_expanded = ttnn.typecast(speaker_embeddings_expanded, hidden_states.dtype)
+
         # Concatenate with hidden states (L1 output)
         hidden_states = ttnn.concat(
             [hidden_states, speaker_embeddings_expanded],
@@ -502,6 +522,10 @@ class TTNNSpeechT5Attention:
 
         # Cache compute config to avoid repeated creation during inference
         self.compute_config = get_high_perf_compute_config()
+
+        # Higher precision config for prefill attention matmuls (QK^T and AV)
+        # packer_l1_acc disabled so fp32_dest_acc is fully effective on growing sequences
+        self.prefill_attn_compute_config = get_prefill_attn_compute_config()
 
         # Cache SDPA decode configs (for decode mode with fixed batch size)
         self.sdpa_configs = get_decode_sdpa_configs(config, max_batch_size, device, max_seq_len)
@@ -688,21 +712,26 @@ class TTNNSpeechT5Attention:
                     query,
                     key,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=self.compute_config,
+                    compute_kernel_config=self.prefill_attn_compute_config,
                 )
 
                 # Apply attention mask if provided
                 if attention_mask is not None:
                     attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-                # Softmax
-                attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                # Use FP32 softmax to prevent rounding errors on large rows (growing sequence)
+                attn_weights = ttnn.softmax(
+                    attn_weights,
+                    dim=-1,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.prefill_attn_compute_config,
+                )
 
                 # Apply attention to values
                 attn_output = ttnn.matmul(
                     attn_weights,
                     value,
-                    compute_kernel_config=self.compute_config,
+                    compute_kernel_config=self.prefill_attn_compute_config,
                 )
 
                 attn_output = ttnn.transformer.concatenate_heads(
@@ -850,6 +879,14 @@ class TTNNSpeechT5DecoderLayer:
         self.device = device
         self.config = config
         self.max_sequence_length = max_sequence_length
+
+        # Compute config for layer norms — fp32 dest accumulation reduces rounding on long seqs
+        self.layernorm_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         # Self-attention
         self.self_attn = TTNNSpeechT5Attention(
@@ -1005,6 +1042,7 @@ class TTNNSpeechT5DecoderLayer:
             epsilon=self.config.layer_norm_eps,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.program_configs["layernorm_1_program_config"],
+            compute_kernel_config=self.layernorm_compute_config,
         )
 
         # PHASE 3: Cross-attention sub-layer (POST-NORM)
@@ -1029,6 +1067,7 @@ class TTNNSpeechT5DecoderLayer:
             epsilon=self.config.layer_norm_eps,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.program_configs["layernorm_1_program_config"],
+            compute_kernel_config=self.layernorm_compute_config,
         )
 
         # PHASE 4: Feed-forward sub-layer (POST-NORM)
@@ -1053,6 +1092,7 @@ class TTNNSpeechT5DecoderLayer:
             epsilon=self.config.layer_norm_eps,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.program_configs["layernorm_1_program_config"],
+            compute_kernel_config=self.layernorm_compute_config,
         )
 
         # PHASE 5: Final output must be in L1
@@ -1102,6 +1142,42 @@ class TTNNSpeechT5Decoder:
         # This avoids dynamic tensor creation during forward pass (required for trace)
         self.causal_mask_cache = {}
         self._precompute_causal_masks()
+
+    def update_speaker_embedding(self, speaker_embeddings: torch.Tensor):
+        """
+        Update the baked-in speaker embedding in-place without rebuilding the decoder.
+
+        The speaker embedding is stored in DRAM as a normalized [batch, 1, speaker_dim]
+        tensor inside the prenet parameters. This method overwrites it in-place using
+        ttnn.copy, so the existing decoder weights, layers, causal masks, and all
+        captured traces remain valid — only the prenet's speaker vector changes.
+
+        This is the preferred path for speaker switching: it avoids the ~35-45s
+        trace re-capture that would be required if the decoder were fully rebuilt.
+
+        Args:
+            speaker_embeddings: New speaker embeddings [batch, speaker_dim] or [1, speaker_dim]
+        """
+        import torch.nn.functional as F
+
+        # L2-normalize (same as preprocess_decoder_parameters)
+        speaker_embeddings_normalized = F.normalize(speaker_embeddings, p=2, dim=-1)
+
+        batch_size = speaker_embeddings_normalized.shape[0]
+        speaker_embeddings_normalized = speaker_embeddings_normalized.reshape(
+            batch_size, 1, self.config.speaker_embedding_dim
+        )
+
+        # Overwrite the existing DRAM tensor in-place
+        new_tensor = ttnn.from_torch(
+            speaker_embeddings_normalized,
+            dtype=self.prenet.parameters["speaker_embeddings_normalized"].dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(new_tensor, self.prenet.parameters["speaker_embeddings_normalized"])
+        ttnn.deallocate(new_tensor)
 
     def _precompute_causal_masks(self):
         """
