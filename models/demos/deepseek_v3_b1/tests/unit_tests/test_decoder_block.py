@@ -87,9 +87,24 @@ def create_decoder_block_tensors(
     device_grid_size = submesh.compute_with_storage_grid_size()
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
+    # TODO: Shouldn't hardcode this here
+    class _RopeConfig:
+        qk_rope_head_dim = 64
+        rope_theta = 10000.0
+        rope_scaling = {
+            "factor": 40,
+            "original_max_position_embeddings": 4096,
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+        }
+
+    _RopeConfig.max_seq_len = max_seq_len
+
     # ── Constants for runtime tensors ──
     QNOPE_HEAD_DIM = 128
-    QROPE_HEAD_DIM = 64
+    QROPE_HEAD_DIM = _RopeConfig.qk_rope_head_dim
     QNOPE_OUT_DIM = 512
     KNOPE_DIM = 512
     KROPE_DIM = 64
@@ -99,7 +114,10 @@ def create_decoder_block_tensors(
     output_size = 7168
     shape = (1, K)
     q_head_dim = QNOPE_HEAD_DIM + QROPE_HEAD_DIM
-    mscale = yarn_get_mscale(40, 1.0)
+    mscale = yarn_get_mscale(
+        _RopeConfig.rope_scaling["factor"],
+        _RopeConfig.rope_scaling["mscale_all_dim"],
+    )
     scale = q_head_dim**-0.5 * mscale * mscale
     kvpe_dim = KNOPE_DIM + KROPE_DIM
 
@@ -319,24 +337,10 @@ def create_decoder_block_tensors(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    # ── RoPE TTNN tensors (Yarn-scaled, matching production DeepSeek V3 config) ──
+    # ── RoPE TTNN tensors ──
     qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     position_ids = torch.tensor([position_id])
 
-    # TODO: Shouldn't hardcode this here
-    class _RopeConfig:
-        qk_rope_head_dim = QROPE_HEAD_DIM
-        rope_theta = 10000.0
-        rope_scaling = {
-            "factor": 40,
-            "original_max_position_embeddings": 4096,
-            "beta_fast": 32,
-            "beta_slow": 1,
-            "mscale": 1.0,
-            "mscale_all_dim": 1.0,
-        }
-
-    _RopeConfig.max_seq_len = max_seq_len
     cos_sin_4d, sin_sin_4d = get_cos_sin_matrix(_RopeConfig)
     torch_cos = cos_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
     torch_sin = sin_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
