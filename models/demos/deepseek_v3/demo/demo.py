@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
+from models.demos.deepseek_v3.tt.generator import DEFAULT_MAX_SEQ_LEN
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import (
     DEFAULT_SAMPLING_TEMPERATURE,
@@ -169,6 +170,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
     p.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=DEFAULT_MAX_SEQ_LEN,
+        help=f"Maximum configured sequence length for the demo runtime (default: {DEFAULT_MAX_SEQ_LEN}).",
+    )
+    p.add_argument(
         "--sampling-temperature",
         type=float,
         default=DEFAULT_SAMPLING_TEMPERATURE,
@@ -294,6 +301,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Always record max-new-tokens even after EOS.",
     )
     p.set_defaults(stop_at_eos=True)
+    p.add_argument(
+        "--max-users-per-row",
+        type=int,
+        default=USERS_PER_ROW,
+        help=f"Maximum number of active users per row for demo decode (default: {USERS_PER_ROW}).",
+    )
     return p
 
 
@@ -396,6 +409,8 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
+    max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
@@ -425,6 +440,7 @@ def run_demo(
     Returns a dict with keys:
         - generations: List[dict] with per-prompt tokens/text
         - statistics: Performance counters from the generator
+        - model_params: Runtime/model configuration details from the generator
     """
     if model_path is None:
         raise SystemExit("Missing model path. Provide --model-path.")
@@ -495,7 +511,7 @@ def run_demo(
             )
             raise
 
-    batch_size_per_row = USERS_PER_ROW
+    batch_size_per_row = max_users_per_row
     batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Configure sampling
@@ -542,11 +558,13 @@ def run_demo(
                 enable_trace=enable_trace,
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
+                max_seq_len=max_seq_len,
                 prefill_max_tokens=prefill_max_tokens,
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
                 enable_mtp=enable_mtp,
+                batch_size_per_row=max_users_per_row,
                 sampling_params=sampling_params,
             )
         else:
@@ -754,6 +772,8 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
+        max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,

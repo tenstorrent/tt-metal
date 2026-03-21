@@ -179,11 +179,20 @@ class MTP2D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        hidden_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        token_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        decoder_block_cfg = MoEDecoderBlock2D.decode_model_config(hf_config, mesh_device, fabric_config)
-        head_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        hidden_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
+        token_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
+        decoder_block_cfg = MoEDecoderBlock2D.decode_model_config(
+            hf_config, mesh_device, fabric_config, batch_size_per_row=batch_size_per_row
+        )
+        head_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
         head_cfg = LMHead1D.decode_model_config(mesh_device)
         # Decode is single-token, so keep the MTP-specific intermediate tensors in L1.
         decode_memory_config = ttnn.L1_MEMORY_CONFIG

@@ -18,7 +18,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -113,10 +113,16 @@ def paged_cache_from_torch(
     """
     if user_id is not None:
         torch_cache_line = torch_cache
+        batch_size_per_row = torch_cache_line.shape[0]
+        # Row-batched prefill helpers hand us one full row worth of cache lines.
+        # Expand back to the global user space and place that row at the row selected by `user_id`.
+        row_start = (user_id // batch_size_per_row) * batch_size_per_row
+        row_end = row_start + batch_size_per_row
         torch_cache = torch.zeros(
-            (mesh_shape[0] * USERS_PER_ROW, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype
+            (mesh_shape[0] * batch_size_per_row, *torch_cache_line.shape[1:]),
+            dtype=torch_cache_line.dtype,
         )
-        torch_cache[user_id : user_id + 1] = torch_cache_line
+        torch_cache[row_start:row_end] = torch_cache_line
 
     batch_size, num_heads, seq_len, dim = torch_cache.shape
     batches_per_device = even_int_div(batch_size, mesh_shape[0] * mesh_shape[1])
@@ -214,7 +220,27 @@ def run_reference_with_attention(
     Intermediate tensors are explicitly freed between chunks using del.
     Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
     """
-    (batch_size,) = position_ids_or_seq_lens.shape
+    activation_batch_size = activation.shape[0]
+    if position_ids_or_seq_lens.ndim != 1:
+        raise ValueError(f"position_ids_or_seq_lens must be 1D, got shape {tuple(position_ids_or_seq_lens.shape)}")
+
+    if mode == "prefill":
+        if position_ids_or_seq_lens.numel() == 1 and activation_batch_size != 1:
+            # Older tests pass a scalar seq_len even when the activation batch is larger.
+            # Expand it here so reference-mask construction follows the true batch size.
+            position_ids_or_seq_lens = position_ids_or_seq_lens.expand(activation_batch_size)
+        elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+            raise ValueError(
+                "Prefill position_ids_or_seq_lens batch must match activation batch: "
+                f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+            )
+    elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+        raise ValueError(
+            "Decode position_ids_or_seq_lens batch must match activation batch: "
+            f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+        )
+
+    batch_size = activation_batch_size
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
@@ -475,14 +501,25 @@ def pad_or_trim_seq_len(tensor: torch.Tensor, mode: Literal["prefill", "decode"]
     return padded_tensor
 
 
-def get_model_config(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
+def get_model_config(
+    ModuleClass: type[AbstractModule],
+    mode: Literal["prefill", "decode"],
+    *args,
+    batch_size_per_row: int | None = None,
+    **kwargs,
+) -> Any:
     """Get the module config for the given mode and kwargs."""
     if mode == "prefill":
-        return ModuleClass.prefill_model_config(*args, **kwargs)
+        config_fn = ModuleClass.prefill_model_config
     elif mode == "decode":
-        return ModuleClass.decode_model_config(*args, **kwargs)
+        config_fn = ModuleClass.decode_model_config
     else:
         raise ValueError(f"Unsupported mode: {mode}. Supported modes are 'prefill' and 'decode'.")
+
+    if mode == "decode" and batch_size_per_row is not None:
+        kwargs.setdefault("batch_size_per_row", batch_size_per_row)
+
+    return config_fn(*args, **kwargs)
 
 
 def run_module_forward(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
@@ -500,16 +537,25 @@ def assert_hidden_dim_pcc(
 ) -> float:
     tt_output_torch = tt_output_torch.cpu().float()
 
+    tt_leading_shape = tt_output_torch.shape[:-2]
+    reference_leading_shape = reference_output.shape[:-2]
     assert (
         all(
             d1 == d2
-            for d1, d2 in itertools.zip_longest(tt_output_torch.shape[:-2], reference_output.shape[:-2], fillvalue=1)
+            for d1, d2 in itertools.zip_longest(
+                reversed(tt_leading_shape), reversed(reference_leading_shape), fillvalue=1
+            )
         )
         and tt_output_torch.shape[-1] == reference_output.shape[-1]
     ), (
         "Model and reference output shape must match on all dimensions except for the second to last one "
         f"(module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
     )
+
+    while tt_output_torch.ndim < reference_output.ndim:
+        tt_output_torch = tt_output_torch.unsqueeze(0)
+    while reference_output.ndim < tt_output_torch.ndim:
+        reference_output = reference_output.unsqueeze(0)
 
     seq_len_or_batch_size = min(tt_output_torch.shape[-2], reference_output.shape[-2])
     tt_output_torch = tt_output_torch[..., :seq_len_or_batch_size, :]
