@@ -40,7 +40,13 @@ def _load_lead_models_from_manifest():
             with open(manifest_path) as f:
                 data = yaml.safe_load(f) or {}
             lead_entries = data.get("targets", {}).get("lead_models", [])
-            patterns = [t["model"] for t in lead_entries if "model" in t]
+            patterns = []
+            for t in lead_entries:
+                m = t.get("model")
+                if isinstance(m, list):
+                    patterns.extend(m)
+                elif m:
+                    patterns.append(m)
             if patterns:
                 return patterns
     except Exception as e:

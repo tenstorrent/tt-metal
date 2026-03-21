@@ -285,7 +285,7 @@ def get_or_create_mesh_config(cur, mesh_config_cache, mesh_shape, device_count):
     Placement info is per-tensor and stored in the argument JSON.
     """
     if not mesh_shape:
-        return None, None
+        return None
 
     mesh_key = (tuple(mesh_shape), device_count)
 
@@ -515,8 +515,8 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
 
         op_id = operation_cache[op_name]
 
-        for config in op_data.get("configurations", []):
-            arguments = config.get("arguments", [])
+        for config_idx, config in enumerate(op_data.get("configurations", [])):
+            arguments = config.get("arguments", {})
 
             # V2 Format: Use executions array (preferred)
             # V1 Format: Use source and machine_info at config level (legacy)
@@ -551,7 +551,7 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
             if not config_hash:
                 raise ValueError(
                     f"Missing config_hash in configuration for operation '{op_name}' "
-                    f"(config index {op_data.get('configurations', []).index(config)}). "
+                    f"(config index {config_idx}). "
                     f"Re-trace with generic_ops_tracer.py to produce a JSON with config hashes."
                 )
 
@@ -571,7 +571,8 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
                 hardware_id, _ = get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count)
 
                 # Parse mesh config
-                mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, arguments)
+                args_dict = arguments if isinstance(arguments, dict) else {}
+                mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, args_dict)
 
                 mesh_config_id = None
                 if mesh_shape:
@@ -720,10 +721,10 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
 
     # Auto-append draft entries to manifest registry
     if trace_run_cache and yaml is not None:
-        _append_manifest_drafts(trace_run_cache, model_cache)
+        _append_manifest_drafts(trace_run_cache)
 
 
-def _append_manifest_drafts(trace_run_cache, model_cache):
+def _append_manifest_drafts(trace_run_cache):
     """Append draft registry entries to the manifest for newly created trace_runs."""
     try:
         data, path = _load_manifest()
@@ -731,19 +732,13 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
         print(f"  Warning: could not update manifest registry: {e}")
         return
 
-    # Build model names from model_cache (all models seen in this load)
-    all_model_names = set()
-    for source_file, hf_model in model_cache.keys():
-        name = derive_model_name(source_file, hf_model)
-        if name:
-            all_model_names.add(name)
-
-    # Fetch hardware details for each trace_run from DB
+    # Fetch hardware details and per-trace model names from DB
     try:
         conn = psycopg2.connect(NEON_URL)
         cur = conn.cursor()
         hw_map = {}
-        for (hardware_id, _sha), _tr_id in trace_run_cache.items():
+        trace_models_map = {}  # trace_run_id -> sorted list of model_names
+        for (hardware_id, _sha), trace_run_id in trace_run_cache.items():
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     "SELECT board_type, device_series, card_count FROM ttnn_ops_v5.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -752,9 +747,20 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
                 row = cur.fetchone()
                 if row:
                     hw_map[hardware_id] = row
+            cur.execute(
+                """
+                SELECT m.model_name FROM ttnn_ops_v5.trace_run_model trm
+                JOIN ttnn_ops_v5.ttnn_model m ON m.ttnn_model_id = trm.model_id
+                WHERE trm.trace_run_id = %s AND m.model_name IS NOT NULL
+                ORDER BY m.model_name
+                """,
+                (trace_run_id,),
+            )
+            trace_models_map[trace_run_id] = [r[0] for r in cur.fetchall()]
         conn.close()
     except Exception:
         hw_map = {}
+        trace_models_map = {}
 
     existing_ids = {entry.get("trace_id") for entry in data["registry"]}
     added = 0
@@ -765,7 +771,7 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
 
         hw = hw_map.get(hardware_id, ("unknown", "unknown", 1))
         board_type, device_series, card_count = hw
-        models = sorted(all_model_names) or ["unknown"]
+        models = trace_models_map.get(trace_run_id) or ["unknown"]
         entry = {
             "trace_id": trace_run_id,
             "status": "draft",
@@ -1098,7 +1104,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema="ttnn_ops_
             c.full_config_json,
             mc.mesh_shape,
             mc.device_count,
-            trc.execution_count,
+            cm.execution_count,
             m.source_file,
             m.hf_model_identifier
         FROM {schema}.trace_run_config trc
