@@ -20,6 +20,8 @@ struct Statistics {
     size_t largest_free_block_bytes = 0;
     // addresses (relative to bank) that can hold the largest_free_block_bytes
     std::vector<uint32_t> largest_free_block_addrs;
+    // Peak allocated bytes (per bank) since last reset
+    size_t peak_allocated_bytes = 0;
 };
 
 class Buffer;
@@ -51,6 +53,9 @@ public:
     // this helper function is made for reports.cpp in TTNN and act as a transient member function.
     size_t get_worker_l1_size() const;
     Statistics get_statistics(const BufferType& buffer_type) const;
+    // Reset peak allocated bytes watermark for the given buffer type.
+    // After reset, peak tracks from the current allocation level.
+    void reset_peak_allocated_bytes(const BufferType& buffer_type);
     // AllocatorState Methods
     // Extracts the current state of the allocator.
     AllocatorState extract_state() const;
