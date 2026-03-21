@@ -290,11 +290,13 @@ class VectorExportSource(VectorSource):
                                 return None
 
                             # Filter vectors based on hardware compatibility.
+                            # When MESH_DEVICE_SHAPE is set, the CI matrix already routed this
+                            # job to the correct hardware — skip runner-side machine matching.
                             # Lead models use strict 4-field matching (board_type, device_series,
                             # card_count, device_count) since they are routed to correct hardware.
                             # Non-lead runs only skip multi-card vectors since CI only has N150.
                             skip_for_resources = False
-                            if current_machine_info and traced_machine_entries:
+                            if current_machine_info and traced_machine_entries and not mesh_filter:
                                 if is_lead_models:
                                     current_board = current_machine_info.get("board_type", "").lower()
                                     current_series = current_machine_info.get("device_series", "").lower()

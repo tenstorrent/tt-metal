@@ -1,0 +1,82 @@
+name: "Run model traced sweeps on specific hardware"
+
+on:
+  workflow_call:
+    inputs:
+      matrix-json:
+        required: true
+        type: string
+        description: "JSON matrix with include entries for this hardware group"
+      hw-name:
+        required: true
+        type: string
+        description: "Hardware name for artifact naming (e.g., n150, n300, t3k, p150b)"
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      timeout-minutes:
+        required: false
+        type: number
+        default: 120
+
+jobs:
+  run-sweeps:
+    name: "${{ matrix.batch_display }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.matrix-json).include }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive, path: docker-job }
+      - uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with: { pattern: "sweeps-vectors-*", path: /work/tests/sweep_framework/vectors_export, merge-multiple: true }
+      - name: Run sweeps
+        env:
+          MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
+        run: |
+          python3 tests/sweep_framework/sweeps_runner.py \
+            --module-name "${{ matrix.module_selector }}" \
+            --vector-source vectors_export --result-dest results_export \
+            --tag ci-main --summary \
+            ${{ matrix.suite_name && format('--suite-name {0}', matrix.suite_name) || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sweeps-results-model-traced-${{ inputs.hw-name }}-${{ strategy.job-index }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1

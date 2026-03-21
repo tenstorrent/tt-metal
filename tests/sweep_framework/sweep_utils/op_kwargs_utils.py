@@ -41,6 +41,9 @@ _INFRA_KEYS = frozenset(
         "sweep_name",
         "storage_type",
         "mesh_coords",
+        "input_hash",
+        "tag",
+        "timestamp",
     }
 )
 
@@ -64,6 +67,8 @@ _TENSOR_PREFIXES = (
     "input_tensor_k",
     "input_tensor_v",
     "page_table_tensor",
+    "page_table",
+    "update_idxs_tensor",
 )
 
 
@@ -81,11 +86,6 @@ def _is_infrastructure_key(key: str) -> bool:
         return True
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
-        return True
-    # memory_config from traced kwargs should not leak into op_kwargs.
-    # It is handled via the output_memory_config parameter in sweep module run() functions.
-    # Passing it through causes "incompatible function arguments" for ops that don't accept it.
-    if key == "memory_config":
         return True
     # Any key ending with _tensor_placement is tensor placement metadata
     if key.endswith("_tensor_placement"):
@@ -114,7 +114,15 @@ def _is_named_tensor_kwarg(key: str, all_keys: Set[str]) -> bool:
 
 def _is_memory_config_dict(value: Any) -> bool:
     """Check if a value looks like a memory config dict."""
-    return isinstance(value, dict) and ("memory_layout" in value or "buffer_type" in value)
+    if not isinstance(value, dict):
+        return False
+    # Direct format: {"memory_layout": ..., "buffer_type": ...}
+    if "memory_layout" in value or "buffer_type" in value:
+        return True
+    # Serialized format: {"type": "ttnn._ttnn.tensor.MemoryConfig", "data": {...}}
+    if value.get("type", "") == "ttnn._ttnn.tensor.MemoryConfig" and "data" in value:
+        return True
+    return False
 
 
 def _is_compute_kernel_config_dict(value: Any) -> bool:
@@ -237,6 +245,29 @@ def build_op_kwargs(
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)
         if parsed is not None:
+            # Convert float values that are whole numbers to appropriate type.
+            # V2 JSON stores all numbers as floats, but ops expect int or bool.
+            if isinstance(parsed, float) and parsed == int(parsed):
+                # Known bool params: convert 0.0/1.0 to False/True
+                _BOOL_PARAMS = {
+                    "keepdim",
+                    "fuse_batch",
+                    "inplace",
+                    "transpose_mcast",
+                    "untilize_out",
+                    "mcast_in0",
+                    "gather_in0",
+                    "fp32_dest_acc_en",
+                    "packer_l1_acc",
+                    "math_approx_mode",
+                    "dst_full_sync_en",
+                    "sorted",
+                    "largest",
+                }
+                if key in _BOOL_PARAMS:
+                    parsed = bool(parsed)
+                else:
+                    parsed = int(parsed)
             op_kwargs[key] = parsed
 
     return op_kwargs

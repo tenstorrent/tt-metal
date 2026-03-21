@@ -14,7 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
-from framework.constants import format_mesh_suffix
+from framework.constants import format_mesh_suffix, get_hardware_id_from_machine_info
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
@@ -88,21 +88,29 @@ def get_mesh_shape_from_vector(vector):
     return None  # Unknown mesh shape: no routing restriction
 
 
-def group_vectors_by_mesh_shape(vectors):
-    """Group vectors by their mesh_device_shape.
+def get_hardware_from_vector(vector):
+    """Extract hardware identifier from traced_machine_info.
+
+    Returns the full device_series (e.g. 'tt-galaxy-wh', 'n300', 't3k') or None.
+    """
+    return get_hardware_id_from_machine_info(vector.get("traced_machine_info"))
+
+
+def group_vectors_by_mesh_and_hardware(vectors):
+    """Group vectors by (mesh_device_shape, hardware_name).
 
     Args:
         vectors: List of vector dictionaries
 
     Returns:
-        dict: Mapping of mesh_shape tuple to list of vectors with that mesh shape
+        dict: Mapping of (mesh_shape_tuple_or_None, hardware_name_or_None)
+              to list of vectors.
     """
-
     grouped = defaultdict(list)
     for vector in vectors:
         mesh_shape = get_mesh_shape_from_vector(vector)
-        grouped[mesh_shape].append(vector)
-
+        hardware = get_hardware_from_vector(vector)
+        grouped[(mesh_shape, hardware)].append(vector)
     return grouped
 
 
@@ -272,44 +280,42 @@ def validate_exported_vectors(export_path, module_name, suite_name):
 
 
 def export_suite_vectors_json(module_name, suite_name, vectors):
-    """Export test vectors to JSON files grouped by mesh shape with atomic writes and deduplication.
+    """Export test vectors to JSON files grouped by mesh shape and hardware.
 
-    Vectors are grouped by mesh_device_shape and written to separate files:
-    - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
-    - model_traced.op.json (for unknown mesh — no suffix, runs on any machine)
+    Vectors are grouped by (mesh_device_shape, hardware_name) and written
+    to separate files so the CI matrix can route each to the correct runner:
+    - model_traced.op__mesh_4x8__hw_galaxy.json
+    - model_traced.op__mesh_1x2__hw_n300.json
+    - model_traced.op.json (unknown mesh/hw — no suffix, runs anywhere)
 
-    IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
+    IMPORTANT: The suffix is used ONLY for filename routing, NOT for modifying
     the sweep_name field. This ensures stable full_test_name and input_hash values
-    for historical comparison in Superset dashboards. The mesh configuration is
-    already captured in traced_machine_info within the vector data.
+    for historical comparison in Superset dashboards. The mesh and hardware info
+    is already captured in traced_machine_info within the vector data.
 
     Args:
         module_name: Name of the test module
         suite_name: Name of the test suite
         vectors: List of vector dictionaries to export
     """
-    # Group vectors by mesh shape
-    grouped_vectors = group_vectors_by_mesh_shape(vectors)
+    # Group vectors by (mesh_shape, hardware)
+    grouped_vectors = group_vectors_by_mesh_and_hardware(vectors)
 
-    # Export each mesh group to a separate file
-    for mesh_shape, mesh_vectors in grouped_vectors.items():
-        # Skip empty groups
-        if not mesh_vectors:
+    # Export each group to a separate file
+    for (mesh_shape, hardware_name), group_vectors in grouped_vectors.items():
+        if not group_vectors:
             continue
 
-        # Generate mesh-specific filename (NOT sweep_name).
-        # None mesh_shape means no routing restriction - export without mesh suffix
-        # so any runner can pick up the file.
+        # Generate filename suffix from mesh shape + hardware.
+        # None mesh_shape means no routing restriction.
         if mesh_shape is not None:
-            mesh_suffix = format_mesh_suffix(mesh_shape)
+            mesh_suffix = format_mesh_suffix(mesh_shape, hardware_name)
             mesh_module_name = f"{module_name}{mesh_suffix}"
         else:
             mesh_module_name = module_name
 
         # Export vectors WITHOUT modifying sweep_name
-        # The mesh info is already in traced_machine_info; sweep_name stays stable
-        # for historical comparison (full_test_name in Superset)
-        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
+        _export_mesh_vectors_to_file(mesh_module_name, suite_name, group_vectors)
 
 
 def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
