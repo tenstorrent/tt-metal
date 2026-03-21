@@ -159,6 +159,14 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
         data_format);
 
+    // Zero-filled CB for FPU accumulate: add_tiles does DST += A + B, so we use B=0
+    // to effectively do DST += A for fp32 reduction accumulation.
+    uint32_t cb_zero_tiled_id = 32;
+    if (use_fp32_partials) {
+        cb_zero_tiled_id = next_cb_index++;
+        tt::tt_metal::create_cb(cb_zero_tiled_id, program, core_grid, tile_size, 1, data_format);
+    }
+
     uint32_t cb_reduction_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     uint32_t cb_worker_ack_back_id =
@@ -212,6 +220,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     if (C_in_num_blocks > 1) {
         other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
         other_cbs_bytes += tile_size;                                    // worker_ack
+    }
+    if (use_fp32_partials) {
+        other_cbs_bytes += tile_size;  // zero tile for FPU accumulate reduction
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
@@ -408,7 +419,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_subblock_h,
         out_subblock_w,
         semaphore_id,
-        (uint32_t)use_fp32_partials};
+        (uint32_t)use_fp32_partials,
+        cb_zero_tiled_id};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -442,7 +454,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_row_size_bytes,
         C_out_block_bytes,
         (uint32_t)use_bias,
-        semaphore_id};
+        semaphore_id,
+        cb_zero_tiled_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)

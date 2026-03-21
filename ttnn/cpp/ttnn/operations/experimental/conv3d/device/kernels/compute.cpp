@@ -10,7 +10,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -160,6 +159,7 @@ void kernel_main() {
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
     constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(28);
 
     constexpr uint32_t patch_tiles = matmul_M_t * matmul_K_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -224,7 +224,7 @@ void kernel_main() {
                                     cb_vol2col_tiled,
                                     cb_weight_tiled,
                                     cb_vol2col_rm,
-                                    cb_vol2col_rm,
+                                    cb_weight_tiled,
                                     false,
                                     subblock_w,
                                     subblock_h,
@@ -270,24 +270,26 @@ void kernel_main() {
                                 // We are a reducer core. Note that num_workers can be 0, in which case there is no
                                 // reduction.
                                 if constexpr (use_fp32_partials) {
-                                    // SFPU path for fp32: copy both to DST, add via SFPU, pack fp32.
-                                    // Init once before the worker loop — both CBs are the same Float32
-                                    // format, so one copy_tile_init suffices for both copy_tile calls.
+                                    // FPU accumulate: copy_tile loads reducer's partial to DST
+                                    // at full fp32 precision (datacopy, no SRC truncation), then
+                                    // add_tiles(worker, zero) accumulates worker via DST += worker + 0.
+                                    // The zero CB is filled by the writer at kernel startup.
+                                    cb_wait_front(cb_zero_tiled, 1);
                                     reconfig_data_format_srca(cb_matmul_interm_tiled);
                                     pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     copy_tile_init(cb_matmul_interm_tiled);
-                                    add_binary_tile_init();
+                                    add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
                                 }
                                 for (uint32_t i = 0; i < num_workers; i++) {
-                                    // Wait for writer to populate reduction buffer
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
 
                                     if constexpr (use_fp32_partials) {
                                         for (uint32_t t = 0; t < output_tiles; t++) {
                                             tile_regs_acquire();
+                                            // Load reducer's partial to DST[0] via datacopy (full fp32)
                                             copy_tile(cb_matmul_interm_tiled, 0, 0);
-                                            copy_tile(cb_reduction_tiled, 0, 1);
-                                            add_binary_tile(0, 1, 0);
+                                            // Accumulate worker's partial: DST[0] += worker + 0
+                                            add_tiles(cb_reduction_tiled, cb_zero_tiled, 0, 0, 0);
                                             tile_regs_commit();
 
                                             cb_pop_front(cb_matmul_interm_tiled, 1);

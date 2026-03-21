@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
+    constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(22);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -65,7 +66,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
@@ -76,6 +77,26 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
+
+    // Zero-fill the zero CB for FPU accumulate reduction (DST += tile + 0).
+    // The zero tile stays resident for the lifetime of the kernel.
+    if constexpr (cb_zero_tiled < 32) {
+        cb_reserve_back(cb_zero_tiled, 1);
+        uint32_t zero_tile_bytes = get_tile_size(cb_zero_tiled);
+        uint32_t zero_addr = get_write_ptr(cb_zero_tiled);
+        uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+        uint32_t remaining = zero_tile_bytes;
+        while (remaining >= MEM_ZEROS_SIZE) {
+            noc_async_read(zeros_noc, zero_addr, MEM_ZEROS_SIZE);
+            zero_addr += MEM_ZEROS_SIZE;
+            remaining -= MEM_ZEROS_SIZE;
+        }
+        if (remaining > 0) {
+            noc_async_read(zeros_noc, zero_addr, remaining);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_zero_tiled, 1);
+    }
 
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
