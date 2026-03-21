@@ -104,6 +104,23 @@ constexpr noc_selection_t k_dispatcher_s_noc = {
 static_assert(k_dispatcher_noc.non_dispatch_noc != k_dispatcher_s_noc.non_dispatch_noc);
 
 //
+// Prefetch writer NOC selections.
+//
+// The writer stub runs on NCRISC of the same Tensix core as the prefetch reader (BRISC).
+// Both RISCs use stateful NoC APIs, so they must use different NOCs to avoid corrupting
+// each other's in-flight request counts.  The reader uses NOC_0; the writer uses NOC_1.
+//
+constexpr noc_selection_t k_prefetcher_writer_noc = {
+    .non_dispatch_noc = NOC::NOC_1,
+    .upstream_noc = NOC::NOC_1,
+    .downstream_noc = NOC::NOC_1,
+};
+
+// Must be on different NOCs because PrefetchKernel (reader) and PrefetchWriterKernel may run on the same
+// core. They are using stateful APIs. Running on the same NOC will mess up requests sent/to free count.
+static_assert(k_prefetcher_noc.non_dispatch_noc != k_prefetcher_writer_noc.non_dispatch_noc);
+
+//
 // Fabric MUX NOC selections
 //
 // Must be NoC0
@@ -558,6 +575,29 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 index_offset += nodes_for_one_mmio.size();
             }
         }
+    }
+
+    // When the split-prefetcher env var is set, append a PREFETCH_HD_WRITER node for every
+    // PREFETCH_HD node.  The writer runs on NCRISC of the same core.  Its only upstream link
+    // is the reader (so it can retrieve the reader's defines in CreateKernel()).
+    if (MetalContext::instance().rtoptions().get_split_prefetcher()) {
+        std::vector<DispatchKernelNode> writer_nodes;
+        for (const auto& node : nodes) {
+            if (node.kernel_type == PREFETCH_HD) {
+                int writer_id = static_cast<int>(nodes.size()) + static_cast<int>(writer_nodes.size());
+                DispatchKernelNode writer_node;
+                writer_node.id = writer_id;
+                writer_node.device_id = node.device_id;
+                writer_node.servicing_device_id = node.servicing_device_id;
+                writer_node.cq_id = node.cq_id;
+                writer_node.kernel_type = PREFETCH_HD_WRITER;
+                writer_node.upstream_ids = {node.id, x, x, x};
+                writer_node.downstream_ids = {x, x, x, x};
+                writer_node.noc_selection = k_prefetcher_writer_noc;
+                writer_nodes.push_back(writer_node);
+            }
+        }
+        nodes.insert(nodes.end(), writer_nodes.begin(), writer_nodes.end());
     }
 
     return nodes;

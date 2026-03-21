@@ -3057,3 +3057,16 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 }  // namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests
+
+namespace tt::tt_metal {
+
+// Verifies that the JIT-compiled dispatch kernels (including cq_prefetch_reader.cpp
+// when TT_METAL_SPLIT_PREFETCHER=1 is set) compile without errors.
+// Run with: TT_METAL_SPLIT_PREFETCHER=1 <binary> --gtest_filter=*SplitPrefetcherJitCompile*
+TEST_F(GenericMeshDeviceFixture, SplitPrefetcherJitCompile) {
+    // No work needed: SetUp() initialises the device, which triggers JIT compilation
+    // of all fast-dispatch kernels.  TearDown() closes it.  A compile failure in any
+    // kernel (e.g. cq_prefetch_reader.cpp) will cause SetUp() to abort.
+}
+
+}  // namespace tt::tt_metal

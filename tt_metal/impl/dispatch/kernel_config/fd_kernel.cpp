@@ -17,6 +17,7 @@
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
+#include "prefetch_writer.hpp"
 #include "impl/context/context_descriptor.hpp"
 // #include "impl/context/metal_context.hpp"
 #include "kernels/kernel.hpp"
@@ -199,6 +200,19 @@ FDKernel* FDKernel::Generate(
                 get_reads_dispatch_cores);
         case DISPATCH_S:
             return new DispatchSKernel(
+                node_id,
+                device_id,
+                servicing_device_id,
+                cq_id,
+                noc_selection,
+                descriptor,
+                dispatch_core_manager,
+                get_control_plane,
+                get_dispatch_query_manager,
+                get_max_num_eth_cores,
+                get_reads_dispatch_cores);
+        case PREFETCH_HD_WRITER:
+            return new PrefetchWriterKernel(
                 node_id,
                 device_id,
                 servicing_device_id,
