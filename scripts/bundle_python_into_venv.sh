@@ -81,58 +81,95 @@ fi
 
 echo "Bundling Python interpreter into venv: $VENV_DIR"
 
-# Get symlink target for diagnostic purposes
-if [[ -L "$VENV_DIR/bin/python" ]]; then
-    SYMLINK_TARGET=$(readlink "$VENV_DIR/bin/python")
-    echo "  Symlink target: $SYMLINK_TARGET"
-fi
+# --- Locate the cpython source directory ---
+# Strategy 1: follow symlinks from the venv's python binary.
+# Strategy 2: read 'home' from pyvenv.cfg (for --link-mode copy venvs where
+#             the binary is already a real file, not a symlink).
+CPYTHON_DIR=""
 
-# Get the real path to the Python interpreter
-# Note: If this fails with "Permission denied", the source Python installation
-# is likely in an inaccessible location (e.g., /root/.local/share/uv).
-# Fix: Ensure UV_PYTHON_INSTALL_DIR is set to an accessible location like
-# /usr/local/share/uv before running 'uv python install'.
-if ! REAL_PYTHON_PATH=$(readlink -f "$VENV_DIR/bin/python" 2>&1); then
-    echo "ERROR: Failed to resolve Python symlink" >&2
-    echo "  readlink error: $REAL_PYTHON_PATH" >&2
-    if [[ -n "${SYMLINK_TARGET:-}" ]]; then
-        echo "  Symlink points to: $SYMLINK_TARGET" >&2
+if [[ -L "$VENV_DIR/bin/python" || -L "$VENV_DIR/bin/python3" ]]; then
+    # Binary is a symlink — resolve it to find the cpython install.
+    local_link="$VENV_DIR/bin/python"
+    [[ -L "$local_link" ]] || local_link="$VENV_DIR/bin/python3"
+
+    echo "  Symlink target: $(readlink "$local_link")"
+
+    if ! REAL_PYTHON_PATH=$(readlink -f "$local_link" 2>&1); then
+        echo "ERROR: Failed to resolve Python symlink" >&2
+        echo "  readlink error: $REAL_PYTHON_PATH" >&2
+        echo "" >&2
+        echo "This typically means Python was installed to an inaccessible location" >&2
+        echo "(e.g., /root/.local/share/uv/) during environment setup." >&2
+        echo "Fix: Set UV_PYTHON_INSTALL_DIR=/usr/local/share/uv" >&2
+        exit 1
     fi
-    echo "" >&2
-    echo "This typically means Python was installed to an inaccessible location" >&2
-    echo "(e.g., /root/.local/share/uv/) during environment setup." >&2
-    echo "" >&2
-    echo "Fix: Set UV_PYTHON_INSTALL_DIR=/usr/local/share/uv (or another accessible" >&2
-    echo "location) before running 'uv python install'." >&2
-    exit 1
-fi
-echo "  Python interpreter: $REAL_PYTHON_PATH"
-
-# Verify the Python interpreter is accessible
-if [[ ! -r "$REAL_PYTHON_PATH" ]]; then
-    echo "ERROR: Python interpreter is not readable: $REAL_PYTHON_PATH" >&2
-    echo "Check that UV_PYTHON_INSTALL_DIR was set correctly during setup." >&2
-    exit 1
-fi
-
-# Extract the cpython installation directory (parent of bin/python)
-# Path structure from uv: <UV_PYTHON_INSTALL_DIR>/cpython-<version>-<platform>/bin/python
-CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
-echo "  CPython directory: $CPYTHON_DIR"
-
-# Verify the CPython directory looks valid
-if [[ ! -d "$CPYTHON_DIR/lib" ]]; then
-    echo "ERROR: CPython directory does not contain expected structure: $CPYTHON_DIR" >&2
-    echo "Expected to find 'lib' subdirectory." >&2
-    exit 1
+    echo "  Python interpreter (resolved): $REAL_PYTHON_PATH"
+    CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
+else
+    # Binary is a regular file (--link-mode copy / --relocatable).
+    # Fall back to pyvenv.cfg's 'home' key to locate the cpython source.
+    echo "  Python binary is a regular file (not a symlink)"
+    if [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+        CFG_HOME=$(grep -E '^home\s*=' "$VENV_DIR/pyvenv.cfg" | head -1 | sed 's/^home\s*=\s*//')
+        if [[ -n "$CFG_HOME" && -d "$CFG_HOME" ]]; then
+            # home points to .../bin; cpython root is one level up.
+            CPYTHON_DIR=$(dirname "$CFG_HOME")
+            echo "  CPython directory (from pyvenv.cfg home): $CPYTHON_DIR"
+        else
+            echo "  pyvenv.cfg home='${CFG_HOME:-<not set>}' — directory does not exist"
+        fi
+    fi
 fi
 
-# Remove python symlinks in venv (they will be replaced with bundled interpreter)
-echo "  Removing venv python symlinks..."
-rm -f "$VENV_DIR/bin/python"*
+# Validate the cpython source directory
+if [[ -z "$CPYTHON_DIR" || ! -d "$CPYTHON_DIR/lib" ]]; then
+    # If we can't find the cpython source but the stdlib is already present
+    # in the venv, we only need to fix pyvenv.cfg (handled below).
+    if ls "$VENV_DIR"/lib/python3*/os.py &>/dev/null; then
+        echo "  CPython source not reachable, but stdlib already present in venv"
+        echo "  Skipping file copy; will update pyvenv.cfg only"
+        CPYTHON_DIR=""
+    else
+        echo "ERROR: Cannot locate CPython source directory and stdlib is not in venv" >&2
+        echo "  Tried: symlink resolution and pyvenv.cfg home key" >&2
+        echo "  The venv may have been created with --link-mode copy on a different host." >&2
+        echo "  Re-create with:  create_venv.sh --bundle-python" >&2
+        exit 1
+    fi
+fi
 
-# Copy the cpython directory contents into the venv
-echo "  Copying Python interpreter files into venv..."
-cp -r "$CPYTHON_DIR"/* "$VENV_DIR/"
+# Copy cpython files into the venv (if we found the source)
+if [[ -n "$CPYTHON_DIR" ]]; then
+    VENV_DIR_REAL=$(cd "$VENV_DIR" && pwd)
+    CPYTHON_DIR_REAL=$(cd "$CPYTHON_DIR" && pwd)
+    if [[ "$CPYTHON_DIR_REAL" == "$VENV_DIR_REAL" ]]; then
+        echo "  CPython source IS the venv itself (--link-mode copy); skipping self-copy"
+    else
+        if [[ ! -r "$CPYTHON_DIR/bin/python3" && ! -r "$CPYTHON_DIR/bin/python" ]]; then
+            echo "ERROR: Python interpreter is not readable in $CPYTHON_DIR/bin/" >&2
+            echo "Check that UV_PYTHON_INSTALL_DIR was set correctly during setup." >&2
+            exit 1
+        fi
+
+        echo "  CPython directory: $CPYTHON_DIR"
+        echo "  Removing venv python binaries..."
+        rm -f "$VENV_DIR/bin/python"*
+
+        echo "  Copying Python interpreter files into venv..."
+        cp -r "$CPYTHON_DIR"/* "$VENV_DIR/"
+    fi
+fi
+
+# Update pyvenv.cfg so 'home' points to the venv's own bin/ directory.
+# Before bundling, home pointed to the original cpython install (e.g.
+# /usr/local/share/uv/python/cpython-.../install/bin) which won't exist
+# on NFS compute nodes.  Python uses the home path to locate its stdlib;
+# if the path is invalid it falls back to the compiled-in prefix and
+# fails with "No module named 'encodings'".
+if [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+    VENV_BIN_DIR="$(cd "$VENV_DIR/bin" && pwd)"
+    echo "  Updating pyvenv.cfg home -> $VENV_BIN_DIR"
+    sed -i "s|^home\s*=.*|home = $VENV_BIN_DIR|" "$VENV_DIR/pyvenv.cfg"
+fi
 
 echo "  Python interpreter bundled successfully"

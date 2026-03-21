@@ -1,0 +1,56 @@
+# Slurm CI scheduled jobs (install with: scrontab schedules.crontab)
+#
+# Format: minute hour day-of-month month day-of-week command
+# All times are UTC.
+#
+# Usage:
+#   scrontab schedules.crontab        # Install this crontab
+#   scrontab -l                       # List current scrontab entries
+#   scrontab -r                       # Remove all scrontab entries
+#
+# Each entry launches a pipeline via the universal submit.sh launcher.
+# Logs go to ${LOG_BASE}/<workflow-name>/<job-id>/ (default: /weka/ci/logs, see config/site.sh).
+
+# ---------------------------------------------------------------------------
+# Nightly pipelines
+# ---------------------------------------------------------------------------
+
+# L2 Nightly - daily at 06:00 UTC (orchestrator: full nightly test suite)
+0 6 * * * ./slurm/submit.sh tt-metal-l2-nightly
+
+# APC nightly debug - daily at 07:00 UTC
+0 7 * * * ./slurm/submit.sh apc-nightly-debug
+
+# vLLM nightly - daily at 08:00 UTC
+0 8 * * * ./slurm/submit.sh vllm-nightly-tests
+
+# Upstream tests - daily at 12:00 UTC (from upstream-tests.yaml schedule)
+0 12 * * * ./slurm/submit.sh upstream-tests
+
+# ---------------------------------------------------------------------------
+# Release / packaging
+# ---------------------------------------------------------------------------
+
+# Package and release (dev) - daily at 00:00 UTC Mon-Sun
+# Creates dev release every day at EOD PST (from package-and-release.yaml)
+0 0 * * * ./slurm/submit.sh package-and-release --env RELEASE_TYPE=dev
+
+# ---------------------------------------------------------------------------
+# Periodic / recurring
+# ---------------------------------------------------------------------------
+
+# Blackhole post-commit - every 4 hours
+0 */4 * * * ./slurm/submit.sh blackhole-post-commit
+
+# TTNN sweeps Slack notify - hourly
+0 * * * * ./slurm/submit.sh ttnn-sweeps-slack-notify
+
+# ---------------------------------------------------------------------------
+# Auto-retry (runs after nightly/post-commit to requeue failures)
+# ---------------------------------------------------------------------------
+
+# Auto-retry nightly - 2 hours after nightly start (08:00 UTC)
+0 8 * * * ./slurm/submit.sh auto-retry-nightly
+
+# Auto-retry post-commit - every 6 hours
+0 */6 * * * ./slurm/submit.sh auto-retry-post-commit

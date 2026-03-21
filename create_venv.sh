@@ -22,6 +22,9 @@ OPTIONS:
     --bundle-python       Deep-copy the Python interpreter into the venv instead of
                           using symlinks. This makes the venv fully self-contained
                           and portable, at the cost of increased disk space.
+    --no-cache            Disable caching for all pip install commands.
+                          Useful for debugging dependency issues or ensuring
+                          fresh package downloads.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -61,6 +64,7 @@ ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
 BUNDLE_PYTHON="false"
+NO_CACHE="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -93,6 +97,10 @@ while [[ $# -gt 0 ]]; do
             BUNDLE_PYTHON="true"
             shift
             ;;
+        --no-cache)
+            NO_CACHE="true"
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -104,6 +112,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Set uv pip cache option based on --no-cache flag
+UV_PIP_CACHE_ARG=""
+if [[ "$NO_CACHE" == "true" ]]; then
+    UV_PIP_CACHE_ARG="--no-cache"
+fi
 
 # ============================================================================
 # Validation Functions
@@ -318,31 +332,31 @@ source "$PYTHON_ENV_DIR/bin/activate"
 # Install uv into the venv at the same version as the invoking uv
 UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
 echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
-uv pip install "uv==${UV_CURRENT_VERSION}"
+uv pip install $UV_PIP_CACHE_ARG "uv==${UV_CURRENT_VERSION}"
 
 # PyTorch CPU index URL for all uv pip commands
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    uv pip install --extra-index-url "$PYTORCH_INDEX" \
+    uv pip install $UV_PIP_CACHE_ARG --extra-index-url "$PYTORCH_INDEX" \
         --index-strategy unsafe-best-match \
         setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    uv pip install --upgrade wheel setuptools==80
+    uv pip install $UV_PIP_CACHE_ARG --upgrade wheel setuptools==80
 fi
 
 echo "Installing dev dependencies"
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
 # no-build-isolation as a workaround for setuptools/mmcv
-uv pip install --extra-index-url "$PYTORCH_INDEX" \
+uv pip install $UV_PIP_CACHE_ARG --extra-index-url "$PYTORCH_INDEX" \
     --index-strategy unsafe-best-match \
     --no-build-isolation \
     -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-metal"
-uv pip install -e .
+uv pip install $UV_PIP_CACHE_ARG -e .
 
 # Create .pth files for ttml
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
