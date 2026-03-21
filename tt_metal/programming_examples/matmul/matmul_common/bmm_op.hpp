@@ -155,7 +155,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
             }
         }
 
-        if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
+        if (Mpc == 0 or Npc == 0 or Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
             return {0, 0, 0, 0};
         }
 
@@ -179,7 +179,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
             }
         }
 
-        if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
+        if (Mpc == 0 or Npc == 0 or Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
             return {0, 0, 0, 0};
         }
 
@@ -203,7 +203,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
                 }
             }
 
-            if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
+            if (Mpc == 0 or Npc == 0 or Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
                 continue;
             }
 
