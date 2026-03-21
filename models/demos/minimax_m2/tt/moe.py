@@ -31,6 +31,7 @@ class TtMiniMaxMoE:
         layer_idx: int,
         mesh_config: MeshConfig = None,
         ccl_manager: CCLManager = None,
+        weight_cache_path=None,
     ):
         self.config = config
         self.device = device
@@ -47,6 +48,7 @@ class TtMiniMaxMoE:
         E_local = E // ep
 
         prefix = f"model.layers.{layer_idx}.block_sparse_moe."
+        cache_prefix = weight_cache_path / f"layer{layer_idx}.moe" if weight_cache_path else None
 
         self._E = E
         self._E_local = E_local
@@ -61,24 +63,28 @@ class TtMiniMaxMoE:
 
         # ---- Router gate weight [H, E] on device ----
         gate_w = state_dict[prefix + "gate.weight"].to(torch.bfloat16)  # [E, H]
-        self.gate_weight = ttnn.from_torch(
+        gate_cache = cache_prefix / "gate_weight" if cache_prefix else None
+        self.gate_weight = ttnn.as_tensor(
             gate_w.T,  # [H, E] for ttnn.linear
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep_mapper,
+            cache_file_name=gate_cache,
         )
 
         # ---- Routing bias [1, E] in float32 (matched to float32 sigmoid path) ----
         routing_bias = state_dict[prefix + "e_score_correction_bias"].float()
-        self.routing_bias = ttnn.from_torch(
+        bias_cache = cache_prefix / "routing_bias" if cache_prefix else None
+        self.routing_bias = ttnn.as_tensor(
             routing_bias.unsqueeze(0),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep_mapper,
+            cache_file_name=bias_cache,
         )
 
         # ---- EP gather matrix for EP slicing ----
@@ -88,13 +94,15 @@ class TtMiniMaxMoE:
                 for j in range(E_local):
                     gather_matrices[r, r * E_local + j, j] = 1.0
             ep_gather_mapper = ttnn.ShardTensor2dMesh(device, dims=(0, None), mesh_shape=device.shape)
-            self.ep_gather_mat = ttnn.from_torch(
+            gather_cache = cache_prefix / "ep_gather_mat" if cache_prefix else None
+            self.ep_gather_mat = ttnn.as_tensor(
                 gather_matrices,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ep_gather_mapper,
+                cache_file_name=gather_cache,
             )
         else:
             self.ep_gather_mat = None
@@ -115,29 +123,35 @@ class TtMiniMaxMoE:
         w3_4d = w3_stack.transpose(1, 2).unsqueeze(0).to(torch.bfloat16)
         w2_4d = w2_stack.transpose(1, 2).unsqueeze(0).to(torch.bfloat16)
 
-        self.w1 = ttnn.from_torch(
+        w1_cache = cache_prefix / "w1" if cache_prefix else None
+        self.w1 = ttnn.as_tensor(
             w1_4d,
             dtype=config.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ep_tp_col_mapper,
+            cache_file_name=w1_cache,
         )
-        self.w3 = ttnn.from_torch(
+        w3_cache = cache_prefix / "w3" if cache_prefix else None
+        self.w3 = ttnn.as_tensor(
             w3_4d,
             dtype=config.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ep_tp_col_mapper,
+            cache_file_name=w3_cache,
         )
-        self.w2 = ttnn.from_torch(
+        w2_cache = cache_prefix / "w2" if cache_prefix else None
+        self.w2 = ttnn.as_tensor(
             w2_4d,
             dtype=config.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ep_tp_row_mapper,
+            cache_file_name=w2_cache,
         )
 
     # ------------------------------------------------------------------

@@ -319,3 +319,269 @@ pytest models/demos/minimax_m2/tests/test_minimax_m2_tt.py -v
 - Tests: `test_trace_generation` passes with 100% token match.
 - Block Hash: `tt/generator.py` prefill device-to-device copy
 - Next: For device-resident sampling, integrate `SamplingGenerator` pattern from gpt_oss.
+
+## Session Update (2026-03-20, ISL Padding Verified + Benchmark Script)
+
+- Status: ISL padding confirmed, benchmark script created.
+  - **ISL Padding: Confirmed** — Uses same pattern as other models:
+    - `nearest_32(isl)` rounds up to nearest multiple of 32 (tile size)
+    - e.g., ISL=100 → 128, ISL=128 → 128, ISL=1024 → 1024
+  - `demo/perf_benchmark.py`: New benchmark script created with:
+    - TTFT (time-to-first-token) measurement via prefill timing
+    - Decode tokens/sec measurement
+    - Support for `--isl` param (default: 128, 1024, 2048, 4096, 8192)
+    - Support for `--use-trace` and `--no-paged` flags
+    - ISL padding applied via `nearest_32()` helper
+- Issue: Benchmark script OOM-killed during weight dequantization (456B model needs ~400GB CPU RAM)
+  - Weights load successfully (125/125 shards)
+  - Process killed during `load_and_dequant()` call
+- Workaround: Use `demo/text_demo.py` for perf numbers (reports tok/s per prompt)
+- Usage:
+  ```bash
+  # Run benchmark (needs high-memory machine)
+  python models/demos/minimax_m2/demo/perf_benchmark.py --isl 128 1024 2048 4096 8192 --use-trace
+
+  # Alternative: text_demo reports per-prompt tok/s
+  MINIMAX_M2_MAX_NEW_TOKENS=32 pytest models/demos/minimax_m2/demo/text_demo.py -xvs
+  ```
+- Block Hash: `demo/perf_benchmark.py` -> new file
+
+## Session Update (2026-03-20, ISL Performance Benchmark + bfloat8_b Weights)
+
+- Status: ISL performance benchmark working, weight dtype optimized for DRAM fit.
+  - **Weight dtype changed to bfloat8_b** in `tt/model_config.py`:
+    - 228B params / 32 devices = 7.125B params/device
+    - BF16: 14.25GB (doesn't fit in 12GB DRAM)
+    - BF8: 7.125GB (fits!)
+    - BF4: 3.56GB (fits, lower accuracy)
+  - **Benchmark script fixes** in `demo/perf_benchmark.py`:
+    - Added `--num-layers` param for quick tests (default: all 62)
+    - Auto-enables `--use-trace` when paged attention enabled (required for paged decode)
+    - Streaming state dict for memory-efficient weight loading
+- **ISL Benchmark Results (2 layers, batch=1)**:
+  | ISL  | Padded | TTFT (ms) | Decode (s) | Tok/s |
+  |------|--------|-----------|------------|-------|
+  | 128  | 128    | 29.1      | 1.03       | 30.0  |
+  | 1024 | 1024   | 105.0     | 1.04       | 29.9  |
+  | 2048 | 2048   | 188.3     | 1.04       | 29.9  |
+  | 4096 | 4096   | 376.5     | 1.04       | 29.8  |
+  | 8192 | 8192   | 805.7     | 1.04       | 29.8  |
+- Key findings:
+  - TTFT scales ~linearly with ISL (expected for prefill)
+  - Decode throughput constant at ~30 tok/s (Metal trace + single token)
+  - Full 62-layer model: estimated ~31x slower (~1 tok/s decode)
+- Tests: All 21 tests pass with bfloat8_b. DecoderLayer PCC ~0.92 (expected due to MoE bf16 topk routing).
+- Usage:
+  ```bash
+  # Quick 2-layer benchmark
+  python models/demos/minimax_m2/demo/perf_benchmark.py --num-layers 2 --isl 128 1024 2048 4096 8192
+
+  # Full 62-layer benchmark (takes hours to load)
+  python models/demos/minimax_m2/demo/perf_benchmark.py --isl 128 1024 2048 4096 8192
+  ```
+- Block Hash: `tt/model_config.py` bfloat8_b dtype, `demo/perf_benchmark.py` num-layers param + trace fix
+
+## Session Update (2026-03-20, Full 62-Layer E2E Benchmark)
+
+- Status: Full 62-layer E2E benchmark completed.
+  - **Model build time**: ~50 minutes (2982s) for 62 layers
+  - **Streaming state dict** successfully loads 228B params from 125 safetensor shards on-demand
+- **ISL Benchmark Results (62 layers, batch=1, paged=True, decode_trace=True)**:
+  | ISL  | Padded | TTFT (ms) | Decode Tok/s |
+  |------|--------|-----------|--------------|
+  | 128  | 128    | 385.7     | 2.5          |
+  | 1024 | 1024   | 440.1     | 2.2          |
+  | 2048 | 2048   | 504.5     | 1.9          |
+  | 4096 | 4096   | OOM       | -            |
+  | 8192 | 8192   | OOM       | -            |
+- Key findings:
+  - Decode throughput: 2.5 tok/s (ISL=128) to 1.9 tok/s (ISL=2048) with Metal trace
+  - TTFT scales ~linearly: 386ms (ISL=128) → 504ms (ISL=2048)
+  - **DRAM OOM at ISL≥4096**: MoE `ttnn.repeat` in prefill needs 768MB but only 13MB free
+- **OOM Issue Analysis**:
+  - Error: `Out of Memory: Not enough space to allocate 805306368 B DRAM buffer`
+  - Root cause: MoE broadcasts `x_flat [1, 1, T, H]` to all experts `[1, E_local, T, H]` in prefill
+  - At ISL=4096: T=4096, H=3072, E_local=32 → 1.5GB intermediate tensor
+  - Model weights + KV cache consume most of 12GB DRAM per device
+- Fix options (future work):
+  1. Chunked prefill: process ISL in smaller chunks
+  2. MoE memory optimization: stream expert computation instead of broadcast
+  3. BF4 weights: reduce model footprint from 7.125GB to 3.56GB
+- Usage:
+  ```bash
+  # Full 62-layer benchmark (ISL ≤ 2048)
+  python models/demos/minimax_m2/demo/perf_benchmark.py --isl 128 1024 2048 --max-seq-len 16384
+  ```
+- Block Hash: `demo/perf_benchmark.py` full 62-layer E2E benchmark
+
+## Session Update (2026-03-20, Coherence Test + Paged Attention Trace Requirement)
+
+- Status: Investigating output coherence for full 62-layer model.
+  - **Bug found**: Paged attention requires `use_trace=True` for decode
+    - `forward_decode()` (line 281-310 in `tt/attention.py`) uses non-paged KV cache ops (`ttnn.update_cache`, `ttnn.slice`)
+    - `forward_decode_trace()` (line 316+) uses paged ops (`paged_update_cache`, `paged_scaled_dot_product_attention_decode`)
+    - When paged attention is enabled but `use_trace=False`, decode fails with KV cache shape mismatch
+  - **Error**: `TT_FATAL: Ends 96 must be less than or equal to the shape of the tensor 64`
+    - KV cache was allocated with paged format `[..., block_size=64, ...]`
+    - Non-trace decode tried to slice `[..., cur_pos=96, ...]`
+  - **Fix applied**: `demo/quick_coherence_test.py` now uses `use_trace=True`
+- **Full 62-Layer Model Build**:
+  - Build time: ~49 minutes (08:31 → 09:20)
+  - Successfully indexed 96103 keys from 125 safetensor shards
+  - Prefill on 6-token prompt completed through all 62 layers
+- **Test Status**: Running 62-layer coherence test with trace mode
+  - Prompt: "The future of artificial intelligence is"
+  - MAX_NEW_TOKENS=100, MAX_SEQ_LEN=512
+- Block Hash: `demo/quick_coherence_test.py` -> added `use_trace=True` for paged attention compatibility
+
+## Session Update (2026-03-20, 62-Layer Coherence Test Results)
+
+- Status: Full 62-layer coherence test completed successfully.
+  - **Model**: 62 layers, 256 experts/layer, paged attention, trace decode
+  - **Prompt**: "The future of artificial intelligence is"
+  - **Tokens generated**: 100
+  - **Total runtime**: ~50 minutes (model build: 49 min, generation: 37 sec)
+- **Generated Output**:
+  ```
+  The future of artificial intelligence is bright, and the future of AI is here.
+  The future of AI is here, and the future of AI is bright.
+  The future of AI is here, and the future of AI is bright. [repeats...]
+  ```
+- **Coherence Assessment**: Partial coherence with repetition
+  - ✅ Produces grammatically correct English
+  - ✅ First sentence is meaningful and topical
+  - ⚠️ Output becomes repetitive after first sentence
+  - **Root cause**: Greedy decode (temperature=0) causes the model to get stuck in high-probability loops
+  - **Fix needed**: Add sampling support (top_p/temperature) to prevent repetition
+- **Timing Breakdown**:
+  - Model build: 09:24:07 → 10:13:36 (~49 min) — loading 62 layers × 256 experts from 125 shards
+  - Prefill (6 tokens): instant
+  - Trace capture + 100 decode tokens: 10:13:36 → 10:14:13 (~37 sec)
+  - Decode throughput: ~2.7 tok/s
+- **Next Steps**:
+  1. Add sampling (temperature > 0, top_p) to prevent greedy decode loops
+  2. Integrate `SamplingGenerator` pattern from `models/common/sampling/generator.py`
+  3. Test with higher temperatures to verify diverse, coherent output
+- Block Hash: Full 62-layer coherence test completed
+
+## Session Update (2026-03-20, Sampling Support Added)
+
+- Status: Added host-based sampling support to fix repetitive output.
+  - `tt/generator.py`: Added sampling infrastructure:
+    - `SamplingParams` dataclass with `temperature`, `top_k`, `top_p`, `repetition_penalty`
+    - `sample_from_logits()` - temperature scaling + top-k + top-p (nucleus) sampling
+    - `apply_repetition_penalty()` - penalizes previously generated tokens
+    - `generate()` now accepts sampling parameters (defaults: temperature=0.0 greedy)
+  - `tt/__init__.py`: Exported `SamplingParams` class
+  - `demo/quick_coherence_test.py`: Updated to use sampling:
+    - `temperature=0.7` for diversity
+    - `top_p=0.9` for nucleus sampling
+    - `repetition_penalty=1.1` to prevent repetition
+- **Sampling Parameters**:
+  | Parameter | Default | Effect |
+  |-----------|---------|--------|
+  | `temperature` | 0.0 | 0.0 = greedy, higher = more random |
+  | `top_k` | 0 | 0 = disabled, >0 = keep top k tokens |
+  | `top_p` | 1.0 | 1.0 = disabled, <1.0 = nucleus sampling |
+  | `repetition_penalty` | 1.0 | 1.0 = disabled, >1.0 = penalize repeats |
+- **Usage**:
+  ```python
+  gen.generate(
+      input_ids,
+      max_new_tokens=100,
+      use_trace=True,
+      temperature=0.7,      # Enable sampling
+      top_p=0.9,            # Nucleus sampling
+      repetition_penalty=1.1,  # Penalize repeats
+  )
+  ```
+- **Note**: This is host-based sampling. For maximum performance, integrate on-device
+  `TTSampling` from `models/common/sampling/tt_sampling.py` (requires additional setup).
+- Block Hash: `tt/generator.py` sampling support, `demo/quick_coherence_test.py` sampling params
+
+## Session Update (2026-03-21, Prefill Trace Fixed)
+
+- Status: Fixed prefill trace implementation following tt_transformers pattern.
+  - **Root cause**: Original prefill trace embedded inputs before trace capture, causing buffer deallocation issues
+  - **Fix applied**: Token IDs embedded INSIDE the trace (not embeddings), following gpt_oss pattern
+  - `tt/generator.py` changes:
+    - `_capture_prefill_trace()`: Creates host tensor, warmup on device, fresh device copy for trace
+    - `_prefill_forward_from_tokens()`: Embeds tokens inside trace, preserving input buffer
+    - `_execute_prefill_trace()`: Copies token IDs to device buffer, executes trace
+  - **Known limitation**: Prefill trace recaptured each call (not reused)
+    - Reusing cached trace after `clear_kv_caches()` causes decode to hang
+    - Root cause unknown - possibly KV cache state after trace replay vs capture
+    - Workaround: Release old trace and recapture each call
+- **Performance (2 layers, batch=1)**:
+  | Mode | TTFT (ms) | Decode Tok/s |
+  |------|-----------|--------------|
+  | Decode trace only | 36 | 27.0 |
+  | Prefill trace only | 51 | 19.0 |
+  | Both (future) | TBD | TBD |
+- **Note**: Prefill trace is slower due to recapture overhead. True trace reuse needs investigation.
+- Tests: All existing tests pass.
+- Block Hash: `tt/generator.py` prefill trace with embed-inside-trace pattern
+
+## Session Update (2026-03-21, ISL Benchmark Results)
+
+- Status: E2E ISL benchmark completed as requested.
+- **ISL Benchmark Results (2 layers, batch=1, paged=True, decode_trace=True)**:
+  | ISL  | Padded | TTFT (ms) | Decode Tok/s |
+  |------|--------|-----------|--------------|
+  | 128  | 128    | 37.8      | 25.6         |
+  | 1024 | 1024   | 54.5      | 17.8         |
+  | 2048 | 2048   | 73.6      | 13.2         |
+  | 4096 | 4096   | 111.8     | 8.7          |
+- Key observations:
+  - TTFT scales sublinearly with ISL (good - prefill benefits from parallelism)
+  - Decode throughput decreases with ISL due to longer KV cache attention
+  - No OOM issues at ISL 4096 with 2 layers (full 62 layers OOMs at ISL ≥ 4096)
+
+- **Full 62-Layer Benchmark Results (batch=1, paged=True, decode_trace=True)**:
+  | ISL  | TTFT (ms) | Decode Tok/s |
+  |------|-----------|--------------|
+  | 128  | 405.4     | 2.4          |
+  | 1024 | 464.9     | 2.1          |
+  | 2048 | 527.5     | 1.8          |
+- Model build: 224s (weights cached in `~/.cache/ttnn/minimax_m2/bfp8/`)
+- TTFT: 405ms (ISL=128) → 528ms (ISL=2048) — scales ~30% for 16x more tokens
+- Decode: 2.4 → 1.8 tok/s — KV attention overhead increases with context length
+
+- Usage:
+  ```bash
+  # Quick benchmark with 2 layers
+  python models/demos/minimax_m2/demo/perf_benchmark.py --isl 128 1024 2048 4096 --use-trace --num-layers 2
+
+  # Full model (ISL ≤ 2048 to avoid OOM)
+  python models/demos/minimax_m2/demo/perf_benchmark.py --isl 128 1024 2048 --use-trace
+  ```
+- Block Hash: Full 62-layer benchmark completed
+
+## Session Update (2026-03-21, Unified Demo)
+
+- Status: Created unified `demo/demo.py` that shows both perf and coherence (like gpt_oss).
+  - Replaces separate `perf_benchmark.py` and `quick_coherence_test.py`
+  - Shows generated text output for coherence verification
+  - Reports TTFT and decode tok/s metrics
+  - Supports sampling (temperature, top_p, repetition_penalty) or greedy decoding
+- **Full 62-Layer Demo Results** (ISL=6, batch=1):
+  - TTFT: 369ms
+  - Decode: 2.7 tok/s
+  - Output: Coherent, topical text about AI future
+- **Sample Output**:
+  > "bright, but it's not without its challenges. As we continue to develop more advanced AI systems, we need to be mindful of the potential risks and ensure that these technologies are used for good. Artificial intelligence is poised to have a major impact on our world in 2024 and beyond..."
+- Usage:
+  ```bash
+  # Default prompts with sampling
+  python models/demos/minimax_m2/demo/demo.py
+
+  # Custom prompt
+  python models/demos/minimax_m2/demo/demo.py --prompt "Write a poem about AI"
+
+  # Greedy decoding
+  python models/demos/minimax_m2/demo/demo.py --greedy
+
+  # Quick test with 2 layers
+  python models/demos/minimax_m2/demo/demo.py --num-layers 2
+  ```
+- Block Hash: `demo/demo.py` unified perf + coherence demo

@@ -66,6 +66,7 @@ class TtMiniMaxAttention:
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
         paged_attention_config: PagedAttentionConfig = None,
+        weight_cache_path=None,
     ):
         self.config = config
         self.device = device
@@ -84,6 +85,7 @@ class TtMiniMaxAttention:
         NK_local = NK // tp
 
         prefix = f"model.layers.{layer_idx}.self_attn."
+        cache_prefix = weight_cache_path / f"layer{layer_idx}.self_attn" if weight_cache_path else None
 
         rep_mapper = ttnn.ReplicateTensorToMesh(device) if self._is_mesh else None
         col_mapper = mesh_config.column_parallel(device) if (self._is_mesh and mesh_config) else None
@@ -91,13 +93,15 @@ class TtMiniMaxAttention:
 
         def _load_col(key):
             w = state_dict[prefix + key].T.to(torch.bfloat16)
-            return ttnn.from_torch(
+            cache_name = cache_prefix / key.replace(".", "_") if cache_prefix else None
+            return ttnn.as_tensor(
                 w,
                 dtype=config.weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=col_mapper,
+                cache_file_name=cache_name,
             )
 
         self.wq = _load_col("q_proj.weight")
@@ -105,19 +109,27 @@ class TtMiniMaxAttention:
         self.wv = _load_col("v_proj.weight")
 
         wo_pt = state_dict[prefix + "o_proj.weight"].T.to(torch.bfloat16)
-        self.wo = ttnn.from_torch(
+        wo_cache = cache_prefix / "o_proj_weight" if cache_prefix else None
+        self.wo = ttnn.as_tensor(
             wo_pt,
             dtype=config.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=row_mapper,
+            cache_file_name=wo_cache,
         )
 
         # QK-norm: row_parallel shards dim=-2 of the [1,1,N/TILE,TILE] weight,
         # giving each TP device a weight matching its local head count.
-        self.q_norm = TtRMSNorm(device, state_dict[prefix + "q_norm.weight"], eps, mesh_mapper=row_mapper)
-        self.k_norm = TtRMSNorm(device, state_dict[prefix + "k_norm.weight"], eps, mesh_mapper=row_mapper)
+        q_norm_cache = cache_prefix / "q_norm" if cache_prefix else None
+        k_norm_cache = cache_prefix / "k_norm" if cache_prefix else None
+        self.q_norm = TtRMSNorm(
+            device, state_dict[prefix + "q_norm.weight"], eps, mesh_mapper=row_mapper, cache_path=q_norm_cache
+        )
+        self.k_norm = TtRMSNorm(
+            device, state_dict[prefix + "k_norm.weight"], eps, mesh_mapper=row_mapper, cache_path=k_norm_cache
+        )
 
         self._NQ = NQ
         self._NK = NK

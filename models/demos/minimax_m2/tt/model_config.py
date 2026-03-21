@@ -10,7 +10,9 @@ Galaxy parallelism: 1×Galaxy = mesh (8,4) = 32 chips
   Prefill: SP=8 (rows), TP=4 (cols), EP=1
 """
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import ttnn
@@ -38,7 +40,11 @@ class MiniMaxM2TTConfig:
     max_position_embeddings: int = 196_608
 
     # TTNN dtypes
-    weight_dtype: ttnn.DataType = field(default=ttnn.bfloat16)
+    # 228B params / 32 devices = 7.125B params/device
+    # At BF16: 14.25GB (doesn't fit in 12GB DRAM)
+    # At BF8:  7.125GB (fits!)
+    # At BF4:  3.56GB  (fits, lower accuracy)
+    weight_dtype: ttnn.DataType = field(default=ttnn.bfloat8_b)
     act_dtype: ttnn.DataType = field(default=ttnn.bfloat16)
 
     # Memory configs
@@ -93,3 +99,39 @@ def make_paged_attention_config(
     # Compute blocks needed for max_seq_len
     max_num_blocks = (max_seq_len + block_size - 1) // block_size
     return PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
+
+def get_weight_cache_path(
+    model_path: str = None,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+) -> Path:
+    """
+    Get the weight cache path for MiniMax-M2.5.
+
+    Weight caching stores pre-converted TTNN tensors on disk to speed up
+    model loading on subsequent runs (first run: ~50 min, cached: ~5 min).
+
+    The cache path is determined by:
+    1. TT_CACHE_PATH env var (if set)
+    2. ~/.cache/ttnn/minimax_m2/<dtype>/
+
+    Args:
+        model_path: Path to model weights (used to create unique cache dir)
+        dtype: Weight dtype (bfloat8_b or bfloat16)
+
+    Returns:
+        Path to weight cache directory
+    """
+    dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8", ttnn.bfloat4_b: "bfp4"}.get(dtype, "bf16")
+
+    # Check for user-specified cache path
+    cache_root = os.environ.get("TT_CACHE_PATH")
+    if cache_root:
+        cache_path = Path(cache_root) / "minimax_m2" / dtype_str
+    else:
+        cache_path = Path.home() / ".cache" / "ttnn" / "minimax_m2" / dtype_str
+
+    # Create cache directory if it doesn't exist
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    return cache_path

@@ -9,6 +9,8 @@ paged_update_cache, SDPA decode, and RoPE embedding lookup.
 All shapes are fixed → safe for Metal trace capture/replay.
 """
 
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -16,7 +18,7 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from .attention import TtMiniMaxAttention
-from .model_config import MiniMaxM2TTConfig, make_mesh_config
+from .model_config import MiniMaxM2TTConfig, get_weight_cache_path, make_mesh_config
 from .moe import TtMiniMaxMoE
 from .rms_norm import TtRMSNorm
 from .rope import PartialRoPESetup
@@ -42,14 +44,25 @@ class TtDecoderLayer:
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
         paged_attention_config: PagedAttentionConfig = None,
+        weight_cache_path: Path = None,
     ):
         prefix = f"model.layers.{layer_idx}."
         eps = config.rms_norm_eps
         rep = _mesh_mapper(device)
 
-        self.input_layernorm = TtRMSNorm(device, state_dict[prefix + "input_layernorm.weight"], eps, mesh_mapper=rep)
+        self.input_layernorm = TtRMSNorm(
+            device,
+            state_dict[prefix + "input_layernorm.weight"],
+            eps,
+            mesh_mapper=rep,
+            cache_path=weight_cache_path / f"layer{layer_idx}.input_layernorm" if weight_cache_path else None,
+        )
         self.post_attention_layernorm = TtRMSNorm(
-            device, state_dict[prefix + "post_attention_layernorm.weight"], eps, mesh_mapper=rep
+            device,
+            state_dict[prefix + "post_attention_layernorm.weight"],
+            eps,
+            mesh_mapper=rep,
+            cache_path=weight_cache_path / f"layer{layer_idx}.post_attention_layernorm" if weight_cache_path else None,
         )
         self.self_attn = TtMiniMaxAttention(
             device,
@@ -61,6 +74,7 @@ class TtDecoderLayer:
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
             paged_attention_config=paged_attention_config,
+            weight_cache_path=weight_cache_path,
         )
         self.moe = TtMiniMaxMoE(
             device,
@@ -69,6 +83,7 @@ class TtDecoderLayer:
             layer_idx,
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
+            weight_cache_path=weight_cache_path,
         )
 
     def forward(self, x, cos, sin, attention_mask=None, is_causal=True):
@@ -158,6 +173,10 @@ class TtMiniMaxModel:
     KV cache is device-resident inside each attention layer.
     Supports both paged and non-paged attention modes.
     Trace-safe decode via forward_decode_trace.
+
+    Weight caching: Set weight_cache_path to enable caching converted TTNN
+    tensors to disk. First run creates cache (~50 min), subsequent runs
+    load from cache (~5-10 min).
     """
 
     def __init__(
@@ -168,6 +187,7 @@ class TtMiniMaxModel:
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
         paged_attention_config: PagedAttentionConfig = None,
+        weight_cache_path: Path = None,
     ):
         self.config = config
         self.device = device
@@ -175,6 +195,11 @@ class TtMiniMaxModel:
         self.max_batch_size = max_batch_size
         self.paged_attention_config = paged_attention_config
         self._is_mesh = isinstance(device, ttnn.MeshDevice)
+
+        # Enable weight caching by default
+        if weight_cache_path is None:
+            weight_cache_path = get_weight_cache_path(dtype=config.weight_dtype)
+        self.weight_cache_path = weight_cache_path
 
         if self._is_mesh:
             self.mesh_config = make_mesh_config(device)
@@ -188,13 +213,15 @@ class TtMiniMaxModel:
 
         # ---------- Embedding ----------
         embed_w = state_dict["model.embed_tokens.weight"].to(torch.bfloat16)
-        self.embed_weight = ttnn.from_torch(
+        embed_cache = weight_cache_path / "embed_tokens" if weight_cache_path else None
+        self.embed_weight = ttnn.as_tensor(
             embed_w.unsqueeze(0).unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
+            cache_file_name=embed_cache,
         )
 
         # ---------- Partial RoPE ----------
@@ -217,22 +244,32 @@ class TtMiniMaxModel:
                 max_seq_len=max_seq_len,
                 max_batch_size=max_batch_size,
                 paged_attention_config=paged_attention_config,
+                weight_cache_path=weight_cache_path,
             )
             for i in range(config.num_hidden_layers)
         ]
 
         # ---------- Final norm ----------
-        self.norm = TtRMSNorm(device, state_dict["model.norm.weight"], config.rms_norm_eps, mesh_mapper=rep)
+        norm_cache = weight_cache_path / "norm" if weight_cache_path else None
+        self.norm = TtRMSNorm(
+            device,
+            state_dict["model.norm.weight"],
+            config.rms_norm_eps,
+            mesh_mapper=rep,
+            cache_path=norm_cache,
+        )
 
         # ---------- LM head [H, V] — replicated -------
         lm_w = state_dict["lm_head.weight"].to(torch.bfloat16).T
-        self.lm_head = ttnn.from_torch(
+        lm_cache = weight_cache_path / "lm_head" if weight_cache_path else None
+        self.lm_head = ttnn.as_tensor(
             lm_w,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
+            cache_file_name=lm_cache,
         )
 
     # ------------------------------------------------------------------
