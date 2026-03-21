@@ -1,0 +1,12 @@
+{
+  "prompts": [
+    {"prompt": "What is Tenstorrent and what makes its hardware architecture unique?"},
+    {"prompt": "Explain the key differences between MoE (Mixture of Experts) and dense transformer models."},
+    {"prompt": "Write a haiku about silicon chips and neural networks."},
+    {"prompt": "What is 1337 in hexadecimal and binary?"},
+    {"prompt": "Describe the role of a KV cache in autoregressive language model inference."},
+    {"prompt": "What is Kimi K2.5 and how does it compare to DeepSeek V3?"},
+    {"prompt": "Explain RoPE (Rotary Position Embedding) in one paragraph."},
+    {"prompt": "What is the significance of INT4 quantization for large language model deployment?"}
+  ]
+}
