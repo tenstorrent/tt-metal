@@ -160,12 +160,12 @@ public:
     // Essential before calling revoke_and_shrink() to ensure all survivors
     // are coordinated.  If any rank passes false, the result is false.
     // Returns std::nullopt if not compiled with ULFM support.
-    std::optional<bool> agree(bool local_value) const;
+    std::optional<bool> agree(bool local_value) const override;
 
     // Returns the set of ranks detected as failed since the last
     // revoke_and_shrink() call.  Only populated under FAULT_TOLERANT policy.
     // Cleared when revoke_and_shrink() succeeds.
-    std::vector<Rank> failed_ranks() const;
+    std::vector<Rank> failed_ranks() const override;
 
     /* ------------- message snooping ------------- */
     std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
