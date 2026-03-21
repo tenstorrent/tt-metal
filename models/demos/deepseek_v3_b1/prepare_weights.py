@@ -257,8 +257,8 @@ _KV_B_PROJ_HEAD_DIM = _QK_NOPE_HEAD_DIM + _V_HEAD_DIM  # 256
 _Q_HEAD_DIM = _QK_NOPE_HEAD_DIM + _QK_ROPE_HEAD_DIM  # 192
 
 
-def deinterleave_q_b_proj(q_b_transposed: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
-    """Convert q_b_proj.weight.T from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
+def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
+    """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
 
     HF stores q_b_proj with out_features = num_heads * q_head_dim, where each head's
     nope and rope dims are contiguous: [h0_nope|h0_rope|h1_nope|h1_rope|...].
@@ -274,6 +274,7 @@ def deinterleave_q_b_proj(q_b_transposed: torch.Tensor, num_heads: int | None = 
     Returns:
         Tensor of the same shape with columns reordered to [ALL_NOPE | ALL_ROPE].
     """
+    q_b_transposed = q_b_proj.T
     K, N = q_b_transposed.shape
     if num_heads is None:
         num_heads = N // _Q_HEAD_DIM
@@ -316,7 +317,7 @@ def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device:
     )
 
 
-def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2.
 
     Expects full logical shape (32768, 512) for 4x2 mesh.
@@ -395,7 +396,7 @@ def _slice_shared_expert_weights_for_moe_tp(
     return shared_gate, shared_up, shared_down
 
 
-def _get_layer_raw_tensors(
+def get_layer_raw_tensors(
     state_dict: dict[str, torch.Tensor], layer_idx: int
 ) -> tuple[
     torch.Tensor,
@@ -413,7 +414,7 @@ def _get_layer_raw_tensors(
 
     Expects full logical HF shapes. We transpose HF
     (out_features, in_features) to (K, N); norms unsqueeze(0) to
-    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see _split_kv_b_proj).
+    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see split_kv_b_proj).
 
     Transformation (HF full logical -> transform -> passed to BlitzDecodeWeights):
 
@@ -433,9 +434,9 @@ def _get_layer_raw_tensors(
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
     """
     q_a = state_dict[_key(layer_idx, "self_attn.q_a_proj.weight")].T.contiguous()
-    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T)
+    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")])
     kv_a = state_dict[_key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-    kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
+    kv_b1, kv_b2 = split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
     o_proj = state_dict[_key(layer_idx, "self_attn.o_proj.weight")].T.contiguous()
 
     attn_norm = state_dict[_key(layer_idx, "input_layernorm.weight")].unsqueeze(0)
@@ -494,7 +495,7 @@ def prepare_attention_weights(
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
     t0 = time.perf_counter()
-    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
+    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
         state_dict, layer_idx
     )
     # Single-device (mla_tp=1) expects per-TP shapes; slice if state dict has full logical (2-TP) size

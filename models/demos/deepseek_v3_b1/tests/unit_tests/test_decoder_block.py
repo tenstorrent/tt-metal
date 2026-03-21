@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
-    deinterleave_q_b_proj,
+    get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
@@ -646,31 +646,28 @@ def create_decoder_block_tensors(
         def _sd_key(suffix):
             return f"model.layers.{layer_idx}.{suffix}"
 
-        golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
-        golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul2_weights = deinterleave_q_b_proj(state_dict[_sd_key("self_attn.q_b_proj.weight")].T)
-        golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-        golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+        (
+            golden_torch_matmul_weights,
+            golden_torch_matmul2_weights,
+            golden_torch_dkv_matmul_weights,
+            golden_kv_b1,
+            golden_kv_b2,
+            golden_torch_o_proj_weights,
+            golden_torch_gamma,
+            golden_torch_rmsnorm2_gamma,
+            golden_torch_dkv_rmsnorm_gamma,
+            ffn_norm,
+        ) = get_layer_raw_tensors(state_dict, layer_idx)
 
-        V_HEAD_DIM = 128
-        KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
-        kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
-        kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
-        total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
-        kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
-        golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
-        golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+        total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
+        kv_lora_rank = golden_kv_b1.shape[1]
         golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
         golden_total_qnope_heads = total_kv_heads
         golden_total_qrope_heads = total_kv_heads
 
         # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
-        golden_moe_rmsnorm_gamma = (
-            state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
-        )
+        golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
         if is_moe:
             golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
             golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
