@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -o pipefail
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -99,13 +101,6 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     exit 1
 fi
 
-echo "Using hosts: $HOSTS"
-echo "Using docker image: $DOCKER_IMAGE"
-echo "Output directory: $OUTPUT_DIR"
-echo ""
-
-echo "Slurm partition: $PARTITION"
-
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
@@ -114,10 +109,20 @@ LOG_FILE="$OUTPUT_DIR/ttnn_tests_$(date +%Y%m%d_%H%M%S).log"
 WORK_DIR=/workspace
 
 {
+    echo "Using hosts: $HOSTS"
+    echo "Using docker image: $DOCKER_IMAGE"
+    echo "Output directory: $OUTPUT_DIR"
+    echo ""
+    echo "Slurm partition: $PARTITION"
+
     echo "Running tt-smi -glx_reset..."
     srun -p $PARTITION -w $HOSTS tt-smi -glx_reset
+    if [[ $? -ne 0 ]]; then
+        echo "Error: tt-smi -glx_reset failed"
+        exit 1
+    fi
 
-    echo "Starting ttnn tests at $(date)"
+    echo "$(date): Starting ttnn tests"
     srun \
     --partition=$PARTITION \
     --nodelist=$HOSTS \
@@ -128,5 +133,11 @@ WORK_DIR=/workspace
     --entrypoint="" \
     $DOCKER_IMAGE \
     python /workspace/ttnn/ttnn/examples/usage/run_op_on_device.py
+
+    if [[ $? -ne 0 ]]; then
+        echo "Error: ttnn tests failed"
+        exit 1
+    fi
+
+    echo "$(date): Completed ttnn tests"
 } 2>&1 | tee "$LOG_FILE"
-echo "Done."
