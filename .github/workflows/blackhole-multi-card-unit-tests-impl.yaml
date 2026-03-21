@@ -122,6 +122,12 @@ jobs:
             cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
             timeout: 15
             test-type: slow
+          - name: VC2 multi-mesh fabric test
+            cmd: |
+              python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+              tt-run --mpi-args "--allow-run-as-root" --rank-binding bh_4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_vc2_at_least_2x2_mesh.yaml
+            timeout: 15
+            test-type: slow
           - name: bh_lb_DeepSeek_PREFILL
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
