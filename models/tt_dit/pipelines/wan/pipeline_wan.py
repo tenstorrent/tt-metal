@@ -33,7 +33,8 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
+from ...utils.tensor import bf16_tensor, float32_tensor, local_device_to_torch, typed_tensor_2dshard
+from ...utils.tracing import Tracer
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -142,19 +143,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.checkpoint_name = checkpoint_name
         self.model_type = model_type
 
-        self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
-        self.text_encoder = UMT5EncoderModel.from_pretrained(
-            checkpoint_name, subfolder="text_encoder", trust_remote_code=True
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            checkpoint_name, subfolder="tokenizer", local_files_only=True, trust_remote_code=True
         )
-        self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
+        self.text_encoder = UMT5EncoderModel.from_pretrained(
+            checkpoint_name, subfolder="text_encoder", trust_remote_code=True, local_files_only=True
+        )
+        self.vae = AutoencoderKLWan.from_pretrained(
+            checkpoint_name, subfolder="vae", trust_remote_code=True, local_files_only=True
+        )
         self.scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
-            checkpoint_name, subfolder="scheduler", flow_shift=12.0
+            checkpoint_name, subfolder="scheduler", flow_shift=12.0, local_files_only=True
         )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
-            checkpoint_name, subfolder="transformer", trust_remote_code=True
+            checkpoint_name, subfolder="transformer", trust_remote_code=True, local_files_only=True
         )
         self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
-            checkpoint_name, subfolder="transformer_2", trust_remote_code=True
+            checkpoint_name, subfolder="transformer_2", trust_remote_code=True, local_files_only=True
         )
 
         self.dit_ccl_manager = CCLManager(
@@ -266,6 +271,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
                 self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
                 self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
+
+        # Trace setup
+        self._transformer_tracer = Tracer(
+            self.transformer.combined_step, device=self.mesh_device, clone_prep_inputs=False
+        )
+        self._transformer_2_tracer = Tracer(
+            self.transformer_2.combined_step, device=self.mesh_device, clone_prep_inputs=False
+        )
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -404,6 +417,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_transformer1(self):
+        self._transformer_2_tracer.release_trace()
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -413,8 +427,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
+        self._transformer_tracer.set_trace_function(self.transformer.combined_step)
 
     def _prepare_transformer2(self):
+        self._transformer_tracer.release_trace()
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -424,8 +440,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
+        self._transformer_2_tracer.set_trace_function(self.transformer_2.combined_step)
 
     def _prepare_vae(self):
+        self._transformer_2_tracer.release_trace()
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
@@ -893,12 +911,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self._prepare_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
+                    forward = self._transformer_tracer if traced else self.transformer.combined_step
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
                     self._prepare_transformer2()
                     current_model = self.transformer_2
+                    forward = self._transformer_2_tracer if traced else self.transformer_2.combined_step
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
 
@@ -935,27 +955,45 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     timestep = t.expand(latents.shape[0])
 
                 permuted_model_input = self.get_model_input(permuted_latent, cond_latents)
-
-                permuted_noise_pred_tt = current_model.inner_step(
-                    spatial_1BNI_torch=permuted_model_input,
+                permuted_model_input = bf16_tensor(
+                    permuted_model_input,
+                    device=self.mesh_device,
+                    mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
+                    shard_dim=-2,
+                )
+                assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
+                timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
+                permuted_noise_pred_tt = forward(
+                    do_classifier_free_guidance=self.do_classifier_free_guidance,
+                    spatial_1BNI=permuted_model_input,
                     prompt_1BLP=prompt_embeds_map[current_model_name],
+                    negative_prompt_1BLP=negative_prompt_embeds_map[current_model_name],
                     N=patchified_seqlen,
-                    timestep_torch=timestep,
+                    timestep=timestep,
                     **rope_args,
+                    guidance_scale=current_guidance_scale,
                 )
 
-                if self.do_classifier_free_guidance:
-                    permuted_noise_uncond_tt = current_model.inner_step(
-                        spatial_1BNI_torch=permuted_model_input,
-                        prompt_1BLP=negative_prompt_embeds_map[current_model_name],
-                        N=patchified_seqlen,
-                        timestep_torch=timestep,
-                        **rope_args,
-                    )
-                    # On-device CFG with high precision fp32 lerp: uncond + scale * (cond - uncond)
-                    permuted_noise_pred_tt = ttnn.lerp(
-                        permuted_noise_uncond_tt, permuted_noise_pred_tt, current_guidance_scale
-                    )
+                # permuted_noise_pred_tt = current_model.inner_step(
+                #     spatial_1BNI_torch=permuted_model_input,
+                #     prompt_1BLP=prompt_embeds_map[current_model_name],
+                #     N=patchified_seqlen,
+                #     timestep_torch=timestep,
+                #     **rope_args,
+                # )
+
+                # if self.do_classifier_free_guidance:
+                # permuted_noise_uncond_tt = current_model.inner_step(
+                #     spatial_1BNI_torch=permuted_model_input,
+                #     prompt_1BLP=negative_prompt_embeds_map[current_model_name],
+                #     N=patchified_seqlen,
+                #     timestep_torch=timestep,
+                #     **rope_args,
+                # )
+                # On-device CFG with high precision fp32 lerp: uncond + scale * (cond - uncond)
+                # permuted_noise_pred_tt = ttnn.lerp(
+                #     permuted_noise_uncond_tt, permuted_noise_pred_tt, current_guidance_scale
+                # )
 
                 # Move result to host for scheduler step
                 permuted_noise_pred = local_device_to_torch(permuted_noise_pred_tt)
@@ -1010,7 +1048,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=False)
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=True)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
