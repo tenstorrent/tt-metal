@@ -385,7 +385,9 @@ UntilizeDeviceOperation::create_op_performance_model(
     uint32_t num_tiles =
         std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
     int compute_cycles = 0;
-    const int max_tiles_per_row = 8;
+    // DEST register capacity in half-sync mode: 4 tiles for 32-bit element types, 8 for 16-bit
+    const bool is_32bit_element = input_tensor.element_size() == 4;
+    const int max_tiles_per_row = is_32bit_element ? 4 : 8;
     const int latency_untilize = 390;      // measured latency for untilize_block
     const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
     if (std::ceil(static_cast<float>(input_tensor.padded_shape()[-1]) / static_cast<float>(tile_width)) <=
