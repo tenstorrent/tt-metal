@@ -210,6 +210,6 @@ def test_ccl_other_smoke_test(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             allowed_pcc=0.9999,
-            num_l1_banks=110,
+            num_l1_banks=100,
         )
     ttnn.ReadDeviceProfiler(submesh_device)
