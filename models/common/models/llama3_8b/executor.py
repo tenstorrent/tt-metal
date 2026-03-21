@@ -20,7 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.models.llama3_8b.model import Llama3Transformer1D
+from models.common.models.llama3_8b.model import Llama3Transformer1D, _all_gather_rmsnorm_tensor
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -517,6 +517,7 @@ class TracedLlamaExecutor:
         self.mesh_device = mesh_device
         self.model_args = model_args
         self._direct = LlamaExecutor(model, mesh_device, model_args)
+        self._cleaned_up = False
 
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
@@ -668,6 +669,7 @@ class TracedLlamaExecutor:
                         (1, 1, (last_token_idx // 32) * 32 + 32, logits.shape[-1]),
                     )
                 )
+                logits = _all_gather_rmsnorm_tensor(self.model.norm, logits)
                 logits = self.model.lm_head.forward(logits)
                 logits = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
             else:
@@ -905,15 +907,19 @@ class TracedLlamaExecutor:
 
     def cleanup(self):
         """Release all captured traces."""
-        for trace_id in self.trace_id_prefill.values():
-            if trace_id is not None:
-                ttnn.release_trace(self.mesh_device, trace_id)
-        for trace_id in self.trace_ids_decode.values():
-            if trace_id is not None:
-                ttnn.release_trace(self.mesh_device, trace_id)
+        if self._cleaned_up:
+            return
 
-    def __del__(self):
-        self.cleanup()
+        for key, trace_id in list(self.trace_id_prefill.items()):
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+                self.trace_id_prefill[key] = None
+        for key, trace_id in list(self.trace_ids_decode.items()):
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+                self.trace_ids_decode[key] = None
+
+        self._cleaned_up = True
 
 
 # =============================================================================

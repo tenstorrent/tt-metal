@@ -38,7 +38,38 @@ from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
+
+# =============================================================================
+# RMSNorm gather helpers
+# =============================================================================
+
+
+def _all_gather_rmsnorm_tensor(
+    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+) -> ttnn.Tensor:
+    cfg = norm.config
+    if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
+        return x
+
+    if memory_config is None:
+        memory_config = x.memory_config()
+
+    tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
+    return ttnn.experimental.all_gather_async(
+        x,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=tt_ccl.get_num_links(),
+        topology=default_topology(cfg.mesh_device),
+        memory_config=memory_config,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
 
 # =============================================================================
 # TransformerBlock1D
@@ -101,6 +132,9 @@ class TransformerBlock1D(LightweightModule):
     def decode_forward(self, x: ttnn.Tensor, current_pos, rot_mats, page_table) -> ttnn.Tensor:
         residual = x
 
+        x = _all_gather_rmsnorm_tensor(
+            self.attention_norm, x, memory_config=self.attention_norm.config.decode_memory_config
+        )
         attn_in = self.attention_norm.decode_forward(x)
         attn_out = self.attention.decode_forward(attn_in, current_pos, rot_mats, page_table=page_table)
         attn_out = ttnn.to_memory_config(attn_out, self.decode_residual_memcfg)
@@ -108,6 +142,9 @@ class TransformerBlock1D(LightweightModule):
         hidden_states = ttnn.add(residual, attn_out, memory_config=self.decode_residual_memcfg)
         residual = hidden_states
 
+        hidden_states = _all_gather_rmsnorm_tensor(
+            self.ff_norm, hidden_states, memory_config=self.ff_norm.config.decode_memory_config
+        )
         hidden_states = self.ff_norm.decode_forward(hidden_states)
         ttnn.deallocate(attn_out)
         hidden_states = self.feed_forward.decode_forward(hidden_states)
@@ -126,6 +163,7 @@ class TransformerBlock1D(LightweightModule):
         residual = x
 
         attn_in = self.attention_norm.prefill_forward(x)
+        attn_in = _all_gather_rmsnorm_tensor(self.attention_norm, attn_in)
         attn_out = self.attention.prefill_forward(
             attn_in,
             rot_mats,
@@ -141,6 +179,7 @@ class TransformerBlock1D(LightweightModule):
         x.deallocate(True)
 
         hidden_states = self.ff_norm.prefill_forward(hidden_states)
+        hidden_states = _all_gather_rmsnorm_tensor(self.ff_norm, hidden_states)
         ttnn.deallocate(attn_out)
         hidden_states = self.feed_forward.prefill_forward(hidden_states)
 
@@ -294,6 +333,7 @@ class Llama3Transformer1D(LightweightModule):
 
             x = layer.decode_forward(x, current_pos, rot_mats, page_table)
 
+        x = _all_gather_rmsnorm_tensor(self.norm, x, memory_config=self.norm.config.decode_memory_config)
         x = self.norm.decode_forward(x)
         x = self.lm_head.forward(x)
         return x
@@ -329,6 +369,7 @@ class Llama3Transformer1D(LightweightModule):
         ttnn.deallocate(old)
 
         x = self.norm.prefill_forward(x)
+        x = _all_gather_rmsnorm_tensor(self.norm, x)
         lm_head_memcfg = self.lm_head.config.input_memcfg
         if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
@@ -395,7 +436,7 @@ class Llama3Transformer1D(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 memory_config=logits.memory_config(),
-                topology=self.tt_ccl.topology,
+                topology=default_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
