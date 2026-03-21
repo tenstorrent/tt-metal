@@ -438,6 +438,7 @@ def test_subalpha_fp32(alpha, device):
     "op_name",
     [
         "eq",
+        "ne",
     ],
 )
 @pytest.mark.parametrize(
