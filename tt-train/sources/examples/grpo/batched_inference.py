@@ -251,3 +251,67 @@ def generate_answers_multiple_prompts(ctx: InferenceCtx, prompt_strs: List[str])
     completions_strs = [ctx.tokenizer.decode(c, skip_special_tokens=False) for c in completions]
 
     return completions_strs
+
+
+def compute_nlog_probs(
+    ctx: InferenceCtx,
+    prompts: List[List[int]],
+    completions: List[List[int]],
+) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int]:
+    assert len(completions) == len(prompts) * ctx.group_size
+
+    B = len(completions)
+    ctx._B = B  # create_causal_mask() reads this
+
+    row_prompts = [prompts[i // ctx.group_size] for i in range(B)]
+    lengths = [len(p) + len(c) for p, c in zip(row_prompts, completions)]
+    T = max(lengths) - 1
+    assert T >= 1
+
+    inputs_np = np.full((B, T), ctx.pad_token, dtype=np.uint32)
+    targets_np = np.full((B, T), ctx.pad_token, dtype=np.uint32)
+    loss_mask_np = np.zeros((B, T), dtype=np.float32)
+    pad_lengths = []
+
+    for i, (p, c) in enumerate(zip(row_prompts, completions)):
+        sequence = p + c
+        L = len(sequence) - 1
+        shift = T - L  # left-padding amount in full sequence
+        pad_lengths.append(shift)  # left pads in inputs/targets
+
+        if len(p) < 2:
+            raise ValueError("Prompt is too short")
+
+        if len(sequence) < 2:
+            raise ValueError("Sequence is too short")
+
+        inputs_np[i, -L:] = np.asarray(sequence[:-1], dtype=np.uint32)
+        targets_np[i, -L:] = np.asarray(sequence[1:], dtype=np.uint32)
+
+        if c:
+            start = -1 + shift + len(p)  # because of the one-token shift we subtract 1
+            end = min(start + len(c), T)
+            if start < end:
+                loss_mask_np[i, start:end] = 1.0
+
+    x_tt = tokens_to_tensor(ctx, inputs_np, B)  # [B,1,1,padded(T)]
+    mask_tt = create_causal_mask(ctx, prompt_len=0, query_len=T, pad_lengths=pad_lengths)
+    logits = ctx.tt_model(x_tt, mask_tt)  # [B,1,T,V]
+
+    Tp = round_up(ctx, T)
+    targets_pad = np.full((B, Tp), ctx.pad_token, dtype=np.uint32)
+    targets_pad[:, :T] = targets_np  # or align however your sequence axis is arranged
+
+    targets_tt = ttml.autograd.Tensor.from_numpy(targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+
+    nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
+    nlog = ttml.ops.reshape.reshape(nlog, [B, Tp])
+
+    loss_mask_pad = np.zeros((B, Tp), dtype=np.float32)
+    loss_mask_pad[:, :T] = loss_mask_np
+
+    loss_mask_tt = ttml.autograd.Tensor.from_numpy(loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
+
+    assert nlog.shape() == [B, Tp]
+    assert loss_mask_tt.shape() == [B, Tp]
+    return nlog, loss_mask_tt, Tp
