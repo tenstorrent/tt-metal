@@ -16,7 +16,7 @@ import ttnn
 class TtRMSNorm:
     """RMSNorm backed by ttnn.rms_norm. Stateless forward (no state between calls)."""
 
-    def __init__(self, device, weight: torch.Tensor, eps: float = 1e-6, mesh_mapper=None):
+    def __init__(self, device, weight: torch.Tensor, eps: float = 1e-6, mesh_mapper=None, cache_path=None):
         """
         Args:
             device:      TTNN device or MeshDevice
@@ -24,6 +24,7 @@ class TtRMSNorm:
             eps:         epsilon for numerical stability
             mesh_mapper: optional ttnn mesh mapper for multi-device (e.g. ReplicateTensorToMesh)
                          When None and device is a MeshDevice, defaults to Replicate.
+            cache_path:  Path for weight caching (speeds up subsequent runs)
         """
         self.eps = eps
 
@@ -33,13 +34,14 @@ class TtRMSNorm:
 
         # Reshape weight to [1, 1, H//TILE_SIZE, TILE_SIZE] as required by ttnn.rms_norm
         w = weight.reshape(1, 1, -1, ttnn.TILE_SIZE).to(torch.bfloat16)
-        self.tt_weight = ttnn.from_torch(
+        self.tt_weight = ttnn.as_tensor(
             w,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=cache_path,
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
