@@ -17,7 +17,6 @@ from ttml.common.config import load_config
 from ttml.common.data import (
     CharTokenizer,
     load_shakespeare_text,
-    get_batch,
 )
 from ttml.common.utils import (
     set_seed,
@@ -370,13 +369,30 @@ def main():
         device = autograd_ctx.get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
 
+    # ── Data chunks ─────────────────────────────────────────────────────────
+    n_chunks = (len(train_ids) - 1) // seq_len
+    _chunk_order = np.arange(n_chunks)
+    np.random.shuffle(_chunk_order)
+    _chunk_ptr = 0
+
+    def get_chunk_batch():
+        nonlocal _chunk_order, _chunk_ptr
+        if _chunk_ptr + batch_size > len(_chunk_order):
+            np.random.shuffle(_chunk_order)
+            _chunk_ptr = 0
+        sel = _chunk_order[_chunk_ptr : _chunk_ptr + batch_size]
+        _chunk_ptr += batch_size
+        x = np.stack([train_ids[i * seq_len : i * seq_len + seq_len] for i in sel])
+        y = np.stack([train_ids[i * seq_len + 1 : i * seq_len + seq_len + 1] for i in sel])
+        return x.astype(np.uint32), y.astype(np.uint32)
+
     # ── Training loop ─────────────────────────────────────────────────────────
     model.train()
     is_first_step = True
 
     for step in range(1, steps + 1):
         t0 = time.perf_counter()
-        x_np, y_np = get_batch(train_ids, seq_len, batch_size)
+        x_np, y_np = get_chunk_batch()
 
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_np.reshape(batch_size, 1, 1, seq_len),
