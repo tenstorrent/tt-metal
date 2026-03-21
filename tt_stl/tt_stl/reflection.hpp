@@ -568,8 +568,8 @@ template <typename T>
 struct visit_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::vector<T>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -578,8 +578,8 @@ template <typename T, auto N>
 struct visit_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
     void operator()(auto&& callback, const std::array<T, N>& value) const {
-        for (auto& tensor : value) {
-            visit_object_of_type<object_t>(callback, tensor);
+        for (const auto& element : value) {
+            visit_object_of_type<object_t>(callback, element);
         }
     }
 };
@@ -652,6 +652,110 @@ struct visit_object_of_type_t<T> {
     void operator()(auto&& callback, const T& object) const {
         reflect::for_each(
             [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
+            object);
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t;
+
+/**
+* Recursively visits all elements in `object` that are instances of `object_t`,
+* calls the `callback` function with those instance in anticipation for an inplace modification.
+ */
+template <typename object_t, typename T>
+void update_object_of_type(auto&& callback, T& object) {
+    update_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), object);
+}
+
+template <typename T>
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& /*callback*/, T& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported update of object of type: {}", get_type_name<T>()));
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t<std::optional<T>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::optional<T>& value) const {
+        if (value.has_value()) {
+            update_object_of_type<object_t>(callback, value.value());
+        }
+    }
+};
+
+template <typename T>
+struct update_object_of_type_t<std::vector<T>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::vector<T>& value) const {
+        for (auto& element : value) {
+            update_object_of_type<object_t>(callback, element);
+        }
+    }
+};
+
+template <typename T, auto N>
+struct update_object_of_type_t<std::array<T, N>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::array<T, N>& value) const {
+        for (auto& element : value) {
+            update_object_of_type<object_t>(callback, element);
+        }
+    }
+};
+
+template <typename... Ts>
+struct update_object_of_type_t<std::tuple<Ts...>> {
+    template <typename object_t>
+    void operator()(auto&& callback, std::tuple<Ts...>& value) const {
+        [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (update_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+    }
+};
+
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        update_object_of_type<object_t>(callback, object.attribute_values());
+    }
+};
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+struct update_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    void operator()(auto&& callback, T& value) const {
+        callback(value);
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    void operator()(auto&& callback, T& object) const {
+        reflect::for_each(
+            [&callback, &object](auto I) { update_object_of_type<object_t>(callback, reflect::get<I>(object)); },
             object);
     }
 };
