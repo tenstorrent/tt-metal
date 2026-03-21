@@ -250,12 +250,16 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
     }
 
-    return MemoryConfig::create_with_prepopulated_shard_specs(
+    auto result = MemoryConfig::create_with_prepopulated_shard_specs(
         mem_config.memory_layout(),
         mem_config.buffer_type(),
         mem_config.shard_spec(),
         std::move(nd_shard_spec),
         mem_config.created_with_nd_shard_spec());
+    if (mem_config.per_core_allocation()) {
+        result.set_per_core_allocation(true);
+    }
+    return result;
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() const {

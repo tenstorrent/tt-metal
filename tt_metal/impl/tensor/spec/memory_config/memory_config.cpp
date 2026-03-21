@@ -58,7 +58,8 @@ bool MemoryConfig::is_dram() const { return buffer_type_ == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
     return config_a.buffer_type() == config_b.buffer_type() && config_a.memory_layout() == config_b.memory_layout() &&
-           config_a.shard_spec() == config_b.shard_spec();
+           config_a.shard_spec() == config_b.shard_spec() &&
+           config_a.per_core_allocation() == config_b.per_core_allocation();
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
@@ -76,6 +77,7 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     json_object["memory_layout"] = config.memory_layout();
     json_object["buffer_type"] = config.buffer_type();
     json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
+    json_object["per_core_allocation"] = config.per_core_allocation();
     if (config.created_with_nd_shard_spec()) {
         if (config.nd_shard_spec().has_value()) {
             json_object["nd_shard_spec"] = ttsl::json::to_json(config.nd_shard_spec().value());
@@ -93,13 +95,22 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
     auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
     auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
+    auto per_core_allocation = json_object.value("per_core_allocation", false);
     if (created_with_nd_shard_spec) {
         auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
-        return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
+        auto config = tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
+        if (per_core_allocation) {
+            config.set_per_core_allocation(true);
+        }
+        return config;
     }
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
     if (json_object.contains("shard_spec")) {
         shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
     }
-    return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+    auto config = tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+    if (per_core_allocation) {
+        config.set_per_core_allocation(true);
+    }
+    return config;
 }

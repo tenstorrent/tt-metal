@@ -153,10 +153,17 @@ public:
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
+    BufferShardingArgs& set_per_core_allocation(bool enable) {
+        per_core_allocation_ = enable;
+        return *this;
+    }
+    bool per_core_allocation() const { return per_core_allocation_; }
+
 private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
     std::optional<ShardSpecBuffer> shard_spec_;
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
+    bool per_core_allocation_ = false;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -250,6 +257,12 @@ public:
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
+    // Per-core allocation API
+    bool per_core_allocation() const { return per_core_allocation_; }
+    DeviceAddr per_core_address(CoreCoord core) const;
+    const std::unordered_map<CoreCoord, DeviceAddr>& per_core_addresses() const { return per_core_addresses_; }
+    void copy_per_core_addresses_from(const Buffer& other);
+
     // Returns the buffer that owns the underlying device memory.
     // Typically returns itself unless the buffer was created with a view method.
     std::shared_ptr<Buffer> root_buffer();
@@ -285,7 +298,10 @@ private:
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     void deallocate_impl();
+    friend class AllocatorImpl;
     friend void DeallocateBuffer(Buffer& buffer);
+
+    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
 
     DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
@@ -310,6 +326,10 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+
+    // Per-core allocation state
+    bool per_core_allocation_ = false;
+    std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses_;
 
     // The root buffer is the buffer that owns the underlying device memory.
     // The root buffer is populated only when the buffer was created with a view method.

@@ -133,6 +133,14 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_config_.sharding_args,
             device_local_config_.bottom_up,
             /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+        // For per-core allocation, propagate per-core addresses from the backing buffer.
+        if (buffer->per_core_allocation()) {
+            TT_FATAL(
+                std::holds_alternative<OwnedBufferState>(state_),
+                "Per-core allocation is not supported for externally-owned MeshBuffers");
+            auto& owned = std::get<OwnedBufferState>(state_);
+            buffer->copy_per_core_addresses_from(*owned.backing_buffer);
+        }
         return buffer;
     };
 
@@ -180,6 +188,12 @@ MeshDevice* MeshBuffer::device() const {
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
     return buffers_.at(device_coord).value().get();
+}
+
+DeviceAddr MeshBuffer::per_core_address(const CoreCoord& core) const {
+    auto* buffer = get_reference_buffer();
+    TT_FATAL(buffer->per_core_allocation(), "Buffer does not use per-core allocation");
+    return buffer->per_core_address(core);
 }
 
 Buffer* MeshBuffer::get_reference_buffer() const {
