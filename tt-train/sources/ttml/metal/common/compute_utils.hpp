@@ -11,6 +11,8 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 
+constexpr uint32_t onetile = 1U;
+
 /**
  * Pack one tile from reg to cb, reserve+wait+pack+push.
  * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
@@ -18,7 +20,6 @@
  * ensures math is done. Prefer commit first, then wait.
  */
 inline void pack_and_push(const uint32_t reg, const uint32_t cb) {
-    constexpr uint32_t onetile = 1U;
     cb_reserve_back(cb, onetile);
     tile_regs_wait();
     pack_reconfig_data_format(cb);

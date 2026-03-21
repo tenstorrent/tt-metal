@@ -90,6 +90,18 @@ void generate_tile_with_packed_bfloat16_value(const uint32_t cb_id, const uint32
     cb_push_back(cb_id, onetile);
 }
 
+// Fills a tile with one repeated 32-bit word.
+// Useful for Float32 scalar tiles (all elements equal to the same fp32 bit pattern).
+void generate_tile_with_uint32_value(const uint32_t cb_id, const uint32_t value_u32) {
+    cb_reserve_back(cb_id, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    const uint32_t num_u32 = get_tile_size(cb_id) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_u32; ++i) {
+        ptr[i] = value_u32;
+    }
+    cb_push_back(cb_id, onetile);
+}
+
 // Generates a tile for broadcasting a scalar bfloat16 value.
 // Only the first element of the tile is set to the scalar value (upper 16 bits of packed_scalar).
 // This is used for efficient broadcast operations where only the first value is needed.

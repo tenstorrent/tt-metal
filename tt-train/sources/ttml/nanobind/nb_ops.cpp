@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/polynorm_op.hpp"
 #include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
@@ -379,6 +380,13 @@ void py_module(nb::module_& m) {
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def(
+            "polynorm",
+            &ttml::ops::polynorm,
+            nb::arg("tensor"),
+            nb::arg("weight"),
+            nb::arg("bias"),
+            nb::arg("epsilon") = 1e-5F);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
