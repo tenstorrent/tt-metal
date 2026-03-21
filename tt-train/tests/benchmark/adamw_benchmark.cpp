@@ -79,7 +79,7 @@ void BM_AdamW(benchmark::State& state) {
 
     // bf16 no-AMSGrad: reads 4 tensors (param, grad, exp_avg, exp_avg_sq), writes 3 (param_out, exp_avg_out,
     // exp_avg_sq_out)
-    const uint64_t tensor_bytes = static_cast<uint64_t>(shape.volume()) * sizeof(uint16_t);  // bf16 = 2 bytes
+    const uint64_t tensor_bytes = shape.volume() * sizeof(uint16_t);  // bf16 = 2 bytes
     const uint64_t total_dram_bytes = 7ULL * tensor_bytes;
 
     auto param = make_random_tensor(shape, dtype, device.get(), seed);
