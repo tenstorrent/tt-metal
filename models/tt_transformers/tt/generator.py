@@ -685,15 +685,36 @@ class Generator(WarmupForwardMixin):
                         if log_probs_host is not None:
                             output_log_probs[slot] = log_probs_host[slot]
                 else:
-                    for local_idx, slot in enumerate(empty_slots):
-                        user_logits = logits[slot : slot + 1, :, :, :]
-                        _logits = self.model[model_id].process_logits_after_prefill_trace(
-                            user_logits, last_token_idx[slot]
-                        )
-                        _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        output_tensor[slot] = self.model[model_id].process_output_prefill(
-                            _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
-                        )
+                    if return_hidden_states:
+                        # Embedding models: trace returns hidden states; extract last-token hidden per slot
+                        slot_hidden_list = []
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_hidden = logits[slot : slot + 1, :, :, :]
+                            slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
+                                user_hidden, last_token_idx[slot]
+                            )
+                            slot_hidden_list.append((slot, slot_hidden, last_token_idx[slot]))
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        dim = self.model[model_id].args.dim
+                        for slot, slot_hidden, lt_idx in slot_hidden_list:
+                            slot_hidden_torch = ttnn.to_torch(ttnn.get_device_tensors(slot_hidden)[0]).float()
+                            pos = int(lt_idx % 32)
+                            out = slot_hidden_torch[0, 0, pos, :dim].clone()
+                            if out.device.type != "cpu":
+                                out = out.cpu()
+                            output_tensor[slot] = out
+                    else:
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_logits = logits[slot : slot + 1, :, :, :]
+                            _logits = self.model[model_id].process_logits_after_prefill_trace(
+                                user_logits, last_token_idx[slot]
+                            )
+                            _logits = ttnn.to_layout(
+                                _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                            )
+                            output_tensor[slot] = self.model[model_id].process_output_prefill(
+                                _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
+                            )
                 break
 
             # Non-batched prefill path

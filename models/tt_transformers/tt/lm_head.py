@@ -35,6 +35,14 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
 
+        # Pad vocab_size to be divisible by (32 * num_devices) so that:
+        # 1. vocab_size is tile-aligned (divisible by 32)
+        # 2. size_per_device is also tile-aligned after dividing by num_devices
+        # This ensures TILE concat doesn't have padding in the middle
+        tile_size = 32
+        self.padded_vocab_size = math.ceil(self.padded_vocab_size / (tile_size * self.num_devices)) * (
+            tile_size * self.num_devices
+        )
         size_per_device = self.padded_vocab_size // self.num_devices
 
         tile_size = 32
