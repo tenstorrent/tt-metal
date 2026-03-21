@@ -360,7 +360,9 @@ def mish(x, *args, **kwargs):
 
 
 def hardmish(x, *args, **kwargs):
-    return x * (x + 2.8).clamp(0.0, 5.0) / 5
+    # Hard Mish: x * clamp(x + 2, 0, 2) / 2
+    # Ref: https://github.com/pytorch/pytorch/issues/25584
+    return x * (x + 2.0).clamp(0.0, 2.0) / 2
 
 
 def recip(x, *args, **kwargs):
