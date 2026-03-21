@@ -125,9 +125,15 @@ class TTNNDistributedRMSNorm(TTNNModule):
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, inp):
-        original_shape = inp.shape
-        if len(original_shape) == 3:
-            inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
+        sh = tuple(int(s) for s in inp.shape)
+        if len(sh) == 4 and sh[1] == 1:
+            inp = ttnn.squeeze(inp, 1)
+            sh = tuple(int(s) for s in inp.shape)
+        added_batch_dim = len(sh) == 3
+        if added_batch_dim:
+            inp = ttnn.unsqueeze(inp, 1)  # 4D required by rms_norm_pre/post; undo before return
+        if inp.layout != ttnn.TILE_LAYOUT:
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
         # AllGather stats
@@ -147,5 +153,65 @@ class TTNNDistributedRMSNorm(TTNNModule):
             weight=self.weight_distributed,
         )
         tt_stats.deallocate(True)
+        if added_batch_dim:
+            tt_out = ttnn.squeeze(tt_out, 1)
+        return tt_out
 
+
+@trace_enabled
+class TTNNDistributedQwen3NextRMSNorm(TTNNModule):
+    """Distributed RMSNorm for HuggingFace ``Qwen3NextRMSNorm`` (scale is ``1 + weight``, not raw ``weight``)."""
+
+    @classmethod
+    def from_torch(cls, rms_norm: nn.Module):
+        from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextRMSNorm
+
+        if not isinstance(rms_norm, Qwen3NextRMSNorm):
+            raise TypeError(f"Expected Qwen3NextRMSNorm, got {type(rms_norm)}")
+        if rms_norm.weight is None:
+            return rms_norm
+        new_layer = cls()
+        new_layer._fallback_torch_layer = rms_norm
+        return new_layer
+
+    def move_weights_to_device_impl(self):
+        dim = self.torch_layer.weight.shape[0]
+        # HF: normalized * (1.0 + weight); fold into RMSNorm weight tensor for ttnn.rms_norm_post_all_gather.
+        eff = (1.0 + self.torch_layer.weight.float()).to(dtype=self.torch_layer.weight.dtype)
+        self.weight_distributed = ttnn.as_tensor(
+            eff.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
+        )
+        self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, inp):
+        sh = tuple(int(s) for s in inp.shape)
+        if len(sh) == 4 and sh[1] == 1:
+            inp = ttnn.squeeze(inp, 1)
+            sh = tuple(int(s) for s in inp.shape)
+        added_batch_dim = len(sh) == 3
+        if added_batch_dim:
+            inp = ttnn.unsqueeze(inp, 1)
+        if inp.layout != ttnn.TILE_LAYOUT:
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
+        tt_stats = ttnn.experimental.all_gather_async(
+            tt_stats,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats,
+            epsilon=self.torch_layer.eps,
+            weight=self.weight_distributed,
+        )
+        tt_stats.deallocate(True)
+        if added_batch_dim:
+            tt_out = ttnn.squeeze(tt_out, 1)
         return tt_out

@@ -85,13 +85,18 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
-                # module_name is None when wrapping torch dispatch results (no TTNN module context).
-                # Small/scalar shapes are always replicated; skip noisy warning for expected cases.
+                # Replicate when we cannot 2D-shard (e.g. last dim 1 from gating linear, norm intermediates).
                 if module_name is not None:
-                    print(
-                        f"Could not determine tensor config for {module_name} with shape {tensor.shape}. "
-                        "Assuming replication to all devices. Override set_output_tensors_config_impl."
+                    # Small MoE router outputs [num_tokens, top_k] (top_k often ∤ mesh width) are always replicated.
+                    small_2d = len(tensor.shape) == 2 and int(tensor.shape[0]) <= 64 and int(tensor.shape[1]) <= 256
+                    trivial_replicate = (
+                        len(tensor.shape) < 2 or tensor.shape[-1] == 1 or tensor.numel() <= 1 or small_2d
                     )
+                    if not trivial_replicate:
+                        print(
+                            f"Could not determine tensor config for {module_name} with shape {tensor.shape}. "
+                            "Assuming replication to all devices. Override set_output_tensors_config_impl."
+                        )
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     mesh_composer=ttnn.create_mesh_composer(

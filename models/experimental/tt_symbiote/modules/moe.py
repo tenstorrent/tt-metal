@@ -842,7 +842,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
 
 
 class TTNNMoERouterDecode(TTNNModule):
-    """TTNN-accelerated router for decode mode."""
+    """TTNN router (softmax/sigmoid + top-k). Indices/weights are small [tokens, k] and stay replicated on mesh."""
 
     @classmethod
     def from_torch(cls, torch_module: Glm4MoeRouteTokenToExperts):
@@ -1575,16 +1575,50 @@ class TTNNBailingMoE(TTNNMoE):
 class TTNNQwen3MoE(TTNNMoE):
     """TTNN MoE for Qwen3-Coder-Next. Softmax routing + gated shared expert."""
 
+    @staticmethod
+    def _qwen3_experts_hf_config(experts, torch_moe):
+        """Config namespace from fused Qwen3NextExperts, per-expert MLPs, or the MoE / root module."""
+        cfg = getattr(experts, "config", None)
+        if cfg is not None:
+            return cfg
+        if isinstance(experts, nn.ModuleList) and len(experts) > 0:
+            cfg = getattr(experts[0], "config", None)
+            if cfg is not None:
+                return cfg
+        return getattr(torch_moe, "config", None)
+
+    @staticmethod
+    def _qwen3_experts_intermediate_dim(experts):
+        if hasattr(experts, "intermediate_dim"):
+            return experts.intermediate_dim
+        if isinstance(experts, nn.ModuleList) and len(experts) > 0:
+            e0 = experts[0]
+            if hasattr(e0, "intermediate_size"):
+                return int(e0.intermediate_size)
+            return int(e0.gate_proj.out_features)
+        raise TypeError(
+            f"TTNNQwen3MoE: unsupported experts {type(experts)} — "
+            "expected Qwen3NextExperts or nn.ModuleList of gate_proj/up_proj/down_proj MLPs."
+        )
+
+    @staticmethod
+    def _qwen3_experts_act_fn(experts):
+        if hasattr(experts, "act_fn"):
+            return experts.act_fn
+        if isinstance(experts, nn.ModuleList) and len(experts) > 0:
+            return getattr(experts[0], "act_fn", None)
+        return None
+
     @classmethod
     def from_torch(cls, torch_moe):
         adapted_config = cls._adapt_config(torch_moe.gate, torch_moe.experts, torch_moe)
         module = cls(adapted_config)
         module._fallback_torch_layer = torch_moe
 
-        zero_bias = torch.zeros(
-            torch_moe.gate.num_experts, device=torch_moe.gate.weight.device, dtype=torch_moe.gate.weight.dtype
-        )
-        module.gate = TTNNGlm4MoeTopkRouter.from_parameters(torch_moe.gate.weight, zero_bias)
+        gate = torch_moe.gate
+        n_routed = gate.out_features if isinstance(gate, nn.Linear) else gate.num_experts
+        zero_bias = torch.zeros(n_routed, device=gate.weight.device, dtype=gate.weight.dtype)
+        module.gate = TTNNGlm4MoeTopkRouter.from_parameters(gate.weight, zero_bias)
         module.route_tokens_to_experts = TTNNMoERouterDecode.from_torch(
             Qwen3RouteTokenToExperts(
                 top_k=adapted_config.num_experts_per_tok,
@@ -1725,26 +1759,46 @@ class TTNNQwen3MoE(TTNNMoE):
             pass
 
         config = AdaptedConfig()
-        config.hidden_size = gate.hidden_dim
-        config.moe_intermediate_size = experts.intermediate_dim
-        config.num_experts_per_tok = gate.top_k
-        config.n_routed_experts = gate.num_experts
+        # HF Qwen3-Next normally uses Qwen3NextTopKRouter; some revisions use nn.Linear(hidden, n_experts).
+        exp_cfg = TTNNQwen3MoE._qwen3_experts_hf_config(experts, torch_moe)
+        if isinstance(gate, nn.Linear):
+            config.hidden_size = gate.in_features
+            config.num_experts_per_tok = getattr(exp_cfg, "num_experts_per_tok", 1) if exp_cfg is not None else 1
+            config.n_routed_experts = gate.out_features
+            config.norm_topk_prob = getattr(exp_cfg, "norm_topk_prob", True) if exp_cfg is not None else True
+        else:
+            config.hidden_size = gate.hidden_dim
+            config.num_experts_per_tok = gate.top_k
+            config.n_routed_experts = gate.num_experts
+            config.norm_topk_prob = gate.norm_topk_prob
+        # Fused Qwen3NextExperts uses intermediate_dim; other HF builds use ModuleList[Qwen3NextMLP] with intermediate_size.
+        config.moe_intermediate_size = TTNNQwen3MoE._qwen3_experts_intermediate_dim(experts)
+        if isinstance(experts, nn.ModuleList) and len(experts) > 0:
+            config.n_routed_experts = len(experts)
         config.n_group = 1
         config.topk_group = 1
-        config.routed_scaling_factor = (
-            getattr(torch_moe, "config", None) and getattr(torch_moe.config, "routed_scaling_factor", None)
-        ) or 1.0
-        config.norm_topk_prob = gate.norm_topk_prob
-        config.hidden_act = getattr(experts, "act_fn", None) or "silu"
+        moe_cfg = getattr(torch_moe, "config", None) or exp_cfg
+        config.routed_scaling_factor = (moe_cfg is not None and getattr(moe_cfg, "routed_scaling_factor", None)) or 1.0
+        config.hidden_act = TTNNQwen3MoE._qwen3_experts_act_fn(experts) or "silu"
         return config
 
     @staticmethod
     def _wrap_experts(qwen3_experts, config):
-        class ExpertsWrapper:
-            pass
+        if hasattr(qwen3_experts, "gate_up_proj") and hasattr(qwen3_experts, "down_proj"):
 
-        w = ExpertsWrapper()
-        w.config = config
-        w.gate_up_proj = qwen3_experts.gate_up_proj
-        w.down_proj = qwen3_experts.down_proj
-        return w
+            class ExpertsWrapper:
+                pass
+
+            w = ExpertsWrapper()
+            w.config = config
+            w.gate_up_proj = qwen3_experts.gate_up_proj
+            w.down_proj = qwen3_experts.down_proj
+            return w
+        if isinstance(qwen3_experts, nn.ModuleList) and len(qwen3_experts) > 0:
+            e0 = qwen3_experts[0]
+            if hasattr(e0, "gate_proj") and hasattr(e0, "up_proj") and hasattr(e0, "down_proj"):
+                return TTNNBailingMoE._consolidate_experts(qwen3_experts, config)
+        raise TypeError(
+            f"TTNNQwen3MoE._wrap_experts: unsupported experts {type(qwen3_experts)} — "
+            "need fused gate_up_proj/down_proj or ModuleList of MLP experts."
+        )

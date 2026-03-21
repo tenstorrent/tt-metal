@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for Qwen3-Coder-Next with TTNN backend (MoE + Gated Attention)."""
+"""Qwen3-Coder-Next on TTNN (MoE + gated attention). Runs on T3K only."""
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -15,120 +16,75 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 
 import ttnn
+from torch import nn
 from transformers.models.qwen3_next.modeling_qwen3_next import (
     Qwen3NextAttention,
     Qwen3NextGatedDeltaNet,
+    Qwen3NextRMSNorm,
     Qwen3NextSparseMoeBlock,
 )
-from torch import nn
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
+
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
 from models.experimental.tt_symbiote.modules.gated_deltanet import TTNNGatedDeltaNet
+from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedQwen3NextRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
-# Use non-FP8 model: FP8 weights (Float8_e4m3fn) cause dtype mismatch with bfloat16
-# activations in transformers MoE (torch.mm expects same dtype).
 QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next"
+REPETITION_PENALTY = 1.28
 
-# Generation / stability (hybrid TTNN logits drift vs full torch — greedy + penalties + early stop).
-QWEN3_MAX_NEW_TOKENS = 128
-QWEN3_REPETITION_PENALTY = 1.28
-QWEN3_DO_SAMPLE = False
-QWEN3_SAMPLE_TEMPERATURE = 0.68
-QWEN3_SAMPLE_TOP_P = 0.88
-QWEN3_SAMPLE_TOP_K: int | None = None  # if set, passed to generate()
-QWEN3_NO_REPEAT_NGRAM_SIZE: int | None = None  # e.g. 3 to ban repeating trigrams (hurts code/markdown)
-QWEN3_SAME_TOKEN_STREAK_STOP = 4  # stop after N identical token ids in a row
-QWEN3_RNG_SEED = 42
-
-# Run only on T3K (symbiote DeviceArch). Uses MESH_DEVICE env if set, else T3K.
 MESH_DEVICE = (os.environ.get("MESH_DEVICE") or "T3K").upper()
 MESH_SHAPE_T3K = (1, 8)
 
 
-class StopOnConsecutiveSameToken(StoppingCriteria):
-    """Stop when the same token id is generated ``streak`` times in a row (kills ``you you you`` tails)."""
+class StopOnLowDiversityGeneratedTail(StoppingCriteria):
+    """End generation when the last window of new tokens collapses to a 2-type loop (common under hybrid TTNN greedy decode)."""
 
-    def __init__(self, streak: int = 6):
-        self.streak = max(2, int(streak))
+    def __init__(self, prompt_len: int, window: int = 48, max_distinct: int = 2, min_new_tokens: int = 64):
+        self.prompt_len = int(prompt_len)
+        self.window = int(window)
+        self.max_distinct = int(max_distinct)
+        self.min_new_tokens = int(min_new_tokens)
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
-        if input_ids.shape[1] < self.streak:
+        gen_len = input_ids.shape[1] - self.prompt_len
+        if gen_len < self.min_new_tokens:
             return torch.zeros(input_ids.shape[0], device=input_ids.device, dtype=torch.bool)
-        tail = input_ids[:, -self.streak :]
-        done = (tail == tail[:, :1]).all(dim=1)
-        return done
+        w = min(self.window, gen_len)
+        tail = input_ids[:, -w:]
+        out = [int(torch.unique(tail[b]).numel()) <= self.max_distinct for b in range(input_ids.shape[0])]
+        return torch.tensor(out, device=input_ids.device, dtype=torch.bool)
 
 
-def _stopping_criteria_list() -> StoppingCriteriaList:
-    """Cut off ``this this…`` tails when same token repeats (see ``QWEN3_SAME_TOKEN_STREAK_STOP``)."""
-    if QWEN3_SAME_TOKEN_STREAK_STOP <= 0:
-        return StoppingCriteriaList([])
-    return StoppingCriteriaList([StopOnConsecutiveSameToken(QWEN3_SAME_TOKEN_STREAK_STOP)])
-
-
-def _merge_generate_kw(base: Dict[str, Any]) -> Dict[str, Any]:
-    sc = _stopping_criteria_list()
-    if len(sc) == 0:
-        return base
-    return {**base, "stopping_criteria": sc}
+def _merge_generate_kw(base: Dict[str, Any], prompt_len: int) -> Dict[str, Any]:
+    return {
+        **base,
+        "stopping_criteria": StoppingCriteriaList([StopOnLowDiversityGeneratedTail(prompt_len)]),
+    }
 
 
 def _clone_model_inputs(inputs: dict) -> dict:
-    """Deep-enough copy so ``generate`` / warmup cannot alias or resize shared prompt tensors."""
     out = {}
     for k, v in inputs.items():
-        if isinstance(v, torch.Tensor):
-            out[k] = v.clone()
-        else:
-            out[k] = v
+        out[k] = v.clone() if isinstance(v, torch.Tensor) else v
     return out
 
 
-def _seed_torch_for_generate() -> None:
-    """Reset PyTorch RNG before ``generate`` when ``do_sample=True`` (no ``generator=`` kwarg on this model)."""
-    torch.manual_seed(QWEN3_RNG_SEED)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(QWEN3_RNG_SEED)
-
-
-def _generate_extra_kw(model, tokenizer) -> Dict[str, Any]:
-    """Kwargs for ``generate`` — tune module constants above (greedy default for TTNN stability)."""
-    kw = {}
-    # Explicit ids avoid chat-template / config mismatches stopping or padding oddly.
-    eos = getattr(model.config, "eos_token_id", None)
-    if eos is None and tokenizer is not None:
-        eos = tokenizer.eos_token_id
+def _generate_kw(model, tokenizer) -> Dict[str, Any]:
+    kw: Dict[str, Any] = {"repetition_penalty": REPETITION_PENALTY, "do_sample": False}
+    eos = getattr(model.config, "eos_token_id", None) or (tokenizer.eos_token_id if tokenizer else None)
     if eos is not None:
         kw["eos_token_id"] = eos
-    pad = getattr(model.config, "pad_token_id", None)
-    if pad is None and tokenizer is not None:
-        pad = tokenizer.pad_token_id
+    pad = getattr(model.config, "pad_token_id", None) or (tokenizer.pad_token_id if tokenizer else None)
     if pad is not None:
         kw["pad_token_id"] = pad
-
-    kw["repetition_penalty"] = QWEN3_REPETITION_PENALTY
-
-    if QWEN3_NO_REPEAT_NGRAM_SIZE is not None and QWEN3_NO_REPEAT_NGRAM_SIZE > 0:
-        kw["no_repeat_ngram_size"] = QWEN3_NO_REPEAT_NGRAM_SIZE
-
-    if QWEN3_DO_SAMPLE:
-        kw["do_sample"] = True
-        kw["temperature"] = QWEN3_SAMPLE_TEMPERATURE
-        kw["top_p"] = QWEN3_SAMPLE_TOP_P
-        if QWEN3_SAMPLE_TOP_K is not None:
-            kw["top_k"] = int(QWEN3_SAMPLE_TOP_K)
-    else:
-        kw["do_sample"] = False
-
     return kw
 
 
 def _get_cached_model_path():
-    """Resolve HF cache snapshot path for Qwen3-Coder-Next (avoids network)."""
     if hub := os.environ.get("HF_HUB_CACHE"):
         cache_root = Path(hub) / f"models--{QWEN3_MODEL_ID.replace('/', '--')}"
     else:
@@ -142,7 +98,6 @@ def _get_cached_model_path():
 
 
 def _load_qwen3_model():
-    """Load tokenizer and model. Uses HF cache if available to avoid network."""
     try:
         cached = _get_cached_model_path()
         load_kw = dict(trust_remote_code=True, torch_dtype="auto", device_map="auto")
@@ -160,8 +115,8 @@ def _load_qwen3_model():
     except Exception as e:
         msg = str(e).lower()
         if any(
-            kw in msg
-            for kw in (
+            x in msg
+            for x in (
                 "network is unreachable",
                 "name resolution",
                 "connection",
@@ -178,34 +133,29 @@ def _load_qwen3_model():
     [{"trace_region_size": 50000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "mesh_device",
-    [MESH_SHAPE_T3K],
-    indirect=True,
-)
-def test_qwen3_coder_next(mesh_device):
-    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K."""
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE_T3K], indirect=True)
+@pytest.mark.parametrize("max_new_tokens", [128])
+@pytest.mark.slow
+def test_qwen3_coder_next(mesh_device, max_new_tokens):
     if MESH_DEVICE != "T3K":
         pytest.skip(f"test_qwen3_coder_next runs only on T3K (MESH_DEVICE={os.environ.get('MESH_DEVICE')!r})")
+
     tokenizer, model = _load_qwen3_model()
 
-    # All Linears → sharded TTNN except lm_head (always PyTorch for correct full-vocab logits).
-    # Still PyTorch: embed_tokens, Qwen3NextRMSNorm, Qwen3NextRotaryEmbedding.
     nn_to_ttnn = {
         Qwen3NextSparseMoeBlock: TTNNQwen3MoE,
         Qwen3NextAttention: TTNNQwen3NextGatedAttention,
         Qwen3NextGatedDeltaNet: TTNNGatedDeltaNet,
+        Qwen3NextRMSNorm: TTNNDistributedQwen3NextRMSNorm,
         nn.Linear: TTNNLinearIColShardedWRowSharded,
     }
-    exclude_replacement = {"lm_head"}
 
     messages = [
         {
             "role": "user",
-            "content": "Write a Python function to calculate fibonacci numbers using dynamic programming.",
+            "content": "Write a quick sort algorithm.",
         },
     ]
-
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
@@ -214,51 +164,60 @@ def test_qwen3_coder_next(mesh_device):
         return_tensors="pt",
     )
 
-    def _to_device(v):
+    dev = next(model.parameters()).device
+
+    def to_dev(v):
         if not isinstance(v, torch.Tensor):
             return v
-        device = next(model.parameters()).device
-        v = v.to(device)
+        v = v.to(dev)
         if v.dtype in (torch.long, torch.int, torch.int32, torch.int64):
             return v
         return v.to(torch.bfloat16)
 
-    inputs = {k: _to_device(v) for k, v in inputs.items()}
-
+    inputs = {k: to_dev(v) for k, v in inputs.items()}
     if model.generation_config.pad_token_id is None:
         model.generation_config.pad_token_id = model.config.eos_token_id
 
-    all_modules = register_module_replacement_dict(
-        model, nn_to_ttnn, model_config=None, exclude_replacement=exclude_replacement
-    )
+    prompt_len = int(inputs["input_ids"].shape[-1])
 
+    all_modules = register_module_replacement_dict(
+        model, nn_to_ttnn, model_config=None, exclude_replacement={"lm_head"}
+    )
     set_device(model, mesh_device, dump_visualization=False)
 
-    for k, v in tqdm(all_modules.items()):
-        v.preprocess_weights()
-        v.move_weights_to_device()
+    t0 = time.perf_counter()
+    for _, m in tqdm(all_modules.items(), desc="Weight prep (per TTNN module)"):
+        m.preprocess_weights()
+        m.move_weights_to_device()
+    setup_s = time.perf_counter() - t0
 
-    model.eval()  # Disables dropout, batch norm updates
-    torch.set_grad_enabled(False)  # Disables autograd overhead
-
-    warm_in = _clone_model_inputs(inputs)
-    wk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
-    if wk.get("do_sample", False):
-        _seed_torch_for_generate()
-    model.generate(**warm_in, max_new_tokens=2, use_cache=True, **wk)
+    model.eval()
+    torch.set_grad_enabled(False)
 
     DispatchManager.clear_timings()
-    # Use enough tokens for a short code answer; very small limits stop mid-sentence and can show U+FFFD ()
-    # at UTF-8 boundaries when the last token is incomplete.
-    max_new = QWEN3_MAX_NEW_TOKENS
-    main_in = _clone_model_inputs(inputs)
-    mk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
-    if mk.get("do_sample", False):
-        _seed_torch_for_generate()
-    outputs = model.generate(**main_in, max_new_tokens=max_new, use_cache=True, **mk)
+    gen_kw = _merge_generate_kw(_generate_kw(model, tokenizer), prompt_len)
+    t1 = time.perf_counter()
+    outputs = model.generate(
+        **_clone_model_inputs(inputs),
+        max_new_tokens=max_new_tokens,
+        use_cache=True,
+        **gen_kw,
+    )
+    gen_s = time.perf_counter() - t1
 
-    prompt_len = int(inputs["input_ids"].shape[-1])
     output_ids = outputs[0][prompt_len:].tolist()
-    content = tokenizer.decode(output_ids, skip_special_tokens=True)
-    print(f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{content}")
+    print(
+        f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{tokenizer.decode(output_ids, skip_special_tokens=True)}"
+    )
+
+    e2e_tok_s = len(output_ids) / gen_s if gen_s > 0 else 0.0
+    print("\n--- Generation performance ---")
+    print(f"  Weight prep: {setup_s:.2f} s")
+    print(f"  Generate ({len(output_ids)} new tokens): {gen_s:.3f} s")
+    print(f"  Prompt: {prompt_len} tokens")
+    print(f"  E2E: {e2e_tok_s:.3f} tok/s")
+    if len(output_ids) >= max_new_tokens:
+        print(f"  Note: reached max_new_tokens={max_new_tokens}")
+    print("---\n")
+
     DispatchManager.save_stats_to_file("qwen3_coder_next_timing_stats.csv")
