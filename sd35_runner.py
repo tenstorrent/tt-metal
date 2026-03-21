@@ -133,9 +133,11 @@ class SD35Runner:
         """Run inference for a single SD3.5 request.
 
         SD3.5 processes one request at a time (batch_size=1 across 2x4 mesh).
-        Only the first request in the list is used. guidance_scale is baked in at
-        create_pipeline() time and cannot be changed per-request; a warning is
-        logged if the caller requests a different value.
+        Only the first request in the list is used.
+
+        Per-request guidance_scale is supported for values > 1. Values <= 1 would
+        disable CFG and break the traced execution (tensor shapes differ), so they
+        are rejected with a warning and the config default is used instead.
 
         Args:
             requests: List of request dicts. Only requests[0] is used.
@@ -150,14 +152,13 @@ class SD35Runner:
         num_inference_steps = request.get("num_inference_steps") or self.config.num_inference_steps
         seed = request.get("seed")
 
-        # Warn if caller requests a guidance_scale that differs from the baked-in value
         requested_guidance = request.get("guidance_scale")
-        if requested_guidance is not None and requested_guidance != self.config.guidance_scale:
+        if requested_guidance is not None and requested_guidance <= 1:
             self.logger.warning(
-                f"Per-request guidance_scale={requested_guidance} requested, but SD3.5 guidance_scale "
-                f"is fixed at {self.config.guidance_scale} (set at pipeline creation time). "
-                f"The configured value will be used."
+                f"Per-request guidance_scale={requested_guidance} must be > 1 for SD3.5 "
+                f"(CFG structure is fixed at pipeline creation). Using default={self.config.guidance_scale}."
             )
+            requested_guidance = None
 
         self.logger.info(f"Running inference: prompt='{prompt[:80]}', steps={num_inference_steps}, seed={seed}")
 
@@ -166,6 +167,7 @@ class SD35Runner:
             negative_prompt=negative_prompt or "",
             num_inference_steps=num_inference_steps,
             seed=seed,
+            guidance_scale=requested_guidance,
             traced=self.config.use_trace,
         )
 

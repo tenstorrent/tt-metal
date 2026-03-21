@@ -412,6 +412,7 @@ class StableDiffusion3Pipeline:
         negative_prompt="",
         num_inference_steps=40,
         seed=None,
+        guidance_scale=None,
         traced=True,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
@@ -425,6 +426,7 @@ class StableDiffusion3Pipeline:
             negative_prompt_3=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
+            guidance_scale=guidance_scale,
             traced=traced,
             profiler=profiler,
             profiler_iteration=profiler_iteration,
@@ -441,6 +443,7 @@ class StableDiffusion3Pipeline:
         negative_prompt_3: list[str],
         num_inference_steps: int = 40,
         seed: int | None = None,
+        guidance_scale: float | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
         profiler: BenchmarkProfiler = None,
@@ -451,7 +454,7 @@ class StableDiffusion3Pipeline:
             num_images_per_prompt = self._prepared_num_images_per_prompt
             width = self._prepared_width
             height = self._prepared_height
-            guidance_scale = self._prepared_guidance_scale
+            guidance_scale = guidance_scale if guidance_scale is not None else self._prepared_guidance_scale
             max_t5_sequence_length = self._prepared_max_t5_sequence_length
 
             assert height % (self._torch_vae_scale_factor * self.patch_size) == 0
