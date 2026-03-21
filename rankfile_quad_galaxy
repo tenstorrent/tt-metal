@@ -1,0 +1,8 @@
+# Rankfile for quad galaxy setup
+# Format: rank <rank_number>=<hostname> slot=<slot_number>
+# For quad galaxy, we need 4 ranks (rank 0, 1, 2, 3)
+
+rank 0=wh-glx-a04u02 slot=0
+rank 1=wh-glx-a05u02 slot=0
+rank 2=wh-glx-a05u08 slot=0
+rank 3=wh-glx-a05u14 slot=0

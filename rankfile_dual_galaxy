@@ -1,0 +1,6 @@
+# Rankfile for dual galaxy setup
+# Format: rank <rank_number>=<hostname> slot=<slot_number>
+# For dual galaxy, we need 2 ranks (rank 0 and rank 1)
+
+rank 0=wh-glx-a04u02 slot=0
+rank 1=wh-glx-a05u02 slot=0
