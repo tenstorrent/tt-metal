@@ -278,6 +278,29 @@ SECTIONS
          )
   }
 
+  /* Watcher overlay section — collects functions marked with WATCHER_OVERLAY_SECTION.
+     When WATCHER_AS_OVERLAY is defined, expensive watcher sanitize functions are placed
+     here instead of in the main .text section, so they don't count against the tight
+     firmware code region limits (e.g. 6KB for brisc on Wormhole).
+
+     This is a file-only section (VMA = 0x7000000) that is NOT loaded by the standard
+     firmware loader. The host must detect this section in the ELF and load it to a
+     separate L1 region (e.g. kernel text space) before firmware uses it.
+
+     Next steps for full overlay support:
+     1. Host firmware initializer: detect .watcher_overlay in the ELF, load to L1
+     2. Firmware startup: populate function pointers from overlay load address
+     3. sanitize.h: call overlay functions via function pointers when WATCHER_AS_OVERLAY
+  */
+  .watcher_overlay 0x7000000 :
+  {
+    __watcher_overlay_start = .;
+    KEEP(*(.watcher_overlay))
+    KEEP(*(.watcher_overlay.*))
+    __watcher_overlay_end = .;
+    . = ALIGN(4);
+  }
+
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */

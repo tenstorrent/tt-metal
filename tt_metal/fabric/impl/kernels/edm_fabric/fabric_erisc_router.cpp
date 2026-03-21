@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This kernel exceeds the ERISC_APP_KERNEL_CODE region (17,312 bytes) when
+// watcher is enabled — it overflows by ~9KB even without watcher overhead.
+// Disable all watcher instrumentation to keep it within size limits.
+#define FORCE_WATCHER_OFF 1
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "internal/ethernet/tunneling.h"

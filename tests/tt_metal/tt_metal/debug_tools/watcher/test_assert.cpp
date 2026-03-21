@@ -178,36 +178,40 @@ static void RunTest(
         default: core_str = "worker";
     }
 
-    // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
-    // can shift as code changes. Use regex to match any line number for DebugAssertTripped
-    // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
-    const std::string msg = get_debug_assert_message(assert_type);
-    ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
-
-    std::string expected = fmt::format(
-        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} {} Current kernel: {}.",
-        device->id(),
-        core_str,
-        logical_core.x,
-        logical_core.y,
-        virtual_core.x,
-        virtual_core.y,
-        risc,
-        msg,
-        kernel);
-
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
-        std::string pattern = regex_escape(expected);
-        const std::string placeholder = "on line 0";
-        size_t pos = pattern.find(placeholder);
-        ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << placeholder << "' not found in escaped pattern: " << pattern;
-        pattern.replace(pos, placeholder.length(), "on line \\d+");
+        // When watcher is enabled and __FILE__ resolves, the assert message format is
+        // "tripped an assert at KERNEL_PATH:LINE." — build a regex to match this with
+        // any line number, since the ASSERT location in the kernel can shift.
+        std::string prefix = regex_escape(fmt::format(
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert at {}:",
+            device->id(),
+            core_str,
+            logical_core.x,
+            logical_core.y,
+            virtual_core.x,
+            virtual_core.y,
+            risc,
+            kernel));
+        std::string suffix = regex_escape(fmt::format(". Current kernel: {}.", kernel));
+        std::string pattern = prefix + "\\d+" + suffix;
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
         // Other assert types have fixed messages, exact match
+        const std::string msg = get_debug_assert_message(assert_type);
+        ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
+
+        std::string expected = fmt::format(
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} {} Current kernel: {}.",
+            device->id(),
+            core_str,
+            logical_core.x,
+            logical_core.y,
+            virtual_core.x,
+            virtual_core.y,
+            risc,
+            msg,
+            kernel);
         EXPECT_EQ(expected, exception);
     }
 }

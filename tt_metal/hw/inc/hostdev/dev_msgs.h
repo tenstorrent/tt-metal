@@ -261,6 +261,13 @@ struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    // Low 16 bits of a compile-time FNV-1a hash of __FILE__ at the assert site.
+    // Zero means "no file info" (e.g. firmware built without watcher, or assert
+    // types that don't come from ASSERT()).  Host resolves the file name by
+    // computing the same hash over every known kernel source path and finding the
+    // first match.  See watcher_file_hash() in assert.h.
+    volatile uint16_t file_id;
+    volatile uint16_t pad;  // keep debug_assert_msg_t a multiple of 4 bytes
 };
 
 enum debug_assert_type_t {

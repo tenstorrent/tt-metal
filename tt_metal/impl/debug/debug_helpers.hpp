@@ -97,16 +97,79 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Returns the assert message portion for a given assert type
-// Returns empty string for unknown types (callers must handle this)
-// For DebugAssertTripped, line_num is used in the message
-inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
+// Host-side FNV-1a hash — must match watcher_file_hash() in assert.h exactly.
+// Used to resolve a file_id stored in the assert mailbox back to a source path.
+inline uint16_t watcher_host_file_hash(const std::string& path) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : path) {
+        h = (h ^ c) * 16777619u;
+    }
+    return static_cast<uint16_t>(h & 0xFFFFu);
+}
+
+// Resolve a file_id (low-16-bit FNV-1a hash of __FILE__) to a source file path.
+// Scans all candidate_paths; returns the matching path only if exactly one matches.
+// Returns an empty string if no match is found or if multiple paths match (collision).
+//
+// Note: if ASSERT() fires inside a shared header (not the kernel's top-level
+// source file), __FILE__ will be the header path, which is not in
+// candidate_paths. In that case this function returns empty and the caller
+// falls back to the line-only message.
+inline std::string resolve_assert_file(uint16_t file_id, const std::vector<std::string>& candidate_paths) {
+    if (file_id == 0) {
+        return "";  // 0 means "no file info available"
+    }
+    std::string matched;
+    for (const auto& path : candidate_paths) {
+        if (watcher_host_file_hash(path) == file_id) {
+            if (!matched.empty()) {
+                // Hash collision between two candidate paths - return empty to avoid
+                // displaying the wrong file name.
+                log_debug(
+                    tt::LogMetal,
+                    "Watcher: assert file_id 0x{:04x} matches multiple candidate "
+                    "paths ('{}' and '{}') - file name suppressed.",
+                    file_id,
+                    matched,
+                    path);
+                return "";
+            }
+            matched = path;
+        }
+    }
+    return matched;
+}
+
+// Returns the assert message portion for a given assert type.
+// Returns empty string for unknown types (callers must handle this).
+// For DebugAssertTripped, line_num and file_id are used to produce a precise location.
+// candidate_source_paths: ordered list of kernel source file paths to search when
+// resolving file_id (pass the kernel source + all known included headers).
+inline std::string get_debug_assert_message(
+    dev_msgs::debug_assert_type_t type,
+    uint16_t line_num = 0,
+    uint16_t file_id = 0,
+    const std::vector<std::string>& candidate_source_paths = {}) {
     switch (type) {
-        case dev_msgs::DebugAssertTripped:
-            return fmt::format(
-                "tripped an assert on line {}. Note that file name reporting is not yet "
-                "implemented, and the reported line number for the assert may be from a different file.",
-                line_num);
+        case dev_msgs::DebugAssertTripped: {
+            std::string file_name = resolve_assert_file(file_id, candidate_source_paths);
+            if (!file_name.empty()) {
+                return fmt::format("tripped an assert at {}:{}.", file_name, line_num);
+            } else {
+                if (file_id != 0) {
+                    log_debug(
+                        tt::LogMetal,
+                        "Watcher: assert file_id 0x{:04x} did not match any candidate source path "
+                        "(kernel compiled with different path format?)",
+                        file_id);
+                }
+                // file_id == 0 means old firmware without file reporting, or non-ASSERT() assert type.
+                return fmt::format(
+                    "tripped an assert on line {}. "
+                    "(File name unavailable — rebuild with watcher enabled to get full location.)",
+                    line_num);
+            }
+        }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC reads flushed barrier).";
