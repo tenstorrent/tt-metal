@@ -107,14 +107,12 @@ class TtSharedExpert(LightweightModule):
                 shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
             )
 
-    def _create_sharded_weight_from_torch(
-        self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16
-    ) -> ttnn.Tensor:
+    def _to_sharded_ttnn(self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16) -> ttnn.Tensor:
         """
         Convert torch weight to sharded ttnn tensor.
 
         Args:
-            torch_weight: PyTorch weight tensor [in_features, out_features]
+            torch_weight: PyTorch weight tensor in TTNN format [in_features, out_features]
             dims: Sharding dimensions for mesh_mapper (e.g., (None, -1) or (-2, None))
             name: Weight name for logging
             dtype: Data type for the weight tensor
@@ -124,14 +122,12 @@ class TtSharedExpert(LightweightModule):
         """
         logger.debug(f"Creating sharded weight {name} with dims={dims}, shape={torch_weight.shape}")
 
-        # Create mesh mapper for sharding
         mesh_mapper = ttnn.ShardTensor2dMesh(
             self.mesh_device,
             mesh_shape=self.mesh_device.shape,
             dims=dims,
         )
 
-        # Convert to ttnn tensor with sharding
         tt_weight = ttnn.from_torch(
             torch_weight,
             mesh_mapper=mesh_mapper,
@@ -143,25 +139,24 @@ class TtSharedExpert(LightweightModule):
         logger.debug(f"Created {name}: {tt_weight.shape}")
         return tt_weight
 
+    def _create_sharded_weight_from_torch(
+        self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16
+    ) -> ttnn.Tensor:
+        """
+        Convert HuggingFace torch weight to sharded ttnn tensor.
+
+        HF/PyTorch nn.Linear weights are [out_features, in_features], but TTNN matmul(x, W)
+        expects [in_features, out_features], so we transpose before sharding.
+        """
+        torch_weight = torch_weight.T.contiguous()
+        return self._to_sharded_ttnn(torch_weight, dims, name, dtype)
+
     def _create_random_sharded_weight(self, shape: tuple, dims: tuple, name: str, dtype: ttnn.bfloat16) -> ttnn.Tensor:
         """
-        Create random sharded weight.
-
-        Args:
-            shape: Weight shape [in_features, out_features]
-            dims: Sharding dimensions for mesh_mapper
-            name: Weight name for logging
-            dtype: Data type for the weight tensor
-
-        Returns:
-            Random sharded ttnn tensor
+        Create random sharded weight in TTNN format [in_features, out_features].
         """
-        logger.debug(f"Creating random sharded weight {name} with dims={dims}, shape={shape}")
-
-        # Create random torch tensor
         torch_weight = torch.randn(*shape, dtype=torch.float32)
-
-        return self._create_sharded_weight_from_torch(torch_weight, dims, name, dtype)
+        return self._to_sharded_ttnn(torch_weight, dims, name, dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
