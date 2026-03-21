@@ -32,7 +32,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
     for (const auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         jit_build_cache_clear();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
@@ -49,9 +49,9 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const int riscv_0_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_1.processor);
         const JitBuildState& build_state_riscv_0 = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
+            device->device_internal().build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
+            device->device_internal().build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();

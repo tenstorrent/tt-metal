@@ -28,7 +28,7 @@ L1AddressInfo get_l1_address_and_size(
     CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
 
     const auto& hal = MetalContext::instance().hal();
-    HalProgrammableCoreType core_type = device->get_programmable_core_type(physical_core);
+    HalProgrammableCoreType core_type = device->device_internal().get_programmable_core_type(physical_core);
     uint64_t core_l1_base_address = hal.get_dev_addr(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
     uint64_t core_l1_size = hal.get_dev_size(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
 

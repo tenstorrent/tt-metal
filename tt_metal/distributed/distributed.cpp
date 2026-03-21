@@ -35,7 +35,8 @@ void EventSynchronize(const MeshEvent& event) {
     }
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+        while (physical_device->device_internal().sysmem_manager().get_last_completed_event(event.mesh_cq_id()) <
+               event.id()) {
             ;
         }
     }
@@ -48,7 +49,8 @@ bool EventQuery(const MeshEvent& event) {
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+        event_completed &= physical_device->device_internal().sysmem_manager().get_last_completed_event(
+                               event.mesh_cq_id()) >= event.id();
     }
     return event_completed;
 }
@@ -60,13 +62,13 @@ MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
 }
 
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (!device->is_initialized()) {
+    if (!device->device_internal().is_initialized()) {
         return;
     }
     if (cq_id.has_value()) {
         device->mesh_command_queue(cq_id).finish(sub_device_ids);
     } else {
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+        for (uint8_t cq_id = 0; cq_id < device->device_internal().num_hw_cqs(); ++cq_id) {
             device->mesh_command_queue(cq_id).finish(sub_device_ids);
         }
     }

@@ -230,14 +230,14 @@ void configure_local_kernels(
                     // Collect write tasks
                     write_tasks.push_back(
                         {curr_chip_id,
-                         curr_chip->ethernet_core_from_logical_core(curr_coord),
+                         curr_chip->device_internal().ethernet_core_from_logical_core(curr_coord),
                          fwd ? &inputs : &all_zeros,
                          src_eth_l1_byte_address});
                     chips_with_writes.insert(curr_chip_id);
 
                     write_tasks.push_back(
                         {neighbor_chip_id,
-                         neighbor_chip->ethernet_core_from_logical_core(neighbor_coord),
+                         neighbor_chip->device_internal().ethernet_core_from_logical_core(neighbor_coord),
                          fwd ? &all_zeros : &inputs,
                          dst_eth_l1_byte_address});
                     chips_with_writes.insert(neighbor_chip_id);
@@ -367,11 +367,14 @@ void configure_cross_host_kernels(
             // Collect write task
             if (sender) {
                 write_tasks.push_back(
-                    {my_chip, my_device->ethernet_core_from_logical_core(my_coord), &inputs, src_eth_l1_byte_address});
+                    {my_chip,
+                     my_device->device_internal().ethernet_core_from_logical_core(my_coord),
+                     &inputs,
+                     src_eth_l1_byte_address});
             } else {
                 write_tasks.push_back(
                     {my_chip,
-                     my_device->ethernet_core_from_logical_core(my_coord),
+                     my_device->device_internal().ethernet_core_from_logical_core(my_coord),
                      &all_zeros,
                      dst_eth_l1_byte_address});
             }
@@ -714,7 +717,8 @@ void dump_link_stats(
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                auto ethernet_core =
+                    ctx.devices.at(chip_id)->device_internal().ethernet_core_from_logical_core(logical_coord);
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 links.push_back(
                     {chip_id,

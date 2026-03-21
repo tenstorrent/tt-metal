@@ -748,8 +748,8 @@ int main(int argc, char** argv) {
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
-            SubDeviceManagerId sdm_id = device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, 0);
-            device->load_sub_device_manager(sdm_id);
+            SubDeviceManagerId sdm_id = device->device_internal().create_sub_device_manager({sender_sub_device, receiver_sub_device}, 0);
+            device->device_internal().load_sub_device_manager(sdm_id);
             receiver_sub_device_ids.push_back(SubDeviceId{1});
         }
         ////////////////////////////////////////////////////////////////////////////
@@ -894,11 +894,11 @@ int main(int argc, char** argv) {
             if (use_sub_devices) {
                 // Enqueue the sender program
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[0], false);
-                device->set_sub_device_stall_group(receiver_sub_device_ids);
+                device->device_internal().set_sub_device_stall_group(receiver_sub_device_ids);
                 for (uint32_t j = 1; j < mesh_workloads.size(); ++j) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[j], false);
                 }
-                device->reset_sub_device_stall_group();
+                device->device_internal().reset_sub_device_stall_group();
             } else {
                 for (auto& mesh_workload : mesh_workloads) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);

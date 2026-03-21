@@ -204,7 +204,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     }
                     constexpr auto state = ProfilerReadState::LAST_FD_READ;
                     detail::ReadDeviceProfilerResultsInternal(
-                        device->get_mesh_device().get(),
+                        device->device_internal().get_mesh_device().get(),
                         device,
                         virtual_cores_map.at(device->id()),
                         state,

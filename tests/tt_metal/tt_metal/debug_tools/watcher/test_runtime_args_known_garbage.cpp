@@ -38,7 +38,7 @@ protected:
         }
         MeshWatcherFixture::SetUp();
         mesh_device = devices_[0];
-        device = mesh_device->get_devices()[0];
+        device = mesh_device->impl().get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);

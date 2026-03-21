@@ -41,10 +41,10 @@ TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterTensixCores) {
 TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterEriscCores) {
     // Get device from fixture
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Check if device has active ethernet cores
-    if (device->get_active_ethernet_cores(true).empty()) {
+    if (device->device_internal().get_active_ethernet_cores(true).empty()) {
         GTEST_SKIP() << "No active ethernet cores available on this device";
     }
 
@@ -57,7 +57,7 @@ TEST_F(MeshDeviceSingleCardFixture, StreamScratchRegisterEriscCores) {
     auto& program_ = workload.get_programs().at(device_range);
 
     // Get first available ethernet core
-    auto eth_core = *device->get_active_ethernet_cores(true).begin();
+    auto eth_core = *device->device_internal().get_active_ethernet_cores(true).begin();
 
     // Create CoreRangeSet for this single ethernet core
     std::set<CoreRange> eth_core_ranges;

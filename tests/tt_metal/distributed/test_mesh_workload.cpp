@@ -232,13 +232,13 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     submesh->mesh_command_queue().enqueue_record_event();
 
     // 2) Quiesce all submeshes from the parent
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     // 3) Run on parent (non-blocking)
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
 
     // 4) Quiesce again
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     // 5) Run again on the same submesh (non-blocking) and finish to ensure completion
     EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
@@ -260,7 +260,10 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
             if (mesh_device_->impl().is_local(device_coord)) {
                 IDevice* device = mesh_device_->impl().get_device(device_coord);
                 auto programs = utils::create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+                    1,
+                    mesh_device_->compute_with_storage_grid_size(),
+                    seed,
+                    device->device_internal().get_active_ethernet_cores(true));
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
             }
         }
@@ -733,7 +736,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
-    for (auto* const device : mesh_device_->get_devices()) {
+    for (auto* const device : mesh_device_->impl().get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
     }
 }

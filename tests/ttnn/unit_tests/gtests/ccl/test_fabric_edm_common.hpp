@@ -27,6 +27,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -607,7 +608,7 @@ bool RunPipelinedWorkersTest(
                 reader_kernels[stage],
                 {&device_tensors[stage]},
                 {page_size_bytes},
-                mesh_device->get_devices()[0],
+                mesh_device->impl().get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
@@ -620,7 +621,7 @@ bool RunPipelinedWorkersTest(
                 writer_kernels[stage],
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
-                mesh_device->get_devices()[0],
+                mesh_device->impl().get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},

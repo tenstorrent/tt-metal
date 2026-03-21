@@ -142,7 +142,7 @@ uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* devic
     // Sub Device manager state must be correct (from device init)
     // If core type is active ethernet, it does not include fabric routers which were created using slow dispatch
     // Not managed by fast dispatch
-    const auto num_workers = device->num_worker_cores(core_type, sub_device_id);
+    const auto num_workers = device->device_internal().num_worker_cores(core_type, sub_device_id);
     return num_workers;
 }
 

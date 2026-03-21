@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

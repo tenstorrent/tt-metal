@@ -88,7 +88,8 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
 
         SetRuntimeArgs(program_, kernel_id, core, {core.x, core.y});
 
-        log_info(tt::LogTest, "Running test on core {}:({},{})", mesh_device->get_devices()[0]->id(), core.x, core.y);
+        log_info(
+            tt::LogTest, "Running test on core {}:({},{})", mesh_device->impl().get_devices()[0]->id(), core.x, core.y);
     }
 
     fixture->RunProgram(mesh_device, workload);

@@ -371,7 +371,7 @@ bool initialize_program(
     }
 
     if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
+        auto erisc_cores = mesh_device->impl().get_device(0, 0)->device_internal().get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
                 tt::LogTest,
@@ -719,8 +719,8 @@ static int pgm_dispatch(T& state, TestInfo info) {
             core_ranges[static_cast<size_t>(HalProgrammableCoreType::TENSIX)] =
                 get_subdevice_core_range_set(info, all_core_range);
             sub_devices.push_back(tt_metal::SubDevice(core_ranges));
-            auto manager = mesh_device->create_sub_device_manager(sub_devices, 1024);
-            mesh_device->load_sub_device_manager(manager);
+            auto manager = mesh_device->device_internal().create_sub_device_manager(sub_devices, 1024);
+            mesh_device->device_internal().load_sub_device_manager(manager);
         }
 
         // Declare program storage at function scope to ensure proper lifetime

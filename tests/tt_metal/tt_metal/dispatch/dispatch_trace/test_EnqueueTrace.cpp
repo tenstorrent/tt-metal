@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -319,7 +320,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
-    auto trace_inst = mesh_device->get_mesh_trace(tid);
+    auto trace_inst = mesh_device->impl().get_mesh_trace(tid);
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer - using the actual device buffer
@@ -654,8 +655,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -678,8 +679,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -730,8 +731,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -759,8 +760,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -925,8 +926,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 
@@ -980,8 +981,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
+        GTEST_SKIP() << "Skipping test because device " << this->device_->impl().get_devices()[0]->id()
                      << " does not have any active ethernet cores";
     }
 

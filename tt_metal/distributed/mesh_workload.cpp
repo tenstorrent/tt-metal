@@ -118,10 +118,10 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     } else {
         for (auto& [device_range, _] : programs_) {
             // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
-            mesh_device->enqueue_to_thread_pool(
+            mesh_device->impl().enqueue_to_thread_pool(
                 [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
         }
-        mesh_device->wait_for_thread_pool();
+        mesh_device->impl().wait_for_thread_pool();
     }
     finalize_offsets(mesh_device);
 }

@@ -1493,8 +1493,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     }
     return FabricEriscDatamoverBuilder(
         ethernet_core,
-        device->ethernet_core_from_logical_core(ethernet_core).x,
-        device->ethernet_core_from_logical_core(ethernet_core).y,
+        device->device_internal().ethernet_core_from_logical_core(ethernet_core).x,
+        device->device_internal().ethernet_core_from_logical_core(ethernet_core).y,
         local_fabric_node_id,
         peer_fabric_node_id,
 
@@ -1641,7 +1641,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
     std::vector<uint32_t> val(1, termination_signal);
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
-        d->logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
+        d->device_internal().logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
         config.termination_signal_address,
         val,
         CoreType::ETH);

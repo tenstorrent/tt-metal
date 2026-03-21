@@ -52,7 +52,7 @@ const uint32_t N_RANDS = 512;
 // Disabled because this test can hang the NoC due to hardware issues.
 // Uses detail::LaunchProgram which requires slow dispatch mode
 TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
 
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;

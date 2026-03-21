@@ -180,7 +180,7 @@ protected:
 
 // Single parametrized test
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
-    IDevice* device = devices_[0]->get_devices()[0];
+    IDevice* device = devices_[0]->impl().get_devices()[0];
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = num_tiles}));
 }

@@ -39,7 +39,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
     constexpr uint32_t base_src_l1_address = 1000 * 1024;
     constexpr uint32_t base_dst_l1_address = 1025 * 1024;
     std::vector<uint32_t> expected_values{0x0123, 0x4567, 0x89AB, 0xCDEF};
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, base_src_l1_address, expected_values);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], core, base_src_l1_address, expected_values);
 
     uint32_t sem_id = CreateSemaphore(program, core, 0);
 
@@ -55,7 +55,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
 
     std::vector<uint32_t> actual_values(4, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, base_dst_l1_address, 4 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], core, base_dst_l1_address, 4 * sizeof(uint32_t), actual_values);
 
     ASSERT_EQ(actual_values, expected_values);
 }
@@ -83,7 +83,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
     uint32_t l1_address = 1000 * 1024;
     std::vector<uint32_t> expected_values{0x0123, 0x4567, 0x89AB, 0xCDEF};
     uint32_t dram_address = 30000 * 1024;
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, expected_values);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->impl().get_devices()[0], 0, dram_address, expected_values);
 
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
@@ -125,7 +125,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
 
     std::vector<uint32_t> actual_values(4, 0);
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
+        mesh_device->impl().get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     ASSERT_EQ(actual_values, expected_values);
 }
@@ -161,7 +161,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->impl().get_devices()[0], 0, dram_src_addr, initial_data);
 
     auto dm_reader = experimental::quasar::CreateKernel(
         program,
@@ -192,7 +192,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
 
     std::vector<uint32_t> actual_data(num_elements, 0);
     tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+        mesh_device->impl().get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
@@ -232,7 +232,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core_0, buf_a_addr, initial_data);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->impl().get_devices()[0], core_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(core_1);
 
@@ -289,7 +289,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
 
     std::vector<uint32_t> actual_data(num_elements, 0);
     tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+        mesh_device->impl().get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 

@@ -42,12 +42,12 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     uint32_t last_read_address = 0;
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
         auto start = std::chrono::system_clock::now();
 
-        uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+        uint32_t completion_queue_base = device->device_internal().sysmem_manager().get_completion_queue_read_ptr(0);
         ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
@@ -230,7 +230,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
@@ -240,7 +240,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
 
     auto start = std::chrono::system_clock::now();
 
-    uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+    uint32_t completion_queue_base = device->device_internal().sysmem_manager().get_completion_queue_read_ptr(0);
     ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =

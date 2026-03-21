@@ -11,6 +11,7 @@
 #include <chrono>
 #include <llrt/tt_cluster.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_worker_kernel_helpers.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::test_utils {
 
@@ -128,7 +129,7 @@ void signal_worker_teardown(
     std::vector<uint32_t> data = {WORKER_TEARDOWN};
 
     // Get the actual device where the kernel is running (first device in mesh)
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     auto virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 

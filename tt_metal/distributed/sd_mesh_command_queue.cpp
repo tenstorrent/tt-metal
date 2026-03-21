@@ -235,7 +235,7 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     }
     auto lock = lock_api_function_();
     wait_for_cores_idle();
-    for (const auto& device : mesh_device_->get_devices()) {
+    for (const auto& device : mesh_device_->impl().get_devices()) {
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
             .get_cluster()
             .dram_barrier(device->id());

@@ -5,6 +5,7 @@
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -875,18 +876,18 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     Tensor golden_1 = ttnn::exp(device_input_tensor_1);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "First run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 
     // Test 2: Program Cache Hit - same tensors
     log_info(tt::LogTest, "Test 2: Program Cache Hit - same tensors");
     ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "Second run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 
     // Test 3: Program Cache Hit with different tensors (different addresses)
     log_info(tt::LogTest, "Test 3: Program Cache Hit - different tensor addresses");
@@ -910,9 +911,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         ttnn::allclose<bfloat16>(golden_2.cpu(), device_output_tensor_2.cpu()),
         "Third run with different addresses failed - override_runtime_arguments not working correctly!");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit with new addresses, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
@@ -1069,7 +1070,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     auto input_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(input_tensors);
     auto output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     // =========================================================================
     // Configuration - hardcoded for this test case
@@ -1369,7 +1370,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
     log_info(tt::LogTest, "Executing all_gather via generic_op with MUX...");
     ttnn::generic_op(std::vector<Tensor>{input_tensor, output_tensor}, mesh_program_descriptor);
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     auto disaggregated_output = tt::tt_metal::experimental::unit_mesh::disaggregate(output_tensor);
     for (uint32_t dev_idx = 0; dev_idx < ring_size; dev_idx++) {
@@ -1510,12 +1511,12 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
         receiver_mesh_program_descriptor);
     ttnn::generic_op(
         std::vector<Tensor>{device_input_tensor_sender, device_output_tensor_sender}, sender_mesh_program_descriptor);
-    sender_device->quiesce_devices();
-    receiver_device->quiesce_devices();
+    sender_device->impl().quiesce_devices();
+    receiver_device->impl().quiesce_devices();
 
     std::vector<uint32_t> sender_status;
     tt::tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+        sender_device->impl().get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1526,7 +1527,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     std::vector<uint32_t> receiver_status;
 
     tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+        receiver_device->impl().get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

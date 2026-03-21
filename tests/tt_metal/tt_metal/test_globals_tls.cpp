@@ -33,7 +33,7 @@ class LegacyVsNonLegacyTest
 TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     auto is_legacy_kernel = GetParam();
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     const uint32_t signal_address = 100 * 1024;
     const uint32_t l1_result_addr = 200 * 1024;
@@ -48,7 +48,7 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = mesh_device->dram_channel_from_virtual_core(core);
+    const uint32_t dram_channel = mesh_device->device_internal().dram_channel_from_virtual_core(core);
 
     // Initialize L1 signal so hart 0 can proceed (then 1, 2, ... in order)
     std::vector<uint32_t> init_signal = {0};
@@ -287,7 +287,7 @@ static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8
 
 TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {

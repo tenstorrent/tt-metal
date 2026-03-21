@@ -105,7 +105,8 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 }
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
-    auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
+    auto num_data_cores =
+        mesh_device->device_internal().num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
     // Allocate buffer at a PCIe aligned address. This requires extra memory to be allocated.

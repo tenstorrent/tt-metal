@@ -35,6 +35,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/device_internal.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
@@ -76,7 +77,7 @@ class DistributedContext;
 
 using DeviceIds = std::vector<int>;
 
-class MeshDeviceImpl : public IDevice {
+class MeshDeviceImpl : public IDevice, public IDeviceInternal {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
@@ -200,6 +201,11 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
+
+    // Access to internal methods
+    IDeviceInternal& device_internal() override { return *this; }
+    const IDeviceInternal& device_internal() const override { return *this; }
+
     ChipId build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;

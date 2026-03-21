@@ -121,7 +121,7 @@ static bool test_sdpa_reduce_c(
         do_eltwise_max);
 
     // Get device and command queue from mesh
-    tt_metal::IDevice* device = mesh_device->get_devices().at(0);
+    tt_metal::IDevice* device = mesh_device->impl().get_devices().at(0);
     tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     tt_metal::Program program = tt_metal::CreateProgram();

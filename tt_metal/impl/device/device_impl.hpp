@@ -30,7 +30,7 @@ class DispatchContext;
 }  // namespace experimental
 
 // A physical PCIexpress Tenstorrent device
-class Device : public IDevice {
+class Device : public IDevice, public IDeviceInternal {
 public:
     Device() = delete;
     Device(
@@ -60,6 +60,11 @@ public:
     tt::ARCH arch() const override;
 
     ChipId id() const override { return id_; }
+
+    // Access to internal methods
+    IDeviceInternal& device_internal() override { return *this; }
+    const IDeviceInternal& device_internal() const override { return *this; }
+
     // For a single device, build id is the same as device id
     ChipId build_id() const override { return id_; }
 

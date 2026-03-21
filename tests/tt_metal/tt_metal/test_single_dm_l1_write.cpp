@@ -25,7 +25,7 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     auto mesh_device = devices_[0];
 
     const uint32_t address = 100 * 1024;

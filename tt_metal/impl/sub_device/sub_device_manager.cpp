@@ -259,7 +259,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->allocator_impl()->get_config();
+    const auto& global_allocator_config = device_->device_internal().allocator_impl()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -336,7 +336,8 @@ void SubDeviceManager::populate_noc_data() {
             noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
                 auto virtual_core = device_->virtual_core_from_logical_core(core, CoreType::ETH);
-                noc_mcast_unicast_data_[idx++] = device_->get_noc_unicast_encoding(noc_index, virtual_core);
+                noc_mcast_unicast_data_[idx++] =
+                    device_->device_internal().get_noc_unicast_encoding(noc_index, virtual_core);
             }
         }
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];

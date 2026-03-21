@@ -377,7 +377,7 @@ public:
         KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         detail::CompileProgram(device, program_);
 
         // Find compiled kernel and extract format string from it to compare with expected_format_message
@@ -388,7 +388,7 @@ public:
         int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
 
         const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            device->device_internal().build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();

@@ -148,7 +148,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_SingleCol) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
@@ -178,7 +178,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc0_MultiCol_S4) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2 || grid.x < 5) {
@@ -208,7 +208,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_MultiCol_S8) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2 || grid.x < 12) {
@@ -238,7 +238,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundY_Down_Noc1_SingleCol) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
@@ -268,7 +268,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc0) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
@@ -292,7 +292,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastWrapAroundX_Right_Noc1) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
@@ -316,7 +316,7 @@ TEST_F(MeshWatcherFixture, DeviceMcastMixedWrap_XWrapYNormal_Noc0) {
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "Wrap-around multicast device tests require Slow Dispatch mode";
     }
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 3) {

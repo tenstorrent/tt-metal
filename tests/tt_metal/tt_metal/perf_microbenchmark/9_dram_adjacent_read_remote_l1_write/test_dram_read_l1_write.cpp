@@ -46,6 +46,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using namespace tt;
@@ -297,7 +298,7 @@ bool validation(
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
+            device->impl().get_devices()[0], core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
 
         if (df == 0) {  // BFP4
             auto result_bfp4 = unpack_bfp4_tiles_into_float_vec(result_vec, true, true);

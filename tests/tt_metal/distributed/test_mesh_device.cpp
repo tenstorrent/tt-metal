@@ -58,7 +58,7 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
@@ -93,15 +93,15 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
 
 TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
-    EXPECT_TRUE(mesh_device_->is_parent_mesh());
+    EXPECT_THAT(mesh_device_->impl().get_devices(), SizeIs(8));
+    EXPECT_TRUE(mesh_device_->impl().is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
-    EXPECT_FALSE(submesh->is_parent_mesh());
+    EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
+    EXPECT_FALSE(submesh->impl().is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
     // Verify coordinates are correct.
@@ -126,7 +126,7 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
     EXPECT_THAT(submeshes, SizeIs(4));
     for (const auto& submesh : submeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+        EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     }
 
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
@@ -184,15 +184,14 @@ TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
     for (auto& [_, unit_mesh] : unit_meshes) {
-        EXPECT_EQ(unit_mesh->is_initialized(), true);
-        EXPECT_ANY_THROW(unit_mesh->initialize(
+        EXPECT_EQ(unit_mesh->device_internal().is_initialized(), true);
+        EXPECT_ANY_THROW(unit_mesh->device_internal().initialize(
             /*num_hw_cqs=*/1,
             /*l1_small_size=*/DEFAULT_L1_SMALL_SIZE,
             /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
             /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
             /*l1_bank_remap=*/{},
-            /*minimal=*/false)
-        );
+            /*minimal=*/false));
     }
 }
 

@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
         }
 
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        device_is_mmio = device->get_devices()[0]->is_mmio_capable();
+        device_is_mmio = device->impl().get_devices()[0]->is_mmio_capable();
 
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");

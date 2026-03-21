@@ -31,10 +31,11 @@ struct CoreWriteDispatchParams : public CoreDispatchParams {
 
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
-    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    const HalMemType mem_type = device->device_internal().get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
         const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
-        HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+        HalProgrammableCoreType programmable_core_type =
+            device->device_internal().get_programmable_core_type(virtual_core);
         const DeviceAddr l1_base_address = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::BASE);
         const DeviceAddr l1_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
 
@@ -44,7 +45,7 @@ void validate_core_read_write_bounds(
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
         const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        const uint32_t dram_channel = device->device_internal().dram_channel_from_virtual_core(virtual_core);
         const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
 
         const DeviceAddr dram_channel_size = device->dram_size_per_channel();
@@ -55,10 +56,10 @@ void validate_core_read_write_bounds(
 }
 
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
-    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    const HalMemType mem_type = device->device_internal().get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
         const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        const uint32_t dram_channel = device->device_internal().dram_channel_from_virtual_core(virtual_core);
         address += soc_desc.get_address_offset(dram_channel);
     }
     return address;
@@ -75,7 +76,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
@@ -90,7 +91,8 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     command_sequence.add_dispatch_write_linear<true, true>(
         0,
-        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
+        dispatch_params.device->device_internal().get_noc_unicast_encoding(
+            k_dispatch_downstream_noc, dispatch_params.virtual_core),
         dispatch_params.address,
         dispatch_params.size_bytes,
         (uint8_t*)dispatch_params.src);
@@ -146,7 +148,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     calculator.add_prefetch_relay_linear();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
@@ -170,7 +172,8 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false, 0);
 
     command_sequence.add_prefetch_relay_linear(
-        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
+        dispatch_params.device->device_internal().get_noc_unicast_encoding(
+            k_dispatch_downstream_noc, dispatch_params.virtual_core),
         dispatch_params.size_bytes,
         dispatch_params.address);
 

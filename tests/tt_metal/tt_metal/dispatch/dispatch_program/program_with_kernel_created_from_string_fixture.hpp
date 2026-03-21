@@ -14,7 +14,7 @@ protected:
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         for (const auto& mesh_device : this->devices_) {
-            auto device = mesh_device->get_devices()[0];
+            auto device = mesh_device->impl().get_devices()[0];
             const ChipId device_id = device->id();
             this->device_ids_to_devices_[device_id] = mesh_device;
         }

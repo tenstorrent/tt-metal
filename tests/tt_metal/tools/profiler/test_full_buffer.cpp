@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
@@ -21,13 +22,13 @@ constexpr uint32_t FULL_L1_MARKER_COUNT = 256;
 
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
-    auto eth_cores = device->get_active_ethernet_cores(true);
+    auto eth_cores = device->device_internal().get_active_ethernet_cores(true);
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;

@@ -396,11 +396,11 @@ void test_single_device_socket_with_workers(
         const auto& recv_logical_coord = mapping.receiver_core;
         auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
         auto worker_logical_coords = corerange_to_cores(mapping.worker_cores, std::nullopt, true);
-        auto worker_virtual_coords = md0->worker_cores_from_logical_cores(worker_logical_coords);
+        auto worker_virtual_coords = md0->device_internal().worker_cores_from_logical_cores(worker_logical_coords);
         auto data_logical_coords = corerange_to_cores(mapping.data_cores, std::nullopt, true);
-        auto data_virtual_coords = md0->worker_cores_from_logical_cores(data_logical_coords);
+        auto data_virtual_coords = md0->device_internal().worker_cores_from_logical_cores(data_logical_coords);
         auto output_logical_coords = corerange_to_cores(mapping.output_cores, std::nullopt, true);
-        auto output_virtual_coords = md0->worker_cores_from_logical_cores(output_logical_coords);
+        auto output_virtual_coords = md0->device_internal().worker_cores_from_logical_cores(output_logical_coords);
         std::vector<uint32_t> data_virtual_xys;
         std::vector<uint32_t> output_virtual_xys;
         data_virtual_xys.reserve(data_virtual_coords.size() * 2);
@@ -1962,11 +1962,11 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
 
     // Create and load sub-device managers on both mesh devices
-    auto sub_device_manager_0 = md0->create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
-    auto sub_device_manager_1 = md1->create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
+    auto sub_device_manager_0 = md0->device_internal().create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
+    auto sub_device_manager_1 = md1->device_internal().create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
 
-    md0->load_sub_device_manager(sub_device_manager_0);
-    md1->load_sub_device_manager(sub_device_manager_1);
+    md0->device_internal().load_sub_device_manager(sub_device_manager_0);
+    md1->device_internal().load_sub_device_manager(sub_device_manager_1);
 
     {
         // Socket on sub device 0
@@ -1996,12 +1996,12 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
         EXPECT_EQ(recv_socket_0.get_config_buffer()->address(), recv_socket_1.get_config_buffer()->address());
         EXPECT_EQ(recv_socket_0.get_data_buffer()->address(), recv_socket_1.get_data_buffer()->address());
         // Try clearing the sub devices while sockets are still allocated - this should fail
-        EXPECT_THROW(md0->clear_loaded_sub_device_manager(), std::exception);
-        EXPECT_THROW(md1->clear_loaded_sub_device_manager(), std::exception);
+        EXPECT_THROW(md0->device_internal().clear_loaded_sub_device_manager(), std::exception);
+        EXPECT_THROW(md1->device_internal().clear_loaded_sub_device_manager(), std::exception);
     }
     // This should not fail - sub device sockets are now deallocated
-    md0->clear_loaded_sub_device_manager();
-    md1->clear_loaded_sub_device_manager();
+    md0->device_internal().clear_loaded_sub_device_manager();
+    md1->device_internal().clear_loaded_sub_device_manager();
 }
 
 TEST_F(MeshSocketTest, AssertOnDuplicateRecvCores) {

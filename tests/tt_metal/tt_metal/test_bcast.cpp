@@ -282,31 +282,31 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, BcastHAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::ADD);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::H, BcastOp::ADD);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastHSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::SUB);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::H, BcastOp::SUB);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastHMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::MUL);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::H, BcastOp::MUL);
 }
 
 TEST_F(MeshDeviceSingleCardFixture, BcastWAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::ADD);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::W, BcastOp::ADD);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastWSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::SUB);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::W, BcastOp::SUB);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastWMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::MUL);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::W, BcastOp::MUL);
 }
 
 TEST_F(MeshDeviceSingleCardFixture, BcastHWAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::ADD);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::HW, BcastOp::ADD);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastHWSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::SUB);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::HW, BcastOp::SUB);
 }
 TEST_F(MeshDeviceSingleCardFixture, BcastHWMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::MUL);
+    run_bcast_test(devices_[0]->impl().get_devices()[0], BcastDim::HW, BcastOp::MUL);
 }

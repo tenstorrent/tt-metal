@@ -60,7 +60,7 @@ constexpr uint32_t TILE_NUM_PAGES = 1;
 constexpr uint32_t TILE_TOTAL_SIZE = TILE_NUM_PAGES * TILE_PAGE_SIZE;
 
 void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffer* input_buffer) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -175,7 +175,7 @@ namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramRowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, buffer.get());
     }
@@ -183,7 +183,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramRo
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramTilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_interleaved_buffer(device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, buffer.get());
     }
@@ -191,7 +191,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramTi
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1RowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, buffer.get());
     }
@@ -199,7 +199,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1RowM
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_interleaved_buffer(device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, buffer.get());
     }
@@ -209,7 +209,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tili
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramRowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
             device,
             RM_PAGE_SIZE,
@@ -224,7 +224,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDram
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramTilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
             device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
         verify_default_page_size(mesh_device, buffer.get());
@@ -233,7 +233,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDram
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1RowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
             device,
             RM_PAGE_SIZE,
@@ -248,7 +248,7 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Ro
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Tilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
             device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
         verify_default_page_size(mesh_device, buffer.get());

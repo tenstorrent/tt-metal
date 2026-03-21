@@ -95,7 +95,7 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    IDevice* dev = devices_[0]->impl().get_devices()[0];
     bool pass = true;
     bool multibank = true;
 
