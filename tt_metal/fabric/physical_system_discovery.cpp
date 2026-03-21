@@ -45,12 +45,24 @@ TrayID get_tray_id_for_chip(
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
+    // BDF aliases: some motherboard variants enumerate PCIe slots differently
+    // Map variant BDFs to their canonical equivalents for tray_id calculation
+    static const std::unordered_map<uint16_t, uint16_t> bus_id_aliases = {
+        {0x43, 0x42},  // bh-qb-10 (SIENAD8-2L2T variant) uses 0x43 for tray 4
+    };
+
     if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
     auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
+    // Apply alias if original bus_id not found and an alias exists
+    if (bus_id_it == ordered_bus_ids.end()) {
+        if (auto alias_it = bus_id_aliases.find(bus_id); alias_it != bus_id_aliases.end()) {
+            bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), alias_it->second);
+        }
+    }
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
     return TrayID{static_cast<unsigned int>(tray_id)};
