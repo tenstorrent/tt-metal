@@ -4,6 +4,7 @@
 
 #include "fabric_tensix_builder_impl.hpp"
 
+#include <cstdint>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -218,6 +219,7 @@ size_t FabricTensixDatamoverBaseConfig::get_termination_signal_address() const {
 size_t FabricTensixDatamoverBaseConfig::get_channel_credits_stream_id(
     ChannelTypes channel_type, uint32_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
+    // All channels use unique stream IDs based on their global offset
     return get_channel_global_offset(channel_type, channel_id);
 }
 
@@ -235,6 +237,8 @@ size_t FabricTensixDatamoverBaseConfig::get_connection_info_address(
 size_t FabricTensixDatamoverBaseConfig::get_connection_handshake_address(
     ChannelTypes channel_type, uint32_t channel_id) const {
     validate_channel_id(channel_type, channel_id);
+    // All channels use L1 addresses for handshakes
+    // Overlay register handling is now done at the control_plane level
     return connection_handshake_regions_.at(channel_type).get_address(channel_id);
 }
 
@@ -513,6 +517,12 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
         ct_args.push_back(region.get_address(base_channel_id));
     }
     // Connection handshake base addresses (one per channel type)
+    // Channel 0 may use overlay for direct worker-router pairing
+    for (const auto& [type, region] : connection_handshake_regions_) {
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+    }
+    // Connection handshake L1 base addresses (one per channel type)
+    // Critical: kernels need L1 base to reset after overlay channel 0 (setup_channel increments address)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
@@ -774,6 +784,12 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
         ct_args.push_back(region.get_address(base_channel_id));
     }
     // Connection handshake base addresses (one per channel type)
+    // Channel 0 may use overlay for direct worker-router pairing
+    for (const auto& [type, region] : connection_handshake_regions_) {
+        ct_args.push_back(get_connection_handshake_address(type, base_channel_id));
+    }
+    // Connection handshake L1 base addresses (one per channel type)
+    // Critical: kernels need L1 base to reset after overlay channel 0 (setup_channel increments address)
     for (const auto& [type, region] : connection_handshake_regions_) {
         ct_args.push_back(region.get_address(base_channel_id));
     }
@@ -1176,7 +1192,7 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverRelayBuilder::build_
         config_->get_channel_base_address(channel_type, channel_id),          // edm_buffer_base_addr
         config_->get_num_buffers(channel_type),                               // num_buffers_per_channel
         config_->get_flow_control_address(channel_type, channel_id),          // edm_l1_sem_addr
-        config_->get_connection_handshake_address(channel_type, channel_id),  // edm_connection_handshake_addr
+        config_->get_connection_handshake_address(channel_type, channel_id),  // edm_connection_handshake_addr (L1 for relay)
         config_->get_connection_info_address(channel_type, channel_id),       // edm_worker_location_info_addr
         config_->get_buffer_size_bytes(channel_type),                         // buffer_size_bytes
         config_->get_buffer_index_address(channel_type, channel_id),          // buffer_index_semaphore_id

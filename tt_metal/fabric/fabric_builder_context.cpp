@@ -96,6 +96,12 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     // Create configs using computed max
     router_config_ = create_edm_config();
+    
+    // Override channel 0 handshake address with overlay for direct worker-router pairing
+    // When DISABLED (no mux/relay), channel 0 is always the local worker connection
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    router_config_->sender_channels_connection_semaphore_address[0] = hal.get_stream_scratch_register_address(0);
+    
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         router_with_mux_config_[direction] =
             create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));

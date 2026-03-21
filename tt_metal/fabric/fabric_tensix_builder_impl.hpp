@@ -9,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+
 #include <array>
 
 #include <tt-metalium/device.hpp>
@@ -259,6 +260,7 @@ protected:
     // Each channel type has its own buffer region with type-specific configuration
     std::map<ChannelTypes, MemoryRegion> channel_buffer_regions_;
 
+    // End of L1 memory map
     size_t memory_map_end_address_ = 0;
 };
 

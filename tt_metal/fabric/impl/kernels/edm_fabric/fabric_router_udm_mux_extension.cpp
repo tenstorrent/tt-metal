@@ -38,8 +38,10 @@ constexpr uint32_t BUFFER_SIZE_ARRAY_START_IDX = NUM_BUFFERS_ARRAY_START_IDX + N
 constexpr uint32_t CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX = BUFFER_SIZE_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 constexpr uint32_t CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX =
     CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
-constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+constexpr uint32_t CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX =
     CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 constexpr uint32_t CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX =
     FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 
@@ -58,6 +60,8 @@ constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_info_base_addrs =
     fill_array_with_next_n_args<size_t, CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
 constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_handshake_base_addrs =
     fill_array_with_next_n_args<size_t, CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_handshake_l1_base_addrs =
+    fill_array_with_next_n_args<size_t, CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
 constexpr std::array<size_t, NUM_CHANNEL_TYPES> flow_control_base_addrs =
     fill_array_with_next_n_args<size_t, FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
 constexpr std::array<size_t, NUM_CHANNEL_TYPES> channel_buffer_base_addrs =
@@ -379,7 +383,11 @@ void kernel_main() {
     size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_connection_info_address = connection_info_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_connection_handshake_address = connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_connection_handshake_l1_base = connection_handshake_l1_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+
+    // forces L1 address assignment
+    worker_connection_handshake_address = worker_connection_handshake_l1_base;
 
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER>(
