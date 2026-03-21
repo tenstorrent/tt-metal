@@ -143,7 +143,7 @@ void BM_AdamW(benchmark::State& state) {
         double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
 
         state.SetIterationTime(avg_time_s);
-        state.counters["Shape"] = shape_index;
+        state.SetLabel(adamw_shape.name);
         state.counters["Time_us"] = time_us;
         state.counters["GB_per_s"] = gb_per_s;
         state.counters["Tensor_MB"] = static_cast<double>(tensor_bytes) / 1e6;
