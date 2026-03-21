@@ -18,7 +18,14 @@ download_artifacts() {
     local workflow_run_id=$2
 
     echo "[info] Downloading test reports for workflow run $workflow_run_id"
-    api_output=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq -r '.artifacts[] | .name')
+
+    # Get and save full artifacts information to JSON file
+    artifacts_data=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts)
+    echo "$artifacts_data" | jq -s '{total_count: .[0].total_count, artifacts: map(.artifacts) | add}' > workflow_artifacts.json
+    echo "[info] Saved artifacts metadata to workflow_artifacts.json"
+
+    # Extract artifact names for downloading
+    api_output=$(echo "$artifacts_data" | jq -r '.artifacts[] | .name')
     if echo "$api_output" | grep -q "test_reports_"; then
         gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
     else

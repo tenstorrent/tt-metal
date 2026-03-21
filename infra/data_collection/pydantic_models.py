@@ -175,6 +175,9 @@ class Pipeline(BaseModel):
     git_commit_hash: str = Field(description="Git commit that triggered the execution of the pipeline.")
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
+    artifact_names: Optional[List[str]] = Field(
+        None, description="List of artifact names uploaded in this pipeline run."
+    )
     jobs: List[Job] = []
 
     # Model validator to check the unique combination constraint

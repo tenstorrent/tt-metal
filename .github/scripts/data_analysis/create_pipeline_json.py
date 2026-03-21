@@ -7,6 +7,7 @@ if __name__ == "__main__":
     github_runner_environment = get_github_runner_environment()
     github_pipeline_json_filename = "workflow.json"
     github_jobs_json_filename = "workflow_jobs.json"
+    github_artifacts_json_filename = "workflow_artifacts.json"
 
     workflow_outputs_dir = pathlib.Path("generated/cicd").resolve()
     assert workflow_outputs_dir.is_dir()
@@ -17,6 +18,7 @@ if __name__ == "__main__":
         github_runner_environment,
         github_pipeline_json_filename,
         github_jobs_json_filename,
+        github_artifacts_json_filename,
     )
 
     cicd_json_filename = get_cicd_json_filename(pipeline)
