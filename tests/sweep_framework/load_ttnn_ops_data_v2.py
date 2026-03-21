@@ -12,8 +12,6 @@ Schema design:
 """
 
 import json
-import hashlib
-import copy
 import os
 import re
 from datetime import date
@@ -59,16 +57,48 @@ def _load_manifest(manifest_path=None):
             data = yaml.safe_load(f) or {}
     else:
         data = {}
-    data.setdefault("targets", [])
+    data.setdefault("targets", {})
     data.setdefault("registry", [])
     return data, path
 
 
 def _save_manifest(data, path):
-    """Write manifest YAML back to disk."""
+    """Write manifest YAML back to disk (full rewrite — loses comments)."""
     _require_yaml()
     with open(path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def _append_registry_entries(entries, path):
+    """Append new registry entries to the manifest without rewriting the file.
+
+    Preserves existing comments and formatting by appending raw YAML text.
+    """
+    _require_yaml()
+    with open(path, "a") as f:
+        f.write("\n")
+        for entry in entries:
+            f.write(f"  - trace_id: {entry['trace_id']}\n")
+            f.write(f"    status: {entry['status']}\n")
+            models = entry.get("models", [])
+            if len(models) == 1:
+                f.write(f"    models: [{models[0]}]\n")
+            else:
+                f.write("    models:\n")
+                for m in models:
+                    f.write(f"      - {m}\n")
+            hw = entry.get("hardware", {})
+            hw_parts = [
+                f"board_type: {hw.get('board_type', '?')}",
+                f"device_series: {hw.get('device_series', '?')}",
+                f"card_count: {hw.get('card_count', 1)}",
+            ]
+            f.write("    hardware: {" + ", ".join(hw_parts) + "}\n")
+            f.write(f"    tt_metal_sha: {entry.get('tt_metal_sha') or 'null'}\n")
+            f.write(f"    config_count: {entry.get('config_count', 0)}\n")
+            f.write(f"    loaded_at: '{entry.get('loaded_at', '')}'\n")
+            f.write(f"    notes: '{entry.get('notes', '')}'\n")
+            f.write("\n")
 
 
 # Connection string from environment (supports both CI and local env var names)
@@ -124,76 +154,65 @@ def extract_model_family(source_file, hf_model):
     return None
 
 
-_OBJECT_ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
-
-
-def _normalize_for_hash(obj):
-    """Normalize arguments in-place for stable config_hash computation.
-
-    Same logic as model_tracer/generic_ops_tracer.py so that hashes
-    computed here match hashes computed by the tracer.
-    """
-    if isinstance(obj, dict):
-        if "hash" in obj and isinstance(obj["hash"], int):
-            del obj["hash"]
-        if "shard_spec" in obj and obj["shard_spec"] is None:
-            obj["shard_spec"] = "None"
-        for k in list(obj.keys()):
-            v = obj[k]
-            if isinstance(v, str):
-                obj[k] = _OBJECT_ADDR_RE.sub("", v)
-            else:
-                _normalize_for_hash(v)
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            if isinstance(item, str):
-                obj[i] = _OBJECT_ADDR_RE.sub("", item)
-            else:
-                _normalize_for_hash(item)
-
-
-def compute_config_hash(operation_name, arguments, hardware, mesh_config):
-    """Compute SHA-256 hash for configuration deduplication.
-
-    Config identity = operation + arguments + hardware + mesh
-    """
-    normalized = {
-        "operation": operation_name,
-        "arguments": arguments,
-        "hardware": hardware,
-        "mesh": mesh_config,
+# Path segments that are too generic to identify a model.
+_GENERIC_PATH_SEGMENTS = frozenset(
+    {
+        "models",
+        "tests",
+        "demos",
+        "experimental",
+        "wormhole",
+        "vision",
+        "classification",
+        "audio",
+        "nightly",
+        "single_card",
+        "demo",
+        "pcc",
+        "segmentation_evaluation",
     }
-    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+)
 
 
-def compute_config_hash_v2(operation_name, arguments, machine_info):
-    """Compute config_hash from V2-format arguments and machine_info.
+def derive_model_name(source_file, hf_model):
+    """Derive a short, lowercase model name for use in manifests and the DB.
 
-    Uses the same normalization as the tracer (generic_ops_tracer.py)
-    so that hashes are consistent regardless of which code path
-    produced the JSON.
+    Rules:
+    - HF model  : lowercase last segment after '/'
+      e.g. 'meta-llama/Llama-3.2-1B-Instruct' -> 'llama-3.2-1b-instruct'
+    - Non-HF    : strip test-node suffix, walk path segments, skip generic
+                  folder/file names, return the first meaningful segment.
+      e.g. 'models/demos/audio/whisper/demo/demo.py' -> 'whisper'
     """
-    hash_args = copy.deepcopy(arguments)
-    _normalize_for_hash(hash_args)
+    if hf_model:
+        return hf_model.split("/")[-1].lower()
+    if not source_file:
+        return None
 
-    hardware = None
-    if machine_info:
-        board_type = machine_info.get("board_type")
-        if board_type:
-            device_series = machine_info.get("device_series")
-            if isinstance(device_series, list):
-                device_series = device_series[0] if device_series else None
-            hardware = (board_type, device_series, machine_info.get("card_count", 1))
+    # Strip test-node suffix  e.g. "path/file.py::test_foo[bar]"
+    path = re.sub(r"::.*$", "", source_file)
+    segments = path.split("/")
 
-    # V2 format stores placement per-tensor, not in machine_info,
-    # so mesh_config is always None (matches the tracer's behavior).
-    normalized = {
-        "operation": operation_name,
-        "arguments": hash_args,
-        "hardware": hardware,
-        "mesh": None,
-    }
-    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+    processed = []
+    for i, seg in enumerate(segments):
+        # Strip file extension from last segment (the filename)
+        if i == len(segments) - 1:
+            seg = re.sub(r"\.(py|json)$", "", seg)
+        # Strip leading 'test_' prefix that test filenames carry
+        seg = re.sub(r"^test_", "", seg).lower()
+        processed.append(seg)
+
+    # First non-generic, non-empty segment is the model name
+    for seg in processed:
+        if seg and seg not in _GENERIC_PATH_SEGMENTS:
+            return seg
+
+    # Fallback: last non-empty segment
+    for seg in reversed(processed):
+        if seg:
+            return seg
+
+    return None
 
 
 def parse_array_value(value):
@@ -233,44 +252,6 @@ def parse_placement(placement_str):
     return "replicate", None
 
 
-def extract_tensor_info(tensor_data):
-    """Extract flattened tensor info from Tensor argument."""
-    if not isinstance(tensor_data, dict) or "Tensor" not in tensor_data:
-        return None
-
-    tensor = tensor_data.get("Tensor", {})
-    if tensor is None:
-        return {"is_tensor": True, "tensor_dtype": None}
-
-    spec = tensor.get("tensor_spec", {})
-    layout = spec.get("tensor_layout", {})
-    mem_config = layout.get("memory_config", {})
-
-    result = {
-        "is_tensor": True,
-        "tensor_shape": parse_array_value(spec.get("logical_shape")),
-        "tensor_dtype": layout.get("dtype"),
-        "tensor_layout": tensor.get("layout"),
-        "tensor_storage_type": tensor.get("storage_type"),
-        "tensor_memory_layout": mem_config.get("memory_layout"),
-        "tensor_buffer_type": mem_config.get("buffer_type"),
-    }
-
-    shard_spec = mem_config.get("shard_spec") or mem_config.get("nd_shard_spec")
-    if shard_spec and isinstance(shard_spec, dict):
-        shard_shape_raw = shard_spec.get("shard_shape") or shard_spec.get("shape")
-        result["shard_shape"] = parse_array_value(shard_shape_raw)
-        result["shard_orientation"] = shard_spec.get("orientation")
-
-        grid = shard_spec.get("grid", [])
-        if grid and len(grid) >= 2:
-            if isinstance(grid[0], dict):
-                result["core_grid_x"] = grid[1].get("x", 0) - grid[0].get("x", 0) + 1
-                result["core_grid_y"] = grid[1].get("y", 0) - grid[0].get("y", 0) + 1
-
-    return result
-
-
 def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count):
     """Get or create a hardware entry, return (hardware_id, hw_key)."""
     # Normalize device_series (can be string or array)
@@ -284,7 +265,7 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
     if hw_key not in hardware_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2_5.ttnn_hardware (board_type, device_series, card_count)
+            INSERT INTO ttnn_ops_v5.ttnn_hardware (board_type, device_series, card_count)
             VALUES (%s, %s, %s)
             ON CONFLICT (board_type, device_series, card_count) DO NOTHING
             RETURNING ttnn_hardware_id
@@ -296,7 +277,7 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
             hardware_cache[hw_key] = result[0]
         else:
             cur.execute(
-                "SELECT ttnn_hardware_id FROM ttnn_ops_v2_5.ttnn_hardware WHERE board_type=%s AND device_series=%s AND card_count=%s",
+                "SELECT ttnn_hardware_id FROM ttnn_ops_v5.ttnn_hardware WHERE board_type=%s AND device_series=%s AND card_count=%s",
                 hw_key,
             )
             hardware_cache[hw_key] = cur.fetchone()[0]
@@ -321,7 +302,7 @@ def get_or_create_mesh_config(
     if mesh_key not in mesh_config_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2_5.ttnn_mesh_config (mesh_shape, device_count)
+            INSERT INTO ttnn_ops_v5.ttnn_mesh_config (mesh_shape, device_count)
             VALUES (%s, %s)
             ON CONFLICT (mesh_shape, device_count) DO NOTHING
             RETURNING ttnn_mesh_config_id
@@ -334,7 +315,7 @@ def get_or_create_mesh_config(
         else:
             cur.execute(
                 """
-                SELECT ttnn_mesh_config_id FROM ttnn_ops_v2_5.ttnn_mesh_config
+                SELECT ttnn_mesh_config_id FROM ttnn_ops_v5.ttnn_mesh_config
                 WHERE mesh_shape = %s AND device_count = %s
             """,
                 (mesh_shape, device_count),
@@ -357,33 +338,50 @@ def get_or_create_model(cur, model_cache, source_file, hf_model):
     model_key = (source_file, hf_model)
     if model_key not in model_cache:
         model_family = extract_model_family(source_file, hf_model)
+        model_name = derive_model_name(source_file, hf_model)
+        # Look up existing row first. ON CONFLICT doesn't work for NULL hf_model_identifier
+        # because NULL != NULL in PostgreSQL UNIQUE constraints.
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2_5.ttnn_model (source_file, hf_model_identifier, model_family)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (source_file, hf_model_identifier) DO UPDATE SET update_ts = NOW()
-            RETURNING ttnn_model_id
-        """,
-            (source_file, hf_model, model_family),
+            SELECT ttnn_model_id FROM ttnn_ops_v5.ttnn_model
+            WHERE source_file = %s
+              AND (hf_model_identifier = %s OR (hf_model_identifier IS NULL AND %s IS NULL))
+            """,
+            (source_file, hf_model, hf_model),
         )
-        model_cache[model_key] = cur.fetchone()[0]
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW() WHERE ttnn_model_id = %s",
+                (model_name, row[0]),
+            )
+            model_cache[model_key] = row[0]
+        else:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO ttnn_ops_v5.ttnn_model
+                        (source_file, hf_model_identifier, model_family, model_name)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING ttnn_model_id
+                    """,
+                    (source_file, hf_model, model_family, model_name),
+                )
+                model_cache[model_key] = cur.fetchone()[0]
+            except Exception as e:
+                err = str(e).lower()
+                if "ttnn_model_name_unique" in err or ("unique" in err and "model_name" in err):
+                    raise RuntimeError(
+                        f"model_name '{model_name}' is already taken by a different model.\n"
+                        f"  Trying to insert: source_file={source_file!r}, hf_model={hf_model!r}\n"
+                        f"  Resolve with:\n"
+                        f"    python load_ttnn_ops_data_v2.py set-model-name "
+                        f'--source-file "{source_file}" --model-name <custom_name>\n'
+                        f"  Then retry."
+                    ) from e
+                raise
 
     return model_cache[model_key]
-
-
-def extract_primary_tensor_info(arguments):
-    """Extract primary tensor info from the first tensor argument."""
-    if not arguments:
-        return {}
-
-    for arg in arguments:
-        if isinstance(arg, dict):
-            for k, v in arg.items():
-                if isinstance(v, dict) and "Tensor" in v:
-                    info = extract_tensor_info(v)
-                    if info:
-                        return info
-    return {}
 
 
 def parse_mesh_from_machine_info(machine_info, arguments=None):
@@ -431,39 +429,20 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
 
-def _has_trace_run_tables(cur):
-    """Check if trace_run tables exist in the schema."""
-    cur.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'ttnn_ops_v2_5' AND table_name = 'trace_run'
-        )
+def get_or_create_trace_run(cur, trace_run_cache, hardware_id, tt_metal_sha=None):
+    """Get or create a trace_run for this hardware + SHA combination.
+
+    v5: no model_id on trace_run — models are tracked via trace_run_model.
     """
-    )
-    return cur.fetchone()[0]
-
-
-def get_or_create_trace_run(cur, trace_run_cache, model_id, board_type, device_series, card_count, tt_metal_sha=None):
-    """Get or create a trace_run for this (model, hardware) combination.
-
-    Returns trace_run_id, or None if trace_run tables don't exist.
-    """
-    if not board_type:
-        board_type = "unknown"
-    if not device_series:
-        device_series = "unknown"
-
-    tr_key = (model_id, board_type, device_series, card_count, tt_metal_sha)
+    tr_key = (hardware_id, tt_metal_sha)
     if tr_key not in trace_run_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2_5.trace_run
-                (model_id, board_type, device_series, card_count, tt_metal_sha)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO ttnn_ops_v5.trace_run (hardware_id, tt_metal_sha)
+            VALUES (%s, %s)
             RETURNING trace_run_id
             """,
-            (model_id, board_type, device_series, card_count, tt_metal_sha),
+            (hardware_id, tt_metal_sha),
         )
         trace_run_cache[tr_key] = cur.fetchone()[0]
 
@@ -474,22 +453,24 @@ def link_trace_run_config(cur, trace_run_id, config_id, execution_count):
     """Link a configuration to a trace_run via trace_run_config."""
     cur.execute(
         """
-        INSERT INTO ttnn_ops_v2_5.trace_run_config (trace_run_id, configuration_id, execution_count)
+        INSERT INTO ttnn_ops_v5.trace_run_config (trace_run_id, configuration_id, execution_count)
         VALUES (%s, %s, %s)
         ON CONFLICT (trace_run_id, configuration_id) DO UPDATE
-        SET execution_count = ttnn_ops_v2_5.trace_run_config.execution_count + EXCLUDED.execution_count
+        SET execution_count = ttnn_ops_v5.trace_run_config.execution_count + EXCLUDED.execution_count
         """,
         (trace_run_id, config_id, execution_count),
     )
 
 
-def load_data(json_path=None, tt_metal_sha=None):
+def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
     """Main loading function.
 
     Args:
         json_path: Path to JSON file (defaults to JSON_PATH).
         tt_metal_sha: Git SHA of tt-metal at trace time (optional).
                       If None, attempts to detect from git.
+        dry_run: If True, run all logic but roll back every DB write at the end.
+                 Prints the same stats so you can verify behaviour without persisting anything.
     """
     json_path = json_path or JSON_PATH
     print(f"Loading JSON from {json_path}...")
@@ -508,15 +489,8 @@ def load_data(json_path=None, tt_metal_sha=None):
     hardware_cache = {}
     mesh_config_cache = {}
     config_cache = {}  # config_hash -> config_id
-    trace_run_cache = {}  # (model_id, board_type, device_series, card_count, sha) -> trace_run_id
-
-    # Check if trace_run tables exist (additive migration may not have run yet)
-    has_trace_runs = _has_trace_run_tables(cur)
-    if has_trace_runs:
-        print("  trace_run tables detected — will populate trace_run + trace_run_config")
-    else:
-        print("  trace_run tables not found — populating ttnn_configuration_model only")
-        print("  (run migrate_v2_5_add_trace_runs.sql to enable trace_run support)")
+    trace_run_cache = {}  # (hardware_id, sha) -> trace_run_id
+    print("  Populating trace_run, trace_run_config, trace_run_model + ttnn_configuration_model")
 
     # Auto-detect tt_metal_sha if not provided
     if tt_metal_sha is None:
@@ -531,7 +505,6 @@ def load_data(json_path=None, tt_metal_sha=None):
             pass
 
     new_configs = 0  # configs inserted for the first time this load
-    total_args = 0
     total_model_links = 0
     total_trace_run_links = 0  # all configs linked to trace_runs (new + pre-existing)
 
@@ -540,11 +513,14 @@ def load_data(json_path=None, tt_metal_sha=None):
         if op_name not in operation_cache:
             cur.execute(
                 """
-                INSERT INTO ttnn_ops_v2_5.ttnn_operation (operation_name)
+                INSERT INTO ttnn_ops_v5.ttnn_operation (operation_name)
                 VALUES (%s)
-                ON CONFLICT (operation_name) DO UPDATE SET update_ts = NOW()
-                RETURNING ttnn_operation_id
+                ON CONFLICT (operation_name) DO NOTHING
             """,
+                (op_name,),
+            )
+            cur.execute(
+                "SELECT ttnn_operation_id FROM ttnn_ops_v5.ttnn_operation WHERE operation_name = %s",
                 (op_name,),
             )
             operation_cache[op_name] = cur.fetchone()[0]
@@ -583,11 +559,14 @@ def load_data(json_path=None, tt_metal_sha=None):
                             }
                         )
 
-            # Extract primary tensor info (same for all hardware/mesh variants)
-            primary_info = extract_primary_tensor_info(arguments)
+            config_hash = config.get("config_hash")
+            if not config_hash:
+                raise ValueError(
+                    f"Missing config_hash in configuration for operation '{op_name}' "
+                    f"(config index {op_data.get('configurations', []).index(config)}). "
+                    f"Re-trace with generic_ops_tracer.py to produce a JSON with config hashes."
+                )
 
-            # Process each execution - each creates a potentially unique config
-            # because hardware + mesh are part of config identity
             for execution in executions:
                 source = execution.get("source")
                 machine_info = execution.get("machine_info", {})
@@ -615,15 +594,12 @@ def load_data(json_path=None, tt_metal_sha=None):
                         cur, mesh_config_cache, mesh_shape, device_count, placement_type, shard_dim, distribution_shape
                     )
 
-                # Compute config hash: op + args + hardware + mesh
-                config_hash = compute_config_hash(op_name, arguments, hw_key if hardware_id else None, mesh_info)
-
                 # Check if we've already created this config
                 if config_hash in config_cache:
                     config_id = config_cache[config_hash]
                     # Just update last_seen_ts
                     cur.execute(
-                        "UPDATE ttnn_ops_v2_5.ttnn_configuration SET last_seen_ts = NOW() WHERE ttnn_configuration_id = %s",
+                        "UPDATE ttnn_ops_v5.ttnn_configuration SET last_seen_ts = NOW() WHERE ttnn_configuration_id = %s",
                         (config_id,),
                     )
                 else:
@@ -631,95 +607,23 @@ def load_data(json_path=None, tt_metal_sha=None):
                     try:
                         cur.execute(
                             """
-                            INSERT INTO ttnn_ops_v2_5.ttnn_configuration
-                            (operation_id, hardware_id, mesh_config_id, primary_dtype, primary_storage_type, primary_layout,
-                             primary_memory_layout, primary_buffer_type, primary_shape, config_hash, full_config_json)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            INSERT INTO ttnn_ops_v5.ttnn_configuration
+                            (operation_id, hardware_id, mesh_config_id, config_hash, full_config_json)
+                            VALUES (%s, %s, %s, %s, %s)
                             ON CONFLICT (config_hash) DO UPDATE SET last_seen_ts = NOW()
                             RETURNING ttnn_configuration_id
-                        """,
-                            (
-                                op_id,
-                                hardware_id,
-                                mesh_config_id,
-                                primary_info.get("tensor_dtype"),
-                                primary_info.get("tensor_storage_type"),
-                                primary_info.get("tensor_layout"),
-                                primary_info.get("tensor_memory_layout"),
-                                primary_info.get("tensor_buffer_type"),
-                                primary_info.get("tensor_shape"),
-                                config_hash,
-                                json.dumps(config),
-                            ),
+                            """,
+                            (op_id, hardware_id, mesh_config_id, config_hash, json.dumps(config)),
                         )
                         config_id = cur.fetchone()[0]
                         config_cache[config_hash] = config_id
                         new_configs += 1
 
-                        # Insert arguments (only for new configs)
-                        for i, arg in enumerate(arguments):
-                            if isinstance(arg, dict):
-                                arg_name = list(arg.keys())[0]
-                                arg_value = arg[arg_name]
-
-                                unsupported_type_string = None
-                                if isinstance(arg_value, str) and "unsupported type" in arg_value:
-                                    unsupported_type_string = arg_value
-
-                                tensor_info = extract_tensor_info(
-                                    {"Tensor": arg_value}
-                                    if isinstance(arg_value, dict) and "Tensor" not in arg_value
-                                    else arg_value
-                                    if isinstance(arg_value, dict)
-                                    else {}
-                                )
-                                is_tensor = tensor_info is not None and tensor_info.get("is_tensor", False)
-                                is_tensor_list = (
-                                    isinstance(arg_value, list)
-                                    and len(arg_value) > 0
-                                    and isinstance(arg_value[0], dict)
-                                )
-
-                                cur.execute(
-                                    """
-                                    INSERT INTO ttnn_ops_v2_5.ttnn_argument
-                                    (configuration_id, arg_index, arg_name, is_tensor, is_tensor_list, tensor_count,
-                                     tensor_dtype, tensor_storage_type, tensor_layout, tensor_memory_layout,
-                                     tensor_buffer_type, tensor_shape, shard_shape, shard_orientation,
-                                     core_grid_x, core_grid_y, scalar_value_json, unsupported_type_string)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                    ON CONFLICT (configuration_id, arg_index) DO NOTHING
-                                """,
-                                    (
-                                        config_id,
-                                        i,
-                                        arg_name,
-                                        is_tensor,
-                                        is_tensor_list,
-                                        len(arg_value) if is_tensor_list else None,
-                                        tensor_info.get("tensor_dtype") if tensor_info else None,
-                                        tensor_info.get("tensor_storage_type") if tensor_info else None,
-                                        tensor_info.get("tensor_layout") if tensor_info else None,
-                                        tensor_info.get("tensor_memory_layout") if tensor_info else None,
-                                        tensor_info.get("tensor_buffer_type") if tensor_info else None,
-                                        tensor_info.get("tensor_shape") if tensor_info else None,
-                                        tensor_info.get("shard_shape") if tensor_info else None,
-                                        tensor_info.get("shard_orientation") if tensor_info else None,
-                                        tensor_info.get("core_grid_x") if tensor_info else None,
-                                        tensor_info.get("core_grid_y") if tensor_info else None,
-                                        json.dumps(arg_value)
-                                        if not is_tensor and not is_tensor_list and not unsupported_type_string
-                                        else None,
-                                        unsupported_type_string,
-                                    ),
-                                )
-                                total_args += 1
-
                     except psycopg2.errors.UniqueViolation:
                         conn.rollback()
                         # Config already exists, fetch its ID
                         cur.execute(
-                            "SELECT ttnn_configuration_id FROM ttnn_ops_v2_5.ttnn_configuration WHERE config_hash = %s",
+                            "SELECT ttnn_configuration_id FROM ttnn_ops_v5.ttnn_configuration WHERE config_hash = %s",
                             (config_hash,),
                         )
                         result = cur.fetchone()
@@ -731,83 +635,108 @@ def load_data(json_path=None, tt_metal_sha=None):
                 if model_id is not None:
                     cur.execute(
                         """
-                        INSERT INTO ttnn_ops_v2_5.ttnn_configuration_model (configuration_id, model_id, execution_count)
+                        INSERT INTO ttnn_ops_v5.ttnn_configuration_model (configuration_id, model_id, execution_count)
                         VALUES (%s, %s, %s)
                         ON CONFLICT (configuration_id, model_id) DO UPDATE
                         SET last_seen_ts = NOW(),
-                            execution_count = ttnn_ops_v2_5.ttnn_configuration_model.execution_count + EXCLUDED.execution_count
+                            execution_count = ttnn_ops_v5.ttnn_configuration_model.execution_count + EXCLUDED.execution_count
                     """,
                         (config_id, model_id, execution_count),
                     )
                     total_model_links += 1
 
-                    # Also link via trace_run if tables exist
-                    if has_trace_runs and board_type:
-                        ds = device_series
-                        if isinstance(ds, list):
-                            ds = ds[0] if ds else "unknown"
+                    # Link via trace_run (keyed by hardware_id + sha, no model_id)
+                    if hardware_id:
                         trace_run_id = get_or_create_trace_run(
                             cur,
                             trace_run_cache,
-                            model_id,
-                            board_type,
-                            ds or "unknown",
-                            card_count or 1,
+                            hardware_id,
                             tt_metal_sha,
                         )
                         link_trace_run_config(cur, trace_run_id, config_id, execution_count)
                         total_trace_run_links += 1
 
-        conn.commit()
+        if not dry_run:
+            conn.commit()
         print(f"  Loaded {op_name}: {len(op_data.get('configurations', []))} JSON configs")
 
-    # Update config_count on trace_runs created during this load
-    if has_trace_runs and trace_run_cache:
+    # Update config_count and populate trace_run_model for each new trace_run
+    if trace_run_cache:
         for tr_id in trace_run_cache.values():
             cur.execute(
                 """
-                UPDATE ttnn_ops_v2_5.trace_run
+                UPDATE ttnn_ops_v5.trace_run
                 SET config_count = (
-                    SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config
+                    SELECT COUNT(*) FROM ttnn_ops_v5.trace_run_config
                     WHERE trace_run_id = %s
                 )
                 WHERE trace_run_id = %s
                 """,
                 (tr_id, tr_id),
             )
+            # Derive model links for this trace from ttnn_configuration_model
+            cur.execute(
+                """
+                INSERT INTO ttnn_ops_v5.trace_run_model (trace_run_id, model_id)
+                SELECT DISTINCT %s, cm.model_id
+                FROM ttnn_ops_v5.trace_run_config trc
+                JOIN ttnn_ops_v5.ttnn_configuration_model cm
+                    ON cm.configuration_id = trc.configuration_id
+                WHERE trc.trace_run_id = %s
+                ON CONFLICT DO NOTHING
+                """,
+                (tr_id, tr_id),
+            )
 
-    conn.commit()
+    def _fetch_db_totals(cur):
+        counts = {}
+        for table, label in [
+            ("ttnn_operation", "Operations"),
+            ("ttnn_model", "Models"),
+            ("ttnn_hardware", "Hardware configs"),
+            ("ttnn_mesh_config", "Mesh configs"),
+            ("ttnn_configuration", "Configurations"),
+            ("ttnn_configuration_model", "Config-Model links"),
+            ("trace_run", "Trace runs"),
+            ("trace_run_config", "Trace-Config links"),
+            ("trace_run_model", "Trace-Model links"),
+        ]:
+            cur.execute(f"SELECT COUNT(*) FROM ttnn_ops_v5.{table}")
+            counts[label] = cur.fetchone()[0]
+        return counts
+
+    if dry_run:
+        post_load_counts = _fetch_db_totals(cur)
+        conn.rollback()
+        print("\n🔍 DRY RUN — all DB writes rolled back.")
+    else:
+        conn.commit()
+
     print(
-        f"\n✅ Loaded {total_trace_run_links} configurations ({new_configs} new, {total_trace_run_links - new_configs} pre-existing), {total_args} arguments, {total_model_links} model links"
+        f"\n{'Would load' if dry_run else '✅ Loaded'} {total_trace_run_links} configurations "
+        f"({new_configs} new, {total_trace_run_links - new_configs} pre-existing), {total_model_links} model links"
     )
-    if has_trace_runs:
-        print(f"   Trace runs created: {len(trace_run_cache)}, total configs tied to traces: {total_trace_run_links}")
+    print(
+        f"   Trace runs {'that would be ' if dry_run else ''}created: {len(trace_run_cache)}, "
+        f"total configs tied to traces: {total_trace_run_links}"
+    )
 
-    # Print stats
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_operation")
-    print(f"   Operations: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_model")
-    print(f"   Models: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_hardware")
-    print(f"   Hardware configs: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_mesh_config")
-    print(f"   Mesh configs: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_configuration")
-    print(f"   Configurations: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_argument")
-    print(f"   Arguments: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.ttnn_configuration_model")
-    print(f"   Config-Model links: {cur.fetchone()[0]}")
-    if has_trace_runs:
-        cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run")
-        print(f"   Trace runs: {cur.fetchone()[0]}")
-        cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config")
-        print(f"   Trace-Config links: {cur.fetchone()[0]}")
+    if dry_run:
+        counts = post_load_counts
+        print("\nDB totals if this load were committed:")
+    else:
+        counts = _fetch_db_totals(cur)
+        print("\nDB totals after load:")
+    for label, n in counts.items():
+        print(f"   {label}: {n}")
 
     conn.close()
 
+    if dry_run:
+        return
+
     # Auto-append draft entries to manifest registry
-    if has_trace_runs and trace_run_cache and yaml is not None:
+    if trace_run_cache and yaml is not None:
         _append_manifest_drafts(trace_run_cache, model_cache)
 
 
@@ -819,22 +748,41 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
         print(f"  Warning: could not update manifest registry: {e}")
         return
 
-    # Reverse model_cache: model_id -> list of model pattern names
-    model_id_to_names = {}
-    for (source_file, hf_model), mid in model_cache.items():
-        name = extract_model_family(source_file, hf_model) or (
-            hf_model.split("/")[-1] if hf_model else os.path.basename(source_file or "unknown").replace(".py", "")
-        )
-        model_id_to_names.setdefault(mid, set()).add(name)
+    # Build model names from model_cache (all models seen in this load)
+    all_model_names = set()
+    for source_file, hf_model in model_cache.keys():
+        name = derive_model_name(source_file, hf_model)
+        if name:
+            all_model_names.add(name)
+
+    # Fetch hardware details for each trace_run from DB
+    try:
+        conn = psycopg2.connect(NEON_URL)
+        cur = conn.cursor()
+        hw_map = {}
+        for (hardware_id, _sha), tr_id in trace_run_cache.items():
+            if hardware_id and hardware_id not in hw_map:
+                cur.execute(
+                    "SELECT board_type, device_series, card_count FROM ttnn_ops_v5.ttnn_hardware WHERE ttnn_hardware_id = %s",
+                    (hardware_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    hw_map[hardware_id] = row
+        conn.close()
+    except Exception:
+        hw_map = {}
 
     existing_ids = {entry.get("trace_id") for entry in data["registry"]}
     added = 0
 
-    for (model_id, board_type, device_series, card_count, sha), trace_run_id in trace_run_cache.items():
+    for (hardware_id, sha), trace_run_id in trace_run_cache.items():
         if trace_run_id in existing_ids:
             continue
 
-        models = sorted(model_id_to_names.get(model_id, {"unknown"}))
+        hw = hw_map.get(hardware_id, ("unknown", "unknown", 1))
+        board_type, device_series, card_count = hw
+        models = sorted(all_model_names) or ["unknown"]
         entry = {
             "trace_id": trace_run_id,
             "status": "draft",
@@ -854,14 +802,15 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
         added += 1
 
     if added:
+        new_entries = data["registry"][-added:]
         # Fetch config counts for new entries
         try:
             conn = psycopg2.connect(NEON_URL)
             cur = conn.cursor()
-            for entry in data["registry"]:
+            for entry in new_entries:
                 if entry.get("config_count") is None:
                     cur.execute(
-                        "SELECT COUNT(*) FROM ttnn_ops_v2_5.trace_run_config WHERE trace_run_id = %s",
+                        "SELECT COUNT(*) FROM ttnn_ops_v5.trace_run_config WHERE trace_run_id = %s",
                         (entry["trace_id"],),
                     )
                     entry["config_count"] = cur.fetchone()[0]
@@ -869,7 +818,7 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
         except Exception:
             pass
 
-        _save_manifest(data, path)
+        _append_registry_entries(new_entries, path)
         print(f"  Appended {added} draft entries to manifest registry ({path})")
 
 
@@ -887,28 +836,12 @@ def format_source(source_file, hf_model):
     return source_file
 
 
-def format_mesh_placement(mesh_shape, placement_type, shard_dim):
-    """Format mesh config back to tensor_placements format."""
-    if not mesh_shape:
-        return None
-
-    placement_dict = {"mesh_device_shape": json.dumps(mesh_shape)}
-
-    # Add placement string if not default replicate
-    if placement_type == "shard" and shard_dim is not None:
-        placement_dict["placement"] = f"[PlacementShard({shard_dim})]"
-    elif placement_type == "replicate":
-        placement_dict["placement"] = "[PlacementReplicate]"
-
-    return placement_dict
-
-
-def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=None):
+def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=None):
     """Reconstruct ttnn_operations_master.json from the database.
 
     Args:
         output_path: Path to write the reconstructed JSON
-        schema: Database schema to use ("ttnn_ops" for V1, "ttnn_ops_v2_5" for V2)
+        schema: Database schema to use (default: "ttnn_ops_v5"; also supports "ttnn_ops_v2_5")
         model_filter: List of model patterns to filter by (e.g., ["deepseek_v3"]).
                       Only configurations linked to models whose source_file contains
                       one of these patterns (case-insensitive) will be included.
@@ -983,59 +916,28 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
         # Get all configurations for this operation
         # V2 schema doesn't have placement_type, shard_dim, distribution_shape in mesh_config
         # (placement is per-tensor in V2)
-        if schema == "ttnn_ops_v2_5":
-            cur.execute(
-                f"""
-                SELECT
-                    c.ttnn_configuration_id,
-                    c.config_hash,
-                    c.full_config_json,
-                    c.hardware_id,
-                    c.mesh_config_id,
-                    h.board_type,
-                    h.device_series,
-                    h.card_count,
-                    mc.mesh_shape,
-                    mc.device_count,
-                    NULL as placement_type,
-                    NULL as shard_dim,
-                    NULL as distribution_shape
-                FROM {schema}.ttnn_configuration c
-                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
-                WHERE c.operation_id = %s
-                {model_filter_clause}
-                ORDER BY c.ttnn_configuration_id
-            """,
-                [op_id] + model_filter_params,
-            )
-        else:
-            # V1 schema has placement fields in mesh_config
-            cur.execute(
-                f"""
-                SELECT
-                    c.ttnn_configuration_id,
-                    c.config_hash,
-                    c.full_config_json,
-                    c.hardware_id,
-                    c.mesh_config_id,
-                    h.board_type,
-                    h.device_series,
-                    h.card_count,
-                    mc.mesh_shape,
-                    mc.device_count,
-                    mc.placement_type,
-                    mc.shard_dim,
-                    mc.distribution_shape
-                FROM {schema}.ttnn_configuration c
-                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
-                WHERE c.operation_id = %s
-                {model_filter_clause}
-                ORDER BY c.ttnn_configuration_id
-            """,
-                [op_id] + model_filter_params,
-            )
+        cur.execute(
+            f"""
+            SELECT
+                c.ttnn_configuration_id,
+                c.config_hash,
+                c.full_config_json,
+                c.hardware_id,
+                c.mesh_config_id,
+                h.board_type,
+                h.device_series,
+                h.card_count,
+                mc.mesh_shape,
+                mc.device_count
+            FROM {schema}.ttnn_configuration c
+            LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+            LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+            WHERE c.operation_id = %s
+            {model_filter_clause}
+            ORDER BY c.ttnn_configuration_id
+        """,
+            [op_id] + model_filter_params,
+        )
         configs = cur.fetchall()
 
         if not configs:
@@ -1055,9 +957,6 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
                 card_count,
                 mesh_shape,
                 device_count,
-                placement_type,
-                shard_dim,
-                distribution_shape,
             ) = config_row
 
             # Get sources linked to this config (filtered by model_filter if set)
@@ -1068,32 +967,18 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
                 source_filter_clause = f" AND ({like_clauses})"
                 source_filter_params = [f"%{pattern}%" for pattern in model_filter]
 
-            if schema == "ttnn_ops_v2_5":
-                cur.execute(
-                    f"""
-                    SELECT m.source_file, m.hf_model_identifier, cm.execution_count
-                    FROM {schema}.ttnn_configuration_model cm
-                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                    WHERE cm.configuration_id = %s
-                    {source_filter_clause}
-                    ORDER BY m.source_file, m.hf_model_identifier
-                """,
-                    [config_id] + source_filter_params,
-                )
-                source_rows = cur.fetchall()
-            else:
-                cur.execute(
-                    f"""
-                    SELECT m.source_file, m.hf_model_identifier, 1 as execution_count
-                    FROM {schema}.ttnn_configuration_model cm
-                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                    WHERE cm.configuration_id = %s
-                    {source_filter_clause}
-                    ORDER BY m.source_file, m.hf_model_identifier
-                """,
-                    [config_id] + source_filter_params,
-                )
-                source_rows = cur.fetchall()
+            cur.execute(
+                f"""
+                SELECT m.source_file, m.hf_model_identifier, cm.execution_count
+                FROM {schema}.ttnn_configuration_model cm
+                JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
+                WHERE cm.configuration_id = %s
+                {source_filter_clause}
+                ORDER BY m.source_file, m.hf_model_identifier
+            """,
+                [config_id] + source_filter_params,
+            )
+            source_rows = cur.fetchall()
 
             # Use full_config_json for arguments (preserves exact original structure)
             if full_config_json:
@@ -1101,83 +986,30 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
             else:
                 arguments = []
 
-            config_dict = {"arguments": arguments}
+            config_dict = {"arguments": arguments, "config_hash": config_hash}
 
-            # config_hash is recomputed below after machine_info is built,
-            # so that V2-reconstructed JSON uses the same hash as the tracer.
-            # Store the DB hash temporarily for fallback.
-            db_config_hash = config_hash
+            executions = []
+            for source_file, hf_model, exec_count in source_rows:
+                source_str = format_source(source_file, hf_model)
+                if not source_str:
+                    continue
 
-            # V2 format: use executions array
-            if schema == "ttnn_ops_v2_5":
-                executions = []
-                for source_file, hf_model, exec_count in source_rows:
-                    source_str = format_source(source_file, hf_model)
-                    if not source_str:
-                        continue
+                execution = {"source": source_str, "machine_info": {}, "count": exec_count}
 
-                    execution = {"source": source_str, "machine_info": {}, "count": exec_count}
-
-                    # Add hardware info to machine_info
-                    if board_type:
-                        execution["machine_info"]["board_type"] = board_type
-                        execution["machine_info"]["device_series"] = device_series
-                        execution["machine_info"]["card_count"] = card_count
-
-                    # Add mesh info (shape only, no placement - that's per-tensor in V2)
-                    if mesh_shape:
-                        execution["machine_info"]["mesh_device_shape"] = mesh_shape
-                        if device_count:
-                            execution["machine_info"]["device_count"] = device_count
-
-                    executions.append(execution)
-
-                if executions:
-                    config_dict["executions"] = executions
-            else:
-                # V1 format: use source and machine_info at config level
-                sources = [format_source(sf, hf) for sf, hf, _ in source_rows]
-                sources = [s for s in sources if s]  # Remove None values
-
-                if len(sources) == 0:
-                    source = None
-                elif len(sources) == 1:
-                    source = sources[0]
-                else:
-                    source = sources
-
-                # Build machine_info
-                machine_info = []
                 if board_type:
-                    mi = {
-                        "board_type": board_type,
-                        "device_series": device_series,
-                        "card_count": card_count,
-                    }
+                    execution["machine_info"]["board_type"] = board_type
+                    execution["machine_info"]["device_series"] = device_series
+                    execution["machine_info"]["card_count"] = card_count
 
-                    # Add tensor_placements if mesh config exists (V1 only)
-                    if mesh_shape:
-                        placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
-                        if placement:
-                            mi["tensor_placements"] = [placement]
+                if mesh_shape:
+                    execution["machine_info"]["mesh_device_shape"] = mesh_shape
+                    if device_count:
+                        execution["machine_info"]["device_count"] = device_count
 
-                    machine_info.append(mi)
+                executions.append(execution)
 
-                if source:
-                    config_dict["source"] = source
-
-                if machine_info:
-                    config_dict["machine_info"] = machine_info
-
-            # Recompute config_hash from V2 arguments using the same
-            # normalization as the tracer, so hashes are consistent.
-            first_mi = None
-            if "executions" in config_dict and config_dict["executions"]:
-                first_mi = config_dict["executions"][0].get("machine_info")
-            elif "machine_info" in config_dict and config_dict["machine_info"]:
-                mi_list = config_dict["machine_info"]
-                first_mi = mi_list[0] if isinstance(mi_list, list) else mi_list
-            config_dict["config_hash"] = compute_config_hash_v2(op_name, arguments, first_mi)
+            if executions:
+                config_dict["executions"] = executions
 
             configurations.append(config_dict)
 
@@ -1200,7 +1032,7 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
     return result
 
 
-def reconstruct_from_trace_run(trace_run_id, output_path=None):
+def reconstruct_from_trace_run(trace_run_id, output_path=None, schema="ttnn_ops_v5", model_names=None):
     """Reconstruct JSON for a specific trace_run, matching the tracer's output format.
 
     This produces output identical to what generic_ops_tracer.py would generate
@@ -1209,23 +1041,27 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None):
     Args:
         trace_run_id: ID of the trace_run to reconstruct.
         output_path: Path to write the reconstructed JSON.
+        schema: Database schema to read from (default: "ttnn_ops_v5").
+        model_names: Optional set/list of model_name values to include. When provided,
+            only configs belonging to those models are reconstructed. None = all models.
 
     Returns:
         Dict in the tracer's master JSON format.
     """
-    print(f"Reconstructing JSON from trace_run {trace_run_id}...")
+    filter_desc = f", models={sorted(model_names)}" if model_names is not None else ""
+    print(f"Reconstructing JSON from trace_run {trace_run_id} (schema: {schema}{filter_desc})...")
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
 
-    # Fetch trace_run metadata
+    # Fetch trace_run metadata (v5: hardware via FK, no model_id)
     cur.execute(
-        """
+        f"""
         SELECT
-            tr.trace_run_id, tr.board_type, tr.device_series, tr.card_count,
-            tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes,
-            m.ttnn_model_id, m.source_file, m.hf_model_identifier
-        FROM ttnn_ops_v2_5.trace_run tr
-        JOIN ttnn_ops_v2_5.ttnn_model m ON m.ttnn_model_id = tr.model_id
+            tr.trace_run_id,
+            h.board_type, h.device_series, h.card_count,
+            tr.tt_metal_sha, tr.traced_at, tr.config_count, tr.notes
+        FROM {schema}.trace_run tr
+        JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
         WHERE tr.trace_run_id = %s
         """,
         (trace_run_id,),
@@ -1236,22 +1072,31 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None):
         conn.close()
         return None
 
-    (
-        _,
-        board_type,
-        device_series,
-        card_count,
-        tt_metal_sha,
-        traced_at,
-        config_count,
-        notes,
-        model_id,
-        source_file,
-        hf_model_identifier,
-    ) = tr_row
+    (_, board_type, device_series, card_count, tt_metal_sha, traced_at, config_count, notes) = tr_row
 
-    # Build source string (same format as tracer)
-    test_source = format_source(source_file, hf_model_identifier)
+    # Fetch all models for this trace; then apply model_names filter if specified.
+    cur.execute(
+        f"""
+        SELECT m.ttnn_model_id, m.source_file, m.hf_model_identifier, m.model_name
+        FROM {schema}.trace_run_model trm
+        JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trm.model_id
+        WHERE trm.trace_run_id = %s
+        ORDER BY m.ttnn_model_id
+        """,
+        (trace_run_id,),
+    )
+    trace_models = cur.fetchall()  # [(model_id, source_file, hf_model_identifier, model_name), ...]
+
+    if model_names is not None:
+        model_names_set = set(model_names)
+        trace_models = [row for row in trace_models if row[3] in model_names_set]
+        if not trace_models:
+            print(f"  No models matching {sorted(model_names_set)} found in trace {trace_run_id}, skipping.")
+            conn.close()
+            return None
+
+    trace_model_ids = {row[0] for row in trace_models}
+    all_sources = [format_source(sf, hf) for _, sf, hf, _ in trace_models if format_source(sf, hf)]
 
     # Build machine_info (same format as tracer)
     machine_info = {
@@ -1260,85 +1105,92 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None):
         "card_count": card_count,
     }
 
-    # Fetch all configurations for this trace_run, grouped by operation
+    # Fetch all configurations with their per-config model sources.
+    # Join ttnn_configuration_model filtered to models in this trace so each
+    # config gets the correct execution sources rather than a single trace-level source.
     cur.execute(
-        """
+        f"""
         SELECT
             o.operation_name,
             c.ttnn_configuration_id,
             c.config_hash,
             c.full_config_json,
-            c.mesh_config_id,
             mc.mesh_shape,
             mc.device_count,
-            trc.execution_count
-        FROM ttnn_ops_v2_5.trace_run_config trc
-        JOIN ttnn_ops_v2_5.ttnn_configuration c
+            trc.execution_count,
+            m.source_file,
+            m.hf_model_identifier
+        FROM {schema}.trace_run_config trc
+        JOIN {schema}.ttnn_configuration c
             ON c.ttnn_configuration_id = trc.configuration_id
-        JOIN ttnn_ops_v2_5.ttnn_operation o
+        JOIN {schema}.ttnn_operation o
             ON o.ttnn_operation_id = c.operation_id
-        LEFT JOIN ttnn_ops_v2_5.ttnn_mesh_config mc
+        LEFT JOIN {schema}.ttnn_mesh_config mc
             ON mc.ttnn_mesh_config_id = c.mesh_config_id
+        JOIN {schema}.ttnn_configuration_model cm
+            ON cm.configuration_id = trc.configuration_id
+        JOIN {schema}.ttnn_model m
+            ON m.ttnn_model_id = cm.model_id
+           AND m.ttnn_model_id = ANY(%s)
         WHERE trc.trace_run_id = %s
-        ORDER BY o.operation_name, c.ttnn_configuration_id
+        ORDER BY o.operation_name, c.ttnn_configuration_id, m.ttnn_model_id
         """,
-        (trace_run_id,),
+        (list(trace_model_ids), trace_run_id),
     )
     rows = cur.fetchall()
     conn.close()
 
-    # Group by operation and build the tracer output format
+    # Group by (op_name, config_id): collect one execution entry per model source
     result = {"operations": {}, "metadata": {}}
-    ops = {}
+    ops = {}  # op_name -> {config_id -> config_dict}
 
     for (
         op_name,
         config_id,
         config_hash,
         full_config_json,
-        mesh_config_id,
         mesh_shape,
         device_count,
         execution_count,
+        source_file,
+        hf_model_identifier,
     ) in rows:
-        if op_name not in ops:
-            ops[op_name] = []
-
-        # Use full_config_json for arguments (preserves exact original structure)
         arguments = full_config_json.get("arguments", {}) if full_config_json else {}
 
-        # Build execution entry (same structure as tracer)
         exec_machine_info = machine_info.copy()
         if mesh_shape:
             exec_machine_info["mesh_device_shape"] = mesh_shape
             if device_count:
                 exec_machine_info["device_count"] = device_count
 
-        # Recompute config_hash using V2 normalization for consistency
-        recomputed_hash = compute_config_hash_v2(op_name, arguments, exec_machine_info)
+        source = format_source(source_file, hf_model_identifier)
 
-        config_dict = {
-            "config_hash": recomputed_hash,
-            "arguments": arguments,
-            "executions": [
-                {
-                    "source": test_source,
-                    "machine_info": exec_machine_info,
-                    "count": execution_count,
-                }
-            ],
-        }
+        if op_name not in ops:
+            ops[op_name] = {}
 
-        ops[op_name].append(config_dict)
+        if config_id not in ops[op_name]:
+            ops[op_name][config_id] = {
+                "config_hash": config_hash,
+                "arguments": arguments,
+                "executions": [],
+            }
+
+        ops[op_name][config_id]["executions"].append(
+            {
+                "source": source,
+                "machine_info": exec_machine_info,
+                "count": execution_count,
+            }
+        )
 
     # Build final structure
     for op_name in sorted(ops.keys()):
-        result["operations"][op_name] = {"configurations": ops[op_name]}
+        result["operations"][op_name] = {"configurations": list(ops[op_name].values())}
 
-    # Add metadata (matches tracer's metadata format)
+    # Add metadata
     total_configs = sum(len(op["configurations"]) for op in result["operations"].values())
     result["metadata"] = {
-        "models": [test_source],
+        "models": all_sources,
         "unique_operations": len(result["operations"]),
         "total_configurations": total_configs,
         "trace_run_id": trace_run_id,
@@ -1368,29 +1220,31 @@ def list_trace_runs(model_filter=None):
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
 
+    # v5: no model_id on trace_run; hardware via FK; models via trace_run_model
     query = """
         SELECT
             tr.trace_run_id,
-            m.source_file,
-            m.hf_model_identifier,
-            tr.board_type,
-            tr.device_series,
-            tr.card_count,
+            h.device_series,
+            h.card_count,
             tr.tt_metal_sha,
             tr.traced_at,
             tr.config_count,
-            tr.notes
-        FROM ttnn_ops_v2_5.trace_run tr
-        JOIN ttnn_ops_v2_5.ttnn_model m ON m.ttnn_model_id = tr.model_id
+            tr.notes,
+            STRING_AGG(COALESCE(m.model_name, m.source_file), ', '
+                       ORDER BY COALESCE(m.model_name, m.source_file)) AS models
+        FROM ttnn_ops_v5.trace_run tr
+        JOIN ttnn_ops_v5.ttnn_hardware h ON h.ttnn_hardware_id = tr.hardware_id
+        LEFT JOIN ttnn_ops_v5.trace_run_model trm ON trm.trace_run_id = tr.trace_run_id
+        LEFT JOIN ttnn_ops_v5.ttnn_model m ON m.ttnn_model_id = trm.model_id
     """
     params = []
 
     if model_filter:
         like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
-        query += f" WHERE {like_clauses}"
+        query += f" WHERE ({like_clauses})"
         params = [f"%{p}%" for p in model_filter]
 
-    query += " ORDER BY tr.traced_at DESC"
+    query += " GROUP BY tr.trace_run_id, h.device_series, h.card_count ORDER BY tr.traced_at DESC"
     cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
@@ -1399,28 +1253,14 @@ def list_trace_runs(model_filter=None):
         print("No trace runs found")
         return []
 
-    print(f"\n{'ID':>4}  {'Model':30}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Notes")
+    print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Models")
     print("-" * 120)
 
-    for (
-        tr_id,
-        source_file,
-        hf_model,
-        board_type,
-        device_series,
-        card_count,
-        sha,
-        traced_at,
-        cfg_count,
-        notes,
-    ) in rows:
-        display_name = (hf_model.split("/")[-1] if hf_model else source_file or "?")[:30]
+    for tr_id, device_series, card_count, sha, traced_at, cfg_count, notes, models in rows:
         hw = f"{device_series} ({card_count}x)"
         sha_short = sha[:12] if sha else "-"
         traced = str(traced_at)[:19] if traced_at else "-"
-        print(
-            f"{tr_id:>4}  {display_name:30}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {notes or ''}"
-        )
+        print(f"{tr_id:>4}  {hw:20}  {sha_short:12}  {cfg_count or 0:>7}  {traced:20}  {models or ''}")
 
     return rows
 
@@ -1428,85 +1268,101 @@ def list_trace_runs(model_filter=None):
 def resolve_manifest(manifest_path=None, scope=None):
     """Resolve manifest targets to a list of trace_run_ids.
 
-    Resolution rules:
-      - model: X              -> latest active trace per unique device_series matching X
-      - model: X, hardware: H -> latest active trace where device_series=H matching X
-      - model: X, trace_id: N -> exact trace N (no resolution, ignores status)
+    The manifest targets section is a mapping with two scope groups:
+      targets:
+        lead_models:
+          - model: X [, trace: N] [, hardware: H]
+        model_traced:
+          - model: X [, trace: N] [, hardware: H]
+
+    Resolution rules per entry:
+      - trace: N provided  -> use that trace_id directly (pinned)
+      - trace omitted      -> latest active trace per unique device_series where model
+                             exactly matches a model_name in the registry models list
 
     Args:
         manifest_path: Path to sweep_manifest.yaml (optional).
-        scope: Filter targets by scope.
-            - None / 'model_traced': all targets (lead_models + model_traced)
-            - 'lead_models': only targets with scope='lead_models'
+        scope: Which group to resolve.
+            - 'lead_models'  : only the lead_models group
+            - 'model_traced' : only the model_traced group
+            - None           : both groups combined
 
     Returns:
         List of unique trace_run_id integers.
     """
-    data, path = _load_manifest(manifest_path)
-    targets = data.get("targets", [])
+    data, _ = _load_manifest(manifest_path)
+    targets_map = data.get("targets", {})
     registry = data.get("registry", [])
 
-    if not targets:
+    if not targets_map:
         print("No targets in manifest")
         return []
 
-    # Apply scope filter:
-    # - 'lead_models' scope -> only lead_models targets
-    # - 'model_traced' or None -> all targets (lead_models is a subset of model_traced)
+    # Select which scope groups to process
     if scope == "lead_models":
-        targets = [t for t in targets if t.get("scope") == "lead_models"]
-        if not targets:
-            print("No lead_models targets in manifest")
-            return []
-        print(f"Scope: lead_models ({len(targets)} targets)")
+        groups = {"lead_models": targets_map.get("lead_models", [])}
+    elif scope == "model_traced":
+        groups = {"model_traced": targets_map.get("model_traced", [])}
     else:
-        print(f"Scope: model_traced ({len(targets)} targets — all scopes)")
+        groups = {k: v for k, v in targets_map.items()}
 
     resolved_ids = []
+    total_entries = sum(len(v) for v in groups.values())
+    print(f"Scope: {scope or 'all'} ({total_entries} entries across {len(groups)} group(s))")
 
-    for target in targets:
-        model_pattern = target.get("model")
-        pinned_id = target.get("trace_id")
-        hw_filter = target.get("hardware")
-
-        if pinned_id is not None:
-            # Pinned: use directly, ignore status
-            resolved_ids.append(pinned_id)
+    for group_name, entries in groups.items():
+        if not entries:
             continue
+        for entry in entries:
+            model_val = entry.get("model")
+            pinned_trace = entry.get("trace")
+            hw_filter = entry.get("hardware")
 
-        if not model_pattern:
-            print(f"  Warning: target has no 'model' or 'trace_id', skipping: {target}")
-            continue
+            if pinned_trace is not None:
+                # Pinned trace: single int or list of ints, use directly
+                if isinstance(pinned_trace, list):
+                    resolved_ids.extend(int(t) for t in pinned_trace)
+                else:
+                    resolved_ids.append(int(pinned_trace))
+                continue
 
-        # Filter registry to active entries matching model pattern
-        candidates = []
-        for entry in registry:
-            if entry.get("status") != "active":
+            if not model_val:
+                print(f"  Warning: entry in {group_name} has no 'model' or 'trace', skipping: {entry}")
                 continue
-            models = entry.get("models", [])
-            # Case-insensitive substring match against any model name in the entry
-            if not any(model_pattern.lower() in m.lower() for m in models):
-                continue
-            if hw_filter:
-                hw = entry.get("hardware", {})
-                if hw.get("device_series") != hw_filter:
+
+            # model may be a string or a list; each model is resolved independently
+            # so each gets the latest active trace available for it
+            patterns = [model_val] if isinstance(model_val, str) else list(model_val)
+
+            for pattern in patterns:
+                # Filter registry to active entries matching this model
+                candidates = []
+                for reg_entry in registry:
+                    if reg_entry.get("status") != "active":
+                        continue
+                    reg_models = reg_entry.get("models", [])
+                    if pattern not in reg_models:
+                        continue
+                    if hw_filter:
+                        hw = reg_entry.get("hardware", {})
+                        if hw.get("device_series") != hw_filter:
+                            continue
+                    candidates.append(reg_entry)
+
+                if not candidates:
+                    print(f"  Warning: no active traces match model '{pattern}' in {group_name}")
                     continue
-            candidates.append(entry)
 
-        if not candidates:
-            print(f"  Warning: no active traces match target {target}")
-            continue
+                # Pick latest (highest trace_id) per device_series
+                by_hw = {}
+                for reg_entry in candidates:
+                    ds = reg_entry.get("hardware", {}).get("device_series", "unknown")
+                    existing = by_hw.get(ds)
+                    if existing is None or reg_entry["trace_id"] > existing["trace_id"]:
+                        by_hw[ds] = reg_entry
 
-        # Group by device_series, pick latest (highest trace_id) per group
-        by_hw = {}
-        for entry in candidates:
-            ds = entry.get("hardware", {}).get("device_series", "unknown")
-            existing = by_hw.get(ds)
-            if existing is None or entry["trace_id"] > existing["trace_id"]:
-                by_hw[ds] = entry
-
-        for entry in by_hw.values():
-            resolved_ids.append(entry["trace_id"])
+                for reg_entry in by_hw.values():
+                    resolved_ids.append(reg_entry["trace_id"])
 
     # Deduplicate while preserving order
     seen = set()
@@ -1516,33 +1372,101 @@ def resolve_manifest(manifest_path=None, scope=None):
             seen.add(tid)
             unique.append(tid)
 
-    print(f"Resolved {len(targets)} targets to {len(unique)} trace_run_ids: {unique}")
+    print(f"Resolved to {len(unique)} trace_run_id(s): {unique}")
     return unique
 
 
-def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None):
+def _resolve_manifest_with_models(manifest_path=None, scope=None):
+    """Like resolve_manifest but returns {trace_id: set_of_model_names | None}.
+
+    None means no filter (all models in the trace).
+    A set means only reconstruct configs belonging to those model_names.
+    """
+    data, _ = _load_manifest(manifest_path)
+    targets_map = data.get("targets", {})
+    registry = data.get("registry", [])
+
+    if scope == "lead_models":
+        groups = {"lead_models": targets_map.get("lead_models") or []}
+    elif scope == "model_traced":
+        groups = {"model_traced": targets_map.get("model_traced") or []}
+    else:
+        groups = {k: v for k, v in targets_map.items() if v}
+
+    # trace_id -> set of model_names to include (None = all models)
+    trace_model_map = {}
+
+    for entries in groups.values():
+        for entry in entries or []:
+            model_val = entry.get("model")
+            pinned_trace = entry.get("trace")
+            hw_filter = entry.get("hardware")
+
+            models = [model_val] if isinstance(model_val, str) else (list(model_val) if model_val else [])
+
+            def _add(tid, model_list):
+                if tid not in trace_model_map:
+                    trace_model_map[tid] = set() if model_list else None
+                if trace_model_map[tid] is not None and model_list:
+                    trace_model_map[tid].update(model_list)
+                elif not model_list:
+                    trace_model_map[tid] = None  # no model filter = all
+
+            if pinned_trace is not None:
+                tids = [int(pinned_trace)] if not isinstance(pinned_trace, list) else [int(t) for t in pinned_trace]
+                for tid in tids:
+                    _add(tid, models)
+                continue
+
+            # Registry-resolved: each model resolves to latest active trace per device_series
+            for model_name in models:
+                candidates = [
+                    r
+                    for r in registry
+                    if r.get("status") == "active"
+                    and model_name in r.get("models", [])
+                    and (not hw_filter or r.get("hardware", {}).get("device_series") == hw_filter)
+                ]
+                by_hw = {}
+                for r in candidates:
+                    ds = r.get("hardware", {}).get("device_series", "unknown")
+                    if ds not in by_hw or r["trace_id"] > by_hw[ds]["trace_id"]:
+                        by_hw[ds] = r
+                for r in by_hw.values():
+                    _add(r["trace_id"], [model_name])
+
+    return trace_model_map
+
+
+def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, schema="ttnn_ops_v5"):
     """Reconstruct merged JSON from manifest targets.
 
-    Resolves targets to trace_run_ids, reconstructs each, merges configs
-    deduplicated by config_hash.
+    Resolves targets to (trace_run_id, model_names) pairs, reconstructs each
+    filtered to the specified models, then merges configs deduplicated by config_hash.
 
     Args:
         manifest_path: Path to sweep_manifest.yaml (optional).
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
+        schema: Database schema to read from (default: "ttnn_ops_v5").
 
     Returns:
         Merged dict in the tracer's master JSON format.
     """
-    trace_ids = resolve_manifest(manifest_path, scope=scope)
-    if not trace_ids:
+    trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope)
+    if not trace_model_map:
         print("Nothing to reconstruct")
         return {"operations": {}, "metadata": {}}
 
-    # Reconstruct each trace
+    print(f"Resolved {len(trace_model_map)} trace(s):")
+    for tid, mnames in trace_model_map.items():
+        label = sorted(mnames) if mnames is not None else "all"
+        print(f"  trace {tid}: {label}")
+
+    # Reconstruct each trace filtered to its model set
     all_results = []
-    for tid in trace_ids:
-        result = reconstruct_from_trace_run(tid)
+    for tid, mnames in trace_model_map.items():
+        result = reconstruct_from_trace_run(tid, schema=schema, model_names=mnames)
         if result:
             all_results.append(result)
 
@@ -1551,7 +1475,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None):
         return {"operations": {}, "metadata": {}}
 
     # Merge: union operations, deduplicate configs by config_hash
-    merged = {"operations": {}, "metadata": {"trace_run_ids": trace_ids, "models": []}}
+    merged = {"operations": {}, "metadata": {"trace_run_ids": sorted(trace_model_map.keys()), "models": []}}
 
     seen_hashes = {}  # config_hash -> True (global dedup across all traces)
     total_configs = 0
@@ -1601,7 +1525,7 @@ def reconstruct_single_operation(operation_name, output_path=None):
 
     # Get operation ID
     cur.execute(
-        "SELECT ttnn_operation_id FROM ttnn_ops_v2_5.ttnn_operation WHERE operation_name = %s",
+        "SELECT ttnn_operation_id FROM ttnn_ops_v5.ttnn_operation WHERE operation_name = %s",
         (operation_name,),
     )
     row = cur.fetchone()
@@ -1619,19 +1543,14 @@ def reconstruct_single_operation(operation_name, output_path=None):
             c.ttnn_configuration_id,
             c.config_hash,
             c.full_config_json,
-            c.hardware_id,
-            c.mesh_config_id,
             h.board_type,
             h.device_series,
             h.card_count,
             mc.mesh_shape,
-            mc.device_count,
-            mc.placement_type,
-            mc.shard_dim,
-            mc.distribution_shape
-        FROM ttnn_ops_v2_5.ttnn_configuration c
-        LEFT JOIN ttnn_ops_v2_5.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-        LEFT JOIN ttnn_ops_v2_5.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+            mc.device_count
+        FROM ttnn_ops_v5.ttnn_configuration c
+        LEFT JOIN ttnn_ops_v5.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+        LEFT JOIN ttnn_ops_v5.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
         WHERE c.operation_id = %s
         ORDER BY c.ttnn_configuration_id
     """,
@@ -1646,24 +1565,19 @@ def reconstruct_single_operation(operation_name, output_path=None):
             config_id,
             config_hash,
             full_config_json,
-            hardware_id,
-            mesh_config_id,
             board_type,
             device_series,
             card_count,
             mesh_shape,
             device_count,
-            placement_type,
-            shard_dim,
-            distribution_shape,
         ) = config_row
 
         # Get sources
         cur.execute(
             """
-            SELECT m.source_file, m.hf_model_identifier
-            FROM ttnn_ops_v2_5.ttnn_configuration_model cm
-            JOIN ttnn_ops_v2_5.ttnn_model m ON m.ttnn_model_id = cm.model_id
+            SELECT m.source_file, m.hf_model_identifier, cm.execution_count
+            FROM ttnn_ops_v5.ttnn_configuration_model cm
+            JOIN ttnn_ops_v5.ttnn_model m ON m.ttnn_model_id = cm.model_id
             WHERE cm.configuration_id = %s
             ORDER BY m.source_file, m.hf_model_identifier
         """,
@@ -1671,45 +1585,27 @@ def reconstruct_single_operation(operation_name, output_path=None):
         )
         source_rows = cur.fetchall()
 
-        sources = [format_source(sf, hf) for sf, hf in source_rows]
-        sources = [s for s in sources if s]
+        arguments = full_config_json.get("arguments", []) if full_config_json else []
+        config_dict = {"config_hash": config_hash, "arguments": arguments}
 
-        if len(sources) == 0:
-            source = None
-        elif len(sources) == 1:
-            source = sources[0]
-        else:
-            source = sources
-
-        # Build machine_info
-        machine_info = []
-        if board_type:
-            mi = {
-                "board_type": board_type,
-                "device_series": device_series,
-                "card_count": card_count,
-            }
+        executions = []
+        for source_file, hf_model, exec_count in source_rows:
+            source_str = format_source(source_file, hf_model)
+            if not source_str:
+                continue
+            execution = {"source": source_str, "machine_info": {}, "count": exec_count}
+            if board_type:
+                execution["machine_info"]["board_type"] = board_type
+                execution["machine_info"]["device_series"] = device_series
+                execution["machine_info"]["card_count"] = card_count
             if mesh_shape:
-                placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
-                if placement:
-                    mi["tensor_placements"] = [placement]
-            machine_info.append(mi)
+                execution["machine_info"]["mesh_device_shape"] = mesh_shape
+                if device_count:
+                    execution["machine_info"]["device_count"] = device_count
+            executions.append(execution)
 
-        if full_config_json:
-            arguments = full_config_json.get("arguments", [])
-        else:
-            arguments = []
-
-        config_dict = {"arguments": arguments}
-
-        # Include config_hash for direct correlation with database
-        if config_hash:
-            config_dict["config_hash"] = config_hash
-
-        if source:
-            config_dict["source"] = source
-        if machine_info:
-            config_dict["machine_info"] = machine_info
+        if executions:
+            config_dict["executions"] = executions
 
         configurations.append(config_dict)
 
@@ -1793,151 +1689,6 @@ def verify_reconstruction(original_path, reconstructed_path=None):
     }
 
 
-def detect_duplicates(json_path=None, operation_filter=None, show_examples=3):
-    """Detect duplicate configurations in the original JSON file.
-
-    A duplicate is when the same (operation + arguments + hardware + mesh) appears
-    multiple times. These get deduplicated when loaded into the database.
-
-    Args:
-        json_path: Path to JSON file (defaults to JSON_PATH)
-        operation_filter: If provided, only analyze this operation (e.g., 'ttnn::add')
-        show_examples: Number of duplicate groups to show in detail
-
-    Returns:
-        Dict with duplicate statistics and details
-    """
-    json_path = json_path or JSON_PATH
-    print(f"Detecting duplicates in {json_path}...")
-
-    with open(json_path) as f:
-        data = json.load(f)
-
-    operations = data.get("operations", {})
-
-    if operation_filter:
-        if operation_filter not in operations:
-            print(f"Operation {operation_filter} not found")
-            return None
-        operations = {operation_filter: operations[operation_filter]}
-
-    total_configs = 0
-    total_unique = 0
-    total_duplicates = 0
-
-    results = {
-        "by_operation": {},
-        "duplicate_examples": [],
-    }
-
-    for op_name, op_data in operations.items():
-        configs = op_data.get("configurations", [])
-        hash_to_indices = {}  # hash -> list of config indices
-
-        for idx, config in enumerate(configs):
-            args = config.get("arguments", [])
-            mi_list = config.get("machine_info", [{}])
-
-            for mi in mi_list:
-                # Extract hardware
-                board = mi.get("board_type")
-                series = mi.get("device_series")
-                if isinstance(series, list):
-                    series = series[0] if series else None
-                card = mi.get("card_count", 1)
-                hw = (board, series, card) if board else None
-
-                # Extract mesh
-                tp = mi.get("tensor_placements", [])
-                mesh = None
-                if tp:
-                    mesh_shape = tp[0].get("mesh_device_shape")
-                    placement = tp[0].get("placement")
-                    mesh = (mesh_shape, placement)
-
-                # Compute hash
-                config_hash = compute_config_hash(op_name, args, hw, mesh)
-
-                if config_hash not in hash_to_indices:
-                    hash_to_indices[config_hash] = []
-                hash_to_indices[config_hash].append(
-                    {
-                        "index": idx,
-                        "source": config.get("source"),
-                        "hw": hw,
-                        "mesh": mesh,
-                    }
-                )
-
-        # Count duplicates for this operation
-        unique_count = len(hash_to_indices)
-        config_count = len(configs)
-        dup_count = config_count - unique_count
-
-        total_configs += config_count
-        total_unique += unique_count
-        total_duplicates += dup_count
-
-        if dup_count > 0:
-            results["by_operation"][op_name] = {
-                "total_configs": config_count,
-                "unique_configs": unique_count,
-                "duplicates": dup_count,
-            }
-
-            # Collect duplicate examples
-            if len(results["duplicate_examples"]) < show_examples:
-                for h, entries in hash_to_indices.items():
-                    if len(entries) > 1:
-                        results["duplicate_examples"].append(
-                            {
-                                "operation": op_name,
-                                "hash": h[:16] + "...",
-                                "occurrences": len(entries),
-                                "indices": [e["index"] for e in entries],
-                                "sources": list(set(str(e["source"])[:60] for e in entries)),
-                                "hw": entries[0]["hw"],
-                                "mesh": entries[0]["mesh"],
-                            }
-                        )
-                        if len(results["duplicate_examples"]) >= show_examples:
-                            break
-
-    # Print summary
-    print(f"\n=== Duplicate Detection Summary ===")
-    print(f"Total configs in JSON: {total_configs}")
-    print(f"Unique configs (by hash): {total_unique}")
-    print(f"Duplicates: {total_duplicates} ({100*total_duplicates/total_configs:.1f}%)")
-
-    if results["by_operation"]:
-        print(f"\nOperations with duplicates ({len(results['by_operation'])}):")
-        sorted_ops = sorted(results["by_operation"].items(), key=lambda x: x[1]["duplicates"], reverse=True)
-        for op_name, stats in sorted_ops[:15]:
-            print(f"  {op_name}: {stats['total_configs']} -> {stats['unique_configs']} ({stats['duplicates']} dups)")
-        if len(sorted_ops) > 15:
-            print(f"  ... and {len(sorted_ops) - 15} more operations")
-
-    if results["duplicate_examples"]:
-        print(f"\nExample duplicate groups:")
-        for ex in results["duplicate_examples"]:
-            print(f"\n  {ex['operation']} (hash: {ex['hash']})")
-            print(
-                f"    Occurrences: {ex['occurrences']} at indices {ex['indices'][:5]}{'...' if len(ex['indices']) > 5 else ''}"
-            )
-            print(f"    Hardware: {ex['hw']}")
-            print(f"    Mesh: {ex['mesh']}")
-            print(f"    Sources: {ex['sources'][:2]}")
-
-    results["summary"] = {
-        "total_configs": total_configs,
-        "unique_configs": total_unique,
-        "duplicates": total_duplicates,
-        "duplicate_percentage": 100 * total_duplicates / total_configs if total_configs > 0 else 0,
-    }
-
-    return results
-
-
 def find_config_line_numbers(json_path, operation_name, config_indices):
     """Find the line numbers for specific config indices in the JSON file.
 
@@ -2001,18 +1752,173 @@ def find_config_line_numbers(json_path, operation_name, config_indices):
     return result
 
 
+def set_model_name(source_file=None, hf_model=None, model_id=None, new_name=None):
+    """Override model_name for a specific ttnn_model row.
+
+    Identify the row by source_file (+ optional hf_model), hf_model alone, or
+    model_id. The new name is lowercased before being stored.
+    """
+    if not new_name:
+        print("Error: --model-name is required")
+        return
+    if not (source_file or hf_model or model_id):
+        print("Error: provide --source-file, --hf-model, or --model-id to identify the row")
+        return
+
+    new_name = new_name.lower()
+    conn = psycopg2.connect(NEON_URL)
+    cur = conn.cursor()
+
+    if model_id is not None:
+        cur.execute(
+            "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW()"
+            " WHERE ttnn_model_id = %s"
+            " RETURNING ttnn_model_id, source_file, hf_model_identifier",
+            (new_name, int(model_id)),
+        )
+    elif source_file and hf_model:
+        cur.execute(
+            "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW()"
+            " WHERE source_file = %s AND hf_model_identifier = %s"
+            " RETURNING ttnn_model_id, source_file, hf_model_identifier",
+            (new_name, source_file, hf_model),
+        )
+    elif source_file:
+        cur.execute(
+            "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW()"
+            " WHERE source_file = %s"
+            " RETURNING ttnn_model_id, source_file, hf_model_identifier",
+            (new_name, source_file),
+        )
+    else:  # hf_model only
+        cur.execute(
+            "UPDATE ttnn_ops_v5.ttnn_model SET model_name = %s, update_ts = NOW()"
+            " WHERE hf_model_identifier = %s"
+            " RETURNING ttnn_model_id, source_file, hf_model_identifier",
+            (new_name, hf_model),
+        )
+
+    updated_rows = cur.fetchall()
+    if not updated_rows:
+        print("No matching model found — nothing updated.")
+        conn.close()
+        return
+
+    conn.commit()
+    conn.close()
+    for row in updated_rows:
+        print(f"Updated ttnn_model_id={row[0]}: model_name set to '{new_name}'")
+        print(f"  source_file={row[1]!r}  hf_model={row[2]!r}")
+
+
+def delete_trace_run(trace_run_id, yes=False):
+    """Delete a trace_run and any configs that belong exclusively to it.
+
+    A config is deleted only if no other trace_run links to it.
+    Configs shared with other traces are unlinked but not deleted.
+
+    Prints a summary and asks for confirmation unless --yes is passed.
+    """
+    conn = psycopg2.connect(NEON_URL)
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT config_count, notes FROM ttnn_ops_v5.trace_run WHERE trace_run_id = %s",
+        (trace_run_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        print(f"Trace run {trace_run_id} not found.")
+        conn.close()
+        return
+
+    config_count, notes = row
+
+    cur.execute(
+        """
+        SELECT COUNT(*) FROM ttnn_ops_v5.trace_run_config trc
+        WHERE trc.trace_run_id = %s
+          AND NOT EXISTS (
+              SELECT 1 FROM ttnn_ops_v5.trace_run_config other
+              WHERE other.configuration_id = trc.configuration_id
+                AND other.trace_run_id != %s
+          )
+        """,
+        (trace_run_id, trace_run_id),
+    )
+    exclusive_count = cur.fetchone()[0]
+    shared_count = (config_count or 0) - exclusive_count
+
+    print(f"Trace run {trace_run_id}: {config_count} configs, notes={notes!r}")
+    print(f"  {exclusive_count} configs will be DELETED (exclusive to this trace)")
+    print(f"  {shared_count} configs will be UNLINKED only (shared with other traces)")
+
+    if not yes:
+        confirm = input("\nProceed? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("Aborted.")
+            conn.close()
+            return
+
+    # Collect exclusive config IDs before touching any rows
+    cur.execute(
+        """
+        SELECT trc.configuration_id FROM ttnn_ops_v5.trace_run_config trc
+        WHERE trc.trace_run_id = %s
+          AND NOT EXISTS (
+              SELECT 1 FROM ttnn_ops_v5.trace_run_config other
+              WHERE other.configuration_id = trc.configuration_id
+                AND other.trace_run_id != %s
+          )
+        """,
+        (trace_run_id, trace_run_id),
+    )
+    exclusive_ids = [r[0] for r in cur.fetchall()]
+
+    # 1. ttnn_configuration_model rows for exclusive configs
+    if exclusive_ids:
+        cur.execute(
+            "DELETE FROM ttnn_ops_v5.ttnn_configuration_model WHERE configuration_id = ANY(%s)",
+            (exclusive_ids,),
+        )
+
+    # 2. All trace_run_config rows for this trace
+    cur.execute("DELETE FROM ttnn_ops_v5.trace_run_config WHERE trace_run_id = %s", (trace_run_id,))
+
+    # 3. trace_run_model rows for this trace
+    cur.execute("DELETE FROM ttnn_ops_v5.trace_run_model WHERE trace_run_id = %s", (trace_run_id,))
+
+    # 4. Exclusive configs themselves
+    if exclusive_ids:
+        cur.execute(
+            "DELETE FROM ttnn_ops_v5.ttnn_configuration WHERE ttnn_configuration_id = ANY(%s)",
+            (exclusive_ids,),
+        )
+    deleted_configs = len(exclusive_ids)
+
+    # 5. The trace_run itself
+    cur.execute("DELETE FROM ttnn_ops_v5.trace_run WHERE trace_run_id = %s", (trace_run_id,))
+
+    conn.commit()
+    conn.close()
+    print(f"Done: trace run {trace_run_id} deleted, {deleted_configs} configs removed, {shared_count} unlinked.")
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == "load":
-            json_path = sys.argv[2] if len(sys.argv) > 2 else None
-            sha = sys.argv[3] if len(sys.argv) > 3 else None
-            load_data(json_path=json_path, tt_metal_sha=sha)
+            args = sys.argv[2:]
+            dry_run = "--dry-run" in args
+            args = [a for a in args if a != "--dry-run"]
+            json_path = args[0] if len(args) > 0 else None
+            sha = args[1] if len(args) > 1 else None
+            load_data(json_path=json_path, tt_metal_sha=sha, dry_run=dry_run)
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
-            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2_5"
+            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v5"
             model_filter = sys.argv[4].split(",") if len(sys.argv) > 4 else None
             reconstruct_from_db(output, schema, model_filter)
         elif cmd == "reconstruct-lead":
@@ -2023,7 +1929,7 @@ if __name__ == "__main__":
                 if len(sys.argv) > 2
                 else "model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json"
             )
-            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2_5"
+            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v5"
             print(f"Using lead model patterns: {LEAD_MODELS}")
             reconstruct_from_db(output, schema, model_filter=LEAD_MODELS)
         elif cmd == "reconstruct-trace":
@@ -2037,10 +1943,18 @@ if __name__ == "__main__":
             model_filter = sys.argv[2].split(",") if len(sys.argv) > 2 else None
             list_trace_runs(model_filter)
         elif cmd == "reconstruct-manifest":
-            manifest = sys.argv[2] if len(sys.argv) > 2 else None
-            output = sys.argv[3] if len(sys.argv) > 3 else None
-            scope = sys.argv[4] if len(sys.argv) > 4 else None
-            reconstruct_from_manifest(manifest, output, scope)
+            _args = sys.argv[2:]
+            # Allow omitting the manifest path: if the first arg ends in .json it's the output
+            if _args and _args[0].endswith(".json"):
+                manifest, output = None, _args[0]
+                _args = _args[1:]
+            else:
+                manifest = _args[0] if _args else None
+                output = _args[1] if len(_args) > 1 else None
+                _args = _args[2:]
+            scope = _args[0] if _args else None
+            schema = _args[1] if len(_args) > 1 else "ttnn_ops_v5"
+            reconstruct_from_manifest(manifest, output, scope, schema)
         elif cmd == "resolve-manifest":
             manifest = sys.argv[2] if len(sys.argv) > 2 else None
             scope = sys.argv[3] if len(sys.argv) > 3 else None
@@ -2056,10 +1970,6 @@ if __name__ == "__main__":
             original = sys.argv[2] if len(sys.argv) > 2 else JSON_PATH
             reconstructed = sys.argv[3] if len(sys.argv) > 3 else None
             verify_reconstruction(original, reconstructed)
-        elif cmd == "duplicates":
-            json_file = sys.argv[2] if len(sys.argv) > 2 else JSON_PATH
-            op_filter = sys.argv[3] if len(sys.argv) > 3 else None
-            detect_duplicates(json_file, op_filter)
         elif cmd == "find-lines":
             if len(sys.argv) < 4:
                 print("Usage: python load_ttnn_ops_data_v2.py find-lines <operation> <index1,index2,...>")
@@ -2068,10 +1978,36 @@ if __name__ == "__main__":
             indices = [int(i) for i in sys.argv[3].split(",")]
             json_file = sys.argv[4] if len(sys.argv) > 4 else JSON_PATH
             find_config_line_numbers(json_file, op_name, indices)
+        elif cmd == "delete-trace":
+            if len(sys.argv) < 3:
+                print("Usage: python load_ttnn_ops_data_v2.py delete-trace <trace_run_id> [--yes]")
+                sys.exit(1)
+            _tr_id = int(sys.argv[2])
+            _yes = "--yes" in sys.argv
+            delete_trace_run(_tr_id, yes=_yes)
+        elif cmd == "set-model-name":
+            # Parse --key value flags
+            _args = sys.argv[2:]
+            _kv = {}
+            i = 0
+            while i < len(_args):
+                if _args[i].startswith("--") and i + 1 < len(_args):
+                    _kv[_args[i][2:]] = _args[i + 1]
+                    i += 2
+                else:
+                    i += 1
+            set_model_name(
+                source_file=_kv.get("source-file"),
+                hf_model=_kv.get("hf-model"),
+                model_id=_kv.get("model-id"),
+                new_name=_kv.get("model-name"),
+            )
         else:
             print(f"Unknown command: {cmd}")
             print("Usage:")
-            print("  python load_ttnn_ops_data_v2.py load [json_path] [tt_metal_sha]              # Load JSON to DB")
+            print(
+                "  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run]           # Load JSON to DB (--dry-run rolls back)"
+            )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB"
             )
@@ -2092,9 +2028,14 @@ if __name__ == "__main__":
                 "  python load_ttnn_ops_data_v2.py reconstruct-op <name>                       # Reconstruct single op"
             )
             print("  python load_ttnn_ops_data_v2.py verify [original] [reconstructed]            # Compare files")
-            print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]                      # Detect duplicates")
             print(
                 "  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>                     # Find config line numbers"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py delete-trace <id> [--yes]                     # Delete trace and its exclusive configs"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py set-model-name --source-file P --model-name N  # Override a model's name"
             )
     else:
         load_data()

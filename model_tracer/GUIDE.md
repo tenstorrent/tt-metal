@@ -1,8 +1,8 @@
 # Model Tracer Guide
 
-The model tracer extracts real operation configurations from running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
+The model tracer extracts operation configuration data while running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
 
-**Schema:** All data lives in `ttnn_ops_v2_5` on Metal Ops PostgreSQL.
+**Schema:** All data lives in `ttnn_ops_v5` on Metal Ops PostgreSQL.
 **Connection:** Set `TTNN_OPS_DATABASE_URL`
 
 ---
@@ -14,10 +14,11 @@ The model tracer extracts real operation configurations from running models and 
 python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py
 
 # 2. Load into DB (creates trace_run, auto-appends draft to manifest)
-python tests/sweep_framework/load_ttnn_ops_data_v2.py load
+python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
+    model_tracer/traced_operations/ttnn_operations_master.json
 
 # 3. Promote the trace in the manifest (edit model_tracer/sweep_manifest.yaml)
-#    Change status: draft → active, add to targets if needed
+#    Change status: draft → active, add to the appropriate targets group
 
 # 4. Reconstruct configs for testing
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
@@ -63,30 +64,64 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json
 
 # Load with explicit tt-metal SHA (auto-detected from git if omitted)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json abc123def456
+
+# Dry run: preview what would be loaded without committing anything
+python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json --dry-run
 ```
 
 On load the tool:
 - Deduplicates configs by `config_hash` (same op + args + hardware + mesh = same config)
-- Creates a `trace_run` row capturing model, hardware, and tt-metal SHA
+- Creates a `trace_run` row capturing hardware and tt-metal SHA
 - Links all configs to that trace via `trace_run_config` (new and pre-existing configs both get linked)
+- Populates `trace_run_model` with the FK-linked models seen in this trace
 - **Auto-appends a `draft` entry** to `model_tracer/sweep_manifest.yaml`
 
 Example output:
 ```
-Loaded 623 configurations (47 new, 576 pre-existing), 891 arguments, 623 model links
-Trace runs created: 1, total configs tied to traces: 623
+✅ Loaded 623 configurations (47 new, 576 pre-existing), 623 model links
+Trace run created: trace_run_id=42
+DB totals after load: 8012 configs, 542 trace_run_config links, 23 models
 Appended 1 draft entries to manifest registry (model_tracer/sweep_manifest.yaml)
 ```
 
-### Step 3: Promote in the manifest
+With `--dry-run`, the transaction is rolled back and the summary shows what the DB would look like after commit. No manifest entry is written.
 
-The loader appends the trace as `status: draft`. Review and promote it to `active`, then add it to `targets` with the appropriate scope:
+### Step 3: Model names (collisions)
+
+Each model gets a short, lowercase `model_name` derived from its source path or HF identifier when it is first inserted. If the loader reports a `model_name` uniqueness error, disambiguate with:
+
+```bash
+# Recompute all model_names from current source_file / hf_model_identifier values
+python tests/sweep_framework/load_ttnn_ops_data_v2.py fix-model-names
+
+# Override a specific model's name
+python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
+    --source-file "path/to/demo.py" --model-name custom_name
+# or by model ID:
+python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
+    --model-id 7 --model-name vit_nightly
+```
+
+**Derivation rules:**
+- HF model: lowercase last segment after `/` → `meta-llama/Llama-3.2-1B-Instruct` → `llama-3.2-1b-instruct`
+- File path: skip generic segments (`models`, `demos`, `experimental`, `wormhole`, `vision`, `demo`, etc.), take first meaningful segment → `models/demos/audio/whisper/demo/demo.py` → `whisper`
+
+`model_name` must be unique in the DB. If two sources derive to the same name, use `set-model-name` to disambiguate before adding the UNIQUE constraint.
+
+### Step 4: Promote in the manifest
+
+The loader appends the trace as `status: draft`. Review and promote it to `active`, then add it to the appropriate `targets` group with the exact `model_name` values:
 
 ```yaml
 # model_tracer/sweep_manifest.yaml
 targets:
-  - model: deepseek_v3
-    scope: lead_models    # ← included in both lead_models and model_traced CI runs
+  lead_models:
+    - model: deepseek_v3
+      trace: 35
+
+  model_traced:
+    - model: [whisper, llama-3.2-1b-instruct, ...]
+      trace: [538, 1]
 
 registry:
   - trace_id: 42
@@ -99,12 +134,12 @@ registry:
     notes: 'Post-matmul refactor re-trace'
 ```
 
-Traces left as `draft` are invisible to model pattern resolution. They can still be used by pinning `trace_id` directly in a target.
+Traces left as `draft` are invisible to model resolution. They can still be used by pinning `trace: N` directly in a target.
 
-### Step 4: Reconstruct configs for testing
+### Step 5: Reconstruct configs for testing
 
 ```bash
-# All targets (model_traced scope — used for branch testing and model_traced CI run)
+# model_traced scope (used for branch testing and model_traced CI run)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/sweep_manifest.yaml \
     model_tracer/traced_operations/ttnn_operations_master_model_traced.json \
@@ -120,9 +155,11 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
 python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
     model_tracer/sweep_manifest.yaml model_traced
 
-# Reconstruct a single specific trace
+# Reconstruct a single specific trace (all models in that trace)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace 35 output.json
 ```
+
+**Important:** `reconstruct-manifest` only includes configs for the models listed in each target entry's `model:` field. If a trace contains 20 models but the target lists only `[whisper]`, only whisper's configs are included in the output.
 
 The reconstructed JSON is in the same format as the tracer output and can be fed directly to `sweeps_parameter_generator.py`.
 
@@ -132,51 +169,42 @@ The reconstructed JSON is in the same format as the tracer output and can be fed
 
 File: `model_tracer/sweep_manifest.yaml`
 
-The manifest is the single place that controls which configs are included when you reconstruct. It has two sections: **targets** (what to reconstruct) and **registry** (log of all known traces).
+The manifest controls which configs are included when reconstructing. It has two sections: **targets** (what to reconstruct) and **registry** (log of all known traces).
 
 ### Targets
 
 ```yaml
 targets:
-  # Latest active trace per hardware for this model — included in both CI run types
-  - model: deepseek_v3
-    scope: lead_models
+  lead_models:
+    - model: deepseek_v3
+      trace: 35
 
-  # Pin an exact trace by ID — included in model_traced CI run only
-  - trace_id: 538
-    scope: model_traced
-
-  # Latest active trace on specific hardware only
-  - model: llama
-    hardware: n300
-    scope: model_traced
-
-  # Two traces merged (regression comparison)
-  - trace_id: 3
-    scope: model_traced
-  - trace_id: 7
-    scope: model_traced
+  model_traced:
+    - model: [whisper, llama-3.2-1b-instruct, phi-3-mini-128k-instruct]
+      trace: [538, 1]
 ```
+
+Two scope groups: `lead_models` and `model_traced`. Each group is a list of entries. Each entry specifies:
+
+| Field | Description |
+|---|---|
+| `model: X` | Exact `model_name` from DB. Can be a string or list. Used for both registry resolution and config filtering. |
+| `trace: N` or `trace: [N, M]` | Pinned trace ID(s). Skips registry resolution. Configs are still filtered to the listed models. |
+| `hardware: H` | Filter registry matches to `device_series == H` (optional, only relevant when `trace` is omitted). |
+
+**Resolution rules:**
 
 | Form | Resolution |
 |---|---|
-| `model: X` | Latest `active` registry entry per unique `device_series` where model matches X |
-| `model: X, hardware: H` | Latest `active` entry where `device_series == H` and model matches X |
-| `model: X, trace_id: N` | Trace N exactly. No resolution. Status ignored. |
-| `trace_id: N` | Trace N directly. No model resolution needed. |
+| `model: X` (no trace) | Latest `active` registry entry per unique `device_series` where `X` is in the `models` list |
+| `model: X, hardware: H` | Latest `active` entry where `device_series == H` and `X` is in `models` |
+| `model: X, trace: N` | Trace N exactly. No registry lookup. Config filtering to model X still applies. |
+| `trace: N` (no model) | Trace N directly. All configs in the trace are included. |
 
-**Scope values:**
-
-| Scope | Included in `lead_models` run | Included in `model_traced` run |
-|---|---|---|
-| `lead_models` | ✅ | ✅ |
-| `model_traced` | ❌ | ✅ |
-
-- "Latest" = highest `trace_id` among matching active entries.
-- Model matching is **case-insensitive substring** against the `models` list in each registry entry.
-- Multiple targets resolving to the same `trace_id` are deduplicated.
+- `model_name` matching is **exact** (not substring) against the registry `models` list.
+- "Latest" = highest `trace_id` among matching active entries per `device_series`.
+- Multiple entries resolving to the same `trace_id` are deduplicated.
 - Configs appearing in multiple traces are deduplicated by `config_hash`.
-- `LEAD_MODELS` in `tests/sweep_framework/framework/constants.py` is derived from manifest targets with `scope: lead_models` at import time.
 
 ### Registry
 
@@ -186,20 +214,23 @@ Append-only log. Auto-updated on each `load`. Status is manually curated.
 registry:
   - trace_id: 538
     status: active              # active | draft | deprecated
-    models: [whisper, llama, phi, mistral, qwen, deepseek, stable_diffusion,
-             vit, segmentation, falcon7b, sentence_bert, efficientnetb0]
+    models:
+      - deepseek-llm-7b-chat
+      - llama-3.2-1b-instruct
+      - whisper
+      # ... one entry per model_name in ttnn_ops_v5.ttnn_model
     hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
     tt_metal_sha: null
     config_count: 7030
-    loaded_at: '2026-03-14'
+    loaded_at: '2026-03-21'
     notes: 'Consolidated n300 trace — all models (v2.5 migration)'
 ```
 
 | Field | Description |
 |---|---|
-| `trace_id` | Maps to `trace_run_id` in `ttnn_ops_v2_5.trace_run` |
-| `status` | `active`: included in model pattern resolution. `draft`: auto-appended on load, not yet reviewed. `deprecated`: excluded from resolution, kept for history. |
-| `models` | Model family names (derived from source path or HF identifier). Used for model pattern matching. |
+| `trace_id` | Maps to `trace_run_id` in `ttnn_ops_v5.trace_run` |
+| `status` | `active`: included in model resolution. `draft`: auto-appended on load, not yet reviewed. `deprecated`: excluded, kept for history. |
+| `models` | Exact `model_name` values from `ttnn_ops_v5.ttnn_model` for this trace. Used for exact matching against target `model:` entries. |
 | `hardware` | `board_type`, `device_series`, `card_count` |
 | `tt_metal_sha` | Git SHA of tt-metal at trace time (`null` for migrated historical traces) |
 | `config_count` | Number of configs linked to this trace |
@@ -210,9 +241,9 @@ registry:
 
 | trace_id | hardware | models | configs | status |
 |---|---|---|---|---|
-| 1 | p150b | whisper | 318 | active |
-| 35 | tt-galaxy-wh | deepseek_v3 | 323 | active |
-| 538 | n300 | all 12 model families | 7,030 | active |
+| 1 | p150b (Blackhole) | whisper | 318 | active |
+| 35 | tt-galaxy-wh (Wormhole, 32 cards) | deepseek_v3 | 323 | active |
+| 538 | n300 (Wormhole) | 19 models (all tt_transformers + vision + audio) | 7,030 | active |
 
 ---
 
@@ -239,33 +270,30 @@ ttnn-generate-sweeps (hardware runner, no DB access)
 | `lead_models` | 2 AM UTC daily | `lead_models` targets only | Yes |
 | `model_traced` | 3 AM UTC daily | All targets | No |
 
-**To add a model to lead_models:** add a target with `scope: lead_models` and promote the trace to `active` in the registry. The manifest is the single source of truth — `LEAD_MODELS` in `constants.py` is read from it automatically.
+**To add a model to a CI run:**
+1. Trace the model and load into DB
+2. Promote the registry entry to `active`
+3. Add the `model_name` to the appropriate `targets` group in the manifest
 
 ---
 
 ## Database Schema
 
-All tables live in the `ttnn_ops_v2_5` schema.
+All tables live in the `ttnn_ops_v5` schema.
 
 ```
-ttnn_operation          ttnn_model
-    │ 1:N                   │ 1:N
-    ▼                       ▼
-ttnn_configuration ◄── trace_run_config ◄── trace_run
-    │  config_hash               (N:M)          │ model_id
-    │  full_config_json                         │ board_type
-    │  hardware_id ──► ttnn_hardware            │ device_series
-    │  mesh_config_id ► ttnn_mesh_config        │ card_count
-    │                                           │ tt_metal_sha
-    │ 1:N                                       │ traced_at
+ttnn_operation          ttnn_model ◄─── trace_run_model
+    │ 1:N                   │ 1:N              │ N:1
+    ▼                       ▼                  ▼
+ttnn_configuration ◄── ttnn_configuration_model    trace_run
+    │  config_hash               (N:M)              │ hardware_id ──► ttnn_hardware
+    │  full_config_json                             │ tt_metal_sha
+    │  hardware_id ──► ttnn_hardware               │ config_count
+    │  mesh_config_id ► ttnn_mesh_config           │ traced_at
+    │
     ▼
-ttnn_argument
-    arg_index, tensor_dtype, tensor_shape,
-    shard_shape, tensor_placement_json,
-    full tensor spec in tensor_spec_json
-
-── legacy (kept for backward compat) ──────────────────
-ttnn_configuration_model   (config ↔ model junction, no snapshot)
+trace_run_config (N:M)
+    trace_run_id, configuration_id, execution_count
 ```
 
 ### Key tables
@@ -275,14 +303,27 @@ ttnn_configuration_model   (config ↔ model junction, no snapshot)
 | Column | Type | Description |
 |---|---|---|
 | `trace_run_id` | SERIAL PK | Auto-incrementing, used as `trace_id` in manifest |
-| `model_id` | FK → `ttnn_model` | Model entry (may be a combined/multi-model entry) |
-| `board_type` | TEXT | e.g., `Wormhole`, `Blackhole` |
-| `device_series` | TEXT | e.g., `n300`, `tt-galaxy-wh`, `p150b` |
-| `card_count` | INTEGER | Number of cards |
-| `tt_metal_sha` | TEXT | Git SHA at trace time |
+| `hardware_id` | FK → `ttnn_hardware` | Board type, device series, card count |
+| `tt_metal_sha` | TEXT | Git SHA at trace time (null for historical traces) |
 | `traced_at` | TIMESTAMPTZ | When loaded |
 | `config_count` | INTEGER | Number of unique configs in this trace |
 | `notes` | TEXT | Free text |
+
+**`trace_run_model`** — which models are in a trace (materialized junction).
+
+| Column | Type | Description |
+|---|---|---|
+| `trace_run_id` | FK → `trace_run` | |
+| `model_id` | FK → `ttnn_model` | Real model, no synthetic aggregates |
+
+**`ttnn_model`** — one row per real model source.
+
+| Column | Type | Description |
+|---|---|---|
+| `model_name` | TEXT UNIQUE | Short lowercase identifier. Used in manifest. |
+| `source_file` | TEXT | Path to the demo/test file |
+| `hf_model_identifier` | TEXT | HF model ID if applicable (e.g. `meta-llama/Llama-3.2-1B-Instruct`) |
+| `model_family` | TEXT | Inferred family (llama, whisper, etc.) |
 
 **`trace_run_config`** — links configs to traces (snapshot).
 
@@ -298,7 +339,8 @@ ttnn_configuration_model   (config ↔ model junction, no snapshot)
 |---|---|
 | `config_hash` | SHA-256 of (operation + arguments + hardware + mesh). Config identity. |
 | `full_config_json` | Complete original config. Source of truth for reconstruction. |
-| `primary_*` | Denormalized fields (dtype, shape, layout) for Superset queries. |
+| `hardware_id` | FK → `ttnn_hardware` |
+| `mesh_config_id` | FK → `ttnn_mesh_config` |
 
 ### Config identity
 
@@ -382,10 +424,13 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 
 | Command | Description |
 |---|---|
-| `load [json] [sha]` | Load JSON into DB. Creates trace_run, appends draft to manifest. |
-| `reconstruct-manifest [manifest] [output] [scope]` | Resolve targets → reconstruct → merge. `scope`: `lead_models` or `model_traced` (default: all) |
-| `resolve-manifest [manifest] [scope]` | Dry-run: print which trace IDs would be used |
-| `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run |
+| `load [json] [sha] [--dry-run]` | Load JSON into DB. Creates trace_run, appends draft to manifest. `--dry-run` previews without committing. |
+| `fix-model-names` | Recompute `model_name` for all models from their source_file / hf_model_identifier. |
+| `set-model-name --source-file P --model-name N` | Override a model's name. Also accepts `--hf-model` or `--model-id`. |
+| `delete-trace <id> [--yes]` | Delete a trace_run and any configs tied exclusively to it. Configs shared with other traces are kept. |
+| `reconstruct-manifest [manifest] [output] [scope]` | Resolve targets → reconstruct (filtered to target models) → merge. `scope`: `lead_models` or `model_traced` (default: all) |
+| `resolve-manifest [manifest] [scope]` | Dry-run: print which trace IDs and model filters would be used |
+| `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run (all models) |
 | `list-traces [filter]` | List all trace_runs in DB |
 | `reconstruct [output] [schema] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
 | `reconstruct-lead [output] [schema]` | Reconstruct lead models only (legacy) |
@@ -402,10 +447,11 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 |---|---|
 | `model_tracer/generic_ops_tracer.py` | Trace models, produce master JSON |
 | `model_tracer/sweep_manifest.yaml` | Targets + trace registry (source of truth for CI) |
-| `model_tracer/migrate_v2_5_add_trace_runs.sql` | Additive DB migration — adds `trace_run` + `trace_run_config` to `ttnn_ops_v2_5` |
-| `model_tracer/cleanup_duplicate_trace_runs.sql` | One-time cleanup: collapses duplicate migrated traces |
-| `model_tracer/consolidate_n300_traces.sql` | One-time: merged all n300 traces into a single trace (run once) |
-| `model_tracer/destructively_create_ttnn_ops_schema_v2.sql` | Original `ttnn_ops_v2_5` schema DDL (reference) |
+| `model_tracer/create_ttnn_ops_schema_v5.sql` | `ttnn_ops_v5` schema DDL |
+| `model_tracer/migrate_v2_5_to_v5.sql` | One-time migration from `ttnn_ops_v2_5` → `ttnn_ops_v5` |
+| `model_tracer/update_model_names.sql` | Add `update_ts` to `ttnn_model`; run before adding UNIQUE constraint on `model_name` |
+| `model_tracer/drop_null_columns_v5.sql` | Drop all-null columns and `ttnn_argument` table |
+| `model_tracer/verify_v5.sql` | 8-test verification suite for `ttnn_ops_v5` data integrity |
 | `tests/sweep_framework/load_ttnn_ops_data_v2.py` | Load, reconstruct, manifest resolution |
 | `tests/sweep_framework/framework/constants.py` | `LEAD_MODELS` — derived from manifest at import time |
 | `tests/sweep_framework/master_config_loader_v2.py` | Loads master JSON for sweep vector generation |

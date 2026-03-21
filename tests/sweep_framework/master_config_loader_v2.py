@@ -102,6 +102,8 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
+TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
+
 
 @dataclass
 class TensorConfig:
@@ -821,12 +823,9 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. TTNN_MASTER_JSON_PATH env var (set by CI per run type)
-                3. ttnn_operations_master_lead_models.json (manifest-based, lead_models scope)
-                4. ttnn_operations_master_model_traced.json (manifest-based, all scopes)
-                5. ttnn_operations_master_v2_reconstructed.json (legacy DB-reconstructed)
-                6. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
-                7. None (degraded mode — empty configs)
+                2. TTNN_MASTER_JSON_PATH env var (optional explicit path)
+                3. TTNN_OPERATIONS_MASTER_JSON (canonical: ttnn_operations_master.json)
+                4. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
             override = MasterConfigLoader._master_file_override
@@ -839,28 +838,13 @@ class MasterConfigLoader:
                 MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-
-            # Env var override (set by CI for each run type)
             env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
             if env_path and os.path.exists(env_path):
                 logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
                 master_file_path = env_path
-
-            # Resolution order for manifest-based JSONs (produced by reconstruct-manifest)
-            candidates = [
-                ("lead_models manifest", os.path.join(traced_dir, "ttnn_operations_master_lead_models.json")),
-                ("model_traced manifest", os.path.join(traced_dir, "ttnn_operations_master_model_traced.json")),
-                ("V2 reconstructed (legacy)", os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")),
-                ("fresh trace", os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")),
-            ]
-
-            if master_file_path is None:
-                for label, path in candidates:
-                    if os.path.exists(path):
-                        logger.info(f"✅ Using {label}: {path}")
-                        master_file_path = path
-                        break
+            elif os.path.exists(TTNN_OPERATIONS_MASTER_JSON):
+                logger.info(f"✅ Using canonical master JSON: {TTNN_OPERATIONS_MASTER_JSON}")
+                master_file_path = TTNN_OPERATIONS_MASTER_JSON
 
         self.master_file_path = master_file_path
         self.master_data = None
