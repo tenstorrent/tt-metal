@@ -159,8 +159,7 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
-    constexpr uint32_t C_in_num_blocks_ct = get_compile_time_arg_val(27);
-    constexpr bool use_fp32_partials = get_compile_time_arg_val(28) == 1;
+    constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
 
     constexpr uint32_t patch_tiles = matmul_M_t * matmul_K_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -272,7 +271,8 @@ void kernel_main() {
                                 // reduction.
                                 if constexpr (use_fp32_partials) {
                                     // SFPU path for fp32: copy both to DST, add via SFPU, pack fp32.
-                                    // Init once before the worker loop — both CBs are Float32.
+                                    // Init once before the worker loop — both CBs are the same Float32
+                                    // format, so one copy_tile_init suffices for both copy_tile calls.
                                     reconfig_data_format_srca(cb_matmul_interm_tiled);
                                     pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     copy_tile_init(cb_matmul_interm_tiled);
