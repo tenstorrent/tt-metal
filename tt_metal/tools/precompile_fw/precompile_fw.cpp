@@ -55,8 +55,6 @@ void enumerate_jit_device_configs(
     constexpr uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
     // Only support compiling 2-ERISC mode for Blackhole.
     const bool enable_2_erisc_mode = (arch == tt::ARCH::BLACKHOLE);
-    // DRAM programmable cores are opt-in on Blackhole; precompile both with and without.
-    const bool enable_dram_programmable_cores = (arch == tt::ARCH::BLACKHOLE);
 
     // FIXME: hardcoded based on UMD values
     static const std::unordered_map<tt::ARCH, uint32_t> num_dram_banks_map = {
@@ -120,45 +118,33 @@ void enumerate_jit_device_configs(
                     TT_THROW("Invalid dispatch core type: {}", dispatch_core_type_str);
                 }
 
-                // Enumerate all possible combinations of routing_fw_enabled, dram_harvesting_cfg,
-                // and dram_programmable_cores.
-                std::vector<bool> dram_programmable_cores_cfgs = {false};
-                if (enable_dram_programmable_cores) {
-                    dram_programmable_cores_cfgs.push_back(true);
-                }
+                // now enumerate all possible combinations of routing_fw_enabled and dram_harvesting_cfg
                 for (const auto& routing_fw_enabled : routing_fw_enabled_cfgs) {
                     for (const auto& dram_harvesting_count : dram_harvesting_cfgs) {
-                        for (const auto& dram_cores_enabled : dram_programmable_cores_cfgs) {
-                            const uint32_t num_dram_banks = num_dram_banks_map.at(arch) - dram_harvesting_count;
-                            tt::tt_metal::Hal hal(
-                                arch,
-                                routing_fw_enabled,
-                                enable_2_erisc_mode,
-                                profiler_dram_bank_size_per_risc_bytes,
-                                /*is_simulator=*/false,
-                                dram_cores_enabled);
-                            JitDeviceConfig jit_device_config = {
-                                .hal = &hal,
-                                .arch = arch,
-                                .num_dram_banks = num_dram_banks,
-                                .num_l1_banks = num_l1_banks,
-                                .pcie_core = pcie_core,
-                                // We only precompile with coordinate_virtualization_enabled = true, so
-                                // harvesting_mask has no effect on compilation
-                                .harvesting_mask = 0,
-                                .dispatch_core_type = dispatch_core_type,
-                                .dispatch_core_axis = dispatch_core_axis,
-                                .coordinate_virtualization_enabled = true,
-                                .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),
-                                .max_cbs = hal.get_arch_num_circular_buffers(),
-                                .num_hw_cqs = num_hw_cqs,
-                                .routing_fw_enabled = routing_fw_enabled,
-                                // We only precompile with profiler disabled, so
-                                // profiler_dram_bank_size_per_risc_bytes has no effect on compilation
-                                .profiler_dram_bank_size_per_risc_bytes = profiler_dram_bank_size_per_risc_bytes,
-                            };
-                            callback(jit_device_config);
-                        }
+                        const uint32_t num_dram_banks = num_dram_banks_map.at(arch) - dram_harvesting_count;
+                        tt::tt_metal::Hal hal(
+                            arch, routing_fw_enabled, enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes);
+                        JitDeviceConfig jit_device_config = {
+                            .hal = &hal,
+                            .arch = arch,
+                            .num_dram_banks = num_dram_banks,
+                            .num_l1_banks = num_l1_banks,
+                            .pcie_core = pcie_core,
+                            // We only precompile with coordinate_virtualization_enabled = true, so harvesting_mask
+                            // has no effect on compilation
+                            .harvesting_mask = 0,
+                            .dispatch_core_type = dispatch_core_type,
+                            .dispatch_core_axis = dispatch_core_axis,
+                            .coordinate_virtualization_enabled = true,
+                            .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),
+                            .max_cbs = hal.get_arch_num_circular_buffers(),
+                            .num_hw_cqs = num_hw_cqs,
+                            .routing_fw_enabled = routing_fw_enabled,
+                            // We only precompile with profiler disabled, so profiler_dram_bank_size_per_risc_bytes
+                            // has no effect on compilation
+                            .profiler_dram_bank_size_per_risc_bytes = profiler_dram_bank_size_per_risc_bytes,
+                        };
+                        callback(jit_device_config);
                     }
                 }
             }
