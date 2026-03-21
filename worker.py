@@ -60,6 +60,25 @@ def setup_sd35_worker_environment(worker_id: int, config):
     os.environ.pop("TT_METAL_VISIBLE_DEVICES", None)
 
 
+def setup_wan_worker_environment(worker_id: int, config):
+    """
+    Set worker-specific environment variables for WAN 2.2 (LoudBox, single worker
+    owns the full 2x4 mesh).
+
+    All 8 device IDs are made visible so the mesh device can be opened with
+    the full 2x4 topology. No per-device isolation needed.
+    """
+    os.environ["TT_METAL_HOME"] = os.getcwd()
+    os.environ["PYTHONPATH"] = os.getcwd()
+
+    # WAN needs the full 2x4 mesh (all 8 chips: 4 PCIe L + 4 ethernet R).
+    # Do NOT restrict TT_VISIBLE_DEVICES — let UMD discover the full topology.
+    # The shell may have set TT_VISIBLE_DEVICES to PCIe-only IDs; clear it here
+    # so the system mesh auto-discovers all 8 chips correctly.
+    os.environ.pop("TT_VISIBLE_DEVICES", None)
+    os.environ.pop("TT_METAL_VISIBLE_DEVICES", None)
+
+
 def device_worker_process(
     worker_id: int,
     task_queue: mp.Queue,
@@ -70,9 +89,10 @@ def device_worker_process(
     config,
 ):
     """
-    Main worker process function that handles image generation inference tasks.
+    Main worker process function that handles inference tasks.
 
-    Supports both SDXL and SD3.5 via config type dispatch:
+    Supports SDXL, SD3.5, and WAN 2.2 via config type dispatch:
+    - WANConfig   → WANRunner   (2x4 mesh, single worker, video output)
     - SD35Config  → SD35Runner  (2x4 mesh, single worker)
     - SDXLConfig  → SDXLRunner  (1x1 mesh, one worker per device)
 
@@ -95,9 +115,15 @@ def device_worker_process(
     try:
         # Determine model type and set up environment + runner
         # Imports are deferred here to avoid ttnn initialization in the main process
+        from wan_config import WANConfig
         from sd35_config import SD35Config
 
-        if isinstance(config, SD35Config):
+        if isinstance(config, WANConfig):
+            setup_wan_worker_environment(worker_id, config)
+            from wan_runner import WANRunner
+
+            runner = WANRunner(worker_id, config)
+        elif isinstance(config, SD35Config):
             setup_sd35_worker_environment(worker_id, config)
             from sd35_runner import SD35Runner
 

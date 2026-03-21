@@ -23,8 +23,8 @@ for arg in "$@"; do
     fi
 done
 
-if [ "$MODEL" != "sdxl" ] && [ "$MODEL" != "sd35" ]; then
-    echo "Error: --model must be 'sdxl' or 'sd35' (got: '$MODEL')"
+if [ "$MODEL" != "sdxl" ] && [ "$MODEL" != "sd35" ] && [ "$MODEL" != "wan" ]; then
+    echo "Error: --model must be 'sdxl', 'sd35', or 'wan' (got: '$MODEL')"
     exit 1
 fi
 
@@ -164,6 +164,36 @@ print(','.join(ids[:8]))
     fi
     # No TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for SD3.5
     # No TT_MM_THROTTLE_PERF for SD3.5
+
+elif [ "$MODEL" = "wan" ]; then
+    # WAN requires 8 devices (2x4 mesh). Fail fast with a clear error if unavailable.
+    if [ "${DETECTED_DEVICE_COUNT}" -gt 0 ] 2>/dev/null; then
+        if [ "${DETECTED_DEVICE_COUNT}" -lt 8 ]; then
+            echo ""
+            echo "ERROR: WAN 2.2 requires 8 TT devices (LoudBox, 2x4 mesh)."
+            echo "       Only ${DETECTED_DEVICE_COUNT} device(s) detected."
+            echo ""
+            echo "WAN 2.2 uses a 2x4 mesh — the pipeline"
+            echo "requires at least 8 chips and cannot run on T3K (4 devices)."
+            echo ""
+            echo "To run SDXL on this machine: ./launch_server.sh --model sdxl"
+            exit 1
+        fi
+        # Use exactly the first 8 detected device IDs
+        WAN_IDS=$(echo "$DETECTED_DEVICE_IDS" | python3 -c "
+import sys
+ids = sys.stdin.read().strip().split(',')
+print(','.join(ids[:8]))
+")
+        export TT_VISIBLE_DEVICES="$WAN_IDS"
+        export TT_METAL_VISIBLE_DEVICES="$WAN_IDS"
+    else
+        echo "Warning: Could not detect device count. Assuming 8 devices for WAN."
+        export TT_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+        export TT_METAL_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+    fi
+    # No TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for WAN
+    # No TT_MM_THROTTLE_PERF for WAN
 fi
 
 # ---------------------------------------------------------------------------
@@ -199,6 +229,11 @@ for arg in "$@"; do
             export SD35_DEV_MODE=true
             echo ""
             echo "*** SD3.5 DEV MODE: Reduced steps, no trace capture ***"
+        elif [ "$MODEL" = "wan" ]; then
+            # WAN dev mode: keep all 8 devices but use fewer inference steps
+            export WAN_DEV_MODE=true
+            echo ""
+            echo "*** WAN DEV MODE: Reduced steps for faster iteration ***"
         fi
         break
     fi
@@ -247,6 +282,8 @@ if [ "$DEV_MODE" = "true" ]; then
     echo "Starting ${MODEL} server in DEV MODE..."
     if [ "$MODEL" = "sd35" ]; then
         echo "This will take 2-5 minutes (no trace capture in dev mode)."
+    elif [ "$MODEL" = "wan" ]; then
+        echo "This will take 5-10 minutes for model loading and warmup (dev mode, fewer steps)."
     else
         echo "This will take 5-8 minutes for initial warmup."
     fi
@@ -254,6 +291,8 @@ else
     echo "Starting ${MODEL} server..."
     if [ "$MODEL" = "sd35" ]; then
         echo "This will take 15-25 minutes for first-run trace capture."
+    elif [ "$MODEL" = "wan" ]; then
+        echo "This will take 15-30 minutes for first-run model loading."
     else
         echo "This will take 5-10 minutes for initial warmup."
     fi

@@ -16,23 +16,29 @@ from pydantic import BaseModel, Field
 
 from utils.logger import setup_logger
 from utils.image_utils import pil_to_base64
+from utils.video_utils import frames_to_mp4, mp4_to_base64
 from utils.cache_utils import validate_cache, log_cache_info
 
 
 def parse_args():
     """Parse command-line arguments for the unified inference server"""
-    parser = argparse.ArgumentParser(description="Unified Image Generation Inference Server (SDXL / SD3.5 Large)")
+    parser = argparse.ArgumentParser(
+        description="Unified Image/Video Generation Inference Server (SDXL / SD3.5 Large / WAN 2.2)"
+    )
     parser.add_argument(
         "--model",
         type=str,
         default="sdxl",
-        choices=["sdxl", "sd35"],
-        help="Model to serve: 'sdxl' (T3K, 4 workers) or 'sd35' (LoudBox, 1 worker × 2x4 mesh)",
+        choices=["sdxl", "sd35", "wan"],
+        help=(
+            "Model to serve: 'sdxl' (T3K, 4 workers), 'sd35' (LoudBox, 1 worker × 2x4 mesh), "
+            "or 'wan' (LoudBox, 1 worker × 2x4 mesh, text-to-video)"
+        ),
     )
     parser.add_argument(
         "--dev",
         action="store_true",
-        help="Enable dev mode (SDXL: 1 worker; SD35: fewer steps, no trace)",
+        help="Enable dev mode (SDXL: 1 worker; SD35: fewer steps, no trace; WAN: fewer steps)",
     )
     parser.add_argument("--workers", type=int, help="Override number of workers")
     parser.add_argument("--steps", type=int, help="Override number of inference steps")
@@ -48,8 +54,10 @@ args = parse_args()
 if args.dev:
     if args.model == "sdxl":
         os.environ["SDXL_DEV_MODE"] = "true"
-    else:
+    elif args.model == "sd35":
         os.environ["SD35_DEV_MODE"] = "true"
+    elif args.model == "wan":
+        os.environ["WAN_DEV_MODE"] = "true"
 
 # Build the appropriate config
 if args.model == "sd35":
@@ -57,6 +65,11 @@ if args.model == "sd35":
 
     config = SD35Config()
     model_label = "SD3.5 Large"
+elif args.model == "wan":
+    from wan_config import WANConfig
+
+    config = WANConfig()
+    model_label = "WAN 2.2"
 else:
     from sdxl_config import SDXLConfig
 
@@ -112,6 +125,25 @@ class ImageResponse(BaseModel):
     images: List[str]  # Base64-encoded JPEG images
     inference_time: float
     model: str  # Model label for client-side detection ("SDXL" or "SD3.5 Large")
+
+
+class VideoRequest(BaseModel):
+    """Video generation request (WAN 2.2 T2V)"""
+
+    prompt: str
+    negative_prompt: Optional[str] = ""
+    num_inference_steps: Optional[int] = Field(default=None, ge=1, le=200)
+    seed: Optional[int] = None
+
+
+class VideoResponse(BaseModel):
+    """Video generation response"""
+
+    video: str  # Base64-encoded MP4
+    inference_time: float
+    model: str  # Model label for client-side detection
+    num_frames: int
+    fps: int
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +293,14 @@ async def generate_image(request: ImageRequest):
     """Generate an image from a text prompt.
 
     Returns a base64-encoded JPEG along with inference time and the model label.
+    Not available when the server is running the WAN 2.2 video model.
     """
+    if args.model == "wan":
+        raise HTTPException(
+            status_code=400,
+            detail="Image generation is not available for the WAN 2.2 model. Use POST /video/generations instead.",
+        )
+
     task_id = str(uuid.uuid4())
 
     try:
@@ -283,6 +322,67 @@ async def generate_image(request: ImageRequest):
                     images=base64_images,
                     inference_time=result["inference_time"],
                     model=model_label,
+                )
+            else:
+                # Result belongs to a different task — put it back
+                result_queue.put(result)
+
+        except Exception:
+            # Check error queue on timeout
+            try:
+                error = error_queue.get_nowait()
+                logger.error(f"Worker error: {error}")
+            except Exception:
+                pass
+
+    raise HTTPException(status_code=408, detail="Request timeout")
+
+
+@app.post("/video/generations", response_model=VideoResponse)
+async def generate_video(request: VideoRequest):
+    """Generate a video from a text prompt (WAN 2.2 T2V only).
+
+    Returns a base64-encoded MP4 along with inference time, model label,
+    frame count, and fps.
+    """
+    if args.model != "wan":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Video generation is only available for the WAN 2.2 model. Current model: {model_label}.",
+        )
+
+    task_id = str(uuid.uuid4())
+
+    try:
+        task_queue.put((task_id, request.dict()), timeout=5)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Task queue is full")
+
+    # Poll result queue until our task_id comes back or we time out
+    start_time = time.time()
+    timeout = start_time + config.inference_timeout_seconds
+
+    while time.time() < timeout:
+        try:
+            result = result_queue.get(timeout=1)
+
+            if result["task_id"] == task_id:
+                video_path = frames_to_mp4(result["images"], fps=config.fps)
+                try:
+                    encoded_video = mp4_to_base64(video_path)
+                finally:
+                    # Clean up temp file after encoding
+                    try:
+                        os.remove(video_path)
+                    except Exception:
+                        pass
+
+                return VideoResponse(
+                    video=encoded_video,
+                    inference_time=result["inference_time"],
+                    model=model_label,
+                    num_frames=config.num_frames,
+                    fps=config.fps,
                 )
             else:
                 # Result belongs to a different task — put it back

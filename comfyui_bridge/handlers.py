@@ -25,6 +25,8 @@ from multiprocessing import shared_memory
 from typing import Dict, Any, Optional
 from sdxl_runner import SDXLRunner
 from sdxl_config import SDXLConfig
+from sd35_runner import SD35Runner
+from sd35_config import SD35Config
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +234,7 @@ class OperationHandler:
         """
         self.config = config
         self.sdxl_runner: Optional[SDXLRunner] = None
+        self.sd35_runner: Optional[SD35Runner] = None
         self.tensor_bridge = TensorBridge()
         self.model_id: Optional[str] = None
         logger.info("OperationHandler initialized")
@@ -252,30 +255,52 @@ class OperationHandler:
         model_type = data.get("model_type", "sdxl")
         logger.info(f"Initializing model: {model_type}")
 
-        if model_type != "sdxl":
-            raise ValueError(f"Unsupported model type: {model_type}")
+        import uuid
 
         try:
-            # Create SDXLRunner with worker_id=0 (single bridge server)
-            self.sdxl_runner = SDXLRunner(worker_id=0, config=self.config)
+            if model_type == "sdxl":
+                # Create SDXLRunner with worker_id=0 (single bridge server)
+                self.sdxl_runner = SDXLRunner(worker_id=0, config=self.config)
 
-            # Initialize device
-            logger.info("Initializing device...")
-            self.sdxl_runner.initialize_device()
+                # Initialize device
+                logger.info("Initializing device...")
+                self.sdxl_runner.initialize_device()
 
-            # Load model (includes warmup)
-            logger.info("Loading model and warming up...")
-            self.sdxl_runner.load_model()
+                # Load model (includes warmup)
+                logger.info("Loading model and warming up...")
+                self.sdxl_runner.load_model()
 
-            # Generate model ID
-            import uuid
+                # Generate model ID
+                self.model_id = f"sdxl_{uuid.uuid4().hex[:8]}"
 
-            self.model_id = f"sdxl_{uuid.uuid4().hex[:8]}"
+                logger.info(f"Model initialized successfully: {self.model_id}")
 
-            logger.info(f"Model initialized successfully: {self.model_id}")
+                return {"model_id": self.model_id, "status": "ready"}
 
-            return {"model_id": self.model_id, "status": "ready"}
+            elif model_type == "sd35":
+                sd35_config = SD35Config()
+                self.sd35_runner = SD35Runner(worker_id=0, config=sd35_config)
 
+                # Initialize device
+                logger.info("Initializing device...")
+                self.sd35_runner.initialize_device()
+
+                # Load model
+                logger.info("Loading model...")
+                self.sd35_runner.load_model()
+
+                # Generate model ID
+                self.model_id = f"sd35_{uuid.uuid4().hex[:8]}"
+
+                logger.info(f"Model initialized successfully: {self.model_id}")
+
+                return {"model_id": self.model_id, "status": "ready"}
+
+            else:
+                raise ValueError(f"Unsupported model type: {model_type}")
+
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Model initialization failed: {e}", exc_info=True)
             raise RuntimeError(f"Model initialization failed: {e}")
@@ -307,7 +332,7 @@ class OperationHandler:
         if model_id != self.model_id:
             raise ValueError(f"Invalid model_id: {model_id}")
 
-        if self.sdxl_runner is None:
+        if self.sdxl_runner is None and self.sd35_runner is None:
             raise RuntimeError("Model not initialized. Call init_model first.")
 
         logger.info("Running full denoise operation...")
@@ -331,23 +356,36 @@ class OperationHandler:
                 f"guidance={guidance_scale}, size={width}x{height}, seed={seed}"
             )
 
-            # Build inference request
-            request = {
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                "prompt_2": prompt_2,
-                "negative_prompt_2": negative_prompt_2,
-                "num_inference_steps": num_steps,
-                "guidance_scale": guidance_scale,
-                "guidance_rescale": guidance_rescale,
-                "width": width,
-                "height": height,
-                "seed": seed,
-            }
+            # Pick the active runner
+            runner = self.sd35_runner if self.sd35_runner is not None else self.sdxl_runner
 
-            # Run inference via SDXLRunner
-            logger.info("Calling SDXLRunner.run_inference...")
-            images = self.sdxl_runner.run_inference([request])
+            # Build inference request
+            if self.sd35_runner is not None:
+                # SD35Runner only accepts a subset of parameters
+                request = {
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "num_inference_steps": num_steps,
+                    "guidance_scale": guidance_scale,
+                    "seed": seed,
+                }
+            else:
+                request = {
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "prompt_2": prompt_2,
+                    "negative_prompt_2": negative_prompt_2,
+                    "num_inference_steps": num_steps,
+                    "guidance_scale": guidance_scale,
+                    "guidance_rescale": guidance_rescale,
+                    "width": width,
+                    "height": height,
+                    "seed": seed,
+                }
+
+            # Run inference via active runner
+            logger.info(f"Calling {type(runner).__name__}.run_inference...")
+            images = runner.run_inference([request])
 
             if not images:
                 raise RuntimeError("No images generated")
@@ -425,6 +463,9 @@ class OperationHandler:
         model_id = data.get("model_id")
         if model_id != self.model_id:
             raise ValueError(f"Invalid model_id: {model_id}")
+
+        if self.sd35_runner is not None:
+            raise NotImplementedError("denoise_only is not supported for SD3.5 — use full_denoise")
 
         if self.sdxl_runner is None:
             raise RuntimeError("Model not initialized. Call init_model first.")
@@ -637,7 +678,7 @@ class OperationHandler:
 
         return {
             "status": "ok",
-            "model_loaded": self.sdxl_runner is not None,
+            "model_loaded": self.sdxl_runner is not None or self.sd35_runner is not None,
             "model_id": self.model_id if self.model_id else None,
         }
 
@@ -663,6 +704,9 @@ class OperationHandler:
         model_id = data.get("model_id")
         if model_id != self.model_id:
             raise ValueError(f"Invalid model_id: {model_id}")
+
+        if self.sd35_runner is not None:
+            raise NotImplementedError("vae_decode is not supported for SD3.5 — use full_denoise")
 
         if self.sdxl_runner is None:
             raise RuntimeError("Model not initialized. Call init_model first.")
@@ -838,6 +882,9 @@ class OperationHandler:
         if model_id != self.model_id:
             raise ValueError(f"Invalid model_id: {model_id}")
 
+        if self.sd35_runner is not None:
+            raise NotImplementedError("vae_encode is not supported for SD3.5 — use full_denoise")
+
         if self.sdxl_runner is None:
             raise RuntimeError("Model not initialized. Call init_model first.")
 
@@ -988,11 +1035,14 @@ class OperationHandler:
         if model_id != self.model_id:
             raise ValueError(f"Invalid model_id: {model_id}")
 
-        if self.sdxl_runner is not None:
+        runner = self.sd35_runner if self.sd35_runner is not None else self.sdxl_runner
+
+        if runner is not None:
             try:
                 # Close device and cleanup
-                self.sdxl_runner.close_device()
+                runner.close_device()
                 self.sdxl_runner = None
+                self.sd35_runner = None
                 self.model_id = None
 
                 # Cleanup shared memory
@@ -1017,7 +1067,13 @@ class OperationHandler:
             try:
                 self.sdxl_runner.close_device()
             except Exception as e:
-                logger.error(f"Error closing device: {e}")
+                logger.error(f"Error closing SDXL device: {e}")
+
+        if self.sd35_runner is not None:
+            try:
+                self.sd35_runner.close_device()
+            except Exception as e:
+                logger.error(f"Error closing SD3.5 device: {e}")
 
         self.tensor_bridge.cleanup_all()
 
