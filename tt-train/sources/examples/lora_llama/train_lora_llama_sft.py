@@ -71,7 +71,12 @@ class LossLogger(TrainerCallback):
     def on_train_end(self, trainer):
         import json
 
-        with open(self._path, "w") as f:
+        # Ensure the parent directory exists before writing the loss log.
+        dirpath = os.path.dirname(self._path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+
+        with open(self._path, "w", encoding="utf-8") as f:
             json.dump(self._records, f, indent=2)
         print(f"Loss log saved to {self._path}")
 
