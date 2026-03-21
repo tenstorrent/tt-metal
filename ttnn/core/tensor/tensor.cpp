@@ -112,8 +112,8 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
-        mesh_device_ = buffer->device();
+    if (is_allocated()) {
+        mesh_device_ = device_storage().get_device();
     }
 }
 
@@ -155,20 +155,15 @@ void Tensor::deallocate_impl(bool force) {
     bool tracking = GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            ttsl::overloaded{
-                [](HostStorage&) {},
-                [this, force, tracking, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
-                        if (tracking) {
+            ttsl::overloaded{[](HostStorage&) {}, [force, tracking](DeviceStorage& storage) {
+                if (tracking) {
                             GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
-                        }
-                        storage.deallocate_root_mesh_buffer();
-                        if (tracking) {
-                            GraphTracker::instance().track_function_end();
-                        }
-                    }
-                    storage.reset_root_mesh_buffer();
-                }},
+                }
+                storage.deallocate(force);
+                if (tracking) {
+                    GraphTracker::instance().track_function_end();
+                }
+            }},
             this->tensor_attributes->get_storage());
     }
 }

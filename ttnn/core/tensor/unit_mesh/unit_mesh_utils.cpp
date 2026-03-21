@@ -84,13 +84,11 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
         parent_mesh.get(),
         reference_address);
 
-    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
-    coords.reserve(parent_mesh->shape().mesh_size());
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(parent_mesh->shape())) {
-        coords.push_back(coord);
-    }
-
-    tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
+    tt::tt_metal::DeviceStorage device_storage(mesh_buffer);
+    TT_FATAL(
+        device_storage.get_coords().size() == 1 &&
+            device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
+        "mesh_buffer is not on a unit submesh");
 
     return Tensor(
         std::move(device_storage),
@@ -136,9 +134,11 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer->global_config(), input_mesh_buffer->device_local_config(), submesh.get(), input_address);
 
-        DeviceStorage device_storage(
-            std::move(mesh_buffer),
-            std::vector<tt::tt_metal::distributed::MeshCoordinate>{tt::tt_metal::distributed::MeshCoordinate(0, 0)});
+        DeviceStorage device_storage(mesh_buffer);
+        TT_FATAL(
+            device_storage.get_coords().size() == 1 &&
+                device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            "mesh_buffer is not on a unit submesh");
 
         result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
     }

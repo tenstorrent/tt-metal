@@ -471,12 +471,12 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const auto& storage = tensor.device_storage();
     auto cpu_tensor = tensor.cpu();
-    if (storage.mesh_buffer == nullptr) {
+    if (!storage.is_allocated()) {
         // Use owned buffer path above.
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto* mesh_device = storage.mesh_buffer->device();
+    auto* mesh_device = storage.get_device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -484,7 +484,7 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const auto& coords = storage.coords;
+    const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
     const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
     std::stringstream ss;
@@ -538,7 +538,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
-    const auto& mesh_buffer = storage.mesh_buffer;
+    const auto& mesh_buffer = storage.get_mesh_buffer();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -548,7 +548,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
     distributed_host_buffer.emplace_shards(
-        storage.coords,
+        std::vector<distributed::MeshCoordinate>(storage.get_coords().begin(), storage.get_coords().end()),
         [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
@@ -583,12 +583,7 @@ DeviceStorage replicate_to_mesh_buffer(
     mesh_device->mesh_command_queue(cq_id_int).enqueue_write_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
 
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        coords.push_back(coord);
-    }
-    return DeviceStorage(mesh_buffer, std::move(coords));
+    return DeviceStorage(mesh_buffer);
 }
 
 DeviceStorage write_to_mesh_buffer(
@@ -598,6 +593,7 @@ DeviceStorage write_to_mesh_buffer(
     std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
     mesh_buffer->device()->mesh_command_queue(cq_id_int).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(distributed_host_buffer.shard_coords().size());
     std::copy(
@@ -671,7 +667,7 @@ void copy_to_host(
         "Host tensor has different page config");
 
     const auto& device_storage = device_tensor.device_storage();
-    const auto& mesh_buffer = device_storage.mesh_buffer;
+    const auto& mesh_buffer = device_tensor.mesh_buffer();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -683,8 +679,8 @@ void copy_to_host(
     // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
     // only for those shards that are actually present on device.
     std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
-    shards.reserve(device_storage.coords.size());
-    for (const auto& device_coord : device_storage.coords) {
+    shards.reserve(device_storage.get_coords().size());
+    for (const auto& device_coord : device_storage.get_coords()) {
         shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
     }
 
@@ -740,7 +736,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
+    auto mesh_buffer = device_tensor.mesh_buffer();
 
     auto [mesh_storage, topology] = to_device_mesh_buffer(
         host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
