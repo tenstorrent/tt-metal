@@ -5,7 +5,7 @@
 #include <cmath>
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
+#include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
 #define PRINT_AND_PROFILE 0
@@ -13,6 +13,17 @@
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "api/debug/dprint.h"
 #endif
+
+template <uint32_t input_cb_index, uint32_t scalar_cb_index>
+ALWI void push_padding_sticks() {
+    cb_reserve_back(input_cb_index, 1);
+    cb_push_back(input_cb_index, 1);
+
+    cb_reserve_back(scalar_cb_index, 1);
+    zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
+    noc_async_read_barrier();
+    cb_push_back(scalar_cb_index, 1);
+}
 
 ALWI void advance_grid_index_bounded(
     uint32_t& in_grid_row_idx,
@@ -76,6 +87,14 @@ void kernel_main() {
     // Get local grid data base address (already in L1)
     const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
 
+    // Compute how many sticks on this core contain valid grid data.
+    // Padding sticks (from height-sharding) may contain garbage L1 data that,
+    // if interpreted as grid coordinates, can cause NOC reads to invalid addresses.
+    constexpr uint32_t total_valid_sticks = input_batch * grid_hw;
+    const uint32_t remaining =
+        (global_grid_stick_start < total_valid_sticks) ? (total_valid_sticks - global_grid_stick_start) : 0;
+    const uint32_t valid_sticks_this_core = (remaining < grid_nsticks_per_core) ? remaining : grid_nsticks_per_core;
+
     // Process each grid stick assigned to this core
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
@@ -103,18 +122,24 @@ void kernel_main() {
     }
 
     while (grid_stick_idx < grid_nsticks_per_core) {
-        volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
+        if (grid_stick_idx < valid_sticks_this_core) {
+            volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
-        uint32_t batch_offset = curr_batch * input_height * input_width;
-        process_grid_point<
-            grid_dtype,
-            use_precomputed_grid,
-            input_height,
-            input_width,
-            input_stick_nbytes,
-            input_cb_index,
-            scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
+            uint32_t batch_offset = curr_batch * input_height * input_width;
+            process_grid_point<
+                grid_dtype,
+                use_precomputed_grid,
+                input_height,
+                input_width,
+                input_stick_nbytes,
+                input_cb_index,
+                scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
+        } else {
+            // Padding stick from height-sharding — push zero-weight data to CBs
+            // so the compute kernel receives the expected number of items.
+            push_padding_sticks<input_cb_index, scalar_cb_index>();
+        }
 
         // Always advance once after processing
         advance_grid_index_bounded(
