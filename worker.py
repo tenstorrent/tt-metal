@@ -52,10 +52,12 @@ def setup_sd35_worker_environment(worker_id: int, config):
     os.environ["TT_METAL_HOME"] = os.getcwd()
     os.environ["PYTHONPATH"] = os.getcwd()
 
-    # Expose all configured device IDs to the worker process
-    device_ids_str = ",".join(map(str, config.device_ids))
-    os.environ["TT_VISIBLE_DEVICES"] = device_ids_str
-    os.environ["TT_METAL_VISIBLE_DEVICES"] = device_ids_str
+    # SD3.5 needs the full 2x4 mesh (all 8 chips: 4 PCIe L + 4 ethernet R).
+    # Do NOT restrict TT_VISIBLE_DEVICES — let UMD discover the full topology.
+    # The shell may have set TT_VISIBLE_DEVICES to PCIe-only IDs; clear it here
+    # so the system mesh auto-discovers all 8 chips correctly.
+    os.environ.pop("TT_VISIBLE_DEVICES", None)
+    os.environ.pop("TT_METAL_VISIBLE_DEVICES", None)
 
 
 def device_worker_process(

@@ -87,7 +87,9 @@ try:
     # On a LoudBox, 4 n300 boards each have L (PCIe) + R (ethernet) chip = 8 total.
     # The R chips have bus_id="N/A" but are still valid TT devices.
     devices = data.get("device_info", [])
-    ids = ",".join(str(i) for i in range(len(devices)))
+    pcie_ids = [str(i) for i, dev in enumerate(devices)
+                if dev.get("board_info", {}).get("bus_id", "N/A") != "N/A"]
+    ids = ",".join(pcie_ids)
     print(f"{len(devices)}:{ids}")
     for i, dev in enumerate(devices):
         board_info = dev.get("board_info", {})

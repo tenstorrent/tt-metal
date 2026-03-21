@@ -27,6 +27,7 @@ class SD35Runner:
         self.logger = setup_logger(f"SD35Runner-{worker_id}")
         self.mesh_device = None
         self.pipeline = None
+        self._fabric_config = None
 
     def initialize_device(self):
         """Initialize 2x4 mesh device with FABRIC_1D and SD3.5-specific parameters.
@@ -46,16 +47,24 @@ class SD35Runner:
         # Map the fabric_config_name string to the ttnn enum value
         fabric_config = getattr(ttnn.FabricConfig, self.config.fabric_config_name)
 
+        # Set fabric before opening the mesh (correct two-step API)
+        ttnn.set_fabric_config(
+            fabric_config,
+            ttnn.FabricReliabilityMode.STRICT_INIT,
+            None,
+            ttnn.FabricTensixConfig.DISABLED,
+        )
+        self._fabric_config = fabric_config
+
         self.mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(rows, cols),
             l1_small_size=self.config.l1_small_size,
             trace_region_size=self.config.trace_region_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(),
-            fabric_config=fabric_config,
         )
 
         self.logger.info(
-            f"Mesh device initialized: shape={self.config.device_mesh_shape}, "
+            f"Mesh device initialized: shape={tuple(self.mesh_device.shape)}, "
             f"fabric={self.config.fabric_config_name}, "
             f"l1_small_size={self.config.l1_small_size}, "
             f"trace_region_size={self.config.trace_region_size}"
@@ -172,3 +181,6 @@ class SD35Runner:
             self.logger.info("Closing mesh device")
             ttnn.close_mesh_device(self.mesh_device)
             self.mesh_device = None
+            if self._fabric_config is not None:
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+                self._fabric_config = None

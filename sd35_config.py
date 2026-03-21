@@ -17,7 +17,12 @@ class SD35Config:
     num_workers: int = 1  # Single worker owns entire 2x4 mesh
 
     # Device settings (LoudBox) - 1 worker with 2x4 mesh
-    device_ids: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
+    device_ids: Tuple[int, ...] = (
+        0,
+        1,
+        2,
+        3,
+    )  # PCIe-attached L chips only; R chips auto-discovered via ethernet fabric
     device_mesh_shape: Tuple[int, int] = (2, 4)
 
     # Device parameters (from test_pipeline_sd35.py device_params fixture)
