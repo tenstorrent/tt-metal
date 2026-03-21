@@ -208,7 +208,9 @@ ttnn::Tensor all_reduce_async(
             num_preferred_links.value_or(1),
             out_memory_config,
             worker_subdevice_id_opt,
-            std::nullopt);
+            std::nullopt,
+            ag_global_semaphores[0],
+            barrier_semaphores[1]);
         reshaped_tensor.deallocate();
 
         bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);
@@ -321,7 +323,11 @@ ttnn::Tensor all_reduce_async(
             num_preferred_links.value_or(1),
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
-            cluster_axis);
+            cluster_axis,
+            ag_global_semaphores.has_value() ? std::optional<GlobalSemaphore>(ag_global_semaphores.value()[0])
+                                             : std::nullopt,
+            barrier_semaphores.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphores.value()[1])
+                                           : std::nullopt);
         reshaped_tensor.deallocate();
 
         bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);

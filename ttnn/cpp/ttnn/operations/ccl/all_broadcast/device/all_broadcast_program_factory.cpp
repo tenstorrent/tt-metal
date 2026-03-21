@@ -34,8 +34,10 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto init_barrier_semaphore = operation_attributes.semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
+    auto final_barrier_semaphore = operation_attributes.barrier_semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
