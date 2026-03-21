@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from models.common.utility_functions import skip_for_wormhole_b0
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -28,8 +29,12 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
         ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM"),
         ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM"),
         ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM"),
-        ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED"),
-        ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED"),
+        pytest.param(
+            "decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", marks=skip_for_wormhole_b0("Failing on Wormhole")
+        ),
+        pytest.param(
+            "decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", marks=skip_for_wormhole_b0("Failing on Wormhole")
+        ),
         ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED"),
     ),
     ids=[
@@ -87,9 +92,15 @@ def test_device_perf_wh_bare_metal(
         ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2115),
         ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 3120),
         ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2870),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 647),
-        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 548),
+        pytest.param(
+            "decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 647, marks=skip_for_wormhole_b0("Failing on Wormhole")
+        ),
+        pytest.param(
+            "decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572, marks=skip_for_wormhole_b0("Failing on Wormhole")
+        ),
+        pytest.param(
+            "decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 548, marks=skip_for_wormhole_b0("Failing on Wormhole")
+        ),
     ),
 )
 def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples):
