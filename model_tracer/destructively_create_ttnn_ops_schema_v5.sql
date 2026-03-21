@@ -63,7 +63,7 @@ CREATE TABLE ttnn_ops_v5.ttnn_hardware (
 
 -- ---------------------------------------------------------------------------
 -- 4. ttnn_mesh_config
---    Mesh shape only; placement is per-tensor in ttnn_argument.
+--    Mesh shape only; per-tensor placement is stored in ttnn_configuration.full_config_json.
 -- ---------------------------------------------------------------------------
 CREATE TABLE ttnn_ops_v5.ttnn_mesh_config (
     ttnn_mesh_config_id SERIAL PRIMARY KEY,
