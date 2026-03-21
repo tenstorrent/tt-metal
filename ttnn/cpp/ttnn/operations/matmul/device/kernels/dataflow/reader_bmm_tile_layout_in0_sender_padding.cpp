@@ -54,21 +54,22 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
-    constexpr uint32_t batch = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_B = get_compile_time_arg_val(20);
+    constexpr uint32_t in1_B = get_compile_time_arg_val(21);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(21);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(22);
+    constexpr uint32_t batchB = get_compile_time_arg_val(22);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(23);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(23);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(24);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(25);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
 
-    constexpr auto in0_args = TensorAccessorArgs<26>();
+    constexpr auto in0_args = TensorAccessorArgs<27>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -148,7 +149,8 @@ void kernel_main() {
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
 
-    for (uint32_t b = 0; b < batch; ++b) {
+    constexpr uint32_t max_batch_size = (in0_B > in1_B) ? in0_B : in1_B;
+    for (uint32_t b = 0; b < max_batch_size; ++b) {
         if constexpr (batchB > 0) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
             noc_async_read_barrier();
@@ -186,6 +188,18 @@ void kernel_main() {
                 }
             }
 
+            // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
+            // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
+            // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
+            // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
+            // CB so compute kernel thinks it has new data
+            if (in0_B == 1 && in1_B > 1 && b > 0) {
+                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+                }
+                continue;
+            }
 #ifdef IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
 #endif  // IN0_SHARDED
@@ -309,7 +323,7 @@ void kernel_main() {
                         // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
                         // NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
+                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV
                         // latency which means data could be changed before write is issued.
                         noc_async_writes_flushed();
 #endif  // ARCH_BLACKHOLE
