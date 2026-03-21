@@ -413,18 +413,20 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
 void Buffer::allocate_impl() {
-    if (GraphTracker::instance().hook_allocate(this)) {
-        address_ = 0;
+    bool is_hooked = GraphTracker::instance().hook_allocate(this);
+
+    validate_sub_device_manager_id(sub_device_manager_id_, device_);
+
+    // Always update allocator state, even when hooked
+    address_ = allocator_->allocate_buffer(this);
+
+    // Assertion here because buffer class returns a u32 when address is queried
+    // Requires updating all use cases of buffer address to accept a u64 to remove
+    TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
+
+    if (is_hooked) {
         hooked_allocation_ = true;
     } else {
-        validate_sub_device_manager_id(sub_device_manager_id_, device_);
-
-        address_ = allocator_->allocate_buffer(this);
-
-        // Assertion here because buffer class returns a u32 when address is queried
-        // Requires updating all use cases of buffer address to accept a u64 to remove
-        TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
-
 #if defined(TRACY_ENABLE)
         if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                 .rtoptions()
@@ -458,7 +460,15 @@ void Buffer::deallocate_impl() {
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
-        if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
+        bool is_hooked = GraphTracker::instance().hook_deallocate(this);
+
+        // Always update allocator state, even when hooked
+        if (!is_hooked || hooked_allocation_) {
+            validate_sub_device_manager_id(sub_device_manager_id_, device_);
+            allocator_->deallocate_buffer(this);
+        }
+
+        if (!is_hooked && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                     .rtoptions()
@@ -467,8 +477,6 @@ void Buffer::deallocate_impl() {
                     reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
             }
 #endif
-            validate_sub_device_manager_id(sub_device_manager_id_, device_);
-            allocator_->deallocate_buffer(this);
         }
 
         // Capture deallocates here instead of higher levels.
