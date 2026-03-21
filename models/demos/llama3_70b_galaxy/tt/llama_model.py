@@ -745,8 +745,14 @@ class TtTransformer(LightweightModule):
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
+        import os as _os, sys as _sys
+
+        _debug_prefill = _os.environ.get("DEBUG_PREFILL_LAYERS", "0") == "1"
         h = None
         for i, layer in enumerate(self.layers):
+            if _debug_prefill and mode == "prefill":
+                ttnn.synchronize_device(self.mesh_device)
+                print(f"[DEBUG] Prefill layer {i} start", flush=True, file=_sys.stdout)
             x, h = layer(
                 x,
                 h,

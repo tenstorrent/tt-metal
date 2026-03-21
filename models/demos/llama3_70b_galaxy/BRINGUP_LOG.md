@@ -629,6 +629,23 @@ All tests show 0 TSU failures. Decode throughput is flat at ~17.4 tok/s/user acr
 
 ---
 
+### 2026-03-21 — 16k ISL Enable (support_seqlens + wo_ag_key fix)
+
+**Status**: 16384 added to `support_seqlens`. Demo test `isl-16k-b1` runs and reaches "Prefill warmup (compile)..." — warmup executes all 64 layers (JIT compiles new 16k kernels, ~30–40 min first run). CCL deadlocks during warmup are device-state dependent; resolved by `tt-smi -r` before each run. ISL=32k/64k not yet validated.
+
+**Changes**:
+1. **`llama_ccl.py`**: `support_seqlens = [16384, 8192, 4096, 2048, 1024, 128]` — enables pre-allocated CCL buffers + traced prefill for 16k.
+2. **`llama_attention.py`**: Fixed `wo_ag_key` — removed erroneous `"WO"` fallback for `seq_len > 4096`; now always `"WO_AG"` for large ISL. The old `"WO"` key has no buffer allocated for 16384 seqlen, causing CCL deadlock.
+3. **Debug instrumentation** added to `llama_model.py`, `llama_decoder.py`, `llama_mlp.py`, `llama_attention.py` — gated by `DEBUG_PREFILL_LAYERS` / `DEBUG_PREFILL_OPS` env vars; zero overhead in production.
+
+**Root Cause Recap**:
+- `wo_ag_key = "WO"` for seq_len > 4096 (non-OLMo path) → no buffer allocated for 16384 → CCL deadlock in `line_all_reduce` WO.
+- Fix: always use `"WO_AG"` for seq_len ≥ 4096 (persistent buffer allocated for all `support_seqlens`).
+
+**Block Hash**: `341c670e3b` (pending update after commit)
+
+---
+
 ### 2026-03-17 — Long ISL Investigation (16k / 32k / 64k, eager prefill)
 
 **Status (2026-03-20 update)**: **ISL=8k restored** with `8192` in `support_seqlens` + `llama_mlp.py` dtype aligned to `seq_len in support_seqlens` for FF1/FF3/FF2 `minimal_matmul`. ISL=16k/32k/64k still not enabled (16k needs `16384` in list + same dtype rule; 32k+ barrier hang / DRAM).

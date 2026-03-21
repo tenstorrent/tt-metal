@@ -1157,6 +1157,16 @@ class TtLlamaAttention(LightweightModule):
         batch_size=1,
         skip_input_dealloc=False,
     ):
+        import os as _os, sys as _sys
+
+        _dbg_ops = _os.environ.get("DEBUG_PREFILL_OPS", "0") == "1"
+        _L = self.layer_num
+
+        def _dbg_sync(tag):
+            if _dbg_ops:
+                ttnn.synchronize_device(self.mesh_device)
+                print(f"[DEBUG_ATTN] L{_L} {tag}", flush=True, file=_sys.stdout)
+
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
@@ -1201,6 +1211,7 @@ class TtLlamaAttention(LightweightModule):
         # Use QKV_BF16 (bfloat16 all-gather buffer) only for ISL <= 2048 where xqkv is bf16.
         # For ISL >= 4096, xqkv is bfloat8_b → use the standard "QKV" buffer.
         qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 2048) else "QKV"
+        _dbg_sync("qkv_allreduce_start")
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
@@ -1209,6 +1220,7 @@ class TtLlamaAttention(LightweightModule):
             buffer_key=qkv_buffer_key,
             batch_size=batch_size,
         )
+        _dbg_sync("qkv_allreduce_done")
         ttnn.deallocate(xqkv)
 
         if seq_len > 2048:
@@ -1254,7 +1266,9 @@ class TtLlamaAttention(LightweightModule):
             q_stats = ttnn.rms_norm_pre_all_gather(
                 q_flat, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
             )
+            _dbg_sync("q_norm_ag_start")
             q_stats_gathered = self._olmo_qk_norm_all_gather(q_stats, cluster_axis=0)
+            _dbg_sync("q_norm_ag_done")
             ttnn.deallocate(q_stats)
             q_normed_flat = ttnn.rms_norm_post_all_gather(
                 q_flat,
@@ -1295,7 +1309,9 @@ class TtLlamaAttention(LightweightModule):
             k_stats = ttnn.rms_norm_pre_all_gather(
                 k_heads_1KSD_pre_rot, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
             )
+            _dbg_sync("k_norm_ag_start")
             k_stats_gathered = self._olmo_qk_norm_all_gather(k_stats, cluster_axis=0)
+            _dbg_sync("k_norm_ag_done")
             ttnn.deallocate(k_stats)
             k_heads_1KSD_pre_rot = ttnn.rms_norm_post_all_gather(
                 k_heads_1KSD_pre_rot,
@@ -1394,7 +1410,7 @@ class TtLlamaAttention(LightweightModule):
             # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
             # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
             # This ensures each device processes two complementary chunks of the attention matrix
-
+            _dbg_sync("sdpa_start")
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_sdpa,
                 k_sdpa,
@@ -1405,6 +1421,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
                 sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
+            _dbg_sync("sdpa_done")
 
         else:
             attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
@@ -1441,6 +1458,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH.deallocate(True)
 
             # Perform ring all-gather on the first chunk (normal order)
+            _dbg_sync("sdpa_ag0_start")
             attn_output_11SH_chunk_0 = self.tt_ccl.ring_all_gather(
                 attn_output_11SH_chunks[0],
                 dim=2,
@@ -1448,9 +1466,11 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SDPA",
             )
+            _dbg_sync("sdpa_ag0_done")
             attn_output_11SH_chunks[0].deallocate(True)
 
             # Perform ring all-gather on the second chunk (reverse order)
+            _dbg_sync("sdpa_ag1_start")
             attn_output_11SH_chunk_1 = self.tt_ccl.ring_all_gather(
                 attn_output_11SH_chunks[1],
                 dim=2,
@@ -1459,6 +1479,7 @@ class TtLlamaAttention(LightweightModule):
                 reverse_order=True,
                 buffer_key="SDPA_REVERSE",
             )
+            _dbg_sync("sdpa_ag1_done")
             attn_output_11SH_chunks[1].deallocate(True)
 
             # Concatenate the gathered chunks along the sequence dimension to form the final output
@@ -1511,7 +1532,8 @@ class TtLlamaAttention(LightweightModule):
         # - seq_len < 4096: ttnn.linear with bfloat16 output → use WO_AG_BF16 (bfloat16 buffer).
         # - seq_len >= 4096: minimal_matmul (bf8 inputs → bf8 output, ring SDPA was already bf8)
         #   → use WO_AG (bfloat8_b buffer).
-        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len < 4096 else ("WO_AG" if seq_len <= 4096 else "WO")
+        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len < 4096 else "WO_AG"
+        _dbg_sync("wo_allreduce_start")
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
@@ -1519,6 +1541,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key=wo_ag_key,
         )
+        _dbg_sync("wo_allreduce_done")
         output_11SH.deallocate()
 
         self._capture_prefill_attn("wo_out", output_11SH_reduced)

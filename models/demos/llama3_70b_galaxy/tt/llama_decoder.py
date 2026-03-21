@@ -218,8 +218,19 @@ class TtTransformerBlock(LightweightModule):
         #   self.ff_norm        has post_attention_layernorm weights  → applied after attention
         #   self.attention_norm has post_feedforward_layernorm weights → applied after FFN
         if self.is_olmo and mode == "prefill":
+            import os as _os, sys as _sys
+
+            _dbg = _os.environ.get("DEBUG_PREFILL_OPS", "0") == "1"
+            _L = self.layer_num
+
+            def _sync_print(tag):
+                if _dbg:
+                    ttnn.synchronize_device(self.mesh_device)
+                    print(f"[DEBUG_OPS] L{_L} {tag}", flush=True, file=_sys.stdout)
+
             self.attention.capture_intermediates = self.capture_intermediates
             self._capture_prefill("input", x)
+            _sync_print("attn_start")
             attn_out = self.attention.forward(
                 x,
                 current_pos,
@@ -233,20 +244,25 @@ class TtTransformerBlock(LightweightModule):
                 batch_size=batch_size,
                 skip_input_dealloc=True,  # keep x alive for residual add
             )
+            _sync_print("attn_done")
             self._debug_check("attn_out", attn_out)
             if self.capture_intermediates:
                 self.captured.update(self.attention.captured)
             self._capture_prefill("attn_out", attn_out)
             attn_out_normed, _ = self.ff_norm(attn_out, None, mode)  # post-attention norm
+            _sync_print("post_attn_norm_done")
             self._capture_prefill("attn_normed", attn_out_normed)
             h = ttnn.add(x, attn_out_normed, memory_config=skip_mem_cfg)
             self._capture_prefill("h_attn", h)
             if not self.enable_trace:
                 x.deallocate(True)
+            _sync_print("mlp_start")
             ff_out = self.feed_forward.forward(h, mode, batch_size=batch_size, skip_input_dealloc=True)
+            _sync_print("mlp_done")
             self._debug_check("ff_out", ff_out)
             self._capture_prefill("ff_out", ff_out)
             ff_out_normed, _ = self.attention_norm(ff_out, None, mode)  # post-FFN norm
+            _sync_print("post_ffn_norm_done")
             self._capture_prefill("ff_normed", ff_out_normed)
             out = ttnn.add(h, ff_out_normed, memory_config=skip_mem_cfg)
             self._capture_prefill("layer_out", out)

@@ -419,6 +419,15 @@ class TtLlamaMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
+        import os as _os, sys as _sys
+
+        _dbg_ops = _os.environ.get("DEBUG_PREFILL_OPS", "0") == "1"
+
+        def _dbg_sync(tag):
+            if _dbg_ops:
+                ttnn.synchronize_device(self.mesh_device)
+                print(f"[DEBUG_MLP] {tag}", flush=True, file=_sys.stdout)
+
         seq_len = x.shape[-2]
 
         is_olmo = getattr(self.args, "is_olmo", False)
@@ -470,6 +479,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        _dbg_sync("ff1_rs_start")
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out,
             cluster_axis=1,
@@ -479,6 +489,7 @@ class TtLlamaMLP(LightweightModule):
             dim=3,
             batch_size=batch_size,
         )
+        _dbg_sync("ff1_rs_done")
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
@@ -507,6 +518,7 @@ class TtLlamaMLP(LightweightModule):
             )
         if not skip_input_dealloc:
             ttnn.deallocate(x)
+        _dbg_sync("ff3_rs_start")
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
@@ -516,6 +528,7 @@ class TtLlamaMLP(LightweightModule):
             dim=3,
             batch_size=batch_size,
         )
+        _dbg_sync("ff3_rs_done")
         ttnn.deallocate(w3_out)
         # OLMo: bfloat8_b for ff1ff3 introduces ~3-8% relative error per layer that
         # compounds to >50% over 64 layers.  Use bfloat16 to preserve precision.
@@ -531,6 +544,7 @@ class TtLlamaMLP(LightweightModule):
             # Use the pre-allocated bfloat16 persistent buffer (FF3_BF16) so the
             # all_gather preserves the bfloat16 ff1ff3 values.  Using "FF3" (bfloat8_b)
             # would re-quantize ff1ff3 and defeat the precision gain.
+            _dbg_sync("ff3_bf16_ag_start")
             w2_in_gathered = self.tt_ccl.line_all_gather(
                 w2_in,
                 cluster_axis=1,
@@ -539,7 +553,9 @@ class TtLlamaMLP(LightweightModule):
                 buffer_key="FF3_BF16",
                 dim=3,
             )
+            _dbg_sync("ff3_bf16_ag_done")
         else:
+            _dbg_sync("ff3_ag_start")
             w2_in_gathered = self.tt_ccl.line_all_gather(
                 w2_in,
                 cluster_axis=1,
@@ -548,6 +564,7 @@ class TtLlamaMLP(LightweightModule):
                 buffer_key="FF3",
                 dim=3,
             )
+            _dbg_sync("ff3_ag_done")
         ttnn.deallocate(w2_in)
 
         if seq_len < 4096 or batch_size > 1:
@@ -570,6 +587,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        _dbg_sync("ff2_ar_start")
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -578,6 +596,7 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="FF2",
             batch_size=batch_size,
         )
+        _dbg_sync("ff2_ar_done")
         ttnn.deallocate(w2_out)
 
         if 1024 <= seq_len < 4096:
