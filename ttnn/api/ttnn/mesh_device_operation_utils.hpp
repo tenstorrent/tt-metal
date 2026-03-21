@@ -60,7 +60,8 @@ TensorReturnValue filter_tensor_shards(
             }
 
             // Create new storage with filtered coords, sharing the mesh_buffer
-            tt::tt_metal::DeviceStorage new_storage(old_storage.mesh_buffer, std::move(filtered_coords));
+            tt::tt_metal::DeviceStorage new_storage(
+                old_storage.get_mesh_buffer_leak_ownership(), std::move(filtered_coords));
 
             // Return new tensor with new storage
             return Tensor(std::move(new_storage), tensor.tensor_spec(), tensor.tensor_topology());
