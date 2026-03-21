@@ -368,6 +368,10 @@ public:
         return this->frequent_retrain_cores_.at(chip_id);
     }
 
+    // Re-runs UMD topology discovery and rebuilds ethernet_sockets_ and frequent_retrain_cores_.
+    // Call after link retraining to allow continued operation without restarting the process.
+    void rediscover_ethernet_links();
+
     const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(ChipId chip_id) const {
         return this->device_eth_routing_info_.at(chip_id);
     }
