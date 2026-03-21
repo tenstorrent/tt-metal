@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, is_ring_fabric
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -146,7 +146,7 @@ def run_decode_reduce_scatter_deepseek_impl(
 
 @pytest.mark.requires_device(["TG"])
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (not is_ring_fabric(get_fabric_config())),
     reason=f"Requires ring fabric",
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)

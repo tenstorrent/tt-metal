@@ -6,6 +6,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Union
 
+import torch
+
 import ttnn
 
 optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
@@ -394,6 +396,152 @@ class AllToAllCombineConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
     topology: ttnn.Topology = optimal_topology
+
+
+@dataclass
+class AllToAllDispatchMetadataConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch_metadata op"""
+
+    @classmethod
+    def create_preallocated_dispatch_output_tensors(
+        cls, mesh_device: ttnn.Device, batch: int, hidden_size: int, num_experts_per_tok: int
+    ):
+        mesh_shape = mesh_device.shape
+        dispatch_devices = mesh_shape[0]
+
+        preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, hidden_size], dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        preallocated_dispatch_output_expert_indices = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, num_experts_per_tok], dtype=torch.uint16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                    [batch, num_experts_per_tok],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        preallocated_dispatch_output_expert_scores = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, num_experts_per_tok], dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                    [batch, num_experts_per_tok],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        return (
+            preallocated_dispatch_output_sparse_buffer,
+            preallocated_dispatch_output_expert_indices,
+            preallocated_dispatch_output_expert_scores,
+        )
+
+    @classmethod
+    def get_metadata_sharded_memory_config(cls, users_per_row: int, num_experts_per_tok: int):
+        num_cores_y = min(8, users_per_row)
+        num_cores_x = (users_per_row + num_cores_y - 1) // num_cores_y
+
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+                ),
+                [1, num_experts_per_tok],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    worker_mode: ttnn.WorkerMode
+    dispatch_algorithm: ttnn.DispatchAlgorithm
+    cluster_axis: int | None = None
+    num_links: int | None = 4
+    cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class MorehFullConfig(OpConfigBase):
+    """Common parameters for a ttnn.moreh_full op"""
+
+    shape: list[int]
+    fill_value: int
+    device: ttnn.Device
+    dtype: ttnn.DataType
+    layout: ttnn.Layout
+    memory_config: ttnn.MemoryConfig
+
+
+@dataclass
+class MoEComputeConfig(OpConfigBase):
+    """Common parameters for a ttnn.moe_compute op"""
+
+    output_height_shard_dim: int
+    output_width_shard_dim: int
+    cluster_axis: int | None = None
+
+
+@dataclass
+class SelectiveReduceCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.selective_reduce_combine op"""
+
+    hidden_size: int
+    batch_size: int
+    seq_size: int
+    select_experts_k: int
+    experts: int
+    token_parallel_core_dim: int
+    data_parallel_core_dim: int
+    worker_cores: list[ttnn.CoreCoord]
+    mux_core_range_set: ttnn.CoreRangeSet
+    cluster_axis: int | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 4
+    optional_cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class DeepseekMoEPostCombineTilizeConfig(OpConfigBase):
+    """Common parameters for a ttnn.deepseek_moe_post_combine_tilize op"""
+
+    @classmethod
+    def get_sharded_memory_config(cls):
+        return ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(
+                shard_shape=[32, 1024],
+                grid=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
+                    }
+                ),
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    output_memory_config: ttnn.MemoryConfig
 
 
 @dataclass

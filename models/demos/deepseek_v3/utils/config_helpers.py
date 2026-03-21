@@ -19,6 +19,25 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+
+
+def get_fabric_config() -> ttnn.FabricConfig:
+    """Get the fabric config for the model."""
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
+
+
+def is_ring_fabric(fabric_config: ttnn.FabricConfig) -> bool:
+    """Check whether the given fabric config has a RING configuration"""
+    return fabric_config == ttnn.FabricConfig.FABRIC_1D_RING
+
+
+def is_quad_mesh() -> bool:
+    """Check whether the given mesh device has a QUAD configuration (16x8)"""
+    return os.getenv("MESH_DEVICE") == "QUAD"
+
+
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
@@ -31,12 +50,6 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
-
-
-def get_fabric_config():
-    return (
-        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-    )
 
 
 def make_deepseek_sampling_args(
