@@ -843,6 +843,114 @@ using tt::tt_metal::TrayID;
 using tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd;
 using tt::tt_metal::experimental::tt_fabric::PhysicalAdjacencyMap;
 
+// Host boundaries come only from the PSD (get_host_name_for_asic). Global groups are one set per host (variable
+// size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise preferred ASICs on a
+// greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
+void configure_pgd_psd_host_alignment_constraints(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<uint32_t, AsicID>& constraints) {
+    std::map<std::string, std::set<AsicID>> host_to_asics;
+    for (const AsicID& asic_id : physical_graph.get_nodes()) {
+        host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
+    }
+
+    std::set<uint32_t> all_targets;
+    for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        all_targets.insert(node_id);
+    }
+
+    if (all_targets.empty()) {
+        return;
+    }
+    if (host_to_asics.size() <= 1) {
+        return;
+    }
+
+    const size_t mesh_target_count = all_targets.size();
+    bool some_host_can_hold_mesh = false;
+    for (const auto& [_, asics] : host_to_asics) {
+        if (asics.size() >= mesh_target_count) {
+            some_host_can_hold_mesh = true;
+            break;
+        }
+    }
+
+    std::set<AsicID> preferred_asics_minimal_host_cover;
+    if (!some_host_can_hold_mesh) {
+        std::vector<std::string> hostnames_by_size;
+        hostnames_by_size.reserve(host_to_asics.size());
+        for (const auto& [hn, asics] : host_to_asics) {
+            if (!asics.empty()) {
+                hostnames_by_size.push_back(hn);
+            }
+        }
+        std::sort(hostnames_by_size.begin(), hostnames_by_size.end(), [&](const std::string& a, const std::string& b) {
+            size_t sa = host_to_asics.at(a).size();
+            size_t sb = host_to_asics.at(b).size();
+            if (sa != sb) {
+                return sa > sb;
+            }
+            return a < b;
+        });
+        size_t covered = 0;
+        for (const std::string& hn : hostnames_by_size) {
+            const auto& asics = host_to_asics.at(hn);
+            preferred_asics_minimal_host_cover.insert(asics.begin(), asics.end());
+            covered += asics.size();
+            if (covered >= mesh_target_count) {
+                break;
+            }
+        }
+    }
+
+    std::vector<std::set<uint32_t>> target_groups;
+    target_groups.push_back(std::move(all_targets));
+
+    std::vector<std::set<AsicID>> global_groups;
+    global_groups.reserve(host_to_asics.size());
+    for (auto& [_, asics] : host_to_asics) {
+        if (!asics.empty()) {
+            global_groups.push_back(std::move(asics));
+        }
+    }
+
+    if (global_groups.empty()) {
+        return;
+    }
+
+    if (some_host_can_hold_mesh) {
+        bool success = constraints.set_same_rank_groups_constraint(target_groups, global_groups);
+        if (!success) {
+            log_warning(
+                tt::LogFabric,
+                "PGD host alignment: failed to set same-rank groups constraint; groupings might cross host boundaries");
+            return;
+        }
+        return;
+    }
+
+    log_debug(
+        tt::LogFabric,
+        "PGD host alignment: mesh size {} exceeds every host's ASIC count; preferring minimal host cover ({} ASICs)",
+        mesh_target_count,
+        preferred_asics_minimal_host_cover.size());
+
+    if (!preferred_asics_minimal_host_cover.empty()) {
+        for (uint32_t target : target_groups.front()) {
+            constraints.add_preferred_constraint(target, preferred_asics_minimal_host_cover);
+        }
+    }
+}
+
 std::string build_pgd_mapping_failure_message(
     const std::string& grouping_name,
     const GroupingInfo& grouping_info,
@@ -920,6 +1028,10 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         }
     }
 
+    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
+    configure_pgd_psd_host_alignment_constraints(
+        grouping_info, physical_graph, physical_system_descriptor, constraints);
+
     return solve_topology_mapping(
         grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
 }
@@ -967,8 +1079,7 @@ static bool add_forbidden_for_used_asics_to_all_groupings(
     return true;
 }
 
-// TODO: Opimize constraints for maximum usage
-// FIXME: Fix for t3k please
+// TODO: Optimize constraints for maximum usage
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1020,6 +1131,7 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 // Each grouping can have a different topology. ASICs are shared globally - no overlap between any mappings.
 // Returns map from each GroupingInfo to its vector of mapping results.
 // Uses the same constraint pattern as homogeneous: add forbidden constraints after each success.
+// TODO: Look into changing this algoirthm to use simulated annealing
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
