@@ -323,11 +323,11 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
                 hidden_size=hf_config.hidden_size,
-                batch=batch,
-                seq=seq_len,
+                batch_size=batch,
+                seq_size=seq_len,
                 select_experts_k=hf_config.num_experts_per_tok,
                 experts=hf_config.n_routed_experts,
-                axis=0,
+                cluster_axis=0,
                 token_parallel_core_dim=4,
                 data_parallel_core_dim=4,
                 worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),

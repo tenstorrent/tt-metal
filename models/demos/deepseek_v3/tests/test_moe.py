@@ -106,7 +106,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": get_fabric_config()},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
