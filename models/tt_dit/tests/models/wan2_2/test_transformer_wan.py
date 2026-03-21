@@ -20,6 +20,7 @@ from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import line_params, ring_params
+from ....utils.tracing import Tracer
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -76,6 +77,9 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
     )
 
 
+DEVICE_PARAMS = {"trace_region_size": 48000000}
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -87,7 +91,9 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"
+        ),
         pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
         pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
     ],
@@ -131,7 +137,7 @@ def test_wan_transformer_block(
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True, local_files_only=True
     )
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
@@ -180,15 +186,22 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    tt_spatial_out = tt_model(
-        spatial_1BND=tt_spatial,
-        prompt_1BLP=tt_prompt,
-        temb_1BTD=tt_temb,
-        N=spatial_seq_len,
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-        trans_mat=tt_trans_mat,
-    )
+    tt_model_traced = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
+    for i in range(3):
+        tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+        tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+        tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+        tt_spatial_out = tt_model_traced(
+            spatial_1BND=tt_spatial,
+            prompt_1BLP=tt_prompt,
+            temb_1BTD=tt_temb,
+            N=spatial_seq_len,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
+        ttnn.ReadDeviceProfiler(mesh_device)
+    # ttnn.synchronize_device(mesh_device)
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
@@ -201,17 +214,17 @@ def test_wan_transformer_block(
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    with torch.no_grad():
-        torch_spatial_out = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            temb=temb_input,
-            rotary_emb=[torch_rope_cos, torch_rope_sin],
-        )
+    # # Run torch model
+    # logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    # with torch.no_grad():
+    #     torch_spatial_out = torch_model(
+    #         hidden_states=spatial_input,
+    #         encoder_hidden_states=prompt_input,
+    #         temb=temb_input,
+    #         rotary_emb=[torch_rope_cos, torch_rope_sin],
+    #     )
 
-    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    # assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(

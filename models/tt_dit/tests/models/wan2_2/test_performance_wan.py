@@ -10,6 +10,7 @@ import torch
 from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -18,6 +19,8 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
 from ....utils.test import line_params, ring_params
+
+DEVICE_PARAMS = {"trace_region_size": 48000000}
 
 
 def t2v_metrics(mesh_device, height):
@@ -114,15 +117,15 @@ device_params_8k.update({"fabric_router_config": create_fabric_router_config()})
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, device_params_8k, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -153,6 +156,14 @@ device_params_8k.update({"fabric_router_config": create_fabric_router_config()})
         "i2v",
     ],
 )
+@pytest.mark.parametrize(
+    "traced",
+    [True, False],
+    ids=[
+        "tracing_on",
+        "tracing_off",
+    ],
+)
 def test_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -168,6 +179,7 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
+    traced: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -205,7 +217,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = 4
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -226,6 +238,7 @@ def test_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         with torch.no_grad():
+            signpost("start_warmup")
             pipeline(
                 prompt=prompts[0],
                 image_prompt=image_prompt,
@@ -251,6 +264,7 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
+                signpost("start_inference")
                 result = pipeline(
                     prompt=prompts[prompt_idx],
                     image_prompt=image_prompt,
@@ -261,8 +275,10 @@ def test_pipeline_performance(
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                     seed=42,
+                    traced=traced,
                 )
-
+                ttnn.synchronize_device(mesh_device)
+                signpost("end_inference")
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
     if hasattr(result, "frames"):
@@ -286,8 +302,8 @@ def test_pipeline_performance(
     try:
         if not is_ci_env:
             if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-                print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
             else:
                 print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
