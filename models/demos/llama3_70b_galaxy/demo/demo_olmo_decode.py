@@ -303,34 +303,54 @@ def run_olmo_demo(
     profiler.end("compile_prefill")
     logger.info("Prefill warmup done.")
 
-    # Step 2: Capture prefill trace
-    logger.info("Capturing prefill trace...")
-    tt_model.set_enable_trace(True)
-    host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
-    device_inputs_trace = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-    prefill_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs_trace)
-    tt_out_trace = tt_model.ttnn_prefill_forward(
-        *transformed_inputs,
-        kv_cache=kv_cache,
-        batch_size=1,
-    )
-    ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    logger.info("Prefill trace captured.")
+    # For seqlens with pre-allocated CCL buffers (≤ 16384), use traced prefill.
+    # For larger seqlens (32k, 64k), skip trace and run in eager mode — the CCL
+    # barrier-sync fallback works in eager but deadlocks inside a captured trace.
+    MAX_TRACE_SEQLEN = max(tt_model.tt_ccl.support_seqlens)
+    use_trace = padded_prefill_len <= MAX_TRACE_SEQLEN
+    logger.info(f"Prefill seqlen={padded_prefill_len}, MAX_TRACE_SEQLEN={MAX_TRACE_SEQLEN}, use_trace={use_trace}")
 
-    # Step 3: Execute trace for each user
+    if use_trace:
+        # Step 2: Capture prefill trace
+        logger.info("Capturing prefill trace...")
+        tt_model.set_enable_trace(True)
+        host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
+        device_inputs_trace = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+        prefill_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs_trace)
+        tt_out_trace = tt_model.ttnn_prefill_forward(
+            *transformed_inputs,
+            kv_cache=kv_cache,
+            batch_size=1,
+        )
+        ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Prefill trace captured.")
+
+    # Step 3: Execute trace (or eager) for each user
     profiler.start("inference_prefill")
     for user_id in range(batch_size):
         prompt_len = prompt_lengths[user_id]
         user_tokens, user_pt = _build_prefill_inputs(user_id)
 
         host_inputs = tt_model.prepare_prefill_inputs_host(user_tokens, user_id=user_id, page_table=user_pt)
-        copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs_trace)
-        ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=False)
+
+        if use_trace:
+            copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs_trace)
+            ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=False)
+            tt_out = tt_out_trace
+        else:
+            # Eager mode for large seqlens (32k, 64k) — CCL barrier sync is safe outside trace
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+            transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
+            tt_out = tt_model.ttnn_prefill_forward(
+                *transformed_inputs,
+                kv_cache=kv_cache,
+                batch_size=1,
+            )
 
         # process_output_prefill runs LM head + CCL outside the trace
-        first_tok = tt_model.process_output_prefill(tt_out_trace, last_token_idx=prompt_len - 1)
+        first_tok = tt_model.process_output_prefill(tt_out, last_token_idx=prompt_len - 1)
         ttnn.synchronize_device(mesh_device)
         first_decode_tokens.append(int(first_tok[0]))
 
@@ -344,8 +364,9 @@ def run_olmo_demo(
             )
 
     profiler.end("inference_prefill")
-    ttnn.release_trace(mesh_device, prefill_trace_id)
-    tt_model.set_enable_trace(False)
+    if use_trace:
+        ttnn.release_trace(mesh_device, prefill_trace_id)
+        tt_model.set_enable_trace(False)
     logger.info(f"Prefill complete for {batch_size} users.")
 
     # ===================== SWITCH TO DECODE MODE =====================
@@ -878,7 +899,7 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            8202,  # ~8192 prefill + 10 decode
+            8201,  # 8191 prefill tokens + 10 decode (pads to 8192)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
@@ -893,15 +914,47 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            16382,  # 16372 prefill tokens + 10 decode (pads to 16384)
+            16393,  # 16383 prefill tokens + 10 decode (pads to 16384)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # capacity: 32768 tokens
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        # NOTE: 32k+ ISL requires max_batch_size=1 (batch_size_per_device_group=1 → capacity=64×max_num_blocks)
-        # to keep KV cache within 12 GB DRAM per chip. Not yet wired in demo.
+        (  # isl-32k-b1: ~32k-token prefill + 10 decode (eager mode, no trace)
+            # capacity: 4128 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 32,976 tokens ≥ 32,778
+            # KV cache memory: 4128 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 4.3 GB/device ✓
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
+            False,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            32777,  # 32767 prefill tokens + 10 decode (pads to 32768)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4128},  # capacity: 32,976 tokens/user
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # isl-64k-b1: ~64k-token prefill + 10 decode (eager mode, no trace, model max context)
+            # capacity: 8208 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 65,664 tokens ≥ 65,545
+            # KV cache memory: 8208 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 8.6 GB/device ✓
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
+            False,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            65545,  # 65535 prefill tokens + 10 decode (pads to 65536)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 8208},  # capacity: 65,664 tokens/user
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
         # ── ISL sweep: batch=32, 64 layers, 20 decode tokens (coherence check) ──────────────
         (  # isl-128-b32: ~128-token prefill + 20 decode, batch=32, 64 layers
             "instruct",
@@ -979,8 +1032,10 @@ def run_olmo_demo(
         "isl-1k-b1",  # ISL sweep: 1k-token prefill, batch=1
         "isl-2k-b1",  # ISL sweep: 2k-token prefill, batch=1
         "isl-4k-b1",  # ISL sweep: 4k-token prefill, batch=1
-        "isl-8k-b1",  # ISL sweep: 8k-token prefill, batch=1
-        "isl-16k-b1",  # ISL sweep: 16k-token prefill, batch=1
+        "isl-8k-b1",  # ISL sweep: 8k-token prefill, batch=1 (traced, pre-allocated CCL buffers)
+        "isl-16k-b1",  # ISL sweep: 16k-token prefill, batch=1 (traced, pre-allocated CCL buffers)
+        "isl-32k-b1",  # ISL sweep: 32k-token prefill, batch=1 (eager mode, CCL barrier sync)
+        "isl-64k-b1",  # ISL sweep: 64k-token prefill, batch=1 (eager mode, model max context)
         "isl-128-b32",  # ISL sweep: 128-token prefill, batch=32, 1 layer
         "isl-1k-b32",  # ISL sweep: 1k-token prefill, batch=32, 1 layer
         "isl-2k-b32",  # ISL sweep: 2k-token prefill, batch=32, 1 layer

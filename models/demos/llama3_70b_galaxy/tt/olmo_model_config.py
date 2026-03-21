@@ -859,7 +859,7 @@ class TtOlmoModelArgs(TtModelArgs):
                 )
             else:
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=16,
+                    M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
                     subblock_h=8,

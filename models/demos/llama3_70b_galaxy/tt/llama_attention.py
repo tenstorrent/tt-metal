@@ -1394,6 +1394,7 @@ class TtLlamaAttention(LightweightModule):
             # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
             # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
             # This ensures each device processes two complementary chunks of the attention matrix
+
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_sdpa,
                 k_sdpa,
@@ -1404,6 +1405,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
                 sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
+
         else:
             attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                 q_sdpa,
@@ -1470,6 +1472,7 @@ class TtLlamaAttention(LightweightModule):
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         # OLMo: Use unpadded WO for prefill (padded WO is for decode with padded Q heads)
+
         wo_weight = self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
         # OLMo: bfloat16 output to avoid quantization error in WO projection.
         # - ttnn.linear path (seq_len < 4096): use hifi2 (FP32 accum) for best precision.

@@ -109,7 +109,7 @@ class Generator(WarmupForwardMixin):
             # Capture trace for both
             for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
                 # For batched prefill this needs to be *32
-                if batch == 32 and supported_length == 4096:
+                if batch == 32 and supported_length >= 4096:
                     # For batched prefill max batch sequence length is 2048 or lower (128k limit)
                     logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
                     continue

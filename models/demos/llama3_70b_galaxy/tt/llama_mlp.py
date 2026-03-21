@@ -420,6 +420,7 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+
         is_olmo = getattr(self.args, "is_olmo", False)
         if is_olmo:
             # OLMo: always use w1_interleaved (DRAM) in prefill.
@@ -434,6 +435,8 @@ class TtLlamaMLP(LightweightModule):
 
         minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
         minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
+        _ccl = getattr(self, "tt_ccl", None)
+        _rs_buf_seqlens = tuple((getattr(_ccl, "support_seqlens", ()) or ()) if _ccl is not None else ())
 
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
@@ -453,11 +456,11 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            # For seq_len == 4096 the ring_reduce_scatter uses a persistent bfloat8_b buffer
-            # (support_seqlens = [128, 1024, 2048, 4096]); the input dtype must match.
-            # For seq_len >= 8192 there is no persistent buffer → dynamic alloc works with
-            # the default (bfloat16 from input); forcing bfloat8_b hangs the ring path.
-            w1_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
+            # When seq_len is in tt_ccl.support_seqlens, ring_reduce_scatter uses a
+            # persistent bfloat8_b buffer — minimal_matmul output dtype must match.
+            # When not listed, there is no persistent buffer (barrier path); dtype=None
+            # lets the op follow input/compute (typically bfloat16).
+            w1_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -493,7 +496,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            w3_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
+            w3_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -557,8 +560,7 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            # FF2 persistent buffer also only exists for seq_len <= 4096.
-            w2_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
+            w2_minimal_dtype = ttnn.bfloat8_b if seq_len in _rs_buf_seqlens else None
             w2_out = ttnn.experimental.minimal_matmul(
                 input_tensor=w2_in_gathered,
                 weight_tensor=self.w2_interleaved,

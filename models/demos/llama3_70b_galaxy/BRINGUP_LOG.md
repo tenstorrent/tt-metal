@@ -629,6 +629,25 @@ All tests show 0 TSU failures. Decode throughput is flat at ~17.4 tok/s/user acr
 
 ---
 
+### 2026-03-17 — Long ISL Investigation (16k / 32k / 64k, eager prefill)
+
+**Status (2026-03-20 update)**: **ISL=8k restored** with `8192` in `support_seqlens` + `llama_mlp.py` dtype aligned to `seq_len in support_seqlens` for FF1/FF3/FF2 `minimal_matmul`. ISL=16k/32k/64k still not enabled (16k needs `16384` in list + same dtype rule; 32k+ barrier hang / DRAM).
+
+**Root Cause (16k/32k hang without 8k/16k in support_seqlens)**:
+- When padded prefill length is **not** in `support_seqlens`, CCL uses the **barrier semaphore path** and can deadlock deep in the stack (e.g. WO `line_all_reduce`).
+- When a length **is** in `support_seqlens`, persistent reduce-scatter buffers are `bfloat8_b`; `minimal_matmul` must use `dtype=ttnn.bfloat8_b` for that seqlen (not `seq_len <= 4096`).
+
+**Fixes applied (current branch)**:
+1. **`llama_ccl.py`**: `support_seqlens = [8192, 4096, 2048, 1024, 128]`.
+2. **`llama_mlp.py`**: `w1_minimal_dtype` / `w3_minimal_dtype` / `w2_minimal_dtype` use `seq_len in support_seqlens`.
+3. **`llama_ccl.py`**: `intermediate_memory_config=DRAM` on `ring_reduce_scatter` (eager/long-ISL path).
+4. **`olmo_model_config.py`**: FF2 `M_block_size` fix for very long seqlen (32k+).
+5. **`demo_olmo_decode.py`**: long-ISL test cases as applicable.
+
+**Block Hash**: `341c670e3b`
+
+---
+
 ### 2026-03-19 — tt-inference-server ISL Sweep (batch=1 via vLLM, Galaxy)
 
 **Status**: All 5 ISLs PASSING. Stable across multiple consecutive requests.
