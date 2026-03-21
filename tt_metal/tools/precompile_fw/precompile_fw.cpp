@@ -123,7 +123,12 @@ void enumerate_jit_device_configs(
                     for (const auto& dram_harvesting_count : dram_harvesting_cfgs) {
                         const uint32_t num_dram_banks = num_dram_banks_map.at(arch) - dram_harvesting_count;
                         tt::tt_metal::Hal hal(
-                            arch, routing_fw_enabled, enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes);
+                            arch,
+                            routing_fw_enabled,
+                            enable_2_erisc_mode,
+                            profiler_dram_bank_size_per_risc_bytes,
+                            /*simulator=*/false,
+                            /*enable_blackhole_dram_programmable_cores=*/true);
                         JitDeviceConfig jit_device_config = {
                             .hal = &hal,
                             .arch = arch,
