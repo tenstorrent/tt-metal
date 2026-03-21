@@ -127,6 +127,14 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
 
+add_executable(swiglu_fusion_benchmark benchmark/swiglu_fusion_benchmark.cpp)
+target_link_libraries(
+    swiglu_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
