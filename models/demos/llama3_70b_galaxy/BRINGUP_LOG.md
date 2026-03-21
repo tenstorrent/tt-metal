@@ -673,6 +673,36 @@ All tests show 0 TSU failures. Decode throughput is flat at ~17.4 tok/s/user acr
 1. `max_num_seqs=32` in model spec — model runner pads batch=1 vLLM requests to batch=32 with zero tokens / pos=-1 / block_table=0. The paged SDPA kernel skips KV writes for `pos=-1` slots.
 2. `setup_decode` reuses existing sub-device manager ID on 2nd+ call (prevents trace invalidation between requests).
 3. SAMPLING buffer in `llama_ccl.py` uses OLMo-specific size 12544×8=100352 (not Llama's 131072).
+
+---
+
+### 2026-03-21 — Long ISL CCL barrier_semaphore Fix
+
+**Status**: **8k ISL PASSING** with barrier_semaphore fix. 16k ISL still hangs during trace execution (needs further investigation). 32k fails with DRAM OOM during CCL intermediate buffer allocation.
+
+**Root Cause**:
+The `ring_reduce_scatter` and `ring_all_gather` functions were **always** passing `barrier_semaphore` to CCL operations, even when persistent buffers were available. Barrier sync inside a captured trace causes deadlocks. The `line_all_gather` already had the correct conditional pattern.
+
+**Fix** (`llama_ccl.py`):
+```python
+# ring_reduce_scatter and ring_all_gather now only pass barrier_semaphore when no persistent buffers
+barrier_semaphore = None
+if persistent_buffers_list is None:  # or persistent_buffers is None for all_gather
+    barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+```
+
+**Results**:
+| ISL  | Status | Notes |
+|------|--------|-------|
+| 8k   | **PASS** (76s) | Traced prefill now works with fix |
+| 16k  | HANG | Trace execution hangs; 16k persistent buffers may not be properly allocated |
+| 32k  | OOM | DRAM fragmentation during CCL intermediate buffer; eager mode fails |
+
+**Next Steps**:
+- 16k: Verify persistent CCL buffers are allocated for seqlen=16384; check for other CCL ops using barrier sync
+- 32k: Reduce KV cache size or CCL buffer size to fit in DRAM
+
+**Block Hash**: `ea833ade1f3`
 4. `OLMo3ForCausalLM.prefill_forward` disables prefill trace (`enable_trace=False`): the CCL is closed between decode→prefill transitions, putting CCL semaphores in a state inconsistent with any previously captured prefill trace. Kernels remain compiled/cached after the first call.
 
 **Verified (2 consecutive sweeps, 0 device hangs)**:
