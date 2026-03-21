@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
+    is_quad_mesh,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -40,6 +41,18 @@ class Experts(AbstractModule):
 
     @classmethod
     def convert_weights(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.Device,
+    ) -> WeightConfig:
+        if is_quad_mesh(mesh_device):
+            return cls._convert_weights_quad(hf_config, state_dicts, output_path, mesh_device)
+        return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
+
+    @classmethod
+    def _convert_weights_default(
         cls,
         hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
@@ -81,6 +94,16 @@ class Experts(AbstractModule):
                 ("up_proj", "w3_experts"),
             ]
         }
+
+    @classmethod
+    def _convert_weights_quad(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.Device,
+    ) -> WeightConfig:
+        return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
