@@ -17,6 +17,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 
@@ -45,6 +47,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -89,28 +95,26 @@ def run(
     else:
         shape = (1, 1, 32, 32)
 
-    # rms_norm_pre_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
-    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
-        input_a_dtype = ttnn.bfloat16
-
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
         shape
     )
 
     torch_expected_stats = torch_input.pow(2).sum(dim=-1, keepdim=True)
 
-    # Create tensor in DRAM first, then move to target memory config
+    layout = input_a_layout if input_a_layout is not None else ttnn.TILE_LAYOUT
+    mem_cfg = input_a_memory_config if input_a_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
     if is_mesh_device:
         input_tensor = create_tensor_on_mesh(
-            torch_input, device, input_a_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            torch_input, device, input_a_dtype, layout, mem_cfg, input_a_tensor_placement
         )
     else:
         input_tensor = ttnn.from_torch(
             torch_input,
             dtype=input_a_dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
     # If the traced config specifies a sharded memory config, move the tensor there
@@ -144,7 +148,7 @@ def run(
                 inplace=bool(int(inp_m.group(1))) if inp_m else False,
             )
         elif "Default" in config_type:
-            pass
+            ttnn_program_config = ttnn.LayerNormDefaultProgramConfig()
         elif "compute_with_storage_grid_size" in program_config:
             compute_grid = program_config.get("compute_with_storage_grid_size", {})
             ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -170,8 +174,11 @@ def run(
 
     tt_sum_x2 = tt_stats_torch[..., 0:1]
 
-    # Use 0.95 PCC threshold: this operation computes intermediate stats (sum(x^2))
-    # which can have lower precision in bfloat16 accumulation, especially without fp32_dest_acc_en.
-    # The final model accuracy is maintained by rms_norm_post_all_gather.
-    pcc_threshold = 0.99 if op_kwargs.get("compute_kernel_config") is not None else 0.95
+    # rms_norm_pre_all_gather computes intermediate stats (sum(x^2)) that accumulate
+    # across the full last dimension. bfloat16 accumulation (fp32_dest_acc_en=false)
+    # loses precision proportional to the reduction length; only fp32 accumulation
+    # warrants the tighter threshold.
+    raw_ckc = kwargs.get("compute_kernel_config", {})
+    fp32_acc = raw_ckc.get("fp32_dest_acc_en", False) if isinstance(raw_ckc, dict) else False
+    pcc_threshold = 0.99 if fp32_acc else 0.95
     return [check_with_pcc(torch_expected_stats, tt_sum_x2, pcc_threshold), e2e_perf]

@@ -13,6 +13,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -40,6 +42,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -82,8 +88,8 @@ def run(
         output_memory_config=output_memory_config,
     )
 
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
+    if memory_config is not None:
+        op_kwargs["memory_config"] = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -91,9 +97,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
     slice_start = kwargs.get("starts", None) or kwargs.get("arg1", None) or [0] * len(shape)
     slice_end = kwargs.get("ends", None) or kwargs.get("arg2", None)
+    has_step = "steps" in kwargs or "arg3" in kwargs
     slice_step = kwargs.get("steps", None) or kwargs.get("arg3", None) or [1] * len(shape)
 
     if not slice_end:
@@ -132,7 +138,10 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    if has_step:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    else:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

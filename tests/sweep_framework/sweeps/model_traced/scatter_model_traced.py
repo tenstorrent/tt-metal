@@ -13,10 +13,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 TIMEOUT = 300
 
@@ -41,6 +42,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -87,21 +92,18 @@ def run(
         input_a_memory_config = kwargs.get("input_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", kwargs.get("input_tensor_placement", None))
+
+    index_dtype = kwargs.get("index_dtype", ttnn.int32)
+    index_layout = kwargs.get("index_layout", input_a_layout)
+    index_memory_config = kwargs.get("index_memory_config", input_a_memory_config)
+    index_tensor_placement = kwargs.get("index_tensor_placement", input_a_tensor_placement)
+
+    src_dtype = kwargs.get("src_dtype", input_a_dtype)
+    src_layout = kwargs.get("src_layout", input_a_layout)
+    src_memory_config = kwargs.get("src_memory_config", input_a_memory_config)
+    src_tensor_placement = kwargs.get("src_tensor_placement", input_a_tensor_placement)
+
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(
-        kwargs,
-        exclude={
-            "arg1",
-            "index_shape",
-            "src_shape",
-            "input_shape",
-            "input_dtype",
-            "input_layout",
-            "input_memory_config",
-            "input_tensor_placement",
-        },
-        output_memory_config=output_memory_config,
-    )
 
     dim = dim or kwargs.get("arg1", 0)
     if isinstance(dim, float):
@@ -120,9 +122,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
     torch_index_tensor = torch.randint(0, shape[dim], index_shape, dtype=torch.int64)
-    torch_src_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(src_shape)
+    torch_src_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype)(
+        src_shape
+    )
 
     torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor)
 
@@ -141,18 +143,18 @@ def run(
             index_tensor = create_tensor_on_mesh(
                 torch_index_tensor,
                 device,
-                ttnn.int32,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
+                index_dtype,
+                index_layout,
+                index_memory_config,
+                index_tensor_placement,
             )
             src_tensor = create_tensor_on_mesh(
                 torch_src_tensor,
                 device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
+                src_dtype,
+                src_layout,
+                src_memory_config,
+                src_tensor_placement,
             )
         else:
             input_tensor = ttnn.from_torch(
@@ -164,25 +166,25 @@ def run(
             )
             index_tensor = ttnn.from_torch(
                 torch_index_tensor,
-                dtype=ttnn.int32,
-                layout=input_a_layout,
+                dtype=index_dtype,
+                layout=index_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=index_memory_config,
             )
             src_tensor = ttnn.from_torch(
                 torch_src_tensor,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
+                dtype=src_dtype,
+                layout=src_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=src_memory_config,
             )
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_a_dtype, layout=input_a_layout)
-        index_tensor = ttnn.from_torch(torch_index_tensor, dtype=ttnn.int32, layout=input_a_layout)
-        src_tensor = ttnn.from_torch(torch_src_tensor, dtype=input_a_dtype, layout=input_a_layout)
+        index_tensor = ttnn.from_torch(torch_index_tensor, dtype=index_dtype, layout=index_layout)
+        src_tensor = ttnn.from_torch(torch_src_tensor, dtype=src_dtype, layout=src_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.scatter(input_tensor, dim, index_tensor, src_tensor, **op_kwargs)
+    output_tensor = ttnn.scatter(input=input_tensor, dim=dim, index=index_tensor, src=src_tensor)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

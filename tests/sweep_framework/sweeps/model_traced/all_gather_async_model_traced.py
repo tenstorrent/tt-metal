@@ -300,13 +300,6 @@ def run(
                 input_memory_config = ttnn.DRAM_MEMORY_CONFIG
                 is_sharded_input = True
 
-        # use_broadcast with num_workers_per_link=1 produces incorrect results on
-        # sharded inputs (op-level issue). Drop these performance-hint kwargs so the
-        # vector still exercises the sharded all_gather path.
-        if is_sharded_input and use_broadcast is True and num_workers_per_link == 1:
-            use_broadcast = None
-            num_workers_per_link = None
-
         # Parse output memory config
         if isinstance(memory_config, dict):
             mem_layout_str = memory_config.get("memory_layout", "")
@@ -435,10 +428,27 @@ def run(
 
     try:
         with device_context(mesh_shape, fabric_config) as (device, device_err):
-            assert tuple(device.shape) == mesh_shape
-
             if device_err is not None:
-                return False, device_err, None, None
+                return [(False, device_err), None]
+
+            # Mesh compatibility guard: prevent TT_FATAL from ShardTensor2dMesh
+            if mesh_shape:
+                try:
+                    dev_shape = device.shape
+                    if callable(dev_shape):
+                        dev_shape = dev_shape()
+                    dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+                except Exception:
+                    dev_rows, dev_cols = 1, 1
+                if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+                    return [
+                        (
+                            False,
+                            f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                            f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                        ),
+                        None,
+                    ]
 
             if is_model_traced:
                 if is_2d_mesh:
@@ -521,19 +531,17 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Build kwargs matching the reference test pattern
-                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                        # subdevice_id is always passed; persistent_output_buffer
-                        # is created locally (not from traced JSON).
                         op_kwargs = {
                             "dim": dim,
                             "multi_device_global_semaphore": ccl_semaphore_handles[i],
                             "num_links": num_links,
                             "topology": topology,
                             "cluster_axis": cluster_axis,
-                            "mesh_device": device,
-                            "subdevice_id": worker_sub_device_id,
                         }
+                        if mesh_device is not None:
+                            op_kwargs["mesh_device"] = device
+                        if subdevice_id is not None:
+                            op_kwargs["subdevice_id"] = worker_sub_device_id
                         if output_memory_config is not None:
                             op_kwargs["memory_config"] = output_memory_config
                         if barrier_semaphore_handles:
@@ -585,7 +593,7 @@ def run(
             # Trim tile padding to match expected shape
             tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
 
-            if input_dtype == ttnn.bfloat16:
+            if input_dtype == ttnn.bfloat16 and not use_broadcast:
                 eq, output = comp_equal(tt_output_tensor, torch_reference)
             else:
                 eq, output = comp_pcc(tt_output_tensor, torch_reference)

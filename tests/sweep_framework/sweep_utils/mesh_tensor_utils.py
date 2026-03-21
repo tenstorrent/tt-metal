@@ -200,7 +200,9 @@ def create_tensor_on_mesh(
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
         try:
-            actual_mesh = mesh_device.shape()
+            actual_mesh = mesh_device.shape
+            if callable(actual_mesh):
+                actual_mesh = actual_mesh()
             actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
         except Exception:
             actual_rows, actual_cols = 1, 1
@@ -210,8 +212,7 @@ def create_tensor_on_mesh(
 
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
 
-        if not mesh_compatible or not entries or "PlacementShard" not in placement_str:
-            # Device mesh too small or no shard placement - replicate
+        if not mesh_compatible or not entries:
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         elif len(entries) >= 2:
             dims = []
@@ -237,13 +238,14 @@ def create_tensor_on_mesh(
             shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
             if shard_match:
                 dim = int(shard_match.group(1))
-                dims_tuple = (None, dim)
-
                 repeat_factors = [1] * torch_tensor.ndim
-                repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
+                total_devices = 1
+                for extent in mesh_shape_tuple:
+                    total_devices *= extent
+                repeat_factors[dim] = total_devices
                 torch_tensor = torch_tensor.repeat(*repeat_factors)
 
-                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+                mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=dim)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         else:
@@ -290,6 +292,82 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
             return None
 
     return None
+
+
+def infer_mesh_shape_from_params(params: Optional[dict]) -> Optional[Tuple[int, int]]:
+    """Scan sweep suite parameters for the largest mesh_device_shape.
+
+    When MESH_DEVICE_SHAPE env var is not set (e.g. in CI), this allows
+    mesh_device_fixture() to auto-detect the mesh shape required by the
+    traced configurations.
+
+    Args:
+        params: The model_traced_params dict returned by
+                MasterConfigLoader.get_suite_parameters().  Its structure
+                is ``{comma_joined_keys: [tuple_per_config, ...]}``.
+
+    Returns:
+        Tuple of (rows, cols) for the largest mesh found, or None.
+    """
+    if not params:
+        return None
+
+    import re
+
+    def _parse(raw):
+        if isinstance(raw, (list, tuple)):
+            return tuple(int(x) for x in raw)
+        if isinstance(raw, str):
+            nums = re.findall(r"\d+", raw)
+            if len(nums) >= 2:
+                return tuple(int(x) for x in nums[:2])
+        return None
+
+    best = None
+    for key, values in params.items():
+        fields = key.split(",")
+        tp_indices = [i for i, f in enumerate(fields) if "tensor_placement" in f]
+        if not tp_indices:
+            continue
+        for val_tuple in values:
+            for idx in tp_indices:
+                if idx >= len(val_tuple):
+                    continue
+                tp = val_tuple[idx]
+                if not isinstance(tp, dict):
+                    continue
+                parsed = _parse(tp.get("mesh_device_shape"))
+                if parsed and (best is None or parsed[0] * parsed[1] > best[0] * best[1]):
+                    best = parsed
+    return best
+
+
+def detect_mesh_shape_from_hardware() -> Optional[Tuple[int, int]]:
+    """Detect the best mesh shape from available hardware.
+
+    Queries the number of available TT devices and returns a mesh shape
+    that uses all of them.  Falls back to None for single-device setups.
+
+    Common mappings:
+        32 devices -> (4, 8)  Galaxy
+         8 devices -> (1, 8)
+         4 devices -> (1, 4)
+         2 devices -> (1, 2)  N300
+         1 device  -> None    N150
+    """
+    try:
+        num_devices = ttnn.GetNumAvailableDevices()
+    except Exception:
+        return None
+
+    if num_devices <= 1:
+        return None
+
+    well_known = {32: (4, 8), 8: (1, 8), 4: (1, 4), 2: (1, 2)}
+    if num_devices in well_known:
+        return well_known[num_devices]
+
+    return (1, num_devices)
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:

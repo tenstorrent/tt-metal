@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -18,6 +20,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 TIMEOUT = 300
@@ -51,6 +55,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -68,6 +76,35 @@ def mesh_device_fixture():
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
+
+
+def _parse_mesh_coords(mesh_coords):
+    if mesh_coords in (None, "__ABSENT__"):
+        return None
+    if isinstance(mesh_coords, set):
+        return mesh_coords
+
+    mesh_coords_repr = mesh_coords
+    if isinstance(mesh_coords, dict):
+        mesh_coords_repr = mesh_coords.get("value", mesh_coords.get("repr"))
+
+    if mesh_coords_repr is None:
+        return None
+
+    matches = re.findall(r"MeshCoordinate\(\[(\d+),\s*(\d+)\]\)", str(mesh_coords_repr))
+    if not matches:
+        return None
+
+    parsed_coords = [(int(row), int(col)) for row, col in matches]
+    unique_rows = sorted({row for row, _ in parsed_coords})
+    unique_cols = sorted({col for _, col in parsed_coords})
+    row_major_coords = [(row, col) for row in unique_rows for col in unique_cols]
+
+    # Rebuild the set using the original row-major cartesian product order the
+    # model uses via set(get_mesh_coords(...)) so the tracer records the same
+    # string representation for this set-valued kwarg.
+    ordered_coords = row_major_coords if set(parsed_coords) == set(row_major_coords) else parsed_coords
+    return {ttnn.MeshCoordinate(row, col) for row, col in ordered_coords}
 
 
 def run(
@@ -94,12 +131,19 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    mesh_coords = _parse_mesh_coords(kwargs.get("mesh_coords"))
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"batch_offset"}, output_memory_config=output_memory_config)
 
     # V2 vectors provide named tensors: update_idxs_tensor_* → input_c, page_table_* → input_d
     update_idxs_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
     page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
+    input_c_tensor_placement = (
+        update_idxs_tensor_kwargs.get("tensor_placement") if update_idxs_tensor_kwargs else input_a_tensor_placement
+    )
+    input_d_tensor_placement = (
+        page_table_kwargs.get("tensor_placement") if page_table_kwargs else input_a_tensor_placement
+    )
     if input_c_dtype is None and update_idxs_tensor_kwargs is not None:
         input_c_dtype = update_idxs_tensor_kwargs["dtype"]
         input_c_layout = update_idxs_tensor_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
@@ -195,7 +239,7 @@ def run(
                 dtype_c,
                 ttnn.ROW_MAJOR_LAYOUT,
                 mem_config_c,
-                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+                input_c_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -235,7 +279,7 @@ def run(
                     dtype_d,
                     ttnn.ROW_MAJOR_LAYOUT,
                     mem_config_d,
-                    kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
+                    input_d_tensor_placement,
                 )
             else:
                 input_tensor_d = ttnn.from_torch(
@@ -249,33 +293,23 @@ def run(
             input_tensor_d = ttnn.from_torch(torch_input_tensor_d, dtype=dtype_d, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     start_time = start_measuring_time()
-    # paged_update_cache signature: (cache_tensor, input_tensor, *, update_idxs=[], update_idxs_tensor=None, share_cache=None, page_table=None, ...)
-    # Only cache and input are positional, everything else is keyword-only
-    # So tensor_a=cache, tensor_b=input, tensor_c=update_idxs_tensor, tensor_d=page_table
-    # Note: paged_update_cache may not accept memory_config parameter - it modifies cache_tensor in place
-    try:
-        output_tensor = ttnn.experimental.paged_update_cache(
-            input_tensor_a,  # cache_tensor (positional)
-            input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
-            page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
-            batch_offset=0,  # Use default batch_offset
-            **op_kwargs,
-        )
-    except TypeError:
-        # If that fails, try with memory_config
-        output_tensor = ttnn.experimental.paged_update_cache(
-            input_tensor_a,  # cache_tensor (positional)
-            input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
-            page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
-            batch_offset=0,
-            **op_kwargs,
-        )
+    call_kwargs = {}
+    if input_tensor_c is not None:
+        call_kwargs["update_idxs_tensor"] = input_tensor_c
+    if input_tensor_d is not None:
+        call_kwargs["page_table"] = input_tensor_d
+    batch_offset = kwargs.get("batch_offset")
+    if batch_offset is not None:
+        call_kwargs["batch_offset"] = batch_offset
+    if mesh_coords is not None:
+        call_kwargs["mesh_coords"] = mesh_coords
+    call_kwargs.update(op_kwargs)
+
+    output_tensor = ttnn.experimental.paged_update_cache(
+        input_tensor_a,
+        input_tensor_b,
+        **call_kwargs,
+    )
     # paged_update_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

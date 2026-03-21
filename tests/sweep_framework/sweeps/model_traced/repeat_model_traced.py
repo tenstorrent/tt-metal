@@ -13,6 +13,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -41,6 +43,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -59,6 +65,19 @@ def mesh_device_fixture():
         yield (device, device_name)
         ttnn.close_device(device)
         del device
+
+
+def _parse_shape_value(raw):
+    """Extract numeric tuple from a Shape dict or iterable."""
+    import re
+
+    if isinstance(raw, dict) and "value" in raw:
+        m = re.search(r"\[([0-9, ]+)\]", str(raw["value"]))
+        if m:
+            return tuple(int(x) for x in m.group(1).split(","))
+    if hasattr(raw, "__iter__") and not isinstance(raw, tuple):
+        return tuple(int(x) for x in raw)
+    return raw
 
 
 def run(
@@ -81,22 +100,24 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "repeat_dims"}, output_memory_config=output_memory_config)
 
-    # v2 tracer puts repeat vector in arg1 or repeat_dims
-    repetition_vector = repeat_shape or repeat_dims or kwargs.get("arg1", None)
-    if repetition_vector is None:
-        repetition_vector = (1, 1, 2, 1)  # fallback for sample
+    # Detect whether the model used keyword (repeat_dims=) or positional (arg1) style.
+    # The tracer records the kwarg name, so we must call with the same convention.
+    use_keyword_style = False
+    raw_arg1 = kwargs.get("arg1", None)
 
-    if isinstance(repetition_vector, dict) and "value" in repetition_vector:
-        import re
+    if repeat_dims is not None:
+        use_keyword_style = True
+        repetition_vector = _parse_shape_value(repeat_dims)
+    elif raw_arg1 is not None:
+        repetition_vector = _parse_shape_value(raw_arg1)
+    elif repeat_shape is not None:
+        repetition_vector = _parse_shape_value(repeat_shape)
+    else:
+        repetition_vector = (1, 1, 2, 1)
 
-        m = re.search(r"\[([0-9, ]+)\]", str(repetition_vector["value"]))
-        if m:
-            repetition_vector = tuple(int(x) for x in m.group(1).split(","))
+    # Wrap in ttnn.Shape so the tracer records {"type": "Shape", "value": "Shape([...])"}
+    shape_arg = ttnn.Shape(list(repetition_vector))
 
-    if isinstance(repetition_vector, list):
-        repetition_vector = tuple(repetition_vector)
-
-    # Use named memory_config if output_memory_config not set
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -132,7 +153,10 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.repeat(input_tensor, repetition_vector, **op_kwargs)
+    if use_keyword_style:
+        output_tensor = ttnn.repeat(input_tensor, repeat_dims=shape_arg, **op_kwargs)
+    else:
+        output_tensor = ttnn.repeat(input_tensor, shape_arg, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

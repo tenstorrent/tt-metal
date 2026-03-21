@@ -331,6 +331,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
                 fused_activation=fused_activation,
             )
             if cfg.get("out_block_h") is not None:
@@ -821,9 +822,10 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
-                4. None (degraded mode — empty configs)
+                2. ttnn_operations_master_v3_reconstructed.json (DB-reconstructed, newest)
+                3. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed, legacy)
+                4. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                5. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
             override = MasterConfigLoader._master_file_override
@@ -837,10 +839,14 @@ class MasterConfigLoader:
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            reconstructed_v3_path = os.path.join(traced_dir, "ttnn_operations_master_v3_reconstructed.json")
             reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
             default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
 
-            if os.path.exists(reconstructed_v2_path):
+            if os.path.exists(reconstructed_v3_path):
+                logger.info(f"✅ Using V3 reconstructed JSON from database: {reconstructed_v3_path}")
+                master_file_path = reconstructed_v3_path
+            elif os.path.exists(reconstructed_v2_path):
                 logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
                 master_file_path = reconstructed_v2_path
             elif os.path.exists(default_trace_path):
@@ -1035,6 +1041,7 @@ class MasterConfigLoader:
         dtype_mapping = {
             # Legacy tracer format (namespace-style)
             "DataType::BFLOAT16": ttnn.bfloat16,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::FLOAT32": ttnn.float32,
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
@@ -1042,6 +1049,7 @@ class MasterConfigLoader:
             "DataType::UINT16": ttnn.uint16,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,

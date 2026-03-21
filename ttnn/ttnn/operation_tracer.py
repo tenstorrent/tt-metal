@@ -122,7 +122,7 @@ def _is_tracing_enabled() -> bool:
 
     # Check sys.argv only once and cache the result
     if _TRACE_PARAMS_IN_ARGV is None:
-        _TRACE_PARAMS_IN_ARGV = _TRACE_PARAMS_FLAG in sys.argv
+        _TRACE_PARAMS_IN_ARGV = _TRACE_PARAMS_FLAG in sys.argv or os.environ.get("TTNN_TRACE_PARAMS") == "1"
 
     return _ENABLE_TRACE or _TRACE_PARAMS_IN_ARGV
 

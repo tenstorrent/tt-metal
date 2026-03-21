@@ -13,6 +13,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -49,6 +51,10 @@ def invalidate_vector(test_vector) -> tuple:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -110,6 +116,8 @@ def run(
 
     if value is None:
         value = 0.0
+    elif isinstance(value, str):
+        value = float(value)
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -158,9 +166,10 @@ def run(
         )
 
     start_time = start_measuring_time()
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
+    has_explicit_memory_config = "memory_config" in kwargs
+    if has_explicit_memory_config and output_memory_config is not None and "memory_config" not in op_kwargs:
         op_kwargs["memory_config"] = output_memory_config
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, **op_kwargs)
+    output_tensor = ttnn.pad(input_tensor, padding, value=value, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

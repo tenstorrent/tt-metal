@@ -13,6 +13,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -41,6 +43,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -82,9 +88,10 @@ def run(
 
     if dim is None:
         dim = kwargs.get("arg1", None)
-    keepdim = kwargs.get("keepdim", True)
-    if keepdim is None:
-        keepdim = True
+    keepdim = kwargs.get("keepdim", None)
+    if keepdim == "__ABSENT__":
+        keepdim = None
+    has_keepdim = keepdim is not None
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -97,7 +104,8 @@ def run(
     if dim is None:
         torch_output_tensor = torch.sum(torch_input_tensor_a)
     else:
-        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
+        effective_keepdim = keepdim if has_keepdim else False
+        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=effective_keepdim)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -125,8 +133,10 @@ def run(
     start_time = start_measuring_time()
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, **op_kwargs)
-    else:
+    elif has_keepdim:
         output_tensor = ttnn.sum(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
+    else:
+        output_tensor = ttnn.sum(input_tensor_a, dim=dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import re
 import torch
 import ttnn
@@ -14,6 +15,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 # Import V2 master config loader and standalone helpers for traced model configurations
@@ -46,12 +49,34 @@ def _parse_shard_dims_from_placement(placements):
 
 
 def _get_placement_from_tensor_spec(tensor_spec):
-    """Extract placement info from a raw tensor spec's mesh_device field.
+    """Extract placement info from a tensor spec.
+
+    Supports two formats:
+      V2 (current tracer): tensor_placement.placement / mesh_device_shape strings
+      Legacy: mesh_device.placements / shape lists
 
     Returns (shard_dims, mesh_shape) or (None, None) if not available.
     shard_dims is a tuple like (2, 1) or (None, 3).
     mesh_shape is a tuple like (4, 8).
     """
+    tp = tensor_spec.get("tensor_placement")
+    if tp:
+        placement_str = tp.get("placement", "")
+        mesh_shape_raw = tp.get("mesh_device_shape", "")
+        if not placement_str or not mesh_shape_raw:
+            return None, None
+        shard_dims = _parse_shard_dims_from_placement(placement_str)
+        if isinstance(mesh_shape_raw, str):
+            try:
+                mesh_shape = tuple(json.loads(mesh_shape_raw))
+            except (json.JSONDecodeError, TypeError):
+                return None, None
+        elif isinstance(mesh_shape_raw, list):
+            mesh_shape = tuple(mesh_shape_raw)
+        else:
+            return None, None
+        return shard_dims, mesh_shape
+
     mesh_device = tensor_spec.get("mesh_device")
     if not mesh_device:
         return None, None
@@ -99,6 +124,11 @@ def mesh_device_fixture():
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
     """
     mesh_shape = get_mesh_shape()
+
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
 
     if mesh_shape:
         # Create mesh device based on env var

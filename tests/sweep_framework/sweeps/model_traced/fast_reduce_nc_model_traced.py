@@ -2,20 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+from functools import partial
+
 import torch
 import ttnn
+from ttnn import ShardTensor2dMesh
+
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
-from functools import partial
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
+    infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -47,6 +51,10 @@ if model_traced_params:
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -66,6 +74,31 @@ def mesh_device_fixture():
         ttnn.close_device(device)
 
 
+def _parse_mesh_shape(mesh_device_shape):
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
+
+
+def _parse_shard_dims_from_placement(tensor_placement):
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    dims = []
+    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+        if m.group(1) is not None:
+            dims.append(int(m.group(1)))
+        else:
+            dims.append(None)
+    return tuple(dims) if len(dims) == 2 else None
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -83,37 +116,82 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])
     op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
 
-    # Handle tuple input_a_shape for sample suite
+    traced_memory_config = memory_config
+    if traced_memory_config == "__ABSENT__":
+        traced_memory_config = None
+    if isinstance(traced_memory_config, dict):
+        traced_memory_config = dict_to_memory_config(traced_memory_config)
+    if traced_memory_config is not None:
+        op_kwargs["memory_config"] = traced_memory_config
+
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
     else:
         shape = input_a_shape
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
-
-    # Torch equivalent: sum over N and C dimensions
-    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=tuple(dims), keepdim=True)
-
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            input_tensor_a = create_tensor_on_mesh(
-                torch_input_tensor_a,
-                device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
-            )
-        else:
+    mesh_shape = None
+    shard_dims = None
+    if is_mesh_device and input_a_tensor_placement:
+        mesh_shape = _parse_mesh_shape(input_a_tensor_placement.get("mesh_device_shape"))
+        shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement)
+
+    if is_mesh_device and mesh_shape:
+        try:
+            dev_shape = device.shape
+            if callable(dev_shape):
+                dev_shape = dev_shape()
+            dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+        except Exception:
+            dev_rows, dev_cols = 1, 1
+        if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+            return [
+                (
+                    False,
+                    f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                    f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                ),
+                None,
+            ]
+
+    if shard_dims is not None and mesh_shape is not None:
+        global_shape = list(shape)
+        for axis_idx, sd in enumerate(shard_dims):
+            if sd is not None:
+                esd = sd if sd >= 0 else len(shape) + sd
+                global_shape[esd] *= mesh_shape[axis_idx]
+
+        torch_global = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(tuple(global_shape))
+
+        dev0_slices = [slice(None)] * len(global_shape)
+        for axis_idx, sd in enumerate(shard_dims):
+            if sd is not None:
+                esd = sd if sd >= 0 else len(shape) + sd
+                dev0_slices[esd] = slice(0, shape[esd])
+        torch_input_dev0 = torch_global[tuple(dev0_slices)]
+        torch_output_tensor = torch.sum(torch_input_dev0, dim=tuple(dims), keepdim=True)
+
+        input_tensor_a = ttnn.from_torch(
+            torch_global,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+            mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+    else:
+        torch_input_tensor_a = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(shape)
+        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=tuple(dims), keepdim=True)
+
+        if not is_host:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -121,18 +199,16 @@ def run(
                 device=device,
                 memory_config=input_a_memory_config,
             )
-    else:
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+        else:
+            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None, **op_kwargs)
 
-    # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)
     for dim in dims:
         output_shape[dim] = 1
 
-    # Convert to torch, unpad from tile, then compare
     if is_mesh_device:
         device_tensors = ttnn.get_device_tensors(output_tensor)
         output_tensor = device_tensors[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
@@ -140,7 +216,6 @@ def run(
         output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - use 0.999 threshold like unit test
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]
