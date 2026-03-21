@@ -7,7 +7,7 @@
 
 ### CI Coverage
 
-- [ ] **CI-01**: BH galaxy GHA runs `test_fabric_vc2_at_least_2x2_mesh.yaml` as a multi-process test, forcing multi-mesh topology so VC1 is enabled alongside VC2
+- [x] **CI-01**: BH galaxy GHA runs `test_fabric_vc2_at_least_2x2_mesh.yaml` as a multi-process test, forcing multi-mesh topology so VC1 is enabled alongside VC2
 
 ### VC Combo Test Cases
 
@@ -36,7 +36,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CI-01 | Phase 7 | Pending |
+| CI-01 | Phase 7 | Complete |
 | VC-01 | Phase 7 | Complete |
 | VC-02 | Phase 7 | Complete |
 | VC-03 | Phase 7 | Complete |
