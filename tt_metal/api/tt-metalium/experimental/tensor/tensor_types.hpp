@@ -83,3 +83,8 @@ using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::DataType> : fmt::formatter<string_view> {
+    auto format(tt::tt_metal::DataType dt, format_context& ctx) const -> format_context::iterator;
+};
