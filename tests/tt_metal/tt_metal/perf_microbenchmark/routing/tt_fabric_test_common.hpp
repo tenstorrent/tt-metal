@@ -401,6 +401,30 @@ public:
         return mesh_adjacency_map;
     }
 
+    CoreCoord get_router_virtual_coord(
+        const FabricNodeId& node_id, RoutingDirection direction, uint32_t link_idx) const override {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
+        const auto& eth_channels = control_plane.get_active_fabric_eth_channels_in_direction(node_id, direction);
+        TT_FATAL(
+            link_idx < eth_channels.size(),
+            "link_idx {} out of range for direction {} on node {} (only {} channels available)",
+            link_idx,
+            static_cast<int>(direction),
+            node_id,
+            eth_channels.size());
+        return cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channels[link_idx]);
+    }
+
+    CoreCoord get_noc_grid_size() const override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto any_node = get_local_node_ids().front();
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(any_node);
+        return cluster.get_soc_desc(physical_chip_id).grid_size;
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.

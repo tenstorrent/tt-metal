@@ -56,6 +56,14 @@ public:
     virtual bool is_multi_mesh() const = 0;
     virtual std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const = 0;
 
+    // Returns the virtual (translated) coordinate of the ethernet router core for a given
+    // fabric node, routing direction, and link index.
+    virtual CoreCoord get_router_virtual_coord(
+        const FabricNodeId& node_id, RoutingDirection direction, uint32_t link_idx) const = 0;
+
+    // Returns the full NOC grid size (for coordinate wraparound calculations).
+    virtual CoreCoord get_noc_grid_size() const = 0;
+
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
         const MeshCoordinate& device_coord,
