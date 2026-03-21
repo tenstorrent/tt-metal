@@ -237,12 +237,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
                 }
             }
             uint32_t l1_alignment = hal::get_l1_alignment();
-            uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
-            if (is_blackhole or is_l1_aligned) {
-                if (!dst_is_dram or is_l1_aligned) {
-                    padded_shard_width = align(output_unit_size, l1_alignment);
-                }
-            }
+            uint32_t padded_shard_width = align(output_unit_size, l1_alignment);
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel_id,
