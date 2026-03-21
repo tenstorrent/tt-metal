@@ -107,7 +107,7 @@ HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_va
 }
 
 template <typename T>
-std::vector<T> to_vector(const HostTensor& tensor) {
+std::vector<T> to_vector_generic(const HostTensor& tensor) {
     TT_FATAL(
         tensor.dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
@@ -123,8 +123,7 @@ std::vector<T> to_vector(const HostTensor& tensor) {
     return decode_tensor_data(data, tensor.tensor_spec());
 }
 
-template <>
-std::vector<float> to_vector<float>(const HostTensor& tensor) {
+std::vector<float> to_vector_float(const HostTensor& tensor) {
     HostBuffer host_buffer = get_single_host_buffer(tensor);
 
     switch (tensor.dtype()) {
@@ -161,6 +160,14 @@ std::vector<float> to_vector<float>(const HostTensor& tensor) {
             TT_THROW("Cannot convert HostTensor to vector<float> for data type: {}", tensor.dtype());
         }
     }
+}
+
+template <typename T>
+std::vector<T> to_vector(const HostTensor& tensor) {
+    if constexpr (std::is_same_v<T, float>) {
+        return to_vector_float(tensor);
+    }
+    return to_vector_generic<T>(tensor);
 }
 
 // ============================================================================
@@ -200,6 +207,7 @@ template HostTensor from_vector<uint32_t>(std::vector<uint32_t>&&, const TensorS
 template HostTensor from_vector<uint16_t>(std::vector<uint16_t>&&, const TensorSpec&, uint16_t);
 template HostTensor from_vector<uint8_t>(std::vector<uint8_t>&&, const TensorSpec&, uint8_t);
 
+template std::vector<float> to_vector<float>(const HostTensor&);
 template std::vector<bfloat16> to_vector<bfloat16>(const HostTensor&);
 template std::vector<int32_t> to_vector<int32_t>(const HostTensor&);
 template std::vector<uint32_t> to_vector<uint32_t>(const HostTensor&);
