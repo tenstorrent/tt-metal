@@ -761,6 +761,20 @@ jobs:
           name: ttnn-operations-master-json
           path: model_tracer/traced_operations/ttnn_operations_master.json
           retention-days: 1
+  cancel-on-db-failure:
+    name: Cancel workflow on DB failure
+    needs: [generate-master-json-from-db]
+    if: always() && needs.generate-master-json-from-db.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "generate-master-json-from-db failed — cancelling workflow"
+          gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
   ttnn-generate-sweeps:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
