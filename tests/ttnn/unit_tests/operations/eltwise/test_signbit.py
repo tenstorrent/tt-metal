@@ -4,18 +4,8 @@
 
 import pytest
 import torch
-import random
-from functools import partial
 import ttnn
 
-
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-    generation_funcs,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
-    run_single_pytorch_test,
-)
 from models.common.utility_functions import skip_for_blackhole
 
 mem_configs = [
@@ -41,21 +31,14 @@ class TestSignbit:
         dst_mem_config,
         device,
     ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-        ]
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": dst_mem_config})
-        comparison_func = comparison_funcs.comp_equal
+        shape = input_shapes[0]
+        torch_input = (torch.rand(shape) * 200 - 100).to(torch.bfloat16)
 
-        run_single_pytorch_test(
-            "eltwise-signbit",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
-        )
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.signbit(tt_input, memory_config=dst_mem_config)
+        torch_output = ttnn.to_torch(tt_output)
+
+        assert torch.equal(torch.signbit(torch_input), torch_output.to(torch.bool))
 
     def test_run_signbit_negative_zero(
         self,
@@ -63,18 +46,11 @@ class TestSignbit:
         dst_mem_config,
         device,
     ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_constant, constant=-0.0), torch.bfloat16)
-        ]
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": dst_mem_config})
-        comparison_func = comparison_funcs.comp_equal
+        shape = input_shapes[0]
+        torch_input = torch.full(shape, -0.0, dtype=torch.bfloat16)
 
-        run_single_pytorch_test(
-            "eltwise-signbit",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
-        )
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.signbit(tt_input, memory_config=dst_mem_config)
+        torch_output = ttnn.to_torch(tt_output)
+
+        assert torch.equal(torch.signbit(torch_input), torch_output.to(torch.bool))
