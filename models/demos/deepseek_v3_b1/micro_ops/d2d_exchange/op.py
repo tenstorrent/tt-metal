@@ -65,6 +65,8 @@ class SocketInterface:
             ), "Sender and receiver mesh IDs must be the same when both MeshDevices are provided"
             self.mesh_device = sender_mesh.get_mesh_device()
             self.local_socket = True
+            self.sender_mesh = sender_mesh.get_mesh_device()
+            self.receiver_mesh = receiver_mesh.get_mesh_device()
         else:
             self.mesh_device = (
                 sender_mesh.get_mesh_device() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_device()
@@ -100,7 +102,9 @@ class SocketInterface:
                 socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-                self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
+                self.downstream_socket_pair = ttnn.create_socket_pair(
+                    receiver_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
+                )
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
 
@@ -165,6 +169,7 @@ class SocketInterface:
         # Upstream Socket (feeding this stage) and Downstream Socket (draining this stage) must be on my_core.
         assert my_upstream_socket.get_active_cores()[0] == my_core_coord
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
+        print("my core co ordinate: ", my_core_coord)
 
         upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
         downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
@@ -265,12 +270,9 @@ class SocketInterface:
         return program
 
     def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
-        )
         if self.local_socket:
             sender_program = self._create_program(
-                self.mesh_device,
+                self.sender_mesh,
                 self.send_core_coord,
                 self.upstream_socket,
                 self.internal_socket_pair[0],
@@ -278,7 +280,7 @@ class SocketInterface:
             )
 
             receiver_program = self._create_program(
-                self.mesh_device,
+                self.receiver_mesh,
                 self.recv_core_coord,
                 self.internal_socket_pair[1],
                 self.downstream_socket,
@@ -304,10 +306,14 @@ class SocketInterface:
                     self.receiver_packet_header_cb_index,
                 )
 
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         if self.local_socket:
-            same_device = self.send_core_coord.device_coord == self.recv_core_coord.device_coord
+            sender_mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+            receiver_mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+            sender_fabric_node_id = self.sender_mesh.get_fabric_node_id(self.send_core_coord.device_coord)
+            receiver_fabric_node_id = self.receiver_mesh.get_fabric_node_id(self.recv_core_coord.device_coord)
+            same_device = sender_fabric_node_id == receiver_fabric_node_id
             if same_device:
+                print("same device")
                 sender_cb_ids = {fd.buffer_index for cb in sender_program.cbs for fd in cb.format_descriptors}
                 combined_cbs = sender_program.cbs + [
                     cb
@@ -326,23 +332,49 @@ class SocketInterface:
                     ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
                 ] = combined_program
             else:
-                mesh_program_descriptor[
+                print(
+                    "sender program on ",
+                    self.send_core_coord.device_coord,
+                    " and receiver program on ",
+                    self.recv_core_coord.device_coord,
+                )
+                sender_mesh_program_descriptor[
                     ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
                 ] = sender_program
-                mesh_program_descriptor[
+                receiver_mesh_program_descriptor[
                     ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
                 ] = receiver_program
+
+            dummy_tensor = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.sender_mesh
+            )
+            dummy_tensor_2 = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.receiver_mesh
+            )
+            io_tensors = [
+                dummy_tensor,
+                dummy_tensor,
+            ]
+            io_tensors_2 = [
+                dummy_tensor_2,
+                dummy_tensor_2,
+            ]
+            ttnn.generic_op(io_tensors, sender_mesh_program_descriptor)
+            ttnn.generic_op(io_tensors_2, receiver_mesh_program_descriptor)
         else:
+            dummy_tensor = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
+            )
+            mesh_program_descriptor = ttnn.MeshProgramDescriptor()
             device_coord = (
                 self.send_core_coord.device_coord if self.upstream_socket else self.recv_core_coord.device_coord
             )
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
-
-        io_tensors = [
-            dummy_tensor,
-            dummy_tensor,
-        ]
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+            io_tensors = [
+                dummy_tensor,
+                dummy_tensor,
+            ]
+            ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
     def terminate(self, sync_devices):
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
@@ -354,7 +386,7 @@ class SocketInterface:
                 ttnn.synchronize_device(self.mesh_device)
 
     def get_downstream_socket(self):
-        return self.downstream_socket
+        return self.downstream_socket_pair[1]
 
     def get_upstream_socket(self):
-        return self.upstream_socket
+        return self.upstream_socket_pair[0]

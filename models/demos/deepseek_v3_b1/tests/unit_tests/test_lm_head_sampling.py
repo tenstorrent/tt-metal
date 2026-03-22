@@ -1973,11 +1973,14 @@ def test_pipline_block_4stage_galaxy_1_iteration_with_submeshes(mesh_device, use
 
     print(f"Mesh device shape: {mesh_device.shape}")
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(4, 2))
+
+    for submesh in submeshes:
+        ttnn.enable_asynchronous_slow_dispatch(submesh)
 
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
     torch_expected_idx = torch_expected_indices[0]
 
-    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(4, 2))
     builder = create_single_galaxy_submesh_pipeline_builder(
         _SyntheticWeightProvider(),
         lm_head_fp32_dest_acc_en=use_fp32,

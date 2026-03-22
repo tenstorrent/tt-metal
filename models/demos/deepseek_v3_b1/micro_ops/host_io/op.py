@@ -66,6 +66,8 @@ class HostInterface:
         # Current implementation only supports host communication with one core on one chip
         if len(h2d_socket.get_active_cores()) != 1 or len(d2h_socket.get_active_cores()) != 1:
             raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
+        print("h2d_socket.get_mesh_device().id()", h2d_socket.get_mesh_device().id())
+        print("d2h_socket.get_mesh_device().id()", d2h_socket.get_mesh_device().id())
         if h2d_socket.get_mesh_device().id() != d2h_socket.get_mesh_device().id():
             raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same mesh device.")
 
@@ -397,8 +399,12 @@ class HostInterface:
         return self.upstream_socket_pair[0]
 
     def terminate(self, sync_devices):
+        print("host_io.terminate: h2d barrier start")
         self.h2d_socket.barrier()
+        print("host_io.terminate: h2d barrier done, d2h barrier start")
         self.d2h_socket.barrier()
+        print("host_io.terminate: d2h barrier done, resetting semaphore")
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        print("host_io.terminate: semaphore reset done")
         if sync_devices:
             ttnn.synchronize_device(self.mesh_device)
