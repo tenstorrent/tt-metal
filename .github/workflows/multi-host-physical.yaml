@@ -122,6 +122,9 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   tooling-and-mpi-t3k:
+    # NOTE: Intentionally manual-dispatch only (no schedule condition).
+    # Add `|| github.event.schedule == '0 */3 * * *'` here to run this
+    # job on the same T3K schedule as multi-host-t3k if that is desired.
     if: ${{ github.event.inputs.multihost_tooling == 'true' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service

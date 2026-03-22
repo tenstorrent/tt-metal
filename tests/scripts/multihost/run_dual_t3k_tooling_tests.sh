@@ -14,7 +14,7 @@
 set -eo pipefail
 
 # Exit immediately if ARCH_NAME is not set or empty
-if [ -z "${ARCH_NAME}" ]; then
+if [[ -z "${ARCH_NAME}" ]]; then
   echo "Error: ARCH_NAME is not set. Exiting." >&2
   exit 1
 fi
