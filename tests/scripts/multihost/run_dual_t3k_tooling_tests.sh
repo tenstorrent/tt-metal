@@ -10,6 +10,7 @@
 #   4. Python unit tests: ttrun exit code interpretation
 #   5. Python unit tests: mpi_fault.py failure paths
 #   6. Triage tool unit tests
+#   7. MPI multiprocess rank resolution test (mpirun -np 4)
 
 set -eo pipefail
 
@@ -128,6 +129,19 @@ triage_exit=0
 if [[ $triage_exit -ne 0 ]]; then
   echo "LOG_METAL: WARNING: test_triage.py exited $triage_exit (needs inspector + hang-app binary; non-blocking)"
 fi
+
+# ── 7. MPI multiprocess rank resolution test ──────────────────────────
+#
+# Spawns 4 MPI ranks via mpirun, each writes a rank-tagged marker file,
+# then rank 0 verifies get_log_directory() resolves correctly for every
+# rank's environment.  Pure Python — no hardware needed.
+MPIRUN_WRAPPER="${repo_root}/tests/tt_metal/multihost/mpirun_wrapper.sh"
+echo "LOG_METAL: Running MPI multiprocess rank resolution test (-np 4)"
+$MPIRUN_WRAPPER -np 4 --oversubscribe --allow-run-as-root \
+  python3 -m pytest \
+  --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
+  --junitxml="${repo_root}/generated/test_reports/test_multihost_rank_resolution_mpi.xml" \
+  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py" ; fail=$((fail + $?))
 
 # ── Done ───────────────────────────────────────────────────────────────
 end_time=$(date +%s)
