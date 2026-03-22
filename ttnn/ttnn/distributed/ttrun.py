@@ -303,8 +303,10 @@ def _detect_openmpi_major_version() -> Optional[int]:
                     major = int(version_str.split(".")[0])
                     _openmpi_major_version = major
                     return major
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
-        pass
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        # Best-effort detection: failures are expected on systems without mpirun
+        # or when the output format changes. Log at debug and fall back to None.
+        logger.debug(f"{TT_RUN_PREFIX} Failed to detect OpenMPI version: {exc}")
 
     return None
 
