@@ -15,4 +15,4 @@ rank_bindings:
     mesh_id: 1
     mesh_host_rank: 0
 
-mesh_graph_desc_path: "configurations/2galaxy_verification/mgd.textproto"
+mesh_graph_desc_path: "tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/2galaxy_verification/mgd.textproto"
