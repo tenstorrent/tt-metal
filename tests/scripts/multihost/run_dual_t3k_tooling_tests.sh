@@ -120,7 +120,7 @@ triage_exit=0
 # annotations that the pytest-github-actions-annotate-failures plugin
 # emits for each failing test — these make the job look broken in the
 # UI even though it passes.  -q --tb=line --no-header reduce verbosity.
-(cd /tmp && env -u PYTHONPATH python3 -m pytest \
+(cd /tmp && env -u PYTHONPATH -u GITHUB_ACTIONS python3 -m pytest \
   -p no:github-actions-annotate-failures \
   --override-ini "addopts=--import-mode=importlib -q --tb=line --no-header" \
   --confcutdir="${repo_root}/tools/tests/triage" \

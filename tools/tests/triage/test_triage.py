@@ -68,7 +68,7 @@ HANG_APP_EXPECTED_RESULTS = {
 
 
 def print_process_output(proc):
-    stdout, stderr = proc.communicate(input=None, timeout=0)
+    stdout, stderr = proc.communicate(input=None, timeout=5)
     print("\n=== Process stdout ===")
     print(stdout.decode("utf-8") if stdout else "(empty)")
     print("\n=== Process stderr ===")
@@ -92,13 +92,15 @@ def cause_hang_with_app(request):
     auto_timeout = app_configuration.get("auto_timeout", False)
     if auto_timeout:
         # Wait for the application to hang itself
+        process_exited_early = False
         try:
             proc.wait(timeout=timeout)
+            process_exited_early = True  # returned normally = process exited within timeout
         except subprocess.TimeoutExpired:
-            pass
+            pass  # process still running = hanging as expected
 
-        # Check if the process has exited
-        if proc.returncode != 0:
+        # Only error if the process actually exited early with a non-zero code
+        if process_exited_early and proc.returncode != 0:
             # Print process output for debugging
             print("The application did not hang as expected.")
             print_process_output(proc)
