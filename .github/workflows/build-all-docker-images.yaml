@@ -406,8 +406,8 @@ jobs:
       - name: Build and push LLK images
         shell: bash
         env:
-          # Same Ubuntu source as dockerfile/Dockerfile (not Harbor): only LLK used Harbor for the base pull and timed out; other jobs use mirror.gcr.io here.
-          LLK_UBUNTU_BASE_IMAGE: mirror.gcr.io/ubuntu:22.04
+          # Use Harbor pull-through cache for docker.io images (CI optimization)
+          LLK_UBUNTU_BASE_IMAGE: harbor.ci.tenstorrent.net/docker.io/ubuntu:22.04
         run: .github/scripts/llk-build-docker-images.sh
 
   # Update latest tags on main

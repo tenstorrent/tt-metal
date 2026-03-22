@@ -11,9 +11,8 @@
 set -euo pipefail
 
 # Base for Dockerfile.base (patches FROM ubuntu:22.04 in a temp file; tt_llk submodule stays vanilla).
-# Default matches upstream tt_llk. CI sets mirror.gcr.io/ubuntu:22.04 to match dockerfile/Dockerfile
-# (Harbor pull-through for docker.io is a different path and can fail while mirror.gcr.io works).
-#   LLK_UBUNTU_BASE_IMAGE=mirror.gcr.io/ubuntu:22.04
+# Default matches upstream tt_llk. CI uses Harbor pull-through cache for docker.io images.
+#   LLK_UBUNTU_BASE_IMAGE=harbor.ci.tenstorrent.net/docker.io/ubuntu:22.04
 LLK_UBUNTU_BASE_IMAGE="${LLK_UBUNTU_BASE_IMAGE:-ubuntu:22.04}"
 
 # LLK Docker images are built from the submodule content
