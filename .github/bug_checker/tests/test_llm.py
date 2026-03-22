@@ -1,6 +1,6 @@
 """Tests for LLM response parsing (does not call the API)."""
 
-from bug_checker.llm import Finding, LLMSession
+from bug_checker.llm import LLMSession
 
 
 def test_parse_findings_no_findings():

@@ -119,7 +119,7 @@ def format_pr_comment(finding: Finding) -> str:
     """Format a single finding as a PR comment body."""
     severity_emoji = "!!!" if finding.severity == "blocking" else "?"
     parts = [
-        f"**Bug Checker [{finding.severity.upper()}]** `{finding.rule_id}`\n",
+        f"{severity_emoji} **Bug Checker [{finding.severity.upper()}]** `{finding.rule_id}`\n",
         finding.message,
     ]
     if finding.suggested_fix:

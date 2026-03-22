@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .github_client import PRInfo, fetch_file_content, post_pr_comment
+from .github_client import PRInfo, post_pr_comment
 from .llm import Finding, LLMSession
 from .output import (
     format_pr_comment,
@@ -49,7 +49,15 @@ def run_bug_check(
     rules_used: list[str] = []
 
     for group in rule_groups:
-        session = LLMSession(model=group[0].model or "")
+        try:
+            session = LLMSession(model=group[0].model or "")
+        except Exception:
+            # Fail open: if session creation fails, skip this entire group
+            rule_ids = ", ".join(r.id for r in group)
+            logger.exception(f"Failed to create LLM session for rules: {rule_ids}")
+            rules_used.extend(r.id for r in group)
+            continue
+
         for rule in group:
             rules_used.append(rule.id)
             try:
@@ -62,9 +70,9 @@ def run_bug_check(
                 )
                 all_findings.extend(findings)
                 logger.info(f"Rule {rule.id}: {len(findings)} finding(s)")
-            except Exception as e:
-                # Fail open: log warning, skip rule, continue
-                logger.warning(f"Rule {rule.id} failed: {e}")
+            except Exception:
+                # Fail open: log warning with traceback, skip rule, continue
+                logger.exception(f"Rule {rule.id} failed")
 
     # Output: CLI
     print_findings(all_findings)
@@ -99,6 +107,8 @@ def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None
         except Exception as e:
             inline_failed += 1
             logger.warning(f"Failed to post inline comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
+
+    logger.info(f"Inline comments: {inline_posted} posted, {inline_failed} failed")
 
     # Post summary comment
     try:
