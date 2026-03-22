@@ -71,6 +71,8 @@ void kernel_main() {
         const uint64_t pcie_src = (static_cast<uint64_t>(src_hi) << 32) | src_lo;
         const uint32_t B = kDmaH2DNumBufs;  // batch size = 8
 
+        volatile tt_l1_ptr uint32_t* h2d_diag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDmaH2DDiagBase);
+
         if (opcode == DMA_OP_H2D_PUSH || opcode == DMA_OP_H2D_PUSH_L1) {
             // ── Host-push H2D: host writes data to L1 via BAR, kernel optionally drains to DRAM ──
             const bool skip_dram = (opcode == DMA_OP_H2D_PUSH_L1);
@@ -110,10 +112,13 @@ void kernel_main() {
 
             progress[0] = 3u;
         } else if (opcode == DMA_OP_TRANSFER || opcode == DMA_OP_L1_ONLY) {
-            // ── Device-pull H2D: 4+4 double-buffered PCIe reads ──────────
-            // Split 8 L1 buffers into two groups of 4.  While group A's
-            // data drains to DRAM, group B fills from PCIe — overlapping
-            // the two independent NOC transactions for higher throughput.
+            // ── Device-pull H2D: streaming circular buffer with per-read HW tracking ──
+            //
+            // Replaces the old 4+4 double-buffer with a B-deep circular ring.
+            // Uses NIU_MST_RD_RESP_RECEIVED (increments by 1 per noc_read_with_state
+            // completion) for fine-grained tracking instead of noc_async_read_barrier().
+            // Benefits: all B buffers in flight at once; no pipeline bubble between
+            // batches; DRAM writes overlap with PCIe reads naturally.
             const bool skip_dram = (opcode == DMA_OP_L1_ONLY);
 
             InterleavedAddrGen<true> dram_gen = {
@@ -121,12 +126,22 @@ void kernel_main() {
                 .page_size = kDmaChunkSize,
             };
 
-            const uint32_t HALF = B / 2;  // 4 bufs per group
-            uint32_t group = 0;
+            uint32_t acc_rd_issue = 0;
+            uint32_t acc_rd_barrier = 0;
+            uint32_t acc_wr_issue = 0;
+            uint32_t acc_wr_barrier = 0;
+            uint32_t rd_waits = 0;
 
-            // Prime: read first batch into group 0 (bufs[0..3])
-            uint32_t prime_count = (num_chunks < HALF) ? num_chunks : HALF;
-            for (uint32_t i = 0; i < prime_count; ++i) {
+            uint32_t t_xfer_start = get_timestamp_32b();
+
+            uint32_t rd_resp_base = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_RD_RESP_RECEIVED);
+            uint32_t issued = 0;
+            uint32_t drained = 0;
+
+            // Prime: fill all B buffers to maximize in-flight PCIe reads.
+            uint32_t prime = (num_chunks < B) ? num_chunks : B;
+            uint32_t t0 = get_timestamp_32b();
+            for (uint32_t i = 0; i < prime; i++) {
                 noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
                     NOC_INDEX,
                     pcie_xy_enc,
@@ -134,55 +149,65 @@ void kernel_main() {
                     bufs[i],
                     kDmaChunkSize);
             }
-            noc_async_read_barrier();
+            issued = prime;
+            uint32_t t1 = get_timestamp_32b();
+            acc_rd_issue += (t1 - t0);
             progress[0] = 2u;
 
-            uint32_t prev_count = prime_count;
-            uint32_t prev_page_base = 0;
+            // Steady-state: drain each read as it completes, reissue into freed buffer.
+            while (drained < num_chunks) {
+                t0 = get_timestamp_32b();
+                uint32_t target = rd_resp_base + drained + 1;
+                while ((int32_t)(NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_RD_RESP_RECEIVED) - target) < 0) {
+                }
+                t1 = get_timestamp_32b();
+                acc_rd_barrier += (t1 - t0);
+                rd_waits++;
 
-            for (uint32_t base = HALF; base < num_chunks; base += HALF) {
-                uint32_t prev_group = group;
-                group ^= 1;
+                uint32_t buf_idx = drained % B;
 
-                uint32_t rd_count = ((num_chunks - base) < HALF) ? (num_chunks - base) : HALF;
+                if (!skip_dram) {
+                    uint32_t tw0 = get_timestamp_32b();
+                    noc_async_write(bufs[buf_idx], dram_gen.get_noc_addr(page_start + drained), kDmaChunkSize);
+                    uint32_t tw1 = get_timestamp_32b();
+                    acc_wr_issue += (tw1 - tw0);
+                }
 
-                // PCIe reads into new group (uses read_cmd_buf)
-                for (uint32_t i = 0; i < rd_count; ++i) {
+                drained++;
+
+                if (issued < num_chunks) {
+                    uint32_t tr0 = get_timestamp_32b();
                     noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
                         NOC_INDEX,
                         pcie_xy_enc,
-                        pcie_src + static_cast<uint64_t>(base + i) * kDmaChunkSize,
-                        bufs[group * HALF + i],
+                        pcie_src + static_cast<uint64_t>(issued) * kDmaChunkSize,
+                        bufs[issued % B],
                         kDmaChunkSize);
+                    uint32_t tr1 = get_timestamp_32b();
+                    acc_rd_issue += (tr1 - tr0);
+                    issued++;
                 }
-
-                // DRAM writes from previous group (uses write_cmd_buf, concurrent)
-                if (!skip_dram) {
-                    for (uint32_t i = 0; i < prev_count; ++i) {
-                        noc_async_write(
-                            bufs[prev_group * HALF + i],
-                            dram_gen.get_noc_addr(page_start + prev_page_base + i),
-                            kDmaChunkSize);
-                    }
-                }
-
-                noc_async_read_barrier();
-                if (!skip_dram) {
-                    noc_async_write_barrier();
-                }
-
-                prev_count = rd_count;
-                prev_page_base = base;
             }
 
-            // Drain: write the last group to DRAM
+            // Sync NOC state so next command starts clean.
+            noc_async_read_barrier();
             if (!skip_dram) {
-                for (uint32_t i = 0; i < prev_count; ++i) {
-                    noc_async_write(
-                        bufs[group * HALF + i], dram_gen.get_noc_addr(page_start + prev_page_base + i), kDmaChunkSize);
-                }
+                t0 = get_timestamp_32b();
                 noc_async_write_barrier();
+                t1 = get_timestamp_32b();
+                acc_wr_barrier += (t1 - t0);
             }
+
+            uint32_t t_xfer_end = get_timestamp_32b();
+
+            h2d_diag[0] = acc_rd_issue;
+            h2d_diag[1] = acc_rd_barrier;
+            h2d_diag[2] = acc_wr_issue;
+            h2d_diag[3] = acc_wr_barrier;
+            h2d_diag[4] = rd_waits;
+            h2d_diag[5] = num_chunks;
+            h2d_diag[6] = t_xfer_end - t_xfer_start;
+            h2d_diag[7] = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_RD_RESP_RECEIVED);
 
             progress[0] = 3u;
         }

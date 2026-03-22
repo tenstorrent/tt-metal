@@ -120,7 +120,15 @@ static void clflush_range(const void* ptr, size_t bytes) {
 struct BenchConfig {
     bool dir_d2h = false;
     bool dir_h2d = false;
+    bool dir_h2d_push = false;
+    bool dir_h2d_dma = false;
+    bool dir_d2h_dma = false;
     bool dir_bidir = false;
+
+    bool dir_d2h_scatter_l1 = false;
+    bool dir_h2d_scatter_l1 = false;
+    bool dir_d2h_interleaved = false;
+    bool dir_h2d_interleaved = false;
 
     bool mode_dram = false;
     bool mode_l1 = false;
@@ -132,9 +140,10 @@ struct BenchConfig {
     int iters = 20;
 
     // DmaEngine knobs
-    uint32_t chunk_size = 16u * 1024u;  // 16 KB default
+    uint32_t chunk_size = 16u * 1024u;  // 16 KB default (may be lowered for WH)
     uint32_t h2d_num_bufs = 8u;
     uint32_t ring_depth = 4u;
+    bool user_chunk_size = false;  // true if --chunk-size was explicitly passed
 
     bool csv = false;
     bool json_out = false;
@@ -251,6 +260,86 @@ static double run_h2d_once(
     return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
 }
 
+static double run_h2d_push_once(
+    DmaEngine& engine,
+    const void* src_ptr,
+    std::shared_ptr<MeshBuffer>& dram_buf,
+    size_t total_bytes,
+    uint32_t opcode) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_h2d_push(
+        static_cast<const uint32_t*>(src_ptr), static_cast<uint32_t>(dram_buf->address()), total_bytes, opcode);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_dma_once(DmaEngine& engine, const void* src_ptr, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_h2d_hw_dma(src_ptr, total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_dma_zc_once(DmaEngine& engine, const void* src_ptr, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_h2d_hw_dma_zerocopy(src_ptr, total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_d2h_dma_once(DmaEngine& engine, void* dst_ptr, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_d2h_hw_dma(dst_ptr, total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_d2h_dma_zc_once(DmaEngine& engine, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_d2h_hw_dma_zerocopy(total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+// ── Scattered L1 / Interleaved DRAM run_once helpers ────────────────────
+
+static double run_d2h_scatter_l1_once(
+    DmaEngine& engine, const std::vector<CoreCoord>& cores, uint32_t l1_offset, size_t shard_size, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_d2h_scattered_l1_zerocopy(cores, l1_offset, shard_size);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_scatter_l1_once(
+    DmaEngine& engine, const std::vector<CoreCoord>& cores, uint32_t l1_offset, size_t shard_size, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_h2d_scattered_l1_zerocopy(cores, l1_offset, shard_size);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_d2h_interleaved_once(
+    DmaEngine& engine, uint32_t num_banks, uint32_t dram_offset, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_d2h_interleaved_dram_zerocopy(num_banks, dram_offset, total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_interleaved_once(
+    DmaEngine& engine, uint32_t num_banks, uint32_t dram_offset, size_t total_bytes) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    engine.transfer_h2d_interleaved_dram_zerocopy(num_banks, dram_offset, total_bytes);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
 // Returns {d2h_bw, h2d_bw} for a single bidirectional iteration.
 static std::pair<double, double> run_bidir_once(
     DmaEngine& engine,
@@ -354,9 +443,16 @@ static void usage(const char* prog) {
     std::cout << "Usage: " << prog
               << " [OPTIONS]\n"
                  "\n"
-                 "Directions (default: all):\n"
+                 "Directions (default: all except h2d-push):\n"
                  "  --d2h                  Enable D2H tests (DRAM→host)\n"
-                 "  --h2d                  Enable H2D tests (host→DRAM)\n"
+                 "  --h2d                  Enable H2D tests (host→DRAM, device-pull via NOC reads)\n"
+                 "  --h2d-push             Enable H2D push tests (host→DRAM, host-push via WC BAR writes)\n"
+                 "  --h2d-dma              Enable H2D DMA engine tests (WH only, DesignWare eDMA)\n"
+                 "  --d2h-dma              Enable D2H DMA engine tests (WH only, DesignWare eDMA)\n"
+                 "  --d2h-scatter-l1       Enable D2H from scattered L1 across tensix cores (eDMA + TLB retarget)\n"
+                 "  --h2d-scatter-l1       Enable H2D to scattered L1 across tensix cores (eDMA + TLB retarget)\n"
+                 "  --d2h-interleaved      Enable D2H from interleaved DRAM (eDMA cycling 6 banks)\n"
+                 "  --h2d-interleaved      Enable H2D to interleaved DRAM (eDMA cycling 6 banks)\n"
                  "  --bidir                Enable bidirectional (concurrent D2H + H2D on same cores)\n"
                  "\n"
                  "Modes (default: both):\n"
@@ -370,8 +466,8 @@ static void usage(const char* prog) {
                  "  --cores 1,4,8,16       Comma-separated core counts (≤16, rebuilds DmaEngine)\n"
                  "\n"
                  "DmaEngine knobs (rebuild engine for each value):\n"
-                 "  --chunk-size 16384     Transfer chunk in bytes; power of 2, [1024,16384] (default 16384)\n"
-                 "                         NOTE: Blackhole NOC PCIe-read burst limit is 16 KB; larger values hang.\n"
+                 "  --chunk-size 8192      Transfer chunk in bytes; power of 2 (default: 8KB on WH, 16KB on BH)\n"
+                 "                         NOTE: NOC PCIe-read burst limit is 8 KB on Wormhole, 16 KB on Blackhole.\n"
                  "  --h2d-bufs 8           H2D PCIe read pipeline depth (default 8)\n"
                  "  --ring-depth 4         Command ring slots per direction; power of 2, [1,16] (default 4)\n"
                  "\n"
@@ -398,6 +494,13 @@ static BenchConfig parse_args(int argc, char** argv) {
     static const struct option long_opts[] = {
         {"d2h", no_argument, nullptr, 'd'},
         {"h2d", no_argument, nullptr, 'H'},
+        {"h2d-push", no_argument, nullptr, 'P'},
+        {"h2d-dma", no_argument, nullptr, 13},
+        {"d2h-dma", no_argument, nullptr, 14},
+        {"d2h-scatter-l1", no_argument, nullptr, 15},
+        {"h2d-scatter-l1", no_argument, nullptr, 16},
+        {"d2h-interleaved", no_argument, nullptr, 17},
+        {"h2d-interleaved", no_argument, nullptr, 18},
         {"bidir", no_argument, nullptr, 'b'},
         {"dram", no_argument, nullptr, 'D'},
         {"l1", no_argument, nullptr, 'l'},
@@ -426,6 +529,34 @@ static BenchConfig parse_args(int argc, char** argv) {
                 cfg.dir_h2d = true;
                 explicit_dir = true;
                 break;
+            case 'P':
+                cfg.dir_h2d_push = true;
+                explicit_dir = true;
+                break;
+            case 13:
+                cfg.dir_h2d_dma = true;
+                explicit_dir = true;
+                break;
+            case 14:
+                cfg.dir_d2h_dma = true;
+                explicit_dir = true;
+                break;
+            case 15:
+                cfg.dir_d2h_scatter_l1 = true;
+                explicit_dir = true;
+                break;
+            case 16:
+                cfg.dir_h2d_scatter_l1 = true;
+                explicit_dir = true;
+                break;
+            case 17:
+                cfg.dir_d2h_interleaved = true;
+                explicit_dir = true;
+                break;
+            case 18:
+                cfg.dir_h2d_interleaved = true;
+                explicit_dir = true;
+                break;
             case 'b':
                 cfg.dir_bidir = true;
                 explicit_dir = true;
@@ -449,7 +580,10 @@ static BenchConfig parse_args(int argc, char** argv) {
             case 'c': cfg.core_counts = parse_uint_list(optarg); break;
             case 'i': cfg.iters = std::stoi(optarg); break;
             case 'w': cfg.warmup = std::stoi(optarg); break;
-            case 10: cfg.chunk_size = static_cast<uint32_t>(std::stoul(optarg)); break;
+            case 10:
+                cfg.chunk_size = static_cast<uint32_t>(std::stoul(optarg));
+                cfg.user_chunk_size = true;
+                break;
             case 11: cfg.h2d_num_bufs = static_cast<uint32_t>(std::stoul(optarg)); break;
             case 12: cfg.ring_depth = static_cast<uint32_t>(std::stoul(optarg)); break;
             case 1: cfg.csv = true; break;
@@ -495,7 +629,7 @@ int main(int argc, char** argv) {
     BenchConfig cfg = parse_args(argc, argv);
 
     // ── Device setup ────────────────────────────────────────────────────────
-    const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
+    const auto system_mesh_shape = distributed::SystemMesh::instance().shape();
 
     auto mesh_device = MeshDevice::create(
         MeshDeviceConfig(system_mesh_shape),
@@ -506,6 +640,12 @@ int main(int argc, char** argv) {
 
     const MeshCoordinate device_coord(0, 0);
     IDevice* device = mesh_device->get_device(device_coord);
+
+    // ── Arch-aware defaults ──────────────────────────────────────────────────
+    const bool is_wh = (device->arch() == tt::ARCH::WORMHOLE_B0);
+    if (!cfg.user_chunk_size) {
+        cfg.chunk_size = is_wh ? 8u * 1024u : 16u * 1024u;
+    }
 
     // ── Pinned memory check ─────────────────────────────────────────────────
     // Attempt a probe allocation rather than relying on can_map_to_noc
@@ -522,7 +662,8 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "persistent_dma_bench"
-              << "  iters=" << cfg.iters << "  warmup=" << cfg.warmup << "  chunk=" << cfg.chunk_size / 1024 << "KB"
+              << "  arch=" << (is_wh ? "WH" : "BH") << "  iters=" << cfg.iters << "  warmup=" << cfg.warmup
+              << "  chunk=" << cfg.chunk_size / 1024 << "KB"
               << "  h2d_bufs=" << cfg.h2d_num_bufs << "  ring=" << cfg.ring_depth << "  cores=";
     for (size_t i = 0; i < cfg.core_counts.size(); ++i) {
         if (i) {
@@ -573,7 +714,7 @@ int main(int argc, char** argv) {
                 WriteShard(mesh_device->mesh_command_queue(), d2h_dram, fill, device_coord);
             }
         }
-        if (cfg.dir_h2d || cfg.dir_bidir) {
+        if (cfg.dir_h2d || cfg.dir_h2d_push || cfg.dir_h2d_dma || cfg.dir_bidir) {
             const size_t h2d_dram_alloc = cfg.mode_dram ? max_bytes : cfg.chunk_size;
             h2d_dram = make_dram_buf(mesh_device, h2d_dram_alloc, cfg.chunk_size);
         }
@@ -587,6 +728,7 @@ int main(int argc, char** argv) {
                 .chunk_size = cfg.chunk_size,
                 .h2d_num_bufs = cfg.h2d_num_bufs,
                 .ring_depth = cfg.ring_depth,
+                .enable_h2d_push = cfg.dir_h2d_push,
             });
 
         // ── Allocate pinned host buffers ─────────────────────────────────────
@@ -606,6 +748,27 @@ int main(int argc, char** argv) {
             uint32_t* p = static_cast<uint32_t*>(h2d_src.ptr);
             for (size_t i = 0; i < max_bytes / sizeof(uint32_t); ++i) {
                 p[i] = i;
+            }
+        }
+
+        // ── H2D push host buffer (regular aligned malloc, not pinned) ────────
+        void* push_buf = nullptr;
+        std::vector<size_t> push_valid_sizes;
+        if (cfg.dir_h2d_push && engine.has_h2d_push()) {
+            const uint32_t pnc = engine.push_num_cores();
+            for (size_t s : cfg.sizes) {
+                if (s % (static_cast<size_t>(pnc) * cfg.chunk_size) == 0) {
+                    push_valid_sizes.push_back(s);
+                }
+            }
+            if (!push_valid_sizes.empty()) {
+                size_t push_max = *std::max_element(push_valid_sizes.begin(), push_valid_sizes.end());
+                push_buf = aligned_alloc(64, push_max);
+                TT_FATAL(push_buf != nullptr, "aligned_alloc failed for push buffer");
+                auto* pp = static_cast<uint32_t*>(push_buf);
+                for (size_t i = 0; i < push_max / sizeof(uint32_t); ++i) {
+                    pp[i] = i;
+                }
             }
         }
 
@@ -719,6 +882,9 @@ int main(int argc, char** argv) {
                         samples};
                     if (cfg.verbose) {
                         print_verbose_samples(r);
+                        if (!is_d2h) {
+                            engine.dump_h2d_timing(total_bytes);
+                        }
                     }
                     all_results.push_back(std::move(r));
                 }
@@ -766,6 +932,378 @@ int main(int argc, char** argv) {
                     /*is_bidir=*/false);
             }
         }
+        if (cfg.dir_h2d_push && engine.has_h2d_push() && push_buf && !push_valid_sizes.empty()) {
+            const uint32_t pnc = engine.push_num_cores();
+            auto run_push_sizes = [&](const std::string& label, const std::string& mode_str, uint32_t opcode) {
+                for (size_t total_bytes : push_valid_sizes) {
+                    if (cfg.verbose) {
+                        std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << " push_cores=" << pnc << "]\n";
+                    }
+                    for (int w = 0; w < cfg.warmup; ++w) {
+                        run_h2d_push_once(engine, push_buf, h2d_dram, total_bytes, opcode);
+                    }
+                    std::vector<double> samples;
+                    for (int it = 0; it < cfg.iters; ++it) {
+                        samples.push_back(run_h2d_push_once(engine, push_buf, h2d_dram, total_bytes, opcode));
+                    }
+                    Result r{
+                        label,
+                        "h2d_push",
+                        mode_str,
+                        pnc,
+                        total_bytes,
+                        cfg.iters,
+                        cfg.chunk_size,
+                        cfg.h2d_num_bufs,
+                        cfg.ring_depth,
+                        samples};
+                    if (cfg.verbose) {
+                        print_verbose_samples(r);
+                    }
+                    all_results.push_back(std::move(r));
+                }
+            };
+            if (cfg.mode_dram) {
+                run_push_sizes("H2D_PUSH_DRAM", "dram", DMA_OP_H2D_PUSH);
+            }
+            if (cfg.mode_l1) {
+                run_push_sizes("H2D_PUSH_L1", "l1", DMA_OP_H2D_PUSH);
+            }
+        }
+        if (push_buf) {
+            std::free(push_buf);
+            push_buf = nullptr;
+        }
+
+        // ── H2D eDMA engine (WH DesignWare PCIe DMA via BAR2) ─────────────
+        if (cfg.dir_h2d_dma && engine.has_hw_dma()) {
+            // eDMA writes to core 0's L1 via TLB-translated AXI address.
+            // For bandwidth testing we overwrite the same L1 area repeatedly;
+            // the goal is measuring raw eDMA throughput, not data correctness.
+            void* dma_src = aligned_alloc(64, max_bytes);
+            TT_FATAL(dma_src != nullptr, "aligned_alloc failed for DMA source buffer");
+            auto* dp = static_cast<uint32_t*>(dma_src);
+            for (size_t i = 0; i < max_bytes / sizeof(uint32_t); ++i) {
+                dp[i] = i;
+            }
+
+            auto run_dma_sizes = [&](const std::string& label, const std::string& mode_str) {
+                for (size_t total_bytes : valid_sizes) {
+                    if (cfg.verbose) {
+                        std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << "]\n";
+                    }
+                    for (int w = 0; w < cfg.warmup; ++w) {
+                        run_h2d_dma_once(engine, dma_src, total_bytes);
+                    }
+                    std::vector<double> samples;
+                    for (int it = 0; it < cfg.iters; ++it) {
+                        samples.push_back(run_h2d_dma_once(engine, dma_src, total_bytes));
+                    }
+                    Result r{
+                        label,
+                        "h2d_dma",
+                        mode_str,
+                        1,
+                        total_bytes,
+                        cfg.iters,
+                        cfg.chunk_size,
+                        cfg.h2d_num_bufs,
+                        cfg.ring_depth,
+                        samples};
+                    if (cfg.verbose) {
+                        print_verbose_samples(r);
+                    }
+                    all_results.push_back(std::move(r));
+                }
+            };
+            run_dma_sizes("H2D_EDMA", "l1");
+
+            // Zero-copy variant: raw eDMA throughput without memcpy overhead.
+            auto run_dma_zc_sizes = [&](const std::string& label, const std::string& mode_str) {
+                for (size_t total_bytes : valid_sizes) {
+                    if (cfg.verbose) {
+                        std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << "]\n";
+                    }
+                    for (int w = 0; w < cfg.warmup; ++w) {
+                        run_h2d_dma_zc_once(engine, dma_src, total_bytes);
+                    }
+                    std::vector<double> samples;
+                    for (int it = 0; it < cfg.iters; ++it) {
+                        samples.push_back(run_h2d_dma_zc_once(engine, dma_src, total_bytes));
+                    }
+                    Result r{
+                        label,
+                        "h2d_dma_zc",
+                        mode_str,
+                        1,
+                        total_bytes,
+                        cfg.iters,
+                        cfg.chunk_size,
+                        cfg.h2d_num_bufs,
+                        cfg.ring_depth,
+                        samples};
+                    if (cfg.verbose) {
+                        print_verbose_samples(r);
+                    }
+                    all_results.push_back(std::move(r));
+                }
+            };
+            run_dma_zc_sizes("H2D_EDMA_ZC", "l1");
+
+            std::free(dma_src);
+        } else if (cfg.dir_h2d_dma && !engine.has_hw_dma()) {
+            std::cerr << "WARNING: --h2d-dma requested but HW eDMA engine not available.\n"
+                      << "         This feature requires Wormhole with an allocated DMA buffer.\n";
+        }
+
+        // ── D2H eDMA engine (WH DesignWare PCIe DMA via BAR2) ─────────────
+        if (cfg.dir_d2h_dma && engine.has_hw_dma()) {
+            void* dma_dst = aligned_alloc(64, max_bytes);
+            TT_FATAL(dma_dst != nullptr, "aligned_alloc failed for DMA destination buffer");
+            std::memset(dma_dst, 0, max_bytes);
+
+            auto run_d2h_dma_sizes = [&](const std::string& label, const std::string& mode_str) {
+                for (size_t total_bytes : valid_sizes) {
+                    if (cfg.verbose) {
+                        std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << "]\n";
+                    }
+                    for (int w = 0; w < cfg.warmup; ++w) {
+                        run_d2h_dma_once(engine, dma_dst, total_bytes);
+                    }
+                    std::vector<double> samples;
+                    for (int it = 0; it < cfg.iters; ++it) {
+                        samples.push_back(run_d2h_dma_once(engine, dma_dst, total_bytes));
+                    }
+                    Result r{
+                        label,
+                        "d2h_dma",
+                        mode_str,
+                        1,
+                        total_bytes,
+                        cfg.iters,
+                        cfg.chunk_size,
+                        cfg.h2d_num_bufs,
+                        cfg.ring_depth,
+                        samples};
+                    if (cfg.verbose) {
+                        print_verbose_samples(r);
+                    }
+                    all_results.push_back(std::move(r));
+                }
+            };
+            run_d2h_dma_sizes("D2H_EDMA", "l1");
+
+            auto run_d2h_dma_zc_sizes = [&](const std::string& label, const std::string& mode_str) {
+                for (size_t total_bytes : valid_sizes) {
+                    if (cfg.verbose) {
+                        std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << "]\n";
+                    }
+                    for (int w = 0; w < cfg.warmup; ++w) {
+                        run_d2h_dma_zc_once(engine, total_bytes);
+                    }
+                    std::vector<double> samples;
+                    for (int it = 0; it < cfg.iters; ++it) {
+                        samples.push_back(run_d2h_dma_zc_once(engine, total_bytes));
+                    }
+                    Result r{
+                        label,
+                        "d2h_dma_zc",
+                        mode_str,
+                        1,
+                        total_bytes,
+                        cfg.iters,
+                        cfg.chunk_size,
+                        cfg.h2d_num_bufs,
+                        cfg.ring_depth,
+                        samples};
+                    if (cfg.verbose) {
+                        print_verbose_samples(r);
+                    }
+                    all_results.push_back(std::move(r));
+                }
+            };
+            run_d2h_dma_zc_sizes("D2H_EDMA_ZC", "l1");
+
+            std::free(dma_dst);
+        } else if (cfg.dir_d2h_dma && !engine.has_hw_dma()) {
+            std::cerr << "WARNING: --d2h-dma requested but HW eDMA engine not available.\n"
+                      << "         This feature requires Wormhole with an allocated DMA buffer.\n";
+        }
+
+        // ── Scattered L1 benchmarks (eDMA + TLB retarget) ───────────────
+        if ((cfg.dir_d2h_scatter_l1 || cfg.dir_h2d_scatter_l1) && engine.has_hw_dma()) {
+            // Build list of worker cores to scatter across.
+            // Use the compute grid — same cores that DMA engine uses, but
+            // we target a low L1 offset (0x0) that doesn't conflict with
+            // the persistent kernel's region at kDmaUserBase (0x80000).
+            const auto grid = device->compute_with_storage_grid_size();
+            const uint32_t scatter_cores = std::min(num_cores, static_cast<uint32_t>(grid.x * grid.y));
+            std::vector<CoreCoord> scatter_core_list;
+            scatter_core_list.reserve(scatter_cores);
+            for (uint32_t r = 0; r < static_cast<uint32_t>(grid.y) && scatter_core_list.size() < scatter_cores; ++r) {
+                for (uint32_t c = 0; c < static_cast<uint32_t>(grid.x) && scatter_core_list.size() < scatter_cores;
+                     ++c) {
+                    scatter_core_list.emplace_back(c, r);
+                }
+            }
+
+            // H2D writes must avoid kernel firmware (~0x0–0x20000) AND the DMA
+            // engine's command/buffer region (0x80000+).  The gap 0x20000–0x80000
+            // (384KB) is safe unused L1.  D2H reads are non-destructive but we
+            // use the same offset so both directions can share the same size list.
+            constexpr uint32_t kScatterL1Offset = 0x20000u;
+            constexpr uint32_t kL1UserBase = 0x80000u;                        // kDmaUserBase
+            constexpr size_t kMaxShardSize = kL1UserBase - kScatterL1Offset;  // 384KB
+
+            // Filter sizes: total must be divisible by scatter_cores AND
+            // per-core shard must fit within L1 from the offset.
+            std::vector<size_t> scatter_sizes;
+            for (size_t s : cfg.sizes) {
+                if (s % scatter_cores != 0) {
+                    continue;
+                }
+                size_t shard = s / scatter_cores;
+                if (shard > kMaxShardSize) {
+                    if (cfg.verbose) {
+                        std::cerr << "NOTE: " << fmt_bytes(s) << " skipped for scatter L1 — shard " << fmt_bytes(shard)
+                                  << " exceeds L1 capacity " << fmt_bytes(kMaxShardSize) << " from offset 0x"
+                                  << std::hex << kScatterL1Offset << std::dec << "\n";
+                    }
+                    continue;
+                }
+                scatter_sizes.push_back(s);
+            }
+
+            if (scatter_sizes.empty()) {
+                std::cerr << "NOTE: no sizes divisible by " << scatter_cores
+                          << " scatter cores — skipping scatter L1\n";
+            } else {
+                auto run_scatter = [&](const std::string& label, const std::string& dir, bool is_d2h) {
+                    for (size_t total_bytes : scatter_sizes) {
+                        const size_t shard_size = total_bytes / scatter_cores;
+                        if (cfg.verbose) {
+                            std::cout << "  [" << label << " " << fmt_bytes(total_bytes)
+                                      << " scatter_cores=" << scatter_cores << " shard=" << fmt_bytes(shard_size)
+                                      << "]\n";
+                        }
+                        for (int w = 0; w < cfg.warmup; ++w) {
+                            if (is_d2h) {
+                                run_d2h_scatter_l1_once(
+                                    engine, scatter_core_list, kScatterL1Offset, shard_size, total_bytes);
+                            } else {
+                                run_h2d_scatter_l1_once(
+                                    engine, scatter_core_list, kScatterL1Offset, shard_size, total_bytes);
+                            }
+                        }
+                        std::vector<double> samples;
+                        for (int it = 0; it < cfg.iters; ++it) {
+                            if (is_d2h) {
+                                samples.push_back(run_d2h_scatter_l1_once(
+                                    engine, scatter_core_list, kScatterL1Offset, shard_size, total_bytes));
+                            } else {
+                                samples.push_back(run_h2d_scatter_l1_once(
+                                    engine, scatter_core_list, kScatterL1Offset, shard_size, total_bytes));
+                            }
+                        }
+                        Result r{
+                            label,
+                            dir,
+                            "l1",
+                            scatter_cores,
+                            total_bytes,
+                            cfg.iters,
+                            cfg.chunk_size,
+                            cfg.h2d_num_bufs,
+                            cfg.ring_depth,
+                            samples};
+                        if (cfg.verbose) {
+                            print_verbose_samples(r);
+                        }
+                        all_results.push_back(std::move(r));
+                    }
+                };
+
+                if (cfg.dir_d2h_scatter_l1) {
+                    run_scatter("D2H_SCATTER_L1", "d2h_scatter_l1", /*is_d2h=*/true);
+                }
+                if (cfg.dir_h2d_scatter_l1) {
+                    run_scatter("H2D_SCATTER_L1", "h2d_scatter_l1", /*is_d2h=*/false);
+                }
+            }
+        } else if ((cfg.dir_d2h_scatter_l1 || cfg.dir_h2d_scatter_l1) && !engine.has_hw_dma()) {
+            std::cerr << "WARNING: --d2h-scatter-l1/--h2d-scatter-l1 requested but HW eDMA not available.\n";
+        }
+
+        // ── Interleaved DRAM benchmarks (eDMA cycling across banks) ─────
+        if ((cfg.dir_d2h_interleaved || cfg.dir_h2d_interleaved) && engine.has_hw_dma()) {
+            // WH has 6 DRAM banks (logical coords (0,0)–(5,0))
+            constexpr uint32_t kNumDramBanks = 6;
+            constexpr uint32_t kDramOffset = 0x100000;  // 1MB into each bank (avoid addr 0)
+
+            // Filter sizes: total must be divisible by num_banks
+            std::vector<size_t> interleaved_sizes;
+            for (size_t s : cfg.sizes) {
+                if (s % kNumDramBanks == 0) {
+                    interleaved_sizes.push_back(s);
+                }
+            }
+
+            if (interleaved_sizes.empty()) {
+                std::cerr << "NOTE: no sizes divisible by " << kNumDramBanks
+                          << " DRAM banks — skipping interleaved DRAM\n";
+            } else {
+                auto run_interleaved = [&](const std::string& label, const std::string& dir, bool is_d2h) {
+                    for (size_t total_bytes : interleaved_sizes) {
+                        if (cfg.verbose) {
+                            std::cout << "  [" << label << " " << fmt_bytes(total_bytes) << " banks=" << kNumDramBanks
+                                      << " per_bank=" << fmt_bytes(total_bytes / kNumDramBanks) << "]\n";
+                        }
+                        for (int w = 0; w < cfg.warmup; ++w) {
+                            if (is_d2h) {
+                                run_d2h_interleaved_once(engine, kNumDramBanks, kDramOffset, total_bytes);
+                            } else {
+                                run_h2d_interleaved_once(engine, kNumDramBanks, kDramOffset, total_bytes);
+                            }
+                        }
+                        std::vector<double> samples;
+                        for (int it = 0; it < cfg.iters; ++it) {
+                            if (is_d2h) {
+                                samples.push_back(
+                                    run_d2h_interleaved_once(engine, kNumDramBanks, kDramOffset, total_bytes));
+                            } else {
+                                samples.push_back(
+                                    run_h2d_interleaved_once(engine, kNumDramBanks, kDramOffset, total_bytes));
+                            }
+                        }
+                        Result r{
+                            label,
+                            dir,
+                            "dram",
+                            kNumDramBanks,
+                            total_bytes,
+                            cfg.iters,
+                            cfg.chunk_size,
+                            cfg.h2d_num_bufs,
+                            cfg.ring_depth,
+                            samples};
+                        if (cfg.verbose) {
+                            print_verbose_samples(r);
+                        }
+                        all_results.push_back(std::move(r));
+                    }
+                };
+
+                if (cfg.dir_d2h_interleaved) {
+                    run_interleaved("D2H_INTLV_DRAM", "d2h_interleaved", /*is_d2h=*/true);
+                }
+                if (cfg.dir_h2d_interleaved) {
+                    run_interleaved("H2D_INTLV_DRAM", "h2d_interleaved", /*is_d2h=*/false);
+                }
+            }
+        } else if ((cfg.dir_d2h_interleaved || cfg.dir_h2d_interleaved) && !engine.has_hw_dma()) {
+            std::cerr << "WARNING: --d2h-interleaved/--h2d-interleaved requested but HW eDMA not available.\n";
+        }
+
         if (cfg.dir_bidir) {
             if (cfg.mode_dram) {
                 collect(

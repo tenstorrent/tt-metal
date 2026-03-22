@@ -46,8 +46,7 @@
 //
 // ── DMA core layout ───────────────────────────────────────────────────────
 //
-//   16 cores: logical (col, row) with col in [0,7], row in [0,1].
-//   Two cores per DRAM bank so BRISC (D2H) and NCRISC (H2D) share a core.
+//   Up to 72 cores: logical (col, row) with col in [0,7], row in [0,8].
 //   Core index c = row * kDmaCoreCols + col.
 
 #pragma once
@@ -159,7 +158,21 @@ static constexpr uint32_t kDmaH2DPushAck = kDmaUserBase + 0x19Cu;  // 0x8019C (k
 static constexpr uint32_t kDmaD2HDiagBase = kDmaUserBase + 0x1A0u;  // 0x801A0
 static constexpr uint32_t kDmaD2HDiagWords = 8u;
 
+// H2D per-transfer timing diagnostic — kernel writes after each H2D command.
+// Host reads via BAR when --verbose is passed to show where cycles go.
+// Wall clock on WH runs at 1 GHz, so cycles ≈ nanoseconds.
+//   [0] total_read_issue_cycles   — time calling noc_read_with_state
+//   [1] total_read_barrier_cycles — time stalled in noc_async_read_barrier
+//   [2] total_write_issue_cycles  — time calling noc_async_write (DRAM drain)
+//   [3] total_write_barrier_cycles— time stalled in noc_async_write_barrier
+//   [4] num_read_batches          — how many read barrier waits
+//   [5] num_chunks                — total chunks transferred
+//   [6] total_transfer_cycles     — wall clock from cmd start to completion
+//   [7] noc_rd_resp_received      — HW counter: NIU_MST_RD_RESP_RECEIVED
+static constexpr uint32_t kDmaH2DDiagBase = kDmaD2HDiagBase + kDmaD2HDiagWords * 4u;  // 0x801C0
+static constexpr uint32_t kDmaH2DDiagWords = 8u;
+
 // ── Engine topology ───────────────────────────────────────────────────────
 static constexpr uint32_t kDmaCoreCols = 8u;                           // columns 0-7
-static constexpr uint32_t kDmaCoreRows = 2u;                           // rows 0-1
-static constexpr uint32_t kDmaNumCores = kDmaCoreCols * kDmaCoreRows;  // 16
+static constexpr uint32_t kDmaCoreRows = 9u;                           // rows 0-8
+static constexpr uint32_t kDmaNumCores = kDmaCoreCols * kDmaCoreRows;  // 72

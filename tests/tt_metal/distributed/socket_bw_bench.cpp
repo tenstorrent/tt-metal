@@ -131,6 +131,8 @@ struct BenchConfig {
     size_t chunk_size = 16 * 1024;  // 16 KB default
     uint32_t fifo_depth = 4;        // fifo_size = fifo_depth * chunk_size
 
+    H2DMode h2d_mode = H2DMode::DEVICE_PULL;  // override with --host-push for WH
+
     bool csv = false;
     bool json_out = false;
     bool no_table = false;
@@ -679,6 +681,244 @@ static double run_h2d_l1_multicore(
     return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
 }
 
+// ── HOST_PUSH H2D run functions ────────────────────────────────────────────
+//
+// Use H2DMode::HOST_PUSH: host writes directly into the device L1 socket FIFO
+// via MMIO (cluster.write_core on WH).  No tensix PCIe NOC reads needed.
+// Works on both WH and BH.  Peak throughput is bounded by host MMIO speed.
+
+static double run_h2d_push_dram_once(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    const CoreCoord& recv_core,
+    size_t total_bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    auto dram_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = total_bytes},
+        DeviceLocalBufferConfig{.page_size = chunk_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+
+    MeshCoreCoord mesh_core{device_coord, recv_core};
+    auto socket = H2DSocket(mesh_device, mesh_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+    socket.set_page_size(chunk_size);
+    const uint32_t cfg_addr = socket.get_config_buffer_address();
+
+    {
+        auto program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_to_dram.cpp",
+            recv_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {cfg_addr, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(total_bytes)},
+            });
+        SetRuntimeArgs(program, kernel, recv_core, {static_cast<uint32_t>(dram_buf->address())});
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t num_chunks = total_bytes / chunk_size;
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xC7C7C7C7u);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < num_chunks; ++i) {
+        socket.write(src.data(), 1);
+    }
+    socket.barrier();
+    auto t1 = std::chrono::high_resolution_clock::now();
+    Finish(mesh_device->mesh_command_queue());
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_push_l1_once(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    const CoreCoord& recv_core,
+    size_t total_bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    auto l1_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = total_bytes},
+        DeviceLocalBufferConfig{.page_size = static_cast<uint32_t>(total_bytes), .buffer_type = BufferType::L1},
+        mesh_device.get());
+    const uint32_t l1_dst_addr = static_cast<uint32_t>(l1_buf->address());
+
+    MeshCoreCoord mesh_core{device_coord, recv_core};
+    auto socket = H2DSocket(mesh_device, mesh_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+    socket.set_page_size(chunk_size);
+    const uint32_t cfg_addr = socket.get_config_buffer_address();
+
+    {
+        auto program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+            recv_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args =
+                    {cfg_addr, l1_dst_addr, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(total_bytes), 1u},
+            });
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t num_chunks = total_bytes / chunk_size;
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xD8D8D8D8u);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < num_chunks; ++i) {
+        socket.write(src.data(), 1);
+    }
+    socket.barrier();
+    auto t1 = std::chrono::high_resolution_clock::now();
+    Finish(mesh_device->mesh_command_queue());
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_push_dram_multicore(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    uint32_t num_cores,
+    uint32_t core_row,
+    size_t total_bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    const size_t per_core_bytes = total_bytes / num_cores;
+
+    std::vector<std::shared_ptr<MeshBuffer>> dram_bufs;
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        dram_bufs.push_back(MeshBuffer::create(
+            ReplicatedBufferConfig{.size = per_core_bytes},
+            DeviceLocalBufferConfig{.page_size = chunk_size, .buffer_type = BufferType::DRAM},
+            mesh_device.get()));
+    }
+
+    std::vector<std::unique_ptr<H2DSocket>> sockets;
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        MeshCoreCoord mesh_core{device_coord, CoreCoord(c, core_row)};
+        auto s = std::make_unique<H2DSocket>(mesh_device, mesh_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+        s->set_page_size(chunk_size);
+        sockets.push_back(std::move(s));
+    }
+
+    {
+        auto program = CreateProgram();
+        for (uint32_t c = 0; c < num_cores; ++c) {
+            const uint32_t cfg_addr = sockets[c]->get_config_buffer_address();
+            const uint32_t dram_base = static_cast<uint32_t>(dram_bufs[c]->address());
+            auto kh = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_to_dram.cpp",
+                CoreCoord(c, core_row),
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args =
+                        {cfg_addr, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(per_core_bytes)},
+                });
+            SetRuntimeArgs(program, kh, CoreCoord(c, core_row), {dram_base});
+        }
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t chunks_per_core = per_core_bytes / chunk_size;
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xC7C7C7C7u);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < chunks_per_core; ++i) {
+        for (uint32_t c = 0; c < num_cores; ++c) {
+            sockets[c]->write(src.data(), 1);
+        }
+    }
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        sockets[c]->barrier();
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+    Finish(mesh_device->mesh_command_queue());
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
+static double run_h2d_push_l1_multicore(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    uint32_t num_cores,
+    uint32_t core_row,
+    size_t total_bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    const size_t per_core_bytes = total_bytes / num_cores;
+
+    std::vector<std::shared_ptr<MeshBuffer>> l1_bufs;
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        l1_bufs.push_back(MeshBuffer::create(
+            ReplicatedBufferConfig{.size = per_core_bytes},
+            DeviceLocalBufferConfig{.page_size = static_cast<uint32_t>(per_core_bytes), .buffer_type = BufferType::L1},
+            mesh_device.get()));
+    }
+
+    std::vector<std::unique_ptr<H2DSocket>> sockets;
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        MeshCoreCoord mesh_core{device_coord, CoreCoord(c, core_row)};
+        auto s = std::make_unique<H2DSocket>(mesh_device, mesh_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
+        s->set_page_size(chunk_size);
+        sockets.push_back(std::move(s));
+    }
+
+    {
+        auto program = CreateProgram();
+        for (uint32_t c = 0; c < num_cores; ++c) {
+            const uint32_t cfg_addr = sockets[c]->get_config_buffer_address();
+            const uint32_t l1_dst_addr = static_cast<uint32_t>(l1_bufs[c]->address());
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+                CoreCoord(c, core_row),
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args =
+                        {cfg_addr,
+                         l1_dst_addr,
+                         static_cast<uint32_t>(chunk_size),
+                         static_cast<uint32_t>(per_core_bytes),
+                         1u},
+                });
+        }
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t chunks_per_core = per_core_bytes / chunk_size;
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xD8D8D8D8u);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < chunks_per_core; ++i) {
+        for (uint32_t c = 0; c < num_cores; ++c) {
+            sockets[c]->write(src.data(), 1);
+        }
+    }
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        sockets[c]->barrier();
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+    Finish(mesh_device->mesh_command_queue());
+
+    return bw_gb_s(total_bytes, std::chrono::duration<double>(t1 - t0).count());
+}
+
 // ── Bidirectional runs ─────────────────────────────────────────────────────
 //
 // D2H on core (0, core_row) + H2D on core (1, core_row), simultaneous threads.
@@ -881,6 +1121,201 @@ static std::pair<double, double> run_bidir_l1_once(
     return {bw_gb_s(bytes, d2h_s), bw_gb_s(bytes, h2d_s)};
 }
 
+// ── HOST_PUSH bidirectional runs ───────────────────────────────────────────
+//
+// Same layout as run_bidir_*_once but H2D side uses HOST_PUSH + HOST_PUSH kernels.
+
+static std::pair<double, double> run_bidir_push_dram_once(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    uint32_t core_row,
+    size_t bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    const uint32_t l1_buf_a = L1_BUF_A_BASE;
+    const uint32_t l1_buf_b = l1_buf_a + static_cast<uint32_t>(chunk_size);
+
+    auto d2h_dram = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = bytes},
+        DeviceLocalBufferConfig{.page_size = chunk_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    {
+        std::vector<uint32_t> fill(bytes / sizeof(uint32_t), 0xA5A5A5A5u);
+        WriteShard(mesh_device->mesh_command_queue(), d2h_dram, fill, device_coord);
+        Finish(mesh_device->mesh_command_queue());
+    }
+
+    auto d2h_socket = D2HSocket(mesh_device, MeshCoreCoord{device_coord, CoreCoord(0, core_row)}, fifo_size);
+    d2h_socket.set_page_size(chunk_size);
+    const uint32_t d2h_cfg = static_cast<uint32_t>(d2h_socket.get_config_buffer_address());
+
+    auto h2d_dram = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = bytes},
+        DeviceLocalBufferConfig{.page_size = chunk_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+
+    auto h2d_socket = H2DSocket(
+        mesh_device,
+        MeshCoreCoord{device_coord, CoreCoord(1, core_row)},
+        BufferType::L1,
+        fifo_size,
+        H2DMode::HOST_PUSH);
+    h2d_socket.set_page_size(chunk_size);
+    const uint32_t h2d_cfg = h2d_socket.get_config_buffer_address();
+
+    {
+        auto program = CreateProgram();
+        auto d2h_kh = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/dram_stream_sender.cpp",
+            CoreCoord(0, core_row),
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args =
+                    {d2h_cfg, l1_buf_a, l1_buf_b, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(bytes)},
+            });
+        SetRuntimeArgs(program, d2h_kh, CoreCoord(0, core_row), {static_cast<uint32_t>(d2h_dram->address())});
+
+        auto h2d_kh = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_to_dram.cpp",
+            CoreCoord(1, core_row),
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {h2d_cfg, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(bytes)},
+            });
+        SetRuntimeArgs(program, h2d_kh, CoreCoord(1, core_row), {static_cast<uint32_t>(h2d_dram->address())});
+
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t num_chunks = bytes / chunk_size;
+    std::vector<uint32_t> sink(chunk_size / sizeof(uint32_t));
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xC7C7C7C7u);
+
+    double d2h_s = 0, h2d_s = 0;
+    std::thread d2h_thread([&] {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < num_chunks; ++i) {
+            d2h_socket.read(sink.data(), 1);
+        }
+        d2h_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        d2h_s = std::chrono::duration<double>(t1 - t0).count();
+    });
+    std::thread h2d_thread([&] {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < num_chunks; ++i) {
+            h2d_socket.write(src.data(), 1);
+        }
+        h2d_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        h2d_s = std::chrono::duration<double>(t1 - t0).count();
+        Finish(mesh_device->mesh_command_queue());
+    });
+    d2h_thread.join();
+    h2d_thread.join();
+
+    return {bw_gb_s(bytes, d2h_s), bw_gb_s(bytes, h2d_s)};
+}
+
+static std::pair<double, double> run_bidir_push_l1_once(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    uint32_t core_row,
+    size_t bytes,
+    size_t chunk_size,
+    size_t fifo_size) {
+    auto d2h_l1 = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = bytes},
+        DeviceLocalBufferConfig{.page_size = static_cast<uint32_t>(bytes), .buffer_type = BufferType::L1},
+        mesh_device.get());
+    {
+        std::vector<uint32_t> fill(bytes / sizeof(uint32_t), 0xB6B6B6B6u);
+        WriteShard(mesh_device->mesh_command_queue(), d2h_l1, fill, device_coord);
+        Finish(mesh_device->mesh_command_queue());
+    }
+    const uint32_t d2h_l1_addr = static_cast<uint32_t>(d2h_l1->address());
+
+    auto d2h_socket = D2HSocket(mesh_device, MeshCoreCoord{device_coord, CoreCoord(0, core_row)}, fifo_size);
+    d2h_socket.set_page_size(chunk_size);
+    const uint32_t d2h_cfg = static_cast<uint32_t>(d2h_socket.get_config_buffer_address());
+
+    auto h2d_l1 = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = bytes},
+        DeviceLocalBufferConfig{.page_size = static_cast<uint32_t>(bytes), .buffer_type = BufferType::L1},
+        mesh_device.get());
+    const uint32_t h2d_l1_addr = static_cast<uint32_t>(h2d_l1->address());
+
+    auto h2d_socket = H2DSocket(
+        mesh_device,
+        MeshCoreCoord{device_coord, CoreCoord(1, core_row)},
+        BufferType::L1,
+        fifo_size,
+        H2DMode::HOST_PUSH);
+    h2d_socket.set_page_size(chunk_size);
+    const uint32_t h2d_cfg = h2d_socket.get_config_buffer_address();
+
+    {
+        auto program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
+            CoreCoord(0, core_row),
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {d2h_cfg, d2h_l1_addr, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(bytes)},
+            });
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+            CoreCoord(1, core_row),
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args =
+                    {h2d_cfg, h2d_l1_addr, static_cast<uint32_t>(chunk_size), static_cast<uint32_t>(bytes), 1u},
+            });
+        auto wl = MeshWorkload();
+        wl.add_program(MeshCoordinateRange(device_coord), std::move(program));
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), wl, false);
+    }
+
+    const size_t num_chunks = bytes / chunk_size;
+    std::vector<uint32_t> sink(chunk_size / sizeof(uint32_t));
+    std::vector<uint32_t> src(chunk_size / sizeof(uint32_t), 0xD8D8D8D8u);
+
+    double d2h_s = 0, h2d_s = 0;
+    std::thread d2h_thread([&] {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < num_chunks; ++i) {
+            d2h_socket.read(sink.data(), 1);
+        }
+        d2h_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        d2h_s = std::chrono::duration<double>(t1 - t0).count();
+    });
+    std::thread h2d_thread([&] {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < num_chunks; ++i) {
+            h2d_socket.write(src.data(), 1);
+        }
+        h2d_socket.barrier();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        h2d_s = std::chrono::duration<double>(t1 - t0).count();
+        Finish(mesh_device->mesh_command_queue());
+    });
+    d2h_thread.join();
+    h2d_thread.join();
+
+    return {bw_gb_s(bytes, d2h_s), bw_gb_s(bytes, h2d_s)};
+}
+
 // ── Output formatters ──────────────────────────────────────────────────────
 
 using OneFn = std::function<double(size_t)>;
@@ -973,6 +1408,10 @@ static void usage(const char* prog) {
                  "  --iters 20             Timed iterations per size point (default: 20)\n"
                  "  --warmup 2             Warmup iterations before timing (default: 2)\n"
                  "\n"
+                 "H2D mode (default: device-pull; use host-push on WH where tensix PCIe reads hang):\n"
+                 "  --host-push            H2D via MMIO writes to device L1 FIFO (works on WH + BH)\n"
+                 "  --device-pull          H2D via tensix PCIe NOC reads (BH only, default)\n"
+                 "\n"
                  "Tuning:\n"
                  "  --chunk-size 16384     DMA chunk size in bytes (default: 16384 = 16 KB)\n"
                  "  --fifo-depth 4         Socket FIFO depth in chunks (default: 4 → 64 KB FIFO)\n"
@@ -999,6 +1438,8 @@ static BenchConfig parse_args(int argc, char** argv) {
         {"bidir", no_argument, nullptr, 'b'},
         {"dram", no_argument, nullptr, 'D'},
         {"l1", no_argument, nullptr, 'l'},
+        {"host-push", no_argument, nullptr, 4},
+        {"device-pull", no_argument, nullptr, 5},
         {"sizes", required_argument, nullptr, 's'},
         {"cores", required_argument, nullptr, 'c'},
         {"core-row", required_argument, nullptr, 'r'},
@@ -1051,6 +1492,8 @@ static BenchConfig parse_args(int argc, char** argv) {
             case 'w': cfg.warmup = std::stoi(optarg); break;
             case 'C': cfg.chunk_size = parse_size(optarg); break;
             case 'f': cfg.fifo_depth = static_cast<uint32_t>(std::stoul(optarg)); break;
+            case 4: cfg.h2d_mode = H2DMode::HOST_PUSH; break;
+            case 5: cfg.h2d_mode = H2DMode::DEVICE_PULL; break;
             case 1: cfg.csv = true; break;
             case 2: cfg.json_out = true; break;
             case 3: cfg.no_table = true; break;
@@ -1149,7 +1592,8 @@ int main(int argc, char** argv) {
 
     std::cout << "socket_bw_bench  chunk=" << (cfg.chunk_size / 1024) << "KB"
               << "  fifo_depth=" << cfg.fifo_depth << "  iters=" << cfg.iters << "  warmup=" << cfg.warmup
-              << "  cores=" << grid.x << "x" << grid.y << "  l1_safe_max=" << (l1_data_max / 1024) << "KB\n";
+              << "  cores=" << grid.x << "x" << grid.y << "  l1_safe_max=" << (l1_data_max / 1024) << "KB"
+              << "  h2d_mode=" << (cfg.h2d_mode == H2DMode::HOST_PUSH ? "HOST_PUSH" : "DEVICE_PULL") << "\n";
 
     std::vector<Result> all_results;
 
@@ -1245,6 +1689,19 @@ int main(int argc, char** argv) {
             if (cfg.mode_dram) {
                 const std::string lbl = "H2D_DRAM_" + std::to_string(nc) + "c";
                 collect(lbl, "h2d", "dram", nc, cfg.sizes_dram, [&](size_t bytes) -> double {
+                    if (cfg.h2d_mode == H2DMode::HOST_PUSH) {
+                        if (nc == 1) {
+                            return run_h2d_push_dram_once(
+                                mesh_device,
+                                device_coord,
+                                CoreCoord(0, cfg.core_row),
+                                bytes,
+                                cfg.chunk_size,
+                                fifo_size);
+                        }
+                        return run_h2d_push_dram_multicore(
+                            mesh_device, device_coord, nc, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
+                    }
                     if (nc == 1) {
                         return run_h2d_dram_once(
                             mesh_device, device_coord, CoreCoord(0, cfg.core_row), bytes, cfg.chunk_size, fifo_size);
@@ -1256,6 +1713,19 @@ int main(int argc, char** argv) {
             if (cfg.mode_l1) {
                 const std::string lbl = "H2D_L1_" + std::to_string(nc) + "c";
                 collect(lbl, "h2d", "l1", nc, cfg.sizes_l1, [&](size_t bytes) -> double {
+                    if (cfg.h2d_mode == H2DMode::HOST_PUSH) {
+                        if (nc == 1) {
+                            return run_h2d_push_l1_once(
+                                mesh_device,
+                                device_coord,
+                                CoreCoord(0, cfg.core_row),
+                                bytes,
+                                cfg.chunk_size,
+                                fifo_size);
+                        }
+                        return run_h2d_push_l1_multicore(
+                            mesh_device, device_coord, nc, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
+                    }
                     if (nc == 1) {
                         return run_h2d_l1_once(
                             mesh_device, device_coord, CoreCoord(0, cfg.core_row), bytes, cfg.chunk_size, fifo_size);
@@ -1315,12 +1785,20 @@ int main(int argc, char** argv) {
 
             if (cfg.mode_dram) {
                 run_bidir("dram", cfg.sizes_dram, [&](size_t bytes) {
+                    if (cfg.h2d_mode == H2DMode::HOST_PUSH) {
+                        return run_bidir_push_dram_once(
+                            mesh_device, device_coord, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
+                    }
                     return run_bidir_dram_once(
                         mesh_device, device_coord, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
                 });
             }
             if (cfg.mode_l1) {
                 run_bidir("l1", cfg.sizes_l1, [&](size_t bytes) {
+                    if (cfg.h2d_mode == H2DMode::HOST_PUSH) {
+                        return run_bidir_push_l1_once(
+                            mesh_device, device_coord, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
+                    }
                     return run_bidir_l1_once(mesh_device, device_coord, cfg.core_row, bytes, cfg.chunk_size, fifo_size);
                 });
             }
