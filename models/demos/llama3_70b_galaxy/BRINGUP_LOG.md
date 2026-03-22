@@ -766,7 +766,28 @@ if self.is_olmo and self.mode == "prefill":
 **Notes**:
 - 16k traced prefill is 2× the 8k TTFT (~1.3s), as expected.
 - 32k/64k run in eager mode (sync CCL per layer, no trace reuse) — too slow for practical use.
-- For 32k+ ISL, need either async CCL with proper barrier handling or extended traced support.
+
+**Root Cause Analysis — Why OLMo can't use async CCL for 32k/64k:**
+
+OLMo uses **bfloat16** for MLP and attention outputs (for PCC), while Qwen3/Llama use **bfloat8_b**:
+```python
+ff1ff3_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b  # MLP
+wo_dtype = ttnn.bfloat16 if self.is_olmo else ttnn.bfloat8_b  # Attention
+```
+
+This 2× activation memory fills DRAM, leaving no room for async CCL's intermediate buffers (~226 MB):
+```
+TT_FATAL: Out of Memory: Not enough space to allocate 226492416 B DRAM buffer
+(allocated: 856547648 B, free: 30358304 B)
+```
+
+**Qwen3 128k works** because bfloat8_b activations leave DRAM headroom for async CCL.
+**OLMo 32k/64k requires sync CCL** (`ttnn.reduce_scatter`/`ttnn.all_gather`) which don't need intermediate buffers but are slow.
+
+**Options to enable fast 32k/64k for OLMo:**
+1. Reduce bfloat16 → bfloat8_b for long ISLs (may hurt PCC)
+2. Add 32768/65536 to `support_seqlens` with pre-allocated buffers (needs more DRAM than available)
+3. Optimize sync CCL performance (limited upside)
 
 **Block Hash**: `3f95041d6ca`
 
