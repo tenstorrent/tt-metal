@@ -275,10 +275,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
         } else {
             // Generate fabric connection args directly using passed parameters
             const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
-            // TODO: VC2-specific sender kernel needs dedicated connection path.
-            // For now, use_vc2 only enables VC2 on the fabric (RT option) but senders still use VC0.
-            append_fabric_connection_rt_args(
-                fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            if (key.use_vc2) {
+                append_fabric_vc2_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            } else {
+                append_fabric_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            }
         }
     }
 

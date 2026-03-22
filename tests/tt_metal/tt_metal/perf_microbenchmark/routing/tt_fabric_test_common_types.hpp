@@ -68,6 +68,7 @@ struct ParsedSenderConfig {
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
     bool use_vc2 = false;             // VC2: use private VC2 connection API instead of public API
+    uint8_t vc_id = 0;                // VC selection: 0=VC0 (default), 2=VC2
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -107,6 +108,7 @@ struct SenderConfig {
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;  // Link ID for multi-link tests
     bool use_vc2 = false;  // VC2: use private VC2 connection API instead of public API
+    uint8_t vc_id = 0;     // VC selection: 0=VC0 (default), 2=VC2
 };
 
 // Sync configuration for a single device
