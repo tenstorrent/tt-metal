@@ -2143,6 +2143,10 @@ template <
     ,
     typename TransactionIdTrackerCH1
 #endif  // FABRIC_2D_VC1_ACTIVE
+#if defined(FABRIC_2D_VC2_SERVICED)
+    ,
+    typename TransactionIdTrackerCH2
+#endif  // FABRIC_2D_VC2_SERVICED
     >
 FORCE_INLINE void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
@@ -2157,6 +2161,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #if defined(FABRIC_2D_VC1_ACTIVE)
     TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
 #endif  // FABRIC_2D_VC1_ACTIVE
+#if defined(FABRIC_2D_VC2_SERVICED)
+    TransactionIdTrackerCH2& receiver_channel_2_trid_tracker,
+#endif  // FABRIC_2D_VC2_SERVICED
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
@@ -2200,6 +2207,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #if defined(FABRIC_2D_VC2_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch2 =
         outbound_to_receiver_channel_pointers.template get<VC2_RECEIVER_CHANNEL>();
+
+    auto receiver_channel_pointers_ch2 = receiver_channel_pointers.template get<VC2_RECEIVER_CHANNEL>();
+    receiver_channel_pointers_ch2.reset();
 #endif  // FABRIC_2D_VC2_SERVICED
 
     if constexpr (skip_src_ch_id_update) {
@@ -2500,6 +2510,23 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
+
+                    // VC2 receiver: single-hop local write only (no forwarding)
+                    rx_progress |= run_receiver_channel_step<
+                        VC2_RECEIVER_CHANNEL,
+                        false,                    // No first-level ack for VC2
+                        VC0_DOWNSTREAM_EDM_SIZE,  // Dummy size (forwarding disabled for VC2)
+                        DownstreamSenderVC0T,
+                        decltype(local_relay_interface)>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc0,  // Dummy (forwarding disabled)
+                        local_relay_interface,
+                        receiver_channel_pointers_ch2,
+                        receiver_channel_2_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table,
+                        local_fabric_telemetry);
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
             }
@@ -2756,6 +2783,15 @@ FORCE_INLINE void teardown(
         edm_to_local_chip_noc,
         edm_to_downstream_noc> receiver_channel_1_trid_tracker
 #endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+    ,
+    WriteTransactionIdTracker<
+        RECEIVER_NUM_BUFFERS_ARRAY[VC2_RECEIVER_CHANNEL],
+        NUM_TRANSACTION_IDS,
+        RX_CH_TRID_STARTS[VC2_RECEIVER_CHANNEL],
+        edm_to_local_chip_noc,
+        edm_to_downstream_noc> receiver_channel_2_trid_tracker
+#endif  // FABRIC_2D_VC2_SERVICED
 ) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
@@ -2768,6 +2804,11 @@ FORCE_INLINE void teardown(
         receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
     }
 #endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+    if constexpr (is_receiver_channel_serviced[VC2_RECEIVER_CHANNEL]) {
+        receiver_channel_2_trid_tracker.all_buffer_slot_transactions_acked();
+    }
+#endif  // FABRIC_2D_VC2_SERVICED
 
     // at minimum, the below call must be updated because in dynamic noc mode, the counters would be shared, so you'd
     // want a sync before this and coordination about which erisc should do the reset (only one of them should do it)
@@ -3370,6 +3411,17 @@ void kernel_main() {
     receiver_channel_1_trid_tracker.init();
 #endif  // FABRIC_2D_VC1_ACTIVE
 
+#if defined(FABRIC_2D_VC2_SERVICED)
+    WriteTransactionIdTracker<
+        RECEIVER_NUM_BUFFERS_ARRAY[VC2_RECEIVER_CHANNEL],
+        NUM_TRANSACTION_IDS,
+        RX_CH_TRID_STARTS[VC2_RECEIVER_CHANNEL],
+        edm_to_local_chip_noc,
+        edm_to_downstream_noc>
+        receiver_channel_2_trid_tracker;
+    receiver_channel_2_trid_tracker.init();
+#endif  // FABRIC_2D_VC2_SERVICED
+
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
     // A more detailed description can be found in `noc_inline_dw_write` in the `dataflow_api` header file
@@ -3612,6 +3664,9 @@ void kernel_main() {
 #if defined(FABRIC_2D_VC1_ACTIVE)
         receiver_channel_1_trid_tracker,
 #endif  // FABRIC_2D_VC1_ACTIVE
+#if defined(FABRIC_2D_VC2_SERVICED)
+        receiver_channel_2_trid_tracker,
+#endif  // FABRIC_2D_VC2_SERVICED
         port_direction_table,
         local_sender_channel_free_slots_stream_ids);
     WAYPOINT("LPDN");
@@ -3624,6 +3679,10 @@ void kernel_main() {
         ,
         receiver_channel_1_trid_tracker
 #endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+        ,
+        receiver_channel_2_trid_tracker
+#endif  // FABRIC_2D_VC2_SERVICED
     );
 
     set_l1_data_cache<false>();
