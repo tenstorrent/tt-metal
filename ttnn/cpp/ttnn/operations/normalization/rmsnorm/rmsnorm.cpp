@@ -43,13 +43,16 @@ Tensor rms_norm(
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
         auto result = ttnn::divide(
-            input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
+            input_tensor,
+            ttnn::abs(input_tensor, output_memory_config),
+            /*output_dtype=*/std::nullopt,
+            output_memory_config);
 
         if (weight.has_value()) {
-            result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::multiply(result, weight.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         if (bias.has_value()) {
-            result = ttnn::add(result, bias.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::add(result, bias.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         return result;
     }
