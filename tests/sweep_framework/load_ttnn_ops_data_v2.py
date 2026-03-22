@@ -317,6 +317,19 @@ def get_or_create_mesh_config(cur, mesh_config_cache, mesh_shape, device_count):
     return mesh_config_cache.get(mesh_key)
 
 
+def _disambiguate_model_name(cur, base_name):
+    """Find the next available model_name by appending _2, _3, etc."""
+    cur.execute(
+        "SELECT model_name FROM ttnn_ops_v5.ttnn_model WHERE model_name LIKE %s",
+        (f"{base_name}%",),
+    )
+    existing = {row[0] for row in cur.fetchall()}
+    suffix = 2
+    while f"{base_name}_{suffix}" in existing:
+        suffix += 1
+    return f"{base_name}_{suffix}"
+
+
 def get_or_create_model(cur, model_cache, source_file, hf_model):
     """Get or create a model entry, return the ID."""
     if not source_file:
@@ -346,6 +359,7 @@ def get_or_create_model(cur, model_cache, source_file, hf_model):
             model_cache[model_key] = row[0]
         else:
             try:
+                cur.execute("SAVEPOINT model_insert")
                 cur.execute(
                     """
                     INSERT INTO ttnn_ops_v5.ttnn_model
@@ -356,18 +370,31 @@ def get_or_create_model(cur, model_cache, source_file, hf_model):
                     (source_file, hf_model, model_family, model_name),
                 )
                 model_cache[model_key] = cur.fetchone()[0]
+                cur.execute("RELEASE SAVEPOINT model_insert")
             except Exception as e:
                 err = str(e).lower()
                 if "ttnn_model_name_unique" in err or ("unique" in err and "model_name" in err):
-                    raise RuntimeError(
-                        f"model_name '{model_name}' is already taken by a different model.\n"
-                        f"  Trying to insert: source_file={source_file!r}, hf_model={hf_model!r}\n"
-                        f"  Resolve with:\n"
-                        f"    python load_ttnn_ops_data_v2.py set-model-name "
-                        f'--source-file "{source_file}" --model-name <custom_name>\n'
-                        f"  Then retry."
-                    ) from e
-                raise
+                    # Name collision — auto-disambiguate with incremental suffix
+                    # Use ROLLBACK TO SAVEPOINT to clear only the failed statement
+                    cur.execute("ROLLBACK TO SAVEPOINT model_insert")
+                    disambiguated = _disambiguate_model_name(cur, model_name)
+                    print(
+                        f"  Warning: model_name '{model_name}' already taken, "
+                        f"using '{disambiguated}' instead. "
+                        f'Rename later with: set-model-name --source-file "{source_file}" --model-name <name>'
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO ttnn_ops_v5.ttnn_model
+                            (source_file, hf_model_identifier, model_family, model_name)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING ttnn_model_id
+                        """,
+                        (source_file, hf_model, model_family, disambiguated),
+                    )
+                    model_cache[model_key] = cur.fetchone()[0]
+                else:
+                    raise
 
     return model_cache[model_key]
 
