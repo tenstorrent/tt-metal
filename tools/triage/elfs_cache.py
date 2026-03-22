@@ -101,9 +101,10 @@ class ElfsCache:
         Get a ParsedElfFile from cache or parse and cache it if not present.
 
         This method is thread-safe. Cache writes are synchronized, but parsing
-        may occur concurrently for the same path (only the first successful
-        result is cached). ESTALE retries happen outside the lock to avoid
-        blocking other threads for up to 10s.
+        may occur concurrently for the same path; only the first thread to
+        acquire the lock after parsing stores its result — others receive the
+        cached instance. ESTALE retries happen outside the lock to avoid
+        blocking other threads for up to 10 s.
 
         Args:
             elf_path: Path to the ELF file

@@ -50,7 +50,7 @@ echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated
 
 # ── 2. ULFM fault tolerance tests ─────────────────────────────────────
 echo "LOG_METAL: Running ULFM fault tolerance tests"
-"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" ; fail=$((fail + $?))
+"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + $?))
 
 # ── 3. Single-node ULFM gap tests (section 7.8) ───────────────────────
 #
@@ -58,7 +58,7 @@ echo "LOG_METAL: Running ULFM fault tolerance tests"
 # multi-host hardware: fast-fail exit code 70, MPI_Finalize watchdog,
 # std::set_terminate handler, and agree() consensus.
 echo "LOG_METAL: Running single-node ULFM gap tests"
-"${repo_root}/tests/tt_metal/multihost/run_single_node_ulfm_tests.sh" ; fail=$((fail + $?))
+"${repo_root}/tests/tt_metal/multihost/run_single_node_ulfm_tests.sh" || fail=$((fail + $?))
 
 # ── 4. Python unit tests: ttrun exit code interpretation ──────────────
 #

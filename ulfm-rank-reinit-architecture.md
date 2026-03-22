@@ -1295,7 +1295,7 @@ The Watcher thread is separate from the main thread and any MPI communication th
 
 2. **`comm_mutex_`** in `MPIContext` protects communicator state. The callback CAN acquire this — there's no lock ordering conflict since `watch_mutex_` and `comm_mutex_` are in independent classes with no nesting.
 
-3. **MPI thread safety:** `MPIX_Comm_revoke()` is safe to call from any thread when MPI is initialized with `MPI_THREAD_MULTIPLE`. The current codebase initializes MPI with `MPI_THREAD_MULTIPLE` (verified in `mpi_distributed_context.cpp`).
+3. **MPI thread safety:** `MPIX_Comm_revoke()` is safe to call from any thread when MPI is initialized with `MPI_THREAD_MULTIPLE`. The current codebase initializes MPI with `MPI_THREAD_MULTIPLE` (verified in `mpi_distributed_context.cpp`). Notably, calling `MPIX_Comm_revoke()` from the Watcher callback while a collective is in progress on another thread is safe: the collective immediately returns `MPIX_ERR_REVOKED`, unblocking all waiters.
 
 4. **Callback lifetime:** The callback holds a reference to the `MPIContext`. The `MPIContext` outlives the `WatcherServer` (both are owned by `MetalContext`, and `MetalContext` destroys them in the correct order: watcher first via `detach_devices()`, then MPI context at process exit via `atexit`). However, if the callback fires during `MetalContext` shutdown, the `MPIContext` may already be in a torn-down state. The callback should check `is_revoked()` or use a `weak_ptr` guard.
 

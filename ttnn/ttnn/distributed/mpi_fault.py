@@ -208,7 +208,7 @@ def _try_get_failed_ranks(comm) -> list[int]:
         # We translate that to a list of rank integers.
         failed_group = comm.Get_failed()
         return list(range(failed_group.Get_size()))
-    except Exception:
+    except (RuntimeError, OSError, AttributeError):
         # Any failure here is non-critical — we're already in error handling
         return []
 
@@ -232,7 +232,7 @@ def _ulfm_fast_fail(comm, rank: int, error_code: int, operation_name: str) -> No
     if hasattr(comm, "Revoke"):
         try:
             comm.Revoke()
-        except Exception:
+        except (RuntimeError, OSError):
             # Revoke failed — continue to diagnostic anyway.  This can happen
             # if the communicator is already revoked or the runtime is in a
             # bad state.
@@ -249,7 +249,7 @@ def _ulfm_fast_fail(comm, rank: int, error_code: int, operation_name: str) -> No
     comm_size = -1
     try:
         comm_size = comm.Get_size()
-    except Exception:
+    except (RuntimeError, OSError):
         # If we cannot query the communicator size, keep the sentinel -1.
         # This is a best-effort diagnostic only and should not affect handling.
         pass
