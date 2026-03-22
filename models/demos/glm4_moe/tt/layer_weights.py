@@ -26,18 +26,24 @@ def _env_prefetch() -> bool:
     return os.environ.get("GLM4_MOE_PREFETCH", "0").strip() == "1"
 
 
-def create_dram_sharded_mem_config(K: int, N: int, num_dram_cores: int = 12, tile_size: int = 32):
+def create_dram_sharded_mem_config(device, K: int, N: int, tile_size: int = 32):
     """Create WIDTH_SHARDED DRAM memory config for weight prefetching.
 
     Shards the N dimension across DRAM cores with tile-aligned padding.
-    Used by the DRAM prefetcher to read weights in parallel across banks.
+    Uses device.dram_grid_size() to get the actual DRAM bank grid (NOT hardcoded).
     """
+    # Get actual DRAM grid from device (works for both Device and MeshDevice)
+    dram_grid = device.dram_grid_size()
+    num_dram_cores = dram_grid.x * dram_grid.y
+
     padded_N = math.ceil(N / (tile_size * num_dram_cores)) * (tile_size * num_dram_cores)
     shard_N = padded_N // num_dram_cores
+    dram_core_range = ttnn.CoreRangeSet([ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1),
+    )])
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet([ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_dram_cores - 1)
-        )]),
+        dram_core_range,
         [K, shard_N],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -429,6 +435,12 @@ class DecoderLayerTTWeights:
     # Optional routed MoE weights (layers >= first_k_dense_replace)
     moe: Optional[MoELayerTTWeights] = None
 
+    # Interleaved copies of QKV/O-proj for prefill when prefetch is active.
+    # Decode uses DRAM-sharded w_qkv/w_o (for GlobalCB gather_in0), but prefill
+    # needs standard interleaved DRAM weights for regular ttnn.linear calls.
+    w_qkv_interleaved: Optional[ttnn.Tensor] = None
+    w_o_interleaved: Optional[ttnn.Tensor] = None
+
 
 def convert_decoder_layer_weights(
     *,
@@ -557,7 +569,7 @@ def convert_decoder_layer_weights(
     _qkv_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
     if _prefetch:
         # Per-device QKV shape: [5120, 1792]. DRAM-shard across 12 cores.
-        _qkv_mem_cfg = create_dram_sharded_mem_config(5120, 1792)
+        _qkv_mem_cfg = create_dram_sharded_mem_config(device, 5120, 1792)
         logger.info("  [DEBUG L{}] QKV using DRAM-sharded mem config for prefetch", layer_idx)
 
     w_qkv = ttnn.as_tensor(
@@ -569,6 +581,10 @@ def convert_decoder_layer_weights(
         mesh_mapper=qkv_mapper,
         cache_file_name=c("w_qkv", tp_variant + ("_dram_shard" if _prefetch else "")),
     )
+    # No interleaved copy needed: DRAM-sharded weights work for both prefill and decode.
+    # Llama Galaxy uses DRAM-sharded weights without interleaved copies.
+    # Keeping a second copy wastes ~34 MB/layer (3.1 GB for 92 layers) → OOM at layer ~78.
+    w_qkv_interleaved = None
     logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
 
     # ---- Fused QKV Bias ----
@@ -607,7 +623,7 @@ def convert_decoder_layer_weights(
     _wo_mem_cfg = None  # default: DRAM interleaved
     if _prefetch:
         # Per-device O-proj shape: [1536, 5120]. DRAM-shard across 12 cores.
-        _wo_mem_cfg = create_dram_sharded_mem_config(1536, 5120)
+        _wo_mem_cfg = create_dram_sharded_mem_config(device, 1536, 5120)
         logger.info("  [DEBUG L{}] O-proj using DRAM-sharded mem config for prefetch", layer_idx)
     w_o = _linear_weight_tt(
         device=device,
@@ -617,6 +633,8 @@ def convert_decoder_layer_weights(
         mesh_mapper=wo_mapper,
         memory_config=_wo_mem_cfg,
     )
+    # No interleaved copy needed — same as QKV (saves ~15 MB/layer = 1.4 GB for 92 layers).
+    w_o_interleaved = None
     logger.info("  [DEBUG L{}] w_o done", layer_idx)
 
     # ---- MLP Weights ----
@@ -843,4 +861,6 @@ def convert_decoder_layer_weights(
         w_mlp_down=w_mlp_down,
         w_mlp_gate_up=w_mlp_gate_up,
         moe=moe,
+        w_qkv_interleaved=w_qkv_interleaved,
+        w_o_interleaved=w_o_interleaved,
     )

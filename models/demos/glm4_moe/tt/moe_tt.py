@@ -98,10 +98,14 @@ def _make_sparse_matmul_program_config(
     out_subblock_h: int = 1,
     out_subblock_w: int = 1,
     per_core_M: int = 1,
+    worker_grid: tuple[int, int] | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    grid = device.compute_with_storage_grid_size()
-    core_x = int(getattr(grid, "x"))
-    core_y = int(getattr(grid, "y"))
+    if worker_grid is not None:
+        core_x, core_y = worker_grid
+    else:
+        grid = device.compute_with_storage_grid_size()
+        core_x = int(getattr(grid, "x"))
+        core_y = int(getattr(grid, "y"))
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     num_cores = max(1, core_x * core_y)
     per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
@@ -304,6 +308,7 @@ def moe_topk_tt(
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeHParams,
     compute_kernel_config: Any | None = None,
+    router_program_config: Any | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return (topk_weights, topk_indices) for routed experts.
 
@@ -326,6 +331,8 @@ def moe_topk_tt(
         linear_kwargs["compute_kernel_config"] = compute_kernel_config
     if mc is not None:
         linear_kwargs["memory_config"] = mc
+    if router_program_config is not None:
+        linear_kwargs["program_config"] = router_program_config
 
     logits = ttnn.linear(x, moe_w.w_gate, **linear_kwargs)  # [1,1,T,96]
     scores = ttnn.sigmoid(logits, memory_config=mc) if mc else ttnn.sigmoid(logits)
@@ -892,26 +899,35 @@ def shared_expert_forward_tt(
     w_gate_up: ttnn.Tensor | None = None,  # fused: [1,1,H,2*inter_tp]
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     compute_kernel_config: Any | None = None,
+    gate_up_program_config: Any | None = None,
+    down_program_config: Any | None = None,
 ) -> ttnn.Tensor:
     """Standard TP-sharded gate-up-SiLU-down MLP for the shared expert."""
     kwargs: dict[str, Any] = {"memory_config": memory_config}
     if compute_kernel_config is not None:
         kwargs["compute_kernel_config"] = compute_kernel_config
 
+    gate_up_kwargs = {**kwargs}
+    if gate_up_program_config is not None:
+        gate_up_kwargs["program_config"] = gate_up_program_config
+
     if w_gate_up is not None:
         # Fused gate+up: single matmul then slice.
-        gate_up = ttnn.linear(x, w_gate_up, **kwargs)  # [1,1,T,2*inter_tp]
+        gate_up = ttnn.linear(x, w_gate_up, **gate_up_kwargs)  # [1,1,T,2*inter_tp]
         inter_tp = gate_up.shape[-1] // 2
         gate = ttnn.slice(gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], inter_tp])
         up = ttnn.slice(gate_up, [0, 0, 0, inter_tp], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], gate_up.shape[-1]])
         ttnn.deallocate(gate_up, force=False)
     else:
-        gate = ttnn.linear(x, w_gate, **kwargs)
-        up = ttnn.linear(x, w_up, **kwargs)
+        gate = ttnn.linear(x, w_gate, **gate_up_kwargs)
+        up = ttnn.linear(x, w_up, **gate_up_kwargs)
 
     x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate, force=False)
     ttnn.deallocate(up, force=False)
-    out = ttnn.linear(x_ff, w_down, **kwargs)
+    down_kwargs = {**kwargs}
+    if down_program_config is not None:
+        down_kwargs["program_config"] = down_program_config
+    out = ttnn.linear(x_ff, w_down, **down_kwargs)
     ttnn.deallocate(x_ff, force=False)
     return out

@@ -1944,16 +1944,26 @@ class Glm4MoeTT:
             # for copy_host_to_device_tensor updates between trace replays.
             x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Start prefetcher before layer loop (if enabled)
-        _gcb = self.prefetcher.global_circular_buffer if self.prefetcher else None
-        _sdid = self.prefetcher.worker_sub_device_id if self.prefetcher else None
         _pf_garbage = None
         if self.prefetcher:
             _pf_garbage = self.prefetcher.start_prefetch()
+        # Must read global_circular_buffer AFTER start_prefetch() — ensure_ready() creates it lazily
+        _gcb = self.prefetcher.global_circular_buffer if self.prefetcher else None
+        _sdid = self.prefetcher.worker_sub_device_id if self.prefetcher else None
+        _pf_qkv_pc = self.prefetcher.qkv_program_config if self.prefetcher else None
+        _pf_oproj_pc = self.prefetcher.oproj_program_config if self.prefetcher else None
+        _pf_qkv_in_mc = self.prefetcher.qkv_input_mem_cfg if self.prefetcher else None
+        _pf_qkv_out_mc = self.prefetcher.qkv_output_mem_cfg if self.prefetcher else None
+        _pf_oproj_in_mc = self.prefetcher.oproj_input_mem_cfg if self.prefetcher else None
+        _pf_oproj_out_mc = self.prefetcher.oproj_output_mem_cfg if self.prefetcher else None
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid)
+                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid,
+                                prefetch_qkv_pc=_pf_qkv_pc, prefetch_oproj_pc=_pf_oproj_pc,
+                                prefetch_qkv_in_mc=_pf_qkv_in_mc, prefetch_qkv_out_mc=_pf_qkv_out_mc,
+                                prefetch_oproj_in_mc=_pf_oproj_in_mc, prefetch_oproj_out_mc=_pf_oproj_out_mc)
             ttnn.deallocate(x, force=False)
             x = x_next
 
@@ -1967,7 +1977,14 @@ class Glm4MoeTT:
         if self.mtp_enabled:
             mtp_hidden_warmup = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
+        # Final norm: use worker core range when prefetcher is active
+        # Must be within worker SubDevice (cols 1-6), avoiding sender cols 0,7.
+        _final_norm_cr_warmup = None
+        if _gcb is not None:
+            _final_norm_cr_warmup = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, 0))
+            ])
+        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size), worker_core_range=_final_norm_cr_warmup)
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
         # In-trace argmax compile warm-up: include sampling ops for ALL devices (including TG mesh).
@@ -1982,6 +1999,7 @@ class Glm4MoeTT:
                 # All-gather vocab shards → full vocab → argmax (same as MTP path)
                 logits_gathered_warm = _simple_all_gather(
                     logits_tt, self.device, cluster_axis=tp_axis, dim=3,
+                    subdevice_id=_sdid,
                 )
                 logits_rm_warm = ttnn.to_layout(logits_gathered_warm, ttnn.ROW_MAJOR_LAYOUT)
                 logits_rm_view_warm = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, active, vocab])
@@ -2018,6 +2036,7 @@ class Glm4MoeTT:
                     if self.lm_head_sharded_vocab and is_mesh and tp_size > 1:
                         logits_gathered = _simple_all_gather(
                             logits_tt, self.device, cluster_axis=tp_axis, dim=3,
+                            subdevice_id=_sdid,
                         )
                     else:
                         logits_gathered = logits_tt
@@ -2110,9 +2129,20 @@ class Glm4MoeTT:
         # Now capture trace.
         logger.info("=== _capture_decode_trace: starting trace capture ===")
         logger.info("Capturing decode trace for batch={}", active)
+
+        # Prefetcher one-time setup: load SubDevice manager + create GlobalCB BEFORE trace.
+        # These are non-traceable ops that must happen once.
+        if self.prefetcher:
+            self.prefetcher.ensure_ready()
+
         if self.tt_ccl is not None:
             self.tt_ccl.reset_sem_counters()
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+
+        # Launch async DRAM prefetch INSIDE trace so it replays on every trace execution.
+        _pf_garbage = None
+        if self.prefetcher:
+            _pf_garbage = self.prefetcher.start_prefetch()
 
         # Embedding inside trace: either in-trace ttnn.embedding or clone of pre-allocated buffer.
         if use_intrace_main_embed:
@@ -2133,7 +2163,10 @@ class Glm4MoeTT:
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid)
+                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid,
+                                prefetch_qkv_pc=_pf_qkv_pc, prefetch_oproj_pc=_pf_oproj_pc,
+                                prefetch_qkv_in_mc=_pf_qkv_in_mc, prefetch_qkv_out_mc=_pf_qkv_out_mc,
+                                prefetch_oproj_in_mc=_pf_oproj_in_mc, prefetch_oproj_out_mc=_pf_oproj_out_mc)
             ttnn.deallocate(x, force=False)
             x = x_next
 
@@ -2141,7 +2174,14 @@ class Glm4MoeTT:
         if self.mtp_enabled:
             mtp_hidden_tt = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
+        # Final norm: use worker core range when prefetcher is active
+        # Must be within worker SubDevice (cols 1-6), avoiding sender cols 0,7.
+        _final_norm_cr = None
+        if _gcb is not None:
+            _final_norm_cr = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, 0))
+            ])
+        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size), worker_core_range=_final_norm_cr)
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
         # In-trace argmax for main model sampling (ALL devices including TG mesh).
@@ -2154,6 +2194,7 @@ class Glm4MoeTT:
                 # All-gather vocab shards → full vocab → argmax
                 logits_gathered_main = _simple_all_gather(
                     logits_tt, self.device, cluster_axis=tp_axis, dim=3,
+                    subdevice_id=_sdid,
                 )
                 logits_rm_main = ttnn.to_layout(logits_gathered_main, ttnn.ROW_MAJOR_LAYOUT)
                 logits_rm_main_view = ttnn.slice(logits_rm_main, [0, 0, 0, 0], [1, 1, active, vocab])
@@ -2189,6 +2230,7 @@ class Glm4MoeTT:
                 if self.lm_head_sharded_vocab and is_mesh and tp_size > 1:
                     logits_gathered = _simple_all_gather(
                         logits_tt, self.device, cluster_axis=tp_axis, dim=3,
+                        subdevice_id=_sdid,
                     )
                 else:
                     logits_gathered = logits_tt
@@ -2225,6 +2267,10 @@ class Glm4MoeTT:
                 mtp_current_embed_tt=mtp_current_embed_trace,
             )
             logger.info("MTP forward included in main trace for batch={} (intrace_embed={})", active, mtp_use_intrace_embed)
+
+        # Stop prefetch inside trace (deallocate garbage, reset stall group)
+        if _pf_garbage is not None:
+            self.prefetcher.stop_prefetch(_pf_garbage)
 
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         logger.info("Decode trace captured for batch={} (combined main+MTP)", active)
@@ -2525,7 +2571,8 @@ class Glm4MoeTT:
             if padded_len > PREFILL_CHUNK_SIZE:
                 x = self._prefill_chunked(
                     x=x, padded_len=padded_len, prompt_len=prompt_len,
-                    page_table_tt=page_table_tt, kv_cache=kv_cache,
+                    page_table_tt=page_table_tt, page_table=page_table,
+                    kv_cache=kv_cache,
                     rot_mats=rot_mats, user_id=i,
                     chunk_size=PREFILL_CHUNK_SIZE,
                 )
@@ -2588,6 +2635,7 @@ class Glm4MoeTT:
         padded_len: int,
         prompt_len: int,
         page_table_tt: ttnn.Tensor,
+        page_table,  # raw torch tensor for host-side page table slicing
         kv_cache: list,
         rot_mats: tuple,
         user_id: int,
@@ -2598,21 +2646,123 @@ class Glm4MoeTT:
         Processes chunk_size tokens at a time through all layers, writing KV cache
         incrementally. Returns the full hidden state [1,1,padded_len,hidden].
         """
+        import sys as _sys
+
+        _dbg_prefill = os.environ.get("GLM4_MOE_DEBUG_PREFILL", "0") != "0"
         hidden = int(self.hparams.hidden_size)
         num_chunks = (padded_len + chunk_size - 1) // chunk_size
+
+        if _dbg_prefill:
+            print(f"\n{'='*80}", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] START: padded_len={padded_len}, prompt_len={prompt_len}, "
+                  f"chunk_size={chunk_size}, num_chunks={num_chunks}, user_id={user_id}, "
+                  f"num_layers={self.num_layers_to_run}", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] x.shape={list(x.shape)}, x.dtype={x.dtype}", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] page_table_tt.shape={list(page_table_tt.shape)}", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] rot_mats[0].shape={list(rot_mats[0].shape)} (cos)", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] rot_mats[1].shape={list(rot_mats[1].shape)} (sin)", flush=True, file=_sys.stderr)
+            print(f"[PREFILL_CHUNKED] kv_cache has {len(kv_cache)} layers, "
+                  f"kv_cache[0][0].shape={list(kv_cache[0][0].shape)} (keys)", flush=True, file=_sys.stderr)
+            _total_t0 = time.time()
+
+        # Pre-compute per-chunk RoPE slices, page tables, and chunk_start_idx.
+        # These are the same for every layer, so compute once outside the layer loop.
+        rope_dim = rot_mats[0].shape[-1]
+        is_mesh = _is_mesh_device(self.device)
+
+        # Determine block_size from KV cache shape: kv_cache[0] = [keys, values],
+        # keys.shape[2] = block_size (number of positions per page/block).
+        block_size = kv_cache[0][0].shape[2]
+
+        chunk_infos = []
+        for chunk_idx in range(num_chunks):
+            start = chunk_idx * chunk_size
+            end = min(start + chunk_size, padded_len)
+
+            # Bug 5 fix: slice cos/sin for correct absolute positions
+            cos_chunk = ttnn.slice(rot_mats[0], [0, 0, start, 0], [1, 1, end, rope_dim])
+            sin_chunk = ttnn.slice(rot_mats[1], [0, 0, start, 0], [1, 1, end, rope_dim])
+            chunk_rot_mats = (cos_chunk, sin_chunk, rot_mats[2])
+
+            # Bug 2 fix: create per-chunk page table for KV cache fill.
+            # The fill kernel maps input tile 0 -> page_table[0], so for chunk N
+            # starting at position `start`, we need page_table entries starting at
+            # start // block_size so the fill writes to the correct physical blocks.
+            start_page = start // block_size
+            chunk_len = end - start
+            num_chunk_pages = chunk_len // block_size
+            # Host-side slice of page table (page_table_tt is on device, need torch slice then re-upload)
+            chunk_page_row = page_table[user_id : user_id + 1, start_page : start_page + num_chunk_pages].to(torch.int32)
+            chunk_page_table_tt = ttnn.from_torch(
+                chunk_page_row,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+            )
+
+            # Bug 1 fix: for SDPA, pass full page table covering positions 0..end-1
+            # so attention can read all previously cached KV.
+            end_page = end // block_size
+            sdpa_page_row = page_table[user_id : user_id + 1, :end_page].to(torch.int32)
+            sdpa_page_table_tt = ttnn.from_torch(
+                sdpa_page_row,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+            )
+
+            chunk_infos.append({
+                "start": start,
+                "end": end,
+                "rot_mats": chunk_rot_mats,
+                "chunk_page_table": chunk_page_table_tt,
+                "sdpa_page_table": sdpa_page_table_tt,
+                "chunk_start_idx": start,
+            })
+
+        if _dbg_prefill:
+            print(f"[PREFILL_CHUNKED] Pre-computed {len(chunk_infos)} chunk infos, "
+                  f"block_size={block_size}", flush=True, file=_sys.stderr)
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next_chunks = []
 
+            if _dbg_prefill:
+                _layer_t0 = time.time()
+
             for chunk_idx in range(num_chunks):
-                start = chunk_idx * chunk_size
-                end = min(start + chunk_size, padded_len)
+                ci = chunk_infos[chunk_idx]
+                start = ci["start"]
+                end = ci["end"]
+
+                if _dbg_prefill:
+                    _chunk_t0 = time.time()
+                    print(f"  [PREFILL_CHUNKED] layer={layer_idx}, chunk={chunk_idx}/{num_chunks}, "
+                          f"tokens[{start}:{end}] (len={end-start})", flush=True, file=_sys.stderr)
 
                 x_chunk = ttnn.slice(x, [0, 0, start, 0], [1, 1, end, hidden])
+
+                if _dbg_prefill:
+                    print(f"    x_chunk.shape={list(x_chunk.shape)}", flush=True, file=_sys.stderr)
+
+                # Pass chunk-specific RoPE, page tables, and start index
                 x_chunk_out = dl.forward(
-                    x_chunk, None, rot_mats, page_table_tt, kv_cache[layer_idx], mode="prefill",
+                    x_chunk, None, ci["rot_mats"],
+                    ci["sdpa_page_table"], kv_cache[layer_idx], mode="prefill",
+                    chunk_page_table=ci["chunk_page_table"],
+                    chunk_start_idx=ci["chunk_start_idx"],
                 )
+
+                if _dbg_prefill:
+                    _chunk_elapsed = time.time() - _chunk_t0
+                    print(f"    x_chunk_out.shape={list(x_chunk_out.shape)}, "
+                          f"chunk_time={_chunk_elapsed:.3f}s", flush=True, file=_sys.stderr)
+
                 x_next_chunks.append(x_chunk_out)
                 ttnn.deallocate(x_chunk, force=False)
 
@@ -2620,8 +2770,30 @@ class Glm4MoeTT:
             if len(x_next_chunks) == 1:
                 x = x_next_chunks[0]
             else:
+                if _dbg_prefill:
+                    _concat_t0 = time.time()
                 x = ttnn.concat(x_next_chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if _dbg_prefill:
+                    print(f"  [PREFILL_CHUNKED] layer={layer_idx} concat {len(x_next_chunks)} chunks -> "
+                          f"shape={list(x.shape)}, concat_time={time.time()-_concat_t0:.3f}s",
+                          flush=True, file=_sys.stderr)
                 for chunk_t in x_next_chunks:
                     ttnn.deallocate(chunk_t, force=False)
+
+            if _dbg_prefill:
+                _layer_elapsed = time.time() - _layer_t0
+                print(f"  [PREFILL_CHUNKED] layer={layer_idx} DONE, layer_time={_layer_elapsed:.3f}s",
+                      flush=True, file=_sys.stderr)
+                # Print every 10 layers to avoid spam but show progress
+                if layer_idx % 10 == 9 or layer_idx == self.num_layers_to_run - 1:
+                    _total_so_far = time.time() - _total_t0
+                    print(f"  [PREFILL_CHUNKED] Progress: {layer_idx+1}/{self.num_layers_to_run} layers, "
+                          f"elapsed={_total_so_far:.1f}s", flush=True, file=_sys.stderr)
+
+        if _dbg_prefill:
+            _total_elapsed = time.time() - _total_t0
+            print(f"[PREFILL_CHUNKED] DONE: total_time={_total_elapsed:.1f}s, "
+                  f"output.shape={list(x.shape)}", flush=True, file=_sys.stderr)
+            print(f"{'='*80}\n", flush=True, file=_sys.stderr)
 
         return x

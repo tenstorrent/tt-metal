@@ -75,13 +75,17 @@ def _simple_all_reduce_host(tensor, mesh_device, cluster_axis, memory_config=Non
     return result
 
 
-def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, ccl=None, impl=None):
+def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, ccl=None, impl=None, subdevice_id=None):
     """All-reduce with configurable implementation via GLM4_MOE_REDUCE_IMPL env var.
 
     Implementations:
       "host"     — Host-side CPU fallback (default, proven correct)
       "native"   — ttnn.all_reduce(cluster_axis=...) on-device
       "rs_ag"    — ttnn.reduce_scatter + ttnn.all_gather 2-step decomposition
+
+    Args:
+        subdevice_id: Optional SubDeviceId for prefetcher SubDevice dispatch.
+            When set, CCL ops are restricted to the worker SubDevice.
     """
     if mesh_device.__class__.__name__ != "MeshDevice":
         return tensor
@@ -104,6 +108,9 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
 
     result = None
 
+    # Build optional subdevice_id kwarg for CCL ops
+    _sd_kw = {"subdevice_id": subdevice_id} if subdevice_id is not None else {}
+
     if impl == "native":
         # On-device all_reduce with explicit Ring topology (8 chips on axis 0).
         result = ttnn.all_reduce(
@@ -111,6 +118,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             cluster_axis=cluster_axis,
             memory_config=mc,
             topology=ttnn.Topology.Ring,
+            **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
@@ -120,6 +128,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             tensor,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
@@ -129,6 +138,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
         result = ttnn.all_reduce(
             tensor,
             memory_config=mc,
+            **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
@@ -140,6 +150,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             dim=3,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
         result = ttnn.all_gather(
@@ -147,6 +158,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             dim=3,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            **_sd_kw,
         )
         ttnn.deallocate(scattered, force=False)
 
@@ -155,9 +167,9 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
         # Uses ttnn.experimental.reduce_scatter_minimal_async + all_gather_async.
         if ccl is None:
             # Fallback to sync rs_ag if CCL not initialized.
-            scattered = ttnn.reduce_scatter(tensor, dim=3, cluster_axis=cluster_axis, memory_config=mc)
+            scattered = ttnn.reduce_scatter(tensor, dim=3, cluster_axis=cluster_axis, memory_config=mc, **_sd_kw)
             ttnn.deallocate(tensor, force=False)
-            result = ttnn.all_gather(scattered, dim=3, cluster_axis=cluster_axis, memory_config=mc)
+            result = ttnn.all_gather(scattered, dim=3, cluster_axis=cluster_axis, memory_config=mc, **_sd_kw)
             ttnn.deallocate(scattered, force=False)
         else:
             rs_params = ccl.get_ccl_params_for_reduce_scatter(axis=cluster_axis)
@@ -167,7 +179,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
                 cluster_axis=cluster_axis,
                 memory_config=mc,
                 topology=ttnn.Topology.Linear,
-                **rs_params,
+                **{**rs_params, **_sd_kw},
             )
             ttnn.deallocate(tensor, force=False)
 
@@ -178,7 +190,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
                 cluster_axis=cluster_axis,
                 memory_config=mc,
                 topology=ttnn.Topology.Linear,
-                **ag_params,
+                **{**ag_params, **_sd_kw},
             )
             ttnn.deallocate(scattered, force=False)
 
@@ -215,7 +227,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     return result
 
 
-def _simple_all_gather(tensor, mesh_device, cluster_axis, dim, memory_config=None):
+def _simple_all_gather(tensor, mesh_device, cluster_axis, dim, memory_config=None, subdevice_id=None):
     """Simple all-gather using ttnn.all_gather (no semaphore management).
 
     For initial bringup — can be replaced with optimized CCL wrappers later.
@@ -226,6 +238,7 @@ def _simple_all_gather(tensor, mesh_device, cluster_axis, dim, memory_config=Non
     if mesh_shape == [1, 1]:
         return tensor
     mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    _sd_kw = {"subdevice_id": subdevice_id} if subdevice_id is not None else {}
     return ttnn.all_gather(
         tensor,
         dim=dim,
@@ -233,6 +246,7 @@ def _simple_all_gather(tensor, mesh_device, cluster_axis, dim, memory_config=Non
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Linear,
         memory_config=mc,
+        **_sd_kw,
     )
 
 
@@ -305,6 +319,10 @@ class Glm4MoeAttention(LightweightModule):
             k_chunk_size=0,
         )
 
+        # Prefetcher-compatible SDPA config: uses sub_core_grids to restrict to worker
+        # cores (cols 1-6). Created lazily by _get_prefetch_sdpa_config().
+        self._prefetch_sdpa_config = None
+
         # Sequence length limits
         self.MAX_QKV_MM_SEQ_LEN = configuration.get("MAX_QKV_MM_SEQ_LEN", 4096)
 
@@ -329,10 +347,19 @@ class Glm4MoeAttention(LightweightModule):
         self.wqkv = layer_weights.w_qkv  # [1, 1, 5120, 1792] per device (TP-sharded)
         self.wqkv_bias = layer_weights.w_qkv_bias  # [1, 1, 1, 1792] per device (TP-sharded)
         self.wo = layer_weights.w_o  # [1, 1, 1536, 5120] per device (row-parallel)
+        # Interleaved copies for prefill when prefetch uses DRAM-sharded weights
+        self.wqkv_interleaved = layer_weights.w_qkv_interleaved  # None if no prefetch
+        self.wo_interleaved = layer_weights.w_o_interleaved  # None if no prefetch
 
         # QK norm (RMSNorm, per-head dim=128, replicated)
         self.q_norm = layer_weights.q_norm
         self.k_norm = layer_weights.k_norm
+
+        # Prefill program configs — explicit to avoid TG mesh auto-config hangs.
+        # Without these, ttnn.linear auto-selects a broken all-DRAM-interleaved TG
+        # program config that hangs during mesh device creation/dispatch.
+        # Pattern adapted from tt_transformers/tt/model_config.py (Llama Galaxy).
+        self._prefill_prog_cfg_cache: dict[str, object] = {}
 
         # Per-batch-bucket HEIGHT_SHARDED memory configs for decode mode.
         # "auto" L1_HEIGHT_SHARDED_MEMORY_CONFIG doesn't work with to_memory_config —
@@ -389,13 +416,92 @@ class Glm4MoeAttention(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def _get_shard_cfgs(self, batch: int) -> dict:
-        """Return per-batch shard configs (lazily created and cached)."""
-        cached = self._shard_cfg_cache.get(batch)
+    def _get_prefetch_sdpa_config(self):
+        """Lazily create SDPA program config restricted to worker cores (cols 1-6)."""
+        if self._prefetch_sdpa_config is not None:
+            return self._prefetch_sdpa_config
+        # Worker grid: cols 1-6, rows 0-8 = 6x9 = 54 cores
+        worker_core_range_set = ttnn.CoreRangeSet([
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 8))
+        ])
+        start_core = ttnn.CoreCoord(1, 0)
+        num_sdpa_cores = 54  # all worker cores
+        self._prefetch_sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(6, 9),
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, num_sdpa_cores, worker_core_range_set, row_wise=True,
+            ),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        return self._prefetch_sdpa_config
+
+    def _get_prefill_program_config(self, seq_len: int, K: int, N: int, label: str = ""):
+        """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls on TG mesh.
+
+        Without explicit program_config, ttnn.linear auto-selects a program that hangs
+        on TG mesh. This mirrors the Llama Galaxy approach from
+        tt_transformers/tt/model_config.py:get_attn_qkv_program_config(PREFILL).
+
+        Args:
+            seq_len: sequence length (after any reshape for long sequences)
+            K: inner dimension (weight rows)
+            N: output dimension (weight columns, per device)
+            label: cache key label (e.g. "qkv", "o_proj")
+        """
+        import math
+        cache_key = f"{label}_{seq_len}_{K}_{N}"
+        if cache_key in self._prefill_prog_cfg_cache:
+            return self._prefill_prog_cfg_cache[cache_key]
+
+        tile_size = 32
+        grid_rows = 8
+        grid_cols = 8  # WH per-chip compute grid: 8x8 (conservative, works on both T3K and Galaxy)
+
+        M_tiles = seq_len // tile_size
+        N_tiles = math.ceil(N / tile_size)
+
+        per_core_M = max(1, math.ceil(M_tiles / grid_rows))
+        per_core_N = max(1, math.ceil(N_tiles / grid_cols))
+
+        cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_cols, grid_rows),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+        self._prefill_prog_cfg_cache[cache_key] = cfg
+        return cfg
+
+    def _get_shard_cfgs(self, batch: int, prefetch: bool = False) -> dict:
+        """Return per-batch shard configs (lazily created and cached).
+
+        When prefetch=True, uses sub_core_grids to place shards within the worker
+        grid (cols 1-6) instead of the full grid. This avoids overlapping with
+        prefetcher sender cores (cols 0 and 7).
+        """
+        cache_key = (batch, prefetch)
+        cached = self._shard_cfg_cache.get(cache_key)
         if cached is not None:
             return cached
         b = max(batch, 1)
-        user_grid = ttnn.num_cores_to_corerangeset(b, self._grid_size, row_wise=True)
+        if prefetch:
+            # Map b cores within worker grid (cols 1-6, rows 0-8)
+            worker_crs = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 8))
+            ])
+            start_core = ttnn.CoreCoord(1, 0)
+            user_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, b, worker_crs, row_wise=True,
+            )
+        else:
+            user_grid = ttnn.num_cores_to_corerangeset(b, self._grid_size, row_wise=True)
         cfgs = {
             "q": ttnn.create_sharded_memory_config(
                 shape=(ttnn.TILE_SIZE, self.head_dim),
@@ -412,7 +518,7 @@ class Glm4MoeAttention(LightweightModule):
                 use_height_and_width_as_shard_shape=True,
             ),
         }
-        self._shard_cfg_cache[batch] = cfgs
+        self._shard_cfg_cache[cache_key] = cfgs
         return cfgs
 
     def _setup_dram_sharded_configs(self):
@@ -580,6 +686,12 @@ class Glm4MoeAttention(LightweightModule):
         active_batch: int | None = None,
         global_cb=None,
         sub_device_id=None,
+        prefetch_qkv_pc=None,
+        prefetch_oproj_pc=None,
+        prefetch_qkv_in_mc=None,
+        prefetch_qkv_out_mc=None,
+        prefetch_oproj_in_mc=None,
+        prefetch_oproj_out_mc=None,
     ) -> ttnn.Tensor:
         """Decode forward: single token per sequence.
 
@@ -596,7 +708,7 @@ class Glm4MoeAttention(LightweightModule):
             Output tensor [1, 1, batch, hidden_size=5120]
         """
 
-        # 1. QKV linear
+        # 1. QKV matmul
         if self._use_dram_shard:
             x_sharded = ttnn.to_memory_config(x, self._ds_qkv_act_mc)
             xqkv = ttnn.linear(
@@ -607,19 +719,32 @@ class Glm4MoeAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(x_sharded, force=False)
+        elif global_cb is not None:
+            # Prefetcher path: gather_in0 ring matmul.
+            # Requirements (from test_matmul_1d_gather_in0.py):
+            #   1. Must use ttnn.matmul (NOT ttnn.linear — gather_in0 doesn't support bias)
+            #   2. Input must be WIDTH_SHARDED on ring cores
+            #   3. Output must have explicit shard spec
+            x_ring = ttnn.to_memory_config(x, prefetch_qkv_in_mc)
+            xqkv = ttnn.matmul(
+                x_ring,
+                self.wqkv,
+                program_config=prefetch_qkv_pc,
+                memory_config=prefetch_qkv_out_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                global_cb=global_cb,
+                sub_device_id=sub_device_id,
+                dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+            )
+            ttnn.deallocate(x_ring, force=False)
         else:
-            _linear_kwargs = {}
-            if global_cb is not None:
-                _linear_kwargs["global_cb"] = global_cb
-            if sub_device_id is not None:
-                _linear_kwargs["sub_device_id"] = sub_device_id
+            _w = self.wqkv_interleaved or self.wqkv
             xqkv = ttnn.linear(
                 x,
-                self.wqkv,
+                _w,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.compute_kernel_config,
-                **_linear_kwargs,
             )
 
         # Add QKV bias
@@ -701,7 +826,7 @@ class Glm4MoeAttention(LightweightModule):
 
         # Convert back to HEIGHT_SHARDED for paged_update_cache and SDPA
         # (partial RoPE returns DRAM interleaved after concat)
-        _shard_cfgs = self._get_shard_cfgs(logical_batch_after_slice)
+        _shard_cfgs = self._get_shard_cfgs(logical_batch_after_slice, prefetch=(sub_device_id is not None))
         q = ttnn.interleaved_to_sharded(q, _shard_cfgs["q"])
         k = ttnn.interleaved_to_sharded(k, _shard_cfgs["k"])
 
@@ -718,7 +843,9 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # 7. SDPA (paged) — limit to 64 cores for Galaxy Wormhole tree reduction
+        # 7. SDPA (paged) — limit cores for Galaxy Wormhole tree reduction.
+        # When prefetcher is active, use sub_core_grids to restrict to worker cores (cols 1-6).
+        _sdpa_pc = self._get_prefetch_sdpa_config() if sub_device_id is not None else self.sdpa_decode_program_config
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             keys,
@@ -726,7 +853,7 @@ class Glm4MoeAttention(LightweightModule):
             page_table_tensor=page_table,
             cur_pos_tensor=current_pos,
             scale=self.scale,
-            program_config=self.sdpa_decode_program_config,
+            program_config=_sdpa_pc,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
@@ -755,6 +882,7 @@ class Glm4MoeAttention(LightweightModule):
             attn_output = _simple_all_gather(
                 attn_output, self.mesh_device, cluster_axis=1, dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                subdevice_id=sub_device_id,
             )
 
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
@@ -781,20 +909,32 @@ class Glm4MoeAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
             )
             ttnn.deallocate(ao_sharded, force=False)
+        elif global_cb is not None:
+            # Prefetcher path: gather_in0 ring matmul for O-proj.
+            # Same pattern as QKV — reshard input, use ttnn.matmul, explicit output config.
+            ao_ring = ttnn.to_memory_config(attn_output, prefetch_oproj_in_mc)
+            ttnn.deallocate(attn_output)
+            dense_out = ttnn.matmul(
+                ao_ring,
+                self.wo,
+                program_config=prefetch_oproj_pc,
+                memory_config=prefetch_oproj_out_mc,
+                compute_kernel_config=self.compute_kernel_config,
+                global_cb=global_cb,
+                sub_device_id=sub_device_id,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.deallocate(ao_ring, force=False)
         else:
-            _oproj_kwargs = {}
-            if global_cb is not None:
-                _oproj_kwargs["global_cb"] = global_cb
-            if sub_device_id is not None:
-                _oproj_kwargs["sub_device_id"] = sub_device_id
+            _w_o = self.wo_interleaved or self.wo
+            _oproj_grid = ttnn.CoreGrid(y=4, x=8) if self.TG else None
             dense_out = ttnn.matmul(
                 attn_output,
-                self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
+                _w_o,
+                core_grid=_oproj_grid,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.compute_kernel_config,
-                **_oproj_kwargs,
             )
             ttnn.deallocate(attn_output)
 
@@ -812,6 +952,7 @@ class Glm4MoeAttention(LightweightModule):
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ccl=self.tt_ccl,
+            subdevice_id=sub_device_id,
         )
 
         return dense_out
@@ -846,11 +987,20 @@ class Glm4MoeAttention(LightweightModule):
         import os as _os
         import sys
         _dbg = _os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
+        _dbg_prefill = _os.environ.get("GLM4_MOE_DEBUG_PREFILL", "0") != "0"
         def _sync(label):
             if _dbg:
                 print(f"  [DEBUG PREFILL] {label} ...", flush=True, file=sys.stderr)
                 ttnn.synchronize_device(self.mesh_device)
                 print(f"  [DEBUG PREFILL] {label} OK", flush=True, file=sys.stderr)
+
+        if _dbg_prefill:
+            print(f"      [ATTN PREFILL] seq_len={seq_len}, user_id={user_id}, "
+                  f"chunk_start_idx={chunk_start_idx}, "
+                  f"page_table={'None' if page_table is None else list(page_table.shape)}, "
+                  f"chunk_page_table={'None' if chunk_page_table is None else list(chunk_page_table.shape)}, "
+                  f"kv_cache={'None' if kv_cache is None else f'[{list(kv_cache[0].shape)}, {list(kv_cache[1].shape)}]'}",
+                  flush=True, file=sys.stderr)
 
         _sync("before QKV linear")
 
@@ -860,12 +1010,22 @@ class Glm4MoeAttention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x = ttnn.reshape(x, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        _wqkv = self.wqkv_interleaved if self.wqkv_interleaved is not None else self.wqkv
+        # Explicit program_config prevents TG mesh auto-config hang
+        _mm_seq = min(seq_len, self.MAX_QKV_MM_SEQ_LEN)
+        _qkv_pc = self._get_prefill_program_config(
+            _mm_seq, int(_wqkv.shape[2]), int(_wqkv.shape[3]), label="qkv"
+        ) if self.TG else None
+        _qkv_kwargs = {}
+        if _qkv_pc is not None:
+            _qkv_kwargs["program_config"] = _qkv_pc
         xqkv = ttnn.linear(
             x,
-            self.wqkv,
+            _wqkv,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            **_qkv_kwargs,
         )
 
         _sync("after QKV linear")
@@ -900,6 +1060,12 @@ class Glm4MoeAttention(LightweightModule):
         _sync("after QK norm")
 
         # 5. Partial RoPE (prefill mode)
+        if _dbg_prefill:
+            print(f"      [ATTN PREFILL] RoPE: cos.shape={list(rot_mats[0].shape)}, "
+                  f"sin.shape={list(rot_mats[1].shape)}, q.shape={list(q.shape)}, "
+                  f"k.shape={list(k.shape)} — NOTE: cos/sin always sliced from [0:seq_len], "
+                  f"not from chunk_start_idx (Bug 2: wrong positions for chunks > 0)",
+                  flush=True, file=sys.stderr)
         q = self._apply_partial_rope_prefill(q, rot_mats[0], rot_mats[1], rot_mats[2])
         k = self._apply_partial_rope_prefill(k, rot_mats[0], rot_mats[1], rot_mats[2])
         _sync("after RoPE")
@@ -928,9 +1094,20 @@ class Glm4MoeAttention(LightweightModule):
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+            if _dbg_prefill:
+                print(f"      [ATTN PREFILL] KV cache fill: paged_fill_cache, "
+                      f"fill_page_table.shape={list(fill_page_table.shape)}, "
+                      f"block_size={block_size}, page_len={page_len}, "
+                      f"k_fill.shape={list(k_fill.shape)}, v_fill.shape={list(v_fill.shape)}, "
+                      f"keys.shape={list(keys.shape)}, user_id={user_id}",
+                      flush=True, file=sys.stderr)
             ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
+            if _dbg_prefill:
+                print(f"      [ATTN PREFILL] KV cache fill: fill_cache (non-paged), "
+                      f"user_id={user_id}, batch_idx={user_id % self.batch_size_per_device_group}",
+                      flush=True, file=sys.stderr)
             ttnn.fill_cache(keys, k_fill, user_id % self.batch_size_per_device_group)
             ttnn.fill_cache(values, v_fill, user_id % self.batch_size_per_device_group)
 
@@ -941,14 +1118,22 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(q)
 
         if chunk_start_idx is not None:
+            if _dbg_prefill:
+                print(f"      [ATTN PREFILL] SDPA: chunked mode, chunk_start_idx={chunk_start_idx}, "
+                      f"q.shape={list(q_8b.shape)}, keys.shape={list(keys.shape)}",
+                      flush=True, file=sys.stderr)
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q_8b,
                 input_tensor_k=keys,
                 input_tensor_v=values,
-                page_table_tensor=fill_page_table,
+                page_table_tensor=page_table,
                 chunk_start_idx=chunk_start_idx,
             )
         else:
+            if _dbg_prefill:
+                print(f"      [ATTN PREFILL] SDPA: local mode (NO cross-chunk attention), "
+                      f"q.shape={list(q_8b.shape)}, k.shape={list(k_8b.shape)}, v.shape={list(v_8b.shape)}",
+                      flush=True, file=sys.stderr)
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_8b,
                 k_8b,
@@ -979,12 +1164,21 @@ class Glm4MoeAttention(LightweightModule):
             attn_output = ttnn.reshape(attn_output, [1, seq_len // _oproj_thresh, _oproj_thresh, -1])
 
         # 9. Output projection (BF16 output for precision through 92 layers)
+        _wo = self.wo_interleaved if self.wo_interleaved is not None else self.wo
+        _o_mm_seq = min(seq_len, _oproj_thresh)
+        _o_pc = self._get_prefill_program_config(
+            _o_mm_seq, int(_wo.shape[2]), int(_wo.shape[3]), label="o_proj"
+        ) if self.TG else None
+        _o_kwargs = {}
+        if _o_pc is not None:
+            _o_kwargs["program_config"] = _o_pc
         output = ttnn.linear(
             attn_output,
-            self.wo,
+            _wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            **_o_kwargs,
         )
 
         if seq_len > _oproj_thresh:
@@ -996,11 +1190,14 @@ class Glm4MoeAttention(LightweightModule):
         # 10. All-reduce on cluster_axis=0 (TP reduction for row-parallel O projection)
         # NOTE: Prefill runs outside trace — do NOT pass ccl to avoid async CCL ops
         # conflicting with the existing captured trace's semaphore state.
+        # Use host-side reduce: native ttnn.all_reduce(Ring) hangs on first CCL call
+        # during prefill on TG mesh (no prior kernel compilation from decode warmup).
         output = _simple_all_reduce(
             output,
             self.mesh_device,
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            impl="rs_ag",
         )
 
         return output
@@ -1019,6 +1216,12 @@ class Glm4MoeAttention(LightweightModule):
         active_batch: int | None = None,
         global_cb=None,
         sub_device_id=None,
+        prefetch_qkv_pc=None,
+        prefetch_oproj_pc=None,
+        prefetch_qkv_in_mc=None,
+        prefetch_qkv_out_mc=None,
+        prefetch_oproj_in_mc=None,
+        prefetch_oproj_out_mc=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1040,6 +1243,12 @@ class Glm4MoeAttention(LightweightModule):
                 active_batch=active_batch,
                 global_cb=global_cb,
                 sub_device_id=sub_device_id,
+                prefetch_qkv_pc=prefetch_qkv_pc,
+                prefetch_oproj_pc=prefetch_oproj_pc,
+                prefetch_qkv_in_mc=prefetch_qkv_in_mc,
+                prefetch_qkv_out_mc=prefetch_qkv_out_mc,
+                prefetch_oproj_in_mc=prefetch_oproj_in_mc,
+                prefetch_oproj_out_mc=prefetch_oproj_out_mc,
             )
 
     def _prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
