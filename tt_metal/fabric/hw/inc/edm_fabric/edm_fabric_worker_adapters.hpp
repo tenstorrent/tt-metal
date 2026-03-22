@@ -68,7 +68,8 @@ struct WorkerToFabricEdmSenderBase {
     static_assert(VC_ID == 0 || VC_ID == 2, "Only VC_ID 0 and 2 are supported");
     // VC0 uses stream 22 (sender_channel_0 free slots); VC2 uses stream 30.
     static constexpr uint32_t STREAM_ID =
-        VC_ID == 2 ? 30u : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
+        VC_ID == 2 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
+                   : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;

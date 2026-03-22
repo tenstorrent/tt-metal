@@ -555,7 +555,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .atomic_inc_address = dest.atomic_inc_address,
                 .link_id = sender.link_id,
                 .noc_id = sender.noc_id,
-                .vc_id = sender.vc_id.value_or(0),
+                .vc_id = sender.vc_id.value_or(tt::tt_fabric::fabric_tests::default_worker_vc_id),
                 .sender_credit_info = pattern.sender_credit_info,
                 .credit_return_batch_size = pattern.credit_return_batch_size,
             };

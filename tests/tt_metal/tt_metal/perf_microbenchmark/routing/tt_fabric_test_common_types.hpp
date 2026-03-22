@@ -22,6 +22,9 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+static constexpr uint8_t default_worker_vc_id = 0;
+static constexpr uint8_t vc2_worker_vc_id = 2;
+
 // Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
 enum class PerformanceTestMode {
     NONE,       // No performance testing (functional test only)

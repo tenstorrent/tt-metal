@@ -882,7 +882,7 @@ void TestDevice::create_sender_kernels() {
         uint8_t sender_vc_id = 0;
         for (const auto& [config, _] : sender.configs_) {
             if (config.use_vc2()) {
-                sender_vc_id = 2;
+                sender_vc_id = vc2_worker_vc_id;
                 break;
             }
         }
