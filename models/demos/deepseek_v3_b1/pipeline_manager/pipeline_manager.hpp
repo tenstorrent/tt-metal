@@ -30,6 +30,8 @@ public:
     void write_token(uint32_t token_id);
     uint32_t read_token();
     void run_one_shot(PipelineManagerRequest& request, std::ostream& output_stream);
+    void write_over_socket(uint32_t token_id);
+    uint32_t read_over_socket();
 
 private:
     struct Impl;

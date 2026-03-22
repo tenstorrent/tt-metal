@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 #include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager.hpp"
 
@@ -42,33 +44,50 @@ int main(int argc, char* argv[]) {
         const uint32_t connect_timeout_ms =
             static_cast<uint32_t>(std::stoul(get_arg_value(arguments, "--connect-timeout-ms")));
 
+        std::cout << "Creating Pipeline Manager" << std::endl;
         PipelineManager pipeline_manager(h2d_socket_id, d2h_socket_id, page_size_bytes, connect_timeout_ms);
         if (iterations == 0) {
             throw std::runtime_error("iterations must be greater than zero");
         }
-
+        std::cout << "Starting Pipeline Manager" << std::endl;
         pipeline_manager.start();
-        pipeline_manager.write_token(initial_token);
-
-        std::vector<uint32_t> observed_tokens;
-        observed_tokens.reserve(iterations);
-
         for (uint32_t step = 0; step < iterations; ++step) {
-            const uint32_t token_id = pipeline_manager.read_token();
-            observed_tokens.push_back(token_id);
-            std::cout << token_id << std::endl;
-
-            if (step + 1 < iterations) {
-                pipeline_manager.write_token(token_id);
-            }
+            std::cout << "Writing Token " << step << std::endl;
+            pipeline_manager.write_over_socket(initial_token);
+            std::cout << "Token Written" << std::endl;
+            const uint32_t token_id = pipeline_manager.read_over_socket();
+            std::cout << "Token Read" << std::endl;
         }
+        // std::cout << "Pipeline Manager Started" << std::endl;
+        // std::thread writer_thread([&pipeline_manager, initial_token, iterations]() {
+        //     for (uint32_t step = 0; step < iterations; ++step) {
+        //         std::cout << "Writing Token " << step << std::endl;
+        //         pipeline_manager.write_over_socket(initial_token);
+        //         std::cout << "Token Written" << std::endl;
+
+        //     }
+        // });
+
+        // std::thread reader_thread([&pipeline_manager, iterations]() {
+        //     auto start_time = std::chrono::high_resolution_clock::now();
+        //     for (uint32_t step = 0; step < iterations; ++step) {
+        //         std::cout << "Reading Token " << step << std::endl;
+        //         const uint32_t token_id = pipeline_manager.read_over_socket();
+        //         std::cout << "Token Read" << std::endl;
+        //     }
+        //     auto end_time = std::chrono::high_resolution_clock::now();
+        //     std::cout << "Time taken to read " << iterations << " tokens: " <<
+        //     std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count() << "ms" <<
+        //     std::endl;
+        // });
+
+        // writer_thread.join();
+        // reader_thread.join();
 
         pipeline_manager.stop();
-        std::cout << "COMPLETE\t" << observed_tokens.size();
-        for (uint32_t token_id : observed_tokens) {
-            std::cout << "\t" << token_id;
-        }
-        std::cout << std::endl;
+
+        std::cout << "Writer and Reader Threads Completed" << std::endl;
+
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << error.what() << std::endl;
