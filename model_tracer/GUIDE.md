@@ -23,7 +23,7 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
 # 4. Reconstruct configs for testing
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/sweep_manifest.yaml \
-    model_tracer/traced_operations/ttnn_operations_master.json
+    model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
 ```
 
 ---
