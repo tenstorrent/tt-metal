@@ -929,14 +929,18 @@ def _write_probe_script(path: Path) -> None:
     The sentinel prefix lets us reliably parse rank env data from mpirun's
     tagged output which may include other log lines.
     """
-    path.write_text(textwrap.dedent("""\
+    path.write_text(
+        textwrap.dedent(
+            """\
             import json, os, sys
             rank = os.environ.get("OMPI_COMM_WORLD_RANK", "?")
             payload = json.dumps(dict(os.environ), separators=(",", ":"))
             # Flush explicitly — mpirun buffers stdout across ranks
             sys.stdout.write(f"TT_ENV_PROBE:{rank}:{payload}\\n")
             sys.stdout.flush()
-        """))
+        """
+        )
+    )
 
 
 def _write_rank_binding_yaml(
