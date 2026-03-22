@@ -17,9 +17,12 @@ Estimated DRAM budget (BF8/BF16 mix) across both chips:
   Qwen3-TTS 1.7B      ~3.4 GB (Talker 28L + CodePredictor 5L)
   OWL-ViT             ~0.3 GB
   BERT Large          ~0.7 GB
+  YUNet               ~0.01 GB (tiny face detector)
+  T5-small            ~0.06 GB
+  Stable Diffusion    ~2.0 GB (UNet only, VAE/CLIP on CPU)
   KV cache + traces   ~1.0 GB
   ─────────────────────────────
-  Total               ~14.9 GB / 24 GB  (across 2 × 12 GB chips)
+  Total               ~17.0 GB / 24 GB  (across 2 × 12 GB chips)
 """
 
 from dataclasses import dataclass
@@ -35,12 +38,17 @@ class ModelBundle:
 
     llm: object = None
     whisper: object = None
-    qwen3_tts: object = None  # Qwen3-TTS (voice cloning, multi-language)
+    speecht5: object = None  # SpeechT5 TTS (English only, fast)
+    qwen3_tts: object = None  # Qwen3-TTS (voice cloning, multi-language, slow)
     owlvit: object = None
     bert: object = None
     sd: object = None  # Stable Diffusion
     yunet: object = None  # Face detection
     t5: object = None  # Translation
+    trocr: object = None  # OCR (text recognition from images)
+    bge: object = None  # BGE embeddings for RAG (TF-IDF fallback)
+    sbert: object = None  # Sentence BERT embeddings (TTNN accelerated)
+    rag: object = None  # RAG system (requires SBERT or BGE)
 
 
 def open_n300_device(enable_fabric: bool = True) -> ttnn.MeshDevice:
@@ -48,10 +56,11 @@ def open_n300_device(enable_fabric: bool = True) -> ttnn.MeshDevice:
     Open the N300 mesh device (1 row × 2 cols = 2 × Wormhole B0 chips).
 
     Device params satisfy the most demanding requirements across all models:
-      l1_small_size=24_576      : SpeechT5 needs >1024 for decoder ops.
+      l1_small_size=79_104      : Sentence BERT / BGE embeddings need 79104.
+                                  SpeechT5 needs >1024 for decoder ops.
                                   300_000 clashes with Whisper's L1 buffers at
                                   offset 1018400 (CB region would end at 1185120).
-                                  24576 ends at ~909696 — safely below 1018400.
+                                  79104 ends at ~964224 — still below 1018400.
       trace_region_size=100MB   : Whisper decode trace (largest requirement)
       num_command_queues=2      : SpeechT5 2CQ async decode uses ttnn.wait_for_event
                                   on CQ1; Whisper only uses CQ0 — CQ1 is unused by it.
@@ -69,7 +78,7 @@ def open_n300_device(enable_fabric: bool = True) -> ttnn.MeshDevice:
         )
 
     device_params = {
-        "l1_small_size": 24_576,
+        "l1_small_size": 79_104,
         "trace_region_size": 100_000_000,
         "num_command_queues": 2,
     }
@@ -86,12 +95,16 @@ def load_all_models(
     mesh_device,
     load_llm: bool = True,
     load_whisper: bool = True,
-    load_qwen3_tts: bool = True,
+    load_speecht5: bool = False,  # SpeechT5 TTS (English only, fast ~2.7s)
+    load_qwen3_tts: bool = False,  # Qwen3-TTS (multi-language, slow ~6min)
     load_owlvit: bool = True,
     load_bert: bool = True,
     load_sd: bool = False,  # Stable Diffusion (disabled by default - large model)
     load_yunet: bool = False,  # Face detection
     load_t5: bool = False,  # Translation
+    load_trocr: bool = False,  # OCR (text recognition from images)
+    load_bge: bool = False,  # BGE embeddings for RAG (TF-IDF fallback)
+    load_sbert: bool = False,  # Sentence BERT embeddings (TTNN accelerated)
 ) -> ModelBundle:
     """
     Load all specialist models into device DRAM.
@@ -108,6 +121,24 @@ def load_all_models(
     bundle = ModelBundle()
 
     # All models run on full (1,2) mesh with fabric enabled for multi-chip parallelism.
+    #
+    # WARNING: SBERT trace capture conflicts with LLM memory when loaded together.
+    # SBERT works standalone but corrupts LLM output in multi-model setup.
+    # Use load_bge=True (TF-IDF) for web demo until this is resolved.
+
+    # --- SBERT (embeddings for RAG - TTNN accelerated) ----------------------
+    # EXPERIMENTAL: Only use in standalone mode, not with LLM
+    if load_sbert:
+        logger.info("[1/11] Loading Sentence BERT embeddings (TTNN accelerated, must load first)...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.sbert_tool import SBERTTool
+
+        bundle.sbert = SBERTTool(mesh_device=mesh_device)
+
+        # Initialize RAG system with SBERT embeddings
+        logger.info("[1/11] Initializing RAG system with SBERT...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.rag_tool import RAGTool
+
+        bundle.rag = RAGTool(bge_tool=bundle.sbert)
 
     # --- LLM (Llama 3.1 8B Instruct — orchestrator) ----------------------
     if load_llm:
@@ -123,7 +154,14 @@ def load_all_models(
 
         bundle.whisper = WhisperTool(mesh_device=mesh_device)
 
-    # --- Qwen3-TTS (TTS with voice cloning) ------------------------------
+    # --- SpeechT5 (TTS - fast, English only) -------------------------------
+    if load_speecht5:
+        logger.info("[3/8] Loading SpeechT5 TTS (English only, fast)...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.speecht5_tool import SpeechT5Tool
+
+        bundle.speecht5 = SpeechT5Tool(mesh_device=mesh_device)
+
+    # --- Qwen3-TTS (TTS with voice cloning - slow) -----------------------
     if load_qwen3_tts:
         logger.info("[3/8] Loading Qwen3-TTS (voice cloning, multi-language)...")
         from models.demos.minimax_m2.agentic.tool_wrappers.qwen3_tts_tool import Qwen3TTSTool
@@ -160,10 +198,30 @@ def load_all_models(
 
     # --- T5 (translation) -----------------------------------------------
     if load_t5:
-        logger.info("[8/8] Loading T5 translation...")
+        logger.info("[8/9] Loading T5 translation...")
         from models.demos.minimax_m2.agentic.tool_wrappers.t5_tool import T5Tool
 
         bundle.t5 = T5Tool(mesh_device=mesh_device)
+
+    # --- TrOCR (OCR - text recognition) ---------------------------------
+    if load_trocr:
+        logger.info("[9/10] Loading TrOCR for text recognition...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.trocr_tool import TrOCRTool
+
+        bundle.trocr = TrOCRTool(mesh_device=mesh_device)
+
+    # --- BGE (embeddings for RAG - TF-IDF fallback) -------------------------
+    if load_bge and not load_sbert:
+        logger.info("[10/11] Loading BGE embeddings for RAG (TF-IDF fallback)...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.bge_tool import BGETool
+
+        bundle.bge = BGETool(mesh_device=mesh_device)
+
+        # Initialize RAG system with BGE embeddings
+        logger.info("[10/11] Initializing RAG system with BGE...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.rag_tool import RAGTool
+
+        bundle.rag = RAGTool(bge_tool=bundle.bge)
 
     logger.info("All models loaded. Agentic system ready.")
     return bundle
@@ -192,6 +250,13 @@ def cleanup_models(bundle: ModelBundle) -> None:
             bundle.whisper.close()
         except Exception as e:
             logger.warning(f"Whisper cleanup failed: {e}")
+
+    # SpeechT5 - release any traces
+    if bundle.speecht5 is not None and hasattr(bundle.speecht5, "close"):
+        try:
+            bundle.speecht5.close()
+        except Exception as e:
+            logger.warning(f"SpeechT5 cleanup failed: {e}")
 
     # Qwen3-TTS - release any traces
     if bundle.qwen3_tts is not None and hasattr(bundle.qwen3_tts, "close"):
@@ -231,5 +296,29 @@ def cleanup_models(bundle: ModelBundle) -> None:
             bundle.t5.close()
         except Exception as e:
             logger.warning(f"T5 cleanup failed: {e}")
+
+    if bundle.trocr is not None and hasattr(bundle.trocr, "close"):
+        try:
+            bundle.trocr.close()
+        except Exception as e:
+            logger.warning(f"TrOCR cleanup failed: {e}")
+
+    if bundle.bge is not None and hasattr(bundle.bge, "close"):
+        try:
+            bundle.bge.close()
+        except Exception as e:
+            logger.warning(f"BGE cleanup failed: {e}")
+
+    if bundle.sbert is not None and hasattr(bundle.sbert, "close"):
+        try:
+            bundle.sbert.close()
+        except Exception as e:
+            logger.warning(f"SBERT cleanup failed: {e}")
+
+    if bundle.rag is not None and hasattr(bundle.rag, "close"):
+        try:
+            bundle.rag.close()
+        except Exception as e:
+            logger.warning(f"RAG cleanup failed: {e}")
 
     logger.info("Model cleanup complete.")

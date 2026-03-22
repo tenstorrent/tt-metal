@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tenstorrent N300 Multi-Modal Demo</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Tenstorrent N300 Multi-Modal Demo</h1>
+        <div class="header-status">
+            <span id="status-indicator" class="status-dot offline"></span>
+            <span id="status-text">Connecting...</span>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Input Panel -->
+        <section class="panel input-panel">
+            <h2>Input</h2>
+
+            <!-- Available Tools Reference -->
+            <div class="tools-reference">
+                <label>Available Tools (9 Models)</label>
+                <div class="tools-grid">
+                    <div class="tool-item">
+                        <span class="tool-icon">🧠</span>
+                        <span class="tool-name">Llama 8B</span>
+                        <span class="tool-desc">Orchestrator</span>
+                    </div>
+                    <div class="tool-item" title="English audio only">
+                        <span class="tool-icon">🎤</span>
+                        <span class="tool-name">Whisper</span>
+                        <span class="tool-desc">STT (English)</span>
+                    </div>
+                    <div class="tool-item" title="English only, fast (~2.7s)">
+                        <span class="tool-icon">🔊</span>
+                        <span class="tool-name">SpeechT5</span>
+                        <span class="tool-desc">TTS (English)</span>
+                    </div>
+                    <div class="tool-item">
+                        <span class="tool-icon">🔍</span>
+                        <span class="tool-name">OWL-ViT</span>
+                        <span class="tool-desc">Object Detection</span>
+                    </div>
+                    <div class="tool-item">
+                        <span class="tool-icon">👤</span>
+                        <span class="tool-name">YUNet</span>
+                        <span class="tool-desc">Face Detection</span>
+                    </div>
+                    <div class="tool-item">
+                        <span class="tool-icon">❓</span>
+                        <span class="tool-name">BERT</span>
+                        <span class="tool-desc">Question Answering</span>
+                    </div>
+                    <div class="tool-item" title="Supports: English, German, French, Romanian">
+                        <span class="tool-icon">🌐</span>
+                        <span class="tool-name">T5-small</span>
+                        <span class="tool-desc">Translate (EN/DE/FR/RO)</span>
+                    </div>
+                    <div class="tool-item">
+                        <span class="tool-icon">🎨</span>
+                        <span class="tool-name">Stable Diffusion</span>
+                        <span class="tool-desc">Image Generation</span>
+                    </div>
+                    <div class="tool-item active" title="BGE embeddings + FAISS vector search">
+                        <span class="tool-icon">📚</span>
+                        <span class="tool-name">RAG (BGE)</span>
+                        <span class="tool-desc">Knowledge Base</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Text Input -->
+            <div class="input-group">
+                <label for="text-input">Text Query</label>
+                <textarea id="text-input" placeholder="Enter your question or prompt..."></textarea>
+            </div>
+
+            <!-- Image Upload -->
+            <div class="input-group">
+                <label>Image</label>
+                <div class="file-upload" id="image-drop-zone">
+                    <input type="file" id="image-input" accept="image/*" hidden>
+                    <p>Drop image here or <span class="link">click to upload</span></p>
+                    <img id="image-preview" class="preview hidden" alt="Preview">
+                </div>
+                <button id="clear-image-btn" class="btn btn-small hidden">Clear Image</button>
+            </div>
+
+            <!-- Audio Upload / Recording -->
+            <div class="input-group">
+                <label>Audio</label>
+                <div class="audio-controls">
+                    <div class="file-upload small" id="audio-drop-zone">
+                        <input type="file" id="audio-input" accept="audio/*" hidden>
+                        <p>Drop audio or <span class="link">upload</span></p>
+                    </div>
+                    <span class="or-text">or</span>
+                    <button id="record-btn" class="btn btn-mic">Record</button>
+                </div>
+                <div id="audio-status" class="audio-status hidden"></div>
+                <audio id="audio-preview" class="hidden" controls></audio>
+                <button id="clear-audio-btn" class="btn btn-small hidden">Clear Audio</button>
+            </div>
+
+            <!-- Options -->
+            <div class="input-group options">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="want-audio-response">
+                    <span>Speak response (TTS)</span>
+                </label>
+            </div>
+
+            <!-- Submit -->
+            <button id="submit-btn" class="btn btn-primary btn-large">Submit</button>
+        </section>
+
+        <!-- Output Panel -->
+        <section class="panel output-panel">
+            <h2>Output</h2>
+
+            <!-- Text Response -->
+            <div class="output-group">
+                <label>Response</label>
+                <div id="text-output" class="text-output">
+                    <p class="placeholder">Response will appear here...</p>
+                </div>
+            </div>
+
+            <!-- Image Output -->
+            <div class="output-group" id="image-output-group">
+                <label>Output Image</label>
+                <div id="image-output-container" class="output-image-container">
+                    <p class="placeholder" id="image-placeholder">No image output</p>
+                    <img id="image-output" class="output-image hidden" alt="Generated">
+                </div>
+            </div>
+
+            <!-- Audio Output -->
+            <div class="output-group" id="audio-output-group">
+                <label>Audio Response</label>
+                <div id="audio-output-container" class="output-audio-container">
+                    <p class="placeholder" id="audio-placeholder">No audio output</p>
+                    <audio id="audio-output" controls class="audio-player hidden"></audio>
+                </div>
+            </div>
+
+            <!-- Tools Used -->
+            <div class="output-group">
+                <label>Tools Used</label>
+                <div id="tools-used" class="tools-list">
+                    <span class="placeholder">-</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Console Panel -->
+        <section class="panel console-panel">
+            <h2>Console</h2>
+            <div id="console" class="console">
+                <div class="console-entry system">
+                    <span class="timestamp">[--:--:--]</span>
+                    <span class="tool">System</span>
+                    <span class="message">Waiting for connection...</span>
+                </div>
+            </div>
+            <button id="clear-console-btn" class="btn btn-small">Clear Console</button>
+        </section>
+    </main>
+
+    <!-- Knowledge Base Panel (Full Width) -->
+    <section class="rag-panel">
+        <div class="rag-panel-header" id="rag-toggle">
+            <h2>📚 Knowledge Base (RAG)</h2>
+            <div class="rag-panel-status">
+                <span id="rag-status" class="rag-badge">0 chunks</span>
+                <span class="chevron">▼</span>
+            </div>
+        </div>
+        <div id="rag-content" class="rag-panel-content hidden">
+            <div class="rag-layout">
+                <div class="rag-upload-section">
+                    <p class="rag-description">Upload documents to create a knowledge base. The LLM will automatically search and use this context when answering questions.</p>
+                    <div class="file-upload" id="rag-drop-zone">
+                        <input type="file" id="rag-input" accept=".txt,.md,.py,.json,.yaml,.yml" multiple hidden>
+                        <p>Drop documents here or <span class="link">click to upload</span></p>
+                        <p class="hint">Supports: .txt, .md, .py, .json, .yaml</p>
+                    </div>
+                </div>
+                <div class="rag-documents-section">
+                    <label>Uploaded Documents</label>
+                    <div id="rag-files" class="rag-files">
+                        <span class="placeholder">No documents uploaded</span>
+                    </div>
+                    <button id="clear-rag-btn" class="btn btn-small">Clear All Documents</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <p>Powered by Tenstorrent N300 with Llama 8B, Whisper, SpeechT5, OWL-ViT, BERT, T5, YUNet, Stable Diffusion, BGE/RAG</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

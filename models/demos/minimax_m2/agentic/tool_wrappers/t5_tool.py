@@ -5,6 +5,7 @@
 T5Tool: Translation and text generation using T5 on TTNN.
 
 Supports translation between languages using the T5-base model.
+Runs on full N300 mesh (1,2) - utility functions handle mesh tensor conversion.
 """
 
 from loguru import logger
@@ -12,7 +13,7 @@ from transformers import AutoTokenizer, T5ForConditionalGeneration
 
 import ttnn
 from models.experimental.t5.t5_utils import run_generate
-from models.experimental.t5.tt.t5_for_conditional_generation import t5_base_for_conditional_generation
+from models.experimental.t5.tt.t5_for_conditional_generation import t5_small_for_conditional_generation
 
 # Supported language pairs (T5-base supports these)
 SUPPORTED_LANGUAGES = {
@@ -31,28 +32,23 @@ class T5Tool:
     """
 
     def __init__(self, mesh_device):
-        self.mesh_device = mesh_device
-        self._init_model(mesh_device)
+        self.device = mesh_device
+        self._init_model()
 
-    def _init_model(self, mesh_device):
+    def _init_model(self):
         """Load T5 model."""
-        logger.info("Loading T5 translation model...")
+        logger.info("Loading T5-small translation model...")
 
-        # Use chip0 submesh for T5 (single-device model)
-        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
-            self.device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
-        else:
-            self.device = mesh_device
-
-        # Load TTNN model
-        self.tt_model, _ = t5_base_for_conditional_generation(self.device)
+        # Load TTNN model - use t5-small instead of t5-base to fit in memory
+        # alongside other models (LLM, Whisper, etc.)
+        self.tt_model, _ = t5_small_for_conditional_generation(self.device)
 
         # Load tokenizer and reference model for generation
-        self.model_name = "t5-base"
+        self.model_name = "t5-small"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, model_max_length=128)
         self.hf_model = T5ForConditionalGeneration.from_pretrained(self.model_name)
 
-        logger.info("T5 ready.")
+        logger.info("T5-small ready.")
 
     def translate(
         self,
@@ -75,6 +71,9 @@ class T5Tool:
         target_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang)
 
         logger.info(f"Translating from {source_name} to {target_name}: '{text[:50]}...'")
+
+        # Synchronize device before T5 operations
+        ttnn.synchronize_device(self.device)
 
         # Format input for T5
         input_text = f"translate {source_name} to {target_name}: {text}"
@@ -108,6 +107,9 @@ class T5Tool:
 
         input_text = f"summarize: {text}"
 
+        # Synchronize device
+        ttnn.synchronize_device(self.device)
+
         output = run_generate(
             input_text,
             self.tokenizer,
@@ -125,4 +127,6 @@ class T5Tool:
         """Release resources."""
         self.tt_model = None
         self.hf_model = None
+        self.tokenizer = None
+        self.device = None
         logger.info("T5Tool closed.")

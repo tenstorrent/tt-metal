@@ -45,11 +45,9 @@ class YUNetTool:
         """Load YUNet model."""
         logger.info("Loading YUNet face detection model...")
 
-        # Use chip0 submesh for YUNet (single-device model)
-        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
-            self.device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
-        else:
-            self.device = mesh_device
+        # Use full mesh device - handle multi-device tensors in _to_torch helper
+        self.device = mesh_device
+        self._is_mesh = hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1
 
         # Setup reference model if needed
         setup_yunet_reference()
@@ -71,11 +69,29 @@ class YUNetTool:
 
         logger.info("YUNet ready.")
 
+    def _to_torch(self, tt_tensor):
+        """Convert TTNN tensor to torch, handling mesh device."""
+        tt_output = tt_tensor.cpu()
+        if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
+
+        # Handle mesh device: get device tensors and use first one
+        if self._is_mesh:
+            try:
+                device_tensors = ttnn.get_device_tensors(tt_output)
+                if len(device_tensors) > 1:
+                    return device_tensors[0].to_torch()
+            except Exception:
+                pass
+
+        return tt_output.to_torch()
+
     def detect(
         self,
         image_path: str,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         nms_threshold: float = DEFAULT_NMS_IOU_THRESHOLD,
+        output_image_path: str = None,
     ) -> List[Dict]:
         """
         Detect faces in an image.
@@ -84,12 +100,14 @@ class YUNetTool:
             image_path: Path to the input image.
             confidence_threshold: Minimum confidence score for detections.
             nms_threshold: IoU threshold for non-maximum suppression.
+            output_image_path: If provided, saves annotated image with bounding boxes.
 
         Returns:
             List of detections, each containing:
                 - box: (x1, y1, x2, y2) bounding box coordinates
                 - confidence: Detection confidence score
                 - keypoints: List of (x, y) facial keypoints
+                - output_image: Path to annotated image (if output_image_path provided)
         """
         logger.info(f"Detecting faces in: {image_path}")
 
@@ -119,17 +137,54 @@ class YUNetTool:
         detections = self._nms(detections, nms_threshold)
 
         logger.info(f"Found {len(detections)} face(s)")
+
+        # Draw bounding boxes and save annotated image if requested
+        if output_image_path or len(detections) > 0:
+            output_path = output_image_path or f"/tmp/faces_detected_{os.path.basename(image_path)}"
+            annotated = self._draw_detections(image, detections)
+            cv2.imwrite(output_path, annotated)
+            logger.info(f"Saved annotated image to: {output_path}")
+            # Add output image path to result
+            for det in detections:
+                det["output_image"] = output_path
+            if not detections:
+                detections = [{"output_image": output_path, "box": None, "confidence": 0, "keypoints": []}]
+
         return detections
+
+    def _draw_detections(self, image, detections: List[Dict]):
+        """Draw bounding boxes and keypoints on the image."""
+        annotated = image.copy()
+
+        for det in detections:
+            box = det["box"]
+            conf = det["confidence"]
+            keypoints = det.get("keypoints", [])
+
+            # Draw bounding box (green)
+            cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
+
+            # Draw confidence label
+            label = f"{conf:.2f}"
+            cv2.putText(annotated, label, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # Draw keypoints (5 points: left eye, right eye, nose, left mouth, right mouth)
+            colors = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0), (0, 255, 255)]
+            for i, (kx, ky) in enumerate(keypoints):
+                color = colors[i % len(colors)]
+                cv2.circle(annotated, (kx, ky), 3, color, -1)
+
+        return annotated
 
     def _decode_outputs(self, cls_outs, box_outs, obj_outs, kpt_outs, orig_w, orig_h, threshold) -> List[Dict]:
         """Decode raw model outputs to detections."""
         detections = []
 
         for scale_idx in range(3):
-            cls_out = ttnn.to_torch(cls_outs[scale_idx]).float().permute(0, 3, 1, 2)
-            box_out = ttnn.to_torch(box_outs[scale_idx]).float().permute(0, 3, 1, 2)
-            obj_out = ttnn.to_torch(obj_outs[scale_idx]).float().permute(0, 3, 1, 2)
-            kpt_out = ttnn.to_torch(kpt_outs[scale_idx]).float().permute(0, 3, 1, 2)
+            cls_out = self._to_torch(cls_outs[scale_idx]).float().permute(0, 3, 1, 2)
+            box_out = self._to_torch(box_outs[scale_idx]).float().permute(0, 3, 1, 2)
+            obj_out = self._to_torch(obj_outs[scale_idx]).float().permute(0, 3, 1, 2)
+            kpt_out = self._to_torch(kpt_outs[scale_idx]).float().permute(0, 3, 1, 2)
 
             stride = STRIDES[scale_idx]
             score = cls_out.sigmoid() * obj_out.sigmoid()

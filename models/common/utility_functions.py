@@ -185,12 +185,27 @@ def torch2tt_tensor(
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = ttnn.Tensor(py_tensor.reshape(size), tt_dtype)
-    tt_tensor = tt_tensor.to(tt_layout)
+    py_tensor_reshaped = py_tensor.reshape(size)
 
     if tt_device is not None:
-        tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
+        # Check if device is a mesh device and use from_torch with mesh_mapper
+        is_mesh = hasattr(tt_device, "get_num_devices") and tt_device.get_num_devices() > 1
+        if is_mesh:
+            tt_tensor = ttnn.from_torch(
+                py_tensor_reshaped,
+                dtype=tt_dtype,
+                layout=tt_layout,
+                device=tt_device,
+                memory_config=tt_memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(tt_device),
+            )
+        else:
+            tt_tensor = ttnn.Tensor(py_tensor_reshaped, tt_dtype)
+            tt_tensor = tt_tensor.to(tt_layout)
+            tt_tensor = tt_tensor.to(tt_device, tt_memory_config)
     else:
+        tt_tensor = ttnn.Tensor(py_tensor_reshaped, tt_dtype)
+        tt_tensor = tt_tensor.to(tt_layout)
         tt_tensor = tt_tensor.cpu()
 
     return tt_tensor
@@ -220,6 +235,16 @@ def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
     if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
+
+    # Handle mesh device: get device tensors and use first one (replicated inference)
+    try:
+        device_tensors = ttnn.get_device_tensors(tt_output)
+        if len(device_tensors) > 1:
+            # On mesh, tensors are replicated - use first device's result
+            return device_tensors[0].to_torch()
+    except Exception:
+        pass  # Not on mesh or not applicable
+
     return tt_output.to_torch()
 
 
@@ -279,10 +304,26 @@ def pad_by_zero(
                 _nearest_32(pad_shape[-2]) - pad_shape[-2],
             ),
         )
-        x = ttnn.Tensor(x, tt_dtype)
-        x = x.to(ttnn.TILE_LAYOUT)
         if device is not None:
-            x = x.to(device, tt_memory_config)
+            # Check if device is a mesh (has multiple devices)
+            is_mesh = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+            if is_mesh:
+                # Use ttnn.from_torch with mesh_mapper for mesh devices
+                x = ttnn.from_torch(
+                    x,
+                    dtype=tt_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=tt_memory_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            else:
+                x = ttnn.Tensor(x, tt_dtype)
+                x = x.to(ttnn.TILE_LAYOUT)
+                x = x.to(device, tt_memory_config)
+        else:
+            x = ttnn.Tensor(x, tt_dtype)
+            x = x.to(ttnn.TILE_LAYOUT)
 
     else:
         x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)

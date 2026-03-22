@@ -5,7 +5,7 @@
 StableDiffusionTool: Text-to-image generation using Stable Diffusion on TTNN.
 
 Uses CompVis/stable-diffusion-v1-4 UNet with TTNN acceleration.
-Generates 256x256 images from text prompts.
+Generates 512x512 images from text prompts.
 """
 
 import os
@@ -144,6 +144,8 @@ class StableDiffusionTool:
 
         # Concatenate for classifier-free guidance
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        # Pad sequence length from 77 to 96 as required by TTNN UNet
+        text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         tt_text_embeddings = ttnn.from_torch(
             text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
@@ -178,8 +180,13 @@ class StableDiffusionTool:
             # Expand latents for classifier-free guidance
             latent_model_input = ttnn.concat([tt_latents, tt_latents], dim=0)
 
-            # Predict noise
-            noise_pred = self.tt_unet(latent_model_input, time_embeddings[i], tt_text_embeddings)
+            # Predict noise (pass config as required by UNet2D)
+            noise_pred = self.tt_unet(
+                latent_model_input,
+                timestep=time_embeddings[i],
+                encoder_hidden_states=tt_text_embeddings,
+                config=self.unet_config,
+            )
 
             # Perform guidance
             noise_pred_uncond, noise_pred_text = ttnn.split(noise_pred, 1, dim=0)
@@ -193,7 +200,7 @@ class StableDiffusionTool:
 
         # Decode latents to image
         logger.info("Decoding latents to image...")
-        latents_torch = ttnn.to_torch(tt_latents)
+        latents_torch = ttnn.to_torch(tt_latents).float()  # Convert bfloat16 to float32 for VAE
         latents_torch = latents_torch / 0.18215  # VAE scaling factor
 
         with torch.no_grad():

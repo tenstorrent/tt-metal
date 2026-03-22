@@ -22,8 +22,6 @@ import soundfile as sf
 import torch
 from loguru import logger
 
-import ttnn
-
 # Default reference audio/text for voice cloning
 DEFAULT_REF_AUDIO = Path(__file__).parent.parent.parent.parent / "qwen3_tts" / "demo" / "jim_reference.wav"
 DEFAULT_REF_CACHE = Path(__file__).parent.parent.parent.parent / "qwen3_tts" / "demo" / "jim_reference.refcache.pt"
@@ -58,13 +56,10 @@ class Qwen3TTSTool:
         """
         self.mesh_device = mesh_device
 
-        # Use chip0 submesh for single-chip operations
-        if hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
-            self.device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
-            self._owns_submesh = True
-        else:
-            self.device = mesh_device
-            self._owns_submesh = False
+        # Use the full mesh device directly to avoid submesh cleanup issues.
+        # The TTNN speaker encoder operations will run on chip 0 of the mesh.
+        self.device = mesh_device
+        self._owns_submesh = False
 
         # Reference audio/text for voice cloning
         self.ref_audio = ref_audio or str(DEFAULT_REF_AUDIO)
@@ -347,23 +342,23 @@ class Qwen3TTSTool:
             self.speaker_embedding = old_speaker_embedding
 
     def close(self):
-        """Release model resources and close submesh if owned."""
-        self.tt_model = None
+        """Release model resources."""
+        # Clear TTNN model first - it holds device references
+        if self.tt_model is not None:
+            if hasattr(self.tt_model, "close"):
+                try:
+                    self.tt_model.close()
+                except Exception:
+                    pass
+            self.tt_model = None
+
+        # Clear all other attributes
         self.tokenizer = None
         self.main_weights = None
         self.decoder_weights = None
         self.speaker_embedding = None
         self.ref_codes = None
         self.audio_data = None
-
-        # Close the submesh if we created it
-        if hasattr(self, "_owns_submesh") and self._owns_submesh and self.device is not None:
-            try:
-                ttnn.close_mesh_device(self.device)
-                logger.info("Qwen3TTSTool submesh closed.")
-            except Exception as e:
-                logger.warning(f"Submesh close failed: {e}")
-            self.device = None
-            self._owns_submesh = False
+        self.device = None
 
         logger.info("Qwen3TTSTool closed.")
