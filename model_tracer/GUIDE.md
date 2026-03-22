@@ -103,7 +103,7 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
 - HF model: lowercase last segment after `/` → `meta-llama/Llama-3.2-1B-Instruct` → `llama-3.2-1b-instruct`
 - File path: skip generic segments (`models`, `demos`, `experimental`, `wormhole`, `vision`, `demo`, etc.), take first meaningful segment → `models/demos/audio/whisper/demo/demo.py` → `whisper`
 
-`model_name` must be unique in the DB. If two sources derive to the same name, use `set-model-name` to disambiguate before adding the UNIQUE constraint.
+`model_name` is UNIQUE in the DB. If two sources derive to the same name, the loader auto-disambiguates by appending `_2`, `_3`, etc. Use `set-model-name` to rename afterwards if the auto-generated suffix isn't ideal.
 
 ### Step 4: Promote in the manifest
 
@@ -136,17 +136,16 @@ Traces left as `draft` are invisible to model resolution. They can still be used
 ### Step 5: Reconstruct configs for testing
 
 ```bash
-# model_traced scope (used for branch testing and model_traced CI run)
+# Reconstruct all targets into the default path (auto-discovered by MasterConfigLoader)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/sweep_manifest.yaml \
-    model_tracer/traced_operations/ttnn_operations_master_model_traced.json \
-    model_traced
+    model_tracer/traced_operations/ttnn_operations_master.json
 
-# Lead models only (used for lead_models CI run)
+# Reconstruct a specific scope (model_traced or lead_models)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/sweep_manifest.yaml \
-    model_tracer/traced_operations/ttnn_operations_master_lead_models.json \
-    lead_models
+    model_tracer/traced_operations/ttnn_operations_master.json \
+    model_traced
 
 # Dry-run: see which trace IDs will be used without hitting the DB
 python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
@@ -155,6 +154,12 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
 # Reconstruct a single specific trace (all models in that trace)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace 35 output.json
 ```
+
+**Path resolution:** `MasterConfigLoader` looks for the master JSON in this order:
+1. `TTNN_MASTER_JSON_PATH` env var (if set and file exists)
+2. `model_tracer/traced_operations/ttnn_operations_master.json` (default)
+
+In CI, each run type sets `TTNN_MASTER_JSON_PATH` to point at its scoped artifact (e.g., `*_lead_models.json` or `*_model_traced.json`). For local development, writing to the default path means the sweep framework picks it up automatically.
 
 **Important:** `reconstruct-manifest` only includes configs for the models listed in each target entry's `model:` field. If a trace contains 20 models but the target lists only `[whisper]`, only whisper's configs are included in the output.
 
