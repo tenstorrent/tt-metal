@@ -64,6 +64,7 @@ peft==0.18.1
 ftfy==6.1.1
 gitpython==3.1.41
 einops==0.6.1
+mpi4py
 # Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
 # transitive dep, which uses dill >=0.3.7, however many packages require
 # dill < 0.3.7
