@@ -86,6 +86,7 @@ def cause_hang_with_app(request):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **app_configuration.get("env", {})},
+        cwd=metal_home,  # C++ runtime requires repo root as CWD to locate its installation
     )
     auto_timeout = app_configuration.get("auto_timeout", False)
     if auto_timeout:
