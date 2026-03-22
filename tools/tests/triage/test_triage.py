@@ -100,10 +100,24 @@ def cause_hang_with_app(request):
 
         # Only error if the process actually exited early with a non-zero code
         if process_exited_early and proc.returncode != 0:
-            # Print process output for debugging
-            print("The application did not hang as expected.")
-            print_process_output(proc)
-            raise RuntimeError("The application did not hang as expected.")
+            stdout_bytes, stderr_bytes = proc.communicate(input=None, timeout=5)
+            stdout_text = stdout_bytes.decode("utf-8") if stdout_bytes else "(empty)"
+            stderr_text = stderr_bytes.decode("utf-8") if stderr_bytes else "(empty)"
+            print("\n=== Process stdout ===")
+            print(stdout_text)
+            print("\n=== Process stderr ===")
+            print(stderr_text)
+            # Ethernet core service timeout during device init — the operation-timeout
+            # handler in TT-Metal tries to read Ethernet core registers while another
+            # process (e.g. MPI) holds the Ethernet cores.  This is a known conflict on
+            # multihost hardware; skip rather than fail with a confusing message.
+            if "Timeout waiting for Ethernet core service" in stderr_text:
+                pytest.skip(
+                    "Hang app crashed during device initialization: Ethernet core service "
+                    "timed out. This occurs when Ethernet cores are occupied by another "
+                    "process (e.g. MPI). Re-run this test in isolation to verify."
+                )
+            raise RuntimeError(f"The application did not hang as expected (exit code {proc.returncode}).")
     else:
         time.sleep(timeout)
 
