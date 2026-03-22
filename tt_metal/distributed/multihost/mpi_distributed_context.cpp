@@ -14,10 +14,11 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 #include <vector>
+#include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
@@ -32,7 +33,7 @@ namespace tt::tt_metal::distributed::multihost {
 
 /* ----------------------------- helpers ---------------------------------- */
 
-constexpr MPI_Op reduce_to_mpi(ReduceOp op) {
+[[nodiscard]] constexpr MPI_Op reduce_to_mpi(ReduceOp op) noexcept {
     switch (op) {
         case ReduceOp::SUM: return MPI_SUM;
         case ReduceOp::MAX: return MPI_MAX;
@@ -46,7 +47,7 @@ constexpr MPI_Op reduce_to_mpi(ReduceOp op) {
     return MPI_SUM;  // default
 }
 
-constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
+[[nodiscard]] constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     switch (dt) {
         case DType::INT8: return MPI_INT8_T;
         case DType::UINT8: return MPI_UINT8_T;
@@ -66,7 +67,7 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
-constexpr int mpi_dtype_size(DType dt) noexcept {
+[[nodiscard]] constexpr int mpi_dtype_size(DType dt) noexcept {
     switch (dt) {
         case DType::INT8:
         case DType::UINT8:
@@ -98,7 +99,7 @@ inline void check_size_fits_int(std::size_t n) {
 
 #if OMPI_HAS_ULFM
 
-inline bool is_ulfm_failure(int rc) noexcept {
+[[nodiscard]] inline bool is_ulfm_failure(int rc) noexcept {
     return rc == MPIX_ERR_PROC_FAILED || rc == MPIX_ERR_PROC_FAILED_PENDING || rc == MPIX_ERR_REVOKED;
 }
 
@@ -132,14 +133,18 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     }
     MPI_Group_free(&failed_group);
 
-    std::string result;
+    fmt::memory_buffer buf;
     for (int i = 0; i < failed_size; ++i) {
         if (i > 0) {
-            result += ", ";
+            fmt::format_to(std::back_inserter(buf), ", ");
         }
-        result += (world_ranks[i] == MPI_UNDEFINED) ? "?" : std::to_string(world_ranks[i]);
+        if (world_ranks[i] == MPI_UNDEFINED) {
+            fmt::format_to(std::back_inserter(buf), "?");
+        } else {
+            fmt::format_to(std::back_inserter(buf), "{}", world_ranks[i]);
+        }
     }
-    return result;
+    return fmt::to_string(buf);
 }
 
 // Handle a detected rank failure according to the active FailurePolicy.
@@ -156,22 +161,25 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
 //   communicator — the old comm is revoked and unusable.
 // Parse a comma-separated list of rank numbers (e.g. "1, 3") into a vector.
 // Returns empty if the string is "unknown", "unknown (no acked failures)", or unparseable.
-static std::vector<Rank> parse_failed_ranks_string(const std::string& s) {
+static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
     std::vector<Rank> result;
-    if (s.empty() || s.find("unknown") != std::string::npos) {
+    if (s.empty() || s.find("unknown") != std::string_view::npos) {
         return result;
     }
-    std::istringstream iss(s);
-    std::string token;
-    while (std::getline(iss, token, ',')) {
+    while (!s.empty()) {
+        // Split on comma
+        auto comma = s.find(',');
+        auto token = s.substr(0, comma);
+        s = (comma == std::string_view::npos) ? std::string_view{} : s.substr(comma + 1);
+
         // Trim whitespace
         auto start = token.find_first_not_of(" \t");
-        if (start == std::string::npos) continue;
+        if (start == std::string_view::npos) continue;
         auto end = token.find_last_not_of(" \t");
         token = token.substr(start, end - start + 1);
         if (token == "?") continue;
         try {
-            result.push_back(Rank{std::stoi(token)});
+            result.push_back(Rank{std::stoi(std::string(token))});
         } catch (...) {
             // skip unparseable tokens
         }
@@ -183,7 +191,7 @@ static void handle_rank_failure(
     MPI_Comm comm,
     int cached_rank,
     int error_code,
-    const char* operation,
+    std::string_view operation,
     FailurePolicy policy,
     std::vector<Rank>* failed_ranks_cache,
     std::mutex* failed_ranks_cache_mutex) {
@@ -205,7 +213,7 @@ static void handle_rank_failure(
     if (failed_ranks_cache) {
         auto parsed = parse_failed_ranks_string(failed);
         if (!parsed.empty()) {
-            std::lock_guard<std::mutex> lock(*failed_ranks_cache_mutex);
+            std::lock_guard lock(*failed_ranks_cache_mutex);
             *failed_ranks_cache = std::move(parsed);
         }
     }
@@ -213,22 +221,22 @@ static void handle_rank_failure(
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
     MPIX_Comm_revoke(comm);
 
-    fprintf(
+    fmt::print(
         stderr,
         "\n"
         "================================================================\n"
-        "%s: MPI rank failure detected\n"
-        "  Detecting rank : %d\n"
-        "  Failed rank(s) : %s\n"
-        "  During         : %s\n"
-        "  MPI error code : %d\n"
+        "{}: MPI rank failure detected\n"
+        "  Detecting rank : {}\n"
+        "  Failed rank(s) : {}\n"
+        "  During         : {}\n"
+        "  MPI error code : {}\n"
         "================================================================\n",
         (policy == FailurePolicy::FAST_FAIL) ? "FATAL" : "WARNING",
         cached_rank,
-        failed.c_str(),
+        failed,
         operation,
         error_code);
-    fflush(stderr);
+    std::fflush(stderr);
 
     if (policy == FailurePolicy::FAULT_TOLERANT) {
         // Caller must catch MPIRankFailureException and call revoke_and_shrink()
@@ -249,11 +257,11 @@ static void handle_rank_failure(
 
 // Generic check: used outside MPIContext member functions (static methods,
 // constructors before comm_ is valid, MPIRequest methods).
-inline void mpi_check(int error_code, const char* call_text) {
+inline void mpi_check(int error_code, std::string_view call_text) {
     if (error_code != MPI_SUCCESS) {
         int rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        throw MPIDistributedException(Rank{rank}, error_code, std::string(call_text) + " failed");
+        throw MPIDistributedException(Rank{rank}, error_code, fmt::format("{} failed", call_text));
     }
 }
 
@@ -261,7 +269,7 @@ inline void mpi_check(int error_code, const char* call_text) {
 // failures and dispatches to handle_rank_failure with the active policy.
 inline void mpi_check_ctx(
     int error_code,
-    const char* call_text,
+    std::string_view call_text,
     [[maybe_unused]] MPI_Comm comm,
     int cached_rank,
     [[maybe_unused]] FailurePolicy policy,
@@ -280,10 +288,10 @@ inline void mpi_check_ctx(
         return;  // unreachable, but silences compiler warnings
     }
 #endif
-    throw MPIDistributedException(Rank{cached_rank}, error_code, std::string(call_text) + " failed");
+    throw MPIDistributedException(Rank{cached_rank}, error_code, fmt::format("{} failed", call_text));
 }
 
-bool was_mpi_finalized() noexcept {
+[[nodiscard]] bool was_mpi_finalized() noexcept {
     int flag = 0;
     /* Safe to call at any time -- even before MPI_Init() */
     MPI_Finalized(&flag);  // sets flag = 1 if MPI_Finalize has completed
@@ -303,7 +311,7 @@ MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std:
     int len = 0;
     MPI_Error_string(error_code_, buf, &len);
     error_string_.assign(buf, len);
-    message_ += ": " + error_string_;
+    message_ = fmt::format("{}: {}", message_, error_string_);
 }
 
 // implement interface
@@ -323,7 +331,7 @@ MPIRankFailureException::MPIRankFailureException(Rank detecting_rank, int error_
     int len = 0;
     MPI_Error_string(error_code_, buf, &len);
     error_string_.assign(buf, len);
-    message_ = "MPI rank failure detected (failed ranks: " + failed_ranks_ + "): " + error_string_;
+    message_ = fmt::format("MPI rank failure detected (failed ranks: {}): {}", failed_ranks_, error_string_);
 }
 
 Rank MPIRankFailureException::rank() const noexcept { return rank_; }
@@ -399,7 +407,7 @@ static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
 
 // SIGALRM handler: MPI_Finalize watchdog fired — another rank is dead/stuck.
 // async-signal-safe: only write() and _exit() are called.
-static void mpi_finalize_alarm_handler(int /*sig*/) {
+static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
     static const char msg[] =
         "[ULFM] MPI_Finalize watchdog: another rank appears dead or stuck. "
         "Exiting 70 to unblock the job.\n";
@@ -418,7 +426,7 @@ static void mpi_finalize_alarm_handler(int /*sig*/) {
 // To switch to fault-tolerant mode: remove this handler and instead set
 // FailurePolicy::FAULT_TOLERANT on your MPIContext, then catch
 // MPIRankFailureException in your collective loops.
-static void mpi_terminate_handler() {
+static void mpi_terminate_handler() noexcept {
 #if OMPI_HAS_ULFM
     // Revoke so that any rank blocked in a collective receives ERR_REVOKED
     // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
@@ -832,7 +840,7 @@ void MPIContext::revoke_and_shrink() {
     // Hold comm_mutex_ to prevent concurrent reads of comm_/group_/rank_/size_
     // from racing with this update (e.g. a send/recv on another thread).
     {
-        std::lock_guard<std::mutex> lock(comm_mutex_);
+        std::lock_guard lock(comm_mutex_);
 
         MPI_Comm old_comm = this->comm_;
         if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
@@ -847,7 +855,7 @@ void MPIContext::revoke_and_shrink() {
 
     revoked_.clear(std::memory_order_release);  // cleared: new communicator is healthy
     {
-        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
+        std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         cached_failed_ranks_.clear();  // new comm has no known failures
     }
 #endif
@@ -915,14 +923,14 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     MPIX_Comm_failure_ack(comm_);  // best-effort; ignore return code
     MPI_Group failed_group = MPI_GROUP_NULL;
     if (MPIX_Comm_failure_get_acked(comm_, &failed_group) != MPI_SUCCESS) {
-        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
+        std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
     int failed_size = 0;
     MPI_Group_size(failed_group, &failed_size);
     if (failed_size == 0) {
         MPI_Group_free(&failed_group);
-        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
+        std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
     MPI_Group world_group = MPI_GROUP_NULL;
