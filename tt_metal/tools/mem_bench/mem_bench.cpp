@@ -247,6 +247,12 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
         0,                                      // Iterations is managed by the benchmark framework
     };
 
+    if (!is_valid_mmio_device(device->id() + 1)) {
+        state.SkipWithMessage("Requires at least 2 MMIO devices");
+        tt::tt_metal::detail::CloseDevices(devices);
+        return results;
+    }
+
     auto src_data = generate_random_src_data(ctx.total_size);
     auto device_hugepage_size = get_hugepage_size(device->id());
 
@@ -343,6 +349,10 @@ TestResult mem_bench_multi_mmio_devices(
 TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& state) {
     // Node 0
     auto device_ids = get_device_ids_for_multi_device_same_node(g_user_device_id);
+    if (device_ids.empty()) {
+        state.SkipWithMessage("No MMIO devices found on NUMA node 0");
+        return {};
+    }
     auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
 
     Context ctx{
