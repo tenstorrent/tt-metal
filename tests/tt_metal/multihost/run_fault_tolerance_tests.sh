@@ -23,9 +23,23 @@ fi
 
 fail=0
 
-"$MPIRUN" --with-ft ulfm -np 8 "$TEST_BIN" --gtest_filter=FaultTolerance.ShrinkAfterRankFailure || fail=$((fail + 1))
-"$MPIRUN" --with-ft ulfm -np 8 "$TEST_BIN" --gtest_filter=FaultTolerance.DisableBrokenBlock || fail=$((fail + 1))
-"$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeConsensus || fail=$((fail + 1))
-"$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.FailurePolicySwitching || fail=$((fail + 1))
+_run_ulfm_test() {
+    # mpirun exits non-zero when ranks are intentionally killed (e.g. ShrinkAfterRankFailure,
+    # DisableBrokenBlock). Use GTest [  FAILED  ] lines to determine pass/fail rather than
+    # relying on mpirun's exit code, which is a false positive for rank-kill tests.
+    local tmpout
+    tmpout=$(mktemp)
+    { "$@" || true; } 2>&1 | tee "$tmpout"
+    if grep -q '\[  FAILED  \]' "$tmpout"; then
+        echo "ERROR: GTest failures detected in: $*" >&2
+        fail=$((fail + 1))
+    fi
+    rm -f "$tmpout"
+}
+
+_run_ulfm_test "$MPIRUN" --with-ft ulfm -np 8 "$TEST_BIN" --gtest_filter=FaultTolerance.ShrinkAfterRankFailure
+_run_ulfm_test "$MPIRUN" --with-ft ulfm -np 8 "$TEST_BIN" --gtest_filter=FaultTolerance.DisableBrokenBlock
+_run_ulfm_test "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeConsensus
+_run_ulfm_test "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.FailurePolicySwitching
 
 exit $fail
