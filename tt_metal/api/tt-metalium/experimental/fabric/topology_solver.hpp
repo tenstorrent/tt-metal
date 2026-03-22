@@ -66,13 +66,6 @@ public:
     const std::vector<NodeId>& get_neighbors(const NodeId& node) const;
 
     /**
-     * @brief Get read-only access to the adjacency map
-     *
-     * @return const AdjacencyMap& Read-only reference to the internal adjacency map
-     */
-    const AdjacencyMap& get_adjacency_map() const;
-
-    /**
      * @brief Print adjacency map for debugging
      *
      * Prints the graph structure showing each node and its neighbors.
@@ -398,16 +391,6 @@ public:
      */
     bool validate(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
 
-    /**
-     * @brief Set quiet mode for constraint validation messages
-     *
-     * When quiet mode is enabled, overconstrained validation messages are logged at debug level
-     * instead of info level to reduce verbosity.
-     *
-     * @param quiet_mode If true, suppress info-level constraint validation messages
-     */
-    void set_quiet_mode(bool quiet_mode) const;
-
 private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
@@ -428,9 +411,6 @@ private:
     // Track which global nodes are exclusively reserved by many-to-many constraints
     // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
     std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
-
-    // Quiet mode flag - mutable so it can be set even on const objects
-    mutable bool quiet_mode_ = false;
 
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
@@ -928,7 +908,6 @@ public:
 
 private:
     SearchState state_;  // Internal state for the search
-    bool quiet_mode_ = false;  // Quiet mode flag to suppress verbose debug messages
     /**
      * @brief Hash state for memoization (FNV-1a hash)
      *
