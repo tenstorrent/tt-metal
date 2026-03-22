@@ -104,11 +104,15 @@ echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexale
 #   - ttexalens installed with its full C extension stack
 # These conditions are not met in every CI environment, so failures here are
 # treated as warnings and do NOT block the tooling suite.
+#
+# NOTE: 'set -eo pipefail' is active.  Use '|| true' so that a non-zero pytest
+# exit does not trigger 'set -e' and kill the script before we can warn.
+triage_exit=0
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
   --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
   --confcutdir="${repo_root}/tools/tests/triage" \
   --junitxml="${repo_root}/generated/test_reports/test_triage.xml" \
-  "${repo_root}/tools/tests/triage/test_triage.py") ; triage_exit=$?
+  "${repo_root}/tools/tests/triage/test_triage.py") || triage_exit=$?
 if [[ $triage_exit -ne 0 ]]; then
   echo "LOG_METAL: WARNING: test_triage.py exited $triage_exit (needs inspector + hang-app binary; non-blocking)"
 fi
