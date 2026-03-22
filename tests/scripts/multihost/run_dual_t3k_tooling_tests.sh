@@ -90,7 +90,7 @@ echo "LOG_METAL: Running mpi_fault.py Python tests"
 #   installed in all environments).
 echo "LOG_METAL: Running triage unit tests (parse_inspector_logs_paths)"
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
-  --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
   --confcutdir="${repo_root}/tools/tests/triage" \
   --junitxml="${repo_root}/generated/test_reports/test_parse_inspector_logs_paths.xml" \
   "${repo_root}/tools/tests/triage/test_parse_inspector_logs_paths.py") ; fail=$((fail + $?))
@@ -108,8 +108,13 @@ echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexale
 # NOTE: 'set -eo pipefail' is active.  Use '|| true' so that a non-zero pytest
 # exit does not trigger 'set -e' and kill the script before we can warn.
 triage_exit=0
+# -p no:github-actions-annotate-failures suppresses the ##[error] GHA
+# annotations that the pytest-github-actions-annotate-failures plugin
+# emits for each failing test — these make the job look broken in the
+# UI even though it passes.  -q --tb=line --no-header reduce verbosity.
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
-  --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  -p no:github-actions-annotate-failures \
+  --override-ini "addopts=--import-mode=importlib -q --tb=line --no-header" \
   --confcutdir="${repo_root}/tools/tests/triage" \
   --junitxml="${repo_root}/generated/test_reports/test_triage.xml" \
   "${repo_root}/tools/tests/triage/test_triage.py") || triage_exit=$?
