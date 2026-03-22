@@ -12,10 +12,67 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
+from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_K,
+    DEFAULT_SAMPLING_TOP_P,
+    USERS_PER_ROW,
+    get_fabric_config,
+)
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+
+
+def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
+    if prompts is not None and index < len(prompts):
+        return prompts[index]
+    if random_weights:
+        return "[random-weights default prompt]"
+    return "[empty prompt]"
+
+
+def _build_output_data(
+    prompts: list[str] | None,
+    generations: list[dict],
+    statistics: dict,
+    model_params: dict,
+    random_weights: bool,
+) -> dict:
+    output_data = {
+        "prompts": prompts if prompts else [],
+        "generations": [],
+        "statistics": statistics,
+        "model_params": model_params,
+    }
+    for i, gen_result in enumerate(generations):
+        output_data["generations"].append(
+            {
+                "index": i + 1,
+                "prompt": _prompt_text_for_index(prompts, random_weights, i),
+                "text": gen_result.get("text"),
+            }
+        )
+    return output_data
+
+
+def _resolve_saved_output_path(prompts_file_path: Path | None, output_path_arg: str | None) -> Path | None:
+    if output_path_arg:
+        return Path(output_path_arg)
+    if prompts_file_path is not None:
+        return prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    return None
+
+
+def _write_json_output(path: Path, payload: dict, label: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        logger.info(f"{label} saved to '{path}'")
+        print(f"\n{label} saved to '{path}'\n")
+    except Exception as e:
+        raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -34,6 +91,45 @@ def _print_performance_metrics(results: dict) -> None:
         trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
         logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+
+
+def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
+    """Summarize sampling arrays for concise reporting."""
+    if not summarize_sampling:
+        return model_params
+
+    sampling = model_params.get("sampling")
+    if not isinstance(sampling, dict):
+        return model_params
+
+    formatted_sampling = {}
+    for key, value in sampling.items():
+        if isinstance(value, (list, tuple)):
+            if value and all(v == value[0] for v in value):
+                formatted_sampling[key] = {"same_value_all_users": value[0], "count": len(value)}
+            else:
+                formatted_sampling[key] = {
+                    "same_value_all_users": False,
+                    "note": "all values are not same",
+                    "first_3_values": list(value[:3]),
+                    "count": len(value),
+                }
+        else:
+            formatted_sampling[key] = value
+
+    return {**model_params, "sampling": formatted_sampling}
+
+
+def _print_model_params(results: dict, summarize_sampling: bool = True) -> None:
+    """Print model parameters from model_params."""
+    if "model_params" in results and results["model_params"]:
+        logger.info("=== Model Parameters ===")
+        model_params = _format_model_params_for_reporting(
+            results["model_params"], summarize_sampling=summarize_sampling
+        )
+        for key in sorted(model_params):
+            logger.info(f"{key}: {model_params[key]}")
+        logger.info("=====================")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -61,12 +157,35 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
     )
     p.add_argument(
+        "--checkpoint-jsonl",
+        type=str,
+        help="Optional JSONL path for appending per-user results during generation.",
+    )
+    p.add_argument(
         "--model-path",
         type=str,
         required=True,
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
+    p.add_argument(
+        "--sampling-temperature",
+        type=float,
+        default=DEFAULT_SAMPLING_TEMPERATURE,
+        help=f"Sampling temperature (default: {DEFAULT_SAMPLING_TEMPERATURE}).",
+    )
+    p.add_argument(
+        "--sampling-top-k",
+        type=int,
+        default=DEFAULT_SAMPLING_TOP_K,
+        help=f"Top-k value for sampling (default: {DEFAULT_SAMPLING_TOP_K}).",
+    )
+    p.add_argument(
+        "--sampling-top-p",
+        type=float,
+        default=DEFAULT_SAMPLING_TOP_P,
+        help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
+    )
     p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -107,16 +226,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
-        "--enable-trace",
-        action="store_true",
-        default=False,
-        help="Enable trace for decode forward pass",
+        "--disable-trace",
+        action="store_false",
+        dest="enable_trace",
+        default=True,
+        help="Disable trace for decode forward pass.",
     )
     p.add_argument(
         "--enable-mem-profile",
         action="store_true",
         default=False,
         help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
+        "--mtp",
+        choices=["on", "off"],
+        default="off",
+        help="Control MTP usage: on (requires MTP weights), off (default).",
     )
     p.add_argument(
         "--repeat-batches",
@@ -141,10 +267,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
     p.add_argument(
-        "--sample-on-device",
-        action="store_true",
-        default=False,
-        help="Enable on-device sampling (default: host-side sampling).",
+        "--sample-on-host",
+        action="store_false",
+        dest="sample_on_device",
+        default=True,
+        help="Disable on-device sampling and use host-side sampling.",
     )
     p.add_argument(
         "--force-recalculate",
@@ -154,6 +281,19 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Force regeneration of cached TTNN weight files and config.",
     )
+    p.add_argument(
+        "--stop-at-eos",
+        dest="stop_at_eos",
+        action="store_true",
+        help="Stop recording output tokens for a user after EOS (default).",
+    )
+    p.add_argument(
+        "--no-stop-at-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        help="Always record max-new-tokens even after EOS.",
+    )
+    p.set_defaults(stop_at_eos=True)
     return p
 
 
@@ -265,20 +405,26 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
-    enable_trace: bool = False,
+    enable_trace: bool = True,
     enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
-    sample_on_device: bool = False,
+    sample_on_device: bool = True,
     force_recalculate: bool = False,
+    stop_at_eos: bool = True,
+    checkpoint_jsonl: str | Path | None = None,
+    enable_mtp: bool = False,
+    sampling_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+    sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
+    sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
     Returns a dict with keys:
-        - tokens: List[int] of generated token IDs
-        - text: Optional[str] decoded text (only when a tokenizer is present)
+        - generations: List[dict] with per-prompt tokens/text
+        - statistics: Performance counters from the generator
     """
     if model_path is None:
         raise SystemExit("Missing model path. Provide --model-path.")
@@ -288,13 +434,25 @@ def run_demo(
         raise SystemExit("Missing cache directory. Provide --cache-dir.")
     cache_dir = Path(cache_dir)
 
+    if sampling_temperature < 0:
+        raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")
+    if not (0.0 < sampling_top_p <= 1.0):
+        raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
+    if sampling_top_k < 0:
+        raise SystemExit(
+            "--sampling-top-k must be >= 0. For top-k=0, use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
+    if sampling_top_k == 0 and sample_on_device:
+        raise SystemExit(
+            "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
+
     # Validate model directory per mode
     validate_model_path(
         str(model_path),
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
@@ -319,6 +477,8 @@ def run_demo(
         # that tracing completes without buffer exhaustion for your target workload.
         BASE_TRACE_REGION_BYTES = 38_070_272
         trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
+        if enable_mtp:
+            trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
@@ -334,6 +494,17 @@ def run_demo(
                 "Failed to load tokenizer from model path. Ensure the directory contains tokenizer files (e.g., tokenizer.model or tokenizer.json)."
             )
             raise
+
+    batch_size_per_row = USERS_PER_ROW
+    batch_size = batch_size_per_row * mesh_device.shape[0]
+
+    # Configure sampling
+    # sampling values of all users are assumed to be the same when initialized with run_demo function.
+    sampling_params = SamplingParams(
+        temperature=[sampling_temperature] * batch_size,
+        top_p=[sampling_top_p] * batch_size,
+        top_k=[sampling_top_k] * batch_size,
+    )
 
     gen = None
     try:
@@ -375,6 +546,8 @@ def run_demo(
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
+                enable_mtp=enable_mtp,
+                sampling_params=sampling_params,
             )
         else:
             raise ValueError(f"Unsupported generator: {generator}")
@@ -399,34 +572,149 @@ def run_demo(
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
 
-        # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
-
-        # Process all generations
-        results = []
-        for i, generation_tokens in enumerate(generations):
-            result = {"tokens": generation_tokens, "text": None}
-            if gen.tokenizer is not None:
-                result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-            if token_acc is not None and i == 0:  # Only compute accuracy for first generation
-                acc = token_acc.compute_accuracy()
-                result.update(
-                    {
-                        "accuracy_top1": acc.get("top1"),
-                        "accuracy_top5": acc.get("top5"),
-                        "predicted_tokens": token_acc._pred_tokens,
-                    }
+        checkpoint_fh = None
+        checkpoint_written: set[int] = set()
+        checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl is not None else None
+        if checkpoint_path is not None:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
+            if not stop_at_eos:
+                logger.info(
+                    "checkpoint-jsonl is enabled without stop-at-eos; records will be written after generation."
                 )
-            results.append(result)
 
-        return {"generations": results, "statistics": statistics}
+        def checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
+            if checkpoint_fh is None or user_idx in checkpoint_written:
+                return
+            text = None
+            if gen.tokenizer is not None:
+                text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+            record = {
+                "index": user_idx + 1,
+                "prompt": prompt_list[user_idx] if user_idx < len(prompt_list) else "",
+                "text": text,
+            }
+            checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            checkpoint_fh.flush()
+            os.fsync(checkpoint_fh.fileno())
+            checkpoint_written.add(user_idx)
+
+        def make_checkpoint_callback(index_offset: int):
+            if checkpoint_fh is None:
+                return None
+
+            def checkpoint_user_with_offset(user_idx: int, token_ids: list[int]) -> None:
+                checkpoint_user(index_offset + user_idx, token_ids)
+
+            return checkpoint_user_with_offset
+
+        try:
+            # Multi-prompt generation
+            use_mtp_path = gen.enable_mtp and token_acc is None and max_new_tokens > 1
+            max_prompts_per_batch = gen.batch_size
+            if use_mtp_path:
+                max_prompts_per_batch = max(1, gen.batch_size // 2)
+
+            if use_mtp_path and len(prompt_list) > max_prompts_per_batch:
+                logger.info(
+                    f"MTP enabled with {len(prompt_list)} prompts; running in batches of up to {max_prompts_per_batch} "
+                    "to reserve lanes for verify batching."
+                )
+                all_generations = []
+                all_stats = []
+                for start in range(0, len(prompt_list), max_prompts_per_batch):
+                    batch_prompts = prompt_list[start : start + max_prompts_per_batch]
+                    batch_pre_tokenized = (
+                        pre_tokenized_prompts[start : start + max_prompts_per_batch]
+                        if pre_tokenized_prompts is not None
+                        else None
+                    )
+                    batch_generations, batch_stats, model_params = gen.generate(
+                        batch_prompts,
+                        max_new_tokens=max_new_tokens,
+                        teacher_forcing=token_acc,
+                        early_print_first_user=early_print_first_user,
+                        repeat_batches=repeat_batches,
+                        pre_tokenized=batch_pre_tokenized,
+                        stop_at_eos=stop_at_eos,
+                        on_user_finished=make_checkpoint_callback(start),
+                    )
+                    all_generations.extend(batch_generations)
+                    all_stats.append(batch_stats)
+
+                generations = all_generations
+                statistics = all_stats[-1] if all_stats else {}
+                if all_stats:
+                    statistics["batch_count"] = len(all_stats)
+                    mtp_accepts = [s.get("mtp_accepts") for s in all_stats if s.get("mtp_accepts") is not None]
+                    mtp_verifies = [s.get("mtp_verifies") for s in all_stats if s.get("mtp_verifies") is not None]
+                    if mtp_accepts and mtp_verifies:
+                        total_accepts = sum(int(x) for x in mtp_accepts)
+                        total_verifies = sum(int(x) for x in mtp_verifies)
+                        statistics["mtp_accepts"] = total_accepts
+                        statistics["mtp_accept_rate"] = total_accepts / total_verifies if total_verifies > 0 else 0.0
+                    else:
+                        mtp_rates = [
+                            s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None
+                        ]
+                        if mtp_rates:
+                            statistics["mtp_accept_rate"] = sum(mtp_rates) / len(mtp_rates)
+                    for key in (
+                        "preparing_prefill_config",
+                        "preparing_decode_config",
+                        "inference_prefill",
+                        "inference_decode",
+                        "decode_forward_passes",
+                        "Full demo runtime",
+                    ):
+                        if any(key in s for s in all_stats):
+                            statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
+            else:
+                generations, statistics, model_params = gen.generate(
+                    prompt_list,
+                    max_new_tokens=max_new_tokens,
+                    teacher_forcing=token_acc,
+                    early_print_first_user=early_print_first_user,
+                    repeat_batches=repeat_batches,
+                    pre_tokenized=pre_tokenized_prompts,
+                    stop_at_eos=stop_at_eos,
+                    on_user_finished=make_checkpoint_callback(0),
+                )
+
+            # Process all generations
+            results = []
+            for i, generation_tokens in enumerate(generations):
+                result = {"tokens": generation_tokens, "text": None}
+                if gen.tokenizer is not None:
+                    result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
+                if token_acc is not None and i == 0:  # Only compute accuracy for first generation
+                    acc = token_acc.compute_accuracy()
+                    result.update(
+                        {
+                            "accuracy_top1": acc.get("top1"),
+                            "accuracy_top5": acc.get("top5"),
+                            "predicted_tokens": token_acc._pred_tokens,
+                        }
+                    )
+                results.append(result)
+
+            if checkpoint_fh is not None:
+                for i, result in enumerate(results):
+                    if i in checkpoint_written:
+                        continue
+                    record = {
+                        "index": i + 1,
+                        "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                        "text": result["text"],
+                    }
+                    checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                checkpoint_fh.flush()
+                os.fsync(checkpoint_fh.fileno())
+
+            return {"generations": results, "statistics": statistics, "model_params": model_params}
+        finally:
+            if checkpoint_fh is not None:
+                checkpoint_fh.close()
     finally:
         # Clean up generator resources
         try:
@@ -482,63 +770,37 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
+        sampling_temperature=args.sampling_temperature,
+        sampling_top_k=args.sampling_top_k,
+        sampling_top_p=args.sampling_top_p,
+        stop_at_eos=bool(args.stop_at_eos),
+        checkpoint_jsonl=args.checkpoint_jsonl,
+        enable_mtp=(args.mtp == "on"),
     )
 
-    # If prompts were loaded from a JSON file, save output to JSON file instead of printing
-    if prompts_file_path:
-        # Use provided output path, or generate default: input_name + "_output.json"
-        if args.output_path:
-            output_path = Path(args.output_path)
-        else:
-            output_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
 
-        # Prepare output data structure
-        output_data = {
-            "prompts": args.prompts if args.prompts else [],
-            "generations": [],
-            "statistics": results.get("statistics", {}),
-        }
-
-        # Add generation results
-        for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
-            output_data["generations"].append(
-                {
-                    "index": i + 1,
-                    "prompt": prompt_text if prompt_text else "[empty prompt]",
-                    "text": gen_result.get("text"),
-                }
-            )
-
-        # Write to JSON file
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Results saved to '{output_path}'")
-            print(f"\nResults saved to '{output_path}'\n")
-        except Exception as e:
-            raise SystemExit(f"Failed to write output file '{output_path}': {e}")
+    # If prompts were loaded from a JSON file, save output to JSON file instead of printing.
+    # Only host rank 0 writes the shared file to avoid rank races corrupting the JSON.
+    if prompts_file_path and saved_output_path is not None:
+        output_data = _build_output_data(
+            prompts=args.prompts,
+            generations=results["generations"],
+            statistics=results.get("statistics", {}),
+            model_params=_format_model_params_for_reporting(
+                results.get("model_params", {}),
+            ),
+            random_weights=bool(args.random_weights),
+        )
+        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+            _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
         print("\n===== Generated =====\n")
 
         for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
             print("-" * 30)
-            if prompt_text:
-                print(f"Prompt[{i+1}]: {prompt_text}")
-            else:
-                print(f"Prompt[{i+1}]: [empty prompt]")
+            print(f"Prompt[{i+1}]: {_prompt_text_for_index(args.prompts, bool(args.random_weights), i)}")
             print(f"Generation[{i+1}]:")
             if gen_result.get("text") is not None:
                 print(gen_result["text"])  # type: ignore
@@ -554,6 +816,9 @@ def main() -> None:
 
     # Print performance metrics if available
     _print_performance_metrics(results)
+
+    # Print model parameters if available
+    _print_model_params(results)
 
 
 if __name__ == "__main__":

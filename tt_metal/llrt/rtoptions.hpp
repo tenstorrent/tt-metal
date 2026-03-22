@@ -15,20 +15,26 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "llrt/hal.hpp"
+#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
+// Forward declarations — full definitions not needed in this header
+namespace tt::tt_metal {
+class Hal;
+enum class KernelBuildOptLevel : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -278,6 +284,9 @@ class RunTimeOptions {
 
     // Path to channel trimming global override YAML
     std::string fabric_trimming_override_path;
+
+    // Enable fabric VC2 (neighbour exchange, single-hop)
+    bool enable_fabric_vc2 = false;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -673,6 +682,10 @@ public:
     const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
     void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
 
+    // Fabric VC2 enable
+    bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
+    void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
@@ -734,11 +747,7 @@ public:
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
-    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
-        }
-    }
+    void ParseAllFeatureEnv(const tt_metal::Hal& hal);
 
     // Resolve FabricNodeIds to physical chip IDs using the control plane.
     // This must be called after the control plane is initialized, since during

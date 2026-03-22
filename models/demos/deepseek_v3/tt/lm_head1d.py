@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
     even_int_div,
     get_dequantized_tensor,
@@ -75,7 +75,7 @@ class LMHead1D(AbstractModule):
                     weight_tensor,
                     shard_dims=(None, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -90,7 +90,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -110,7 +110,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -130,11 +130,53 @@ class LMHead1D(AbstractModule):
             "ccl": ccl,
         }
 
+    @staticmethod
+    def _fwd_linear(x: ttnn.Tensor, cfg: dict) -> ttnn.Tensor:
+        """Pure compute for the lm_head linear projection (no deallocation)."""
+        return ttnn.linear(x, **cfg["linear"])
+
+    @staticmethod
+    def _fwd_prefill(x: ttnn.Tensor, cfg: dict, deallocate_inputs: bool = True) -> ttnn.Tensor:
+        """Prefill compute: chunk, linear, de-chunk.
+
+        Args:
+            deallocate_inputs: When True (production), eagerly frees input
+                tensors to avoid holding the original and padded/chunked
+                copies simultaneously.  Set to False in perf-measurement
+                loops that reuse the input across iterations.
+        """
+        _, _, seq_len, _ = x.shape
+        original_seq_len = seq_len
+
+        pad_rows = 0
+        if seq_len > SEQ_LEN_CHUNK_SIZE:
+            if seq_len % SEQ_LEN_CHUNK_SIZE != 0:
+                pad_rows = SEQ_LEN_CHUNK_SIZE - (seq_len % SEQ_LEN_CHUNK_SIZE)
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                if deallocate_inputs:
+                    ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
+            x = ttnn.reshape(x, [1, even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE), SEQ_LEN_CHUNK_SIZE, -1])
+
+        output = ttnn.linear(x, **cfg["linear"])
+
+        if deallocate_inputs:
+            ttnn.deallocate(x)
+
+        _, num_chunks, _, output_dim = output.shape
+        if num_chunks > 1:
+            output = ttnn.reshape(output, [1, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [1, 1, original_seq_len, output_dim])
+
+        return output
+
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        output = ttnn.linear(x, **cfg["linear"])
+        output = cls._fwd_linear(x, cfg)
 
         ttnn.deallocate(x)
 
@@ -146,29 +188,7 @@ class LMHead1D(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        _, _, seq_len, _ = x.shape
-        original_seq_len = seq_len
-
-        pad_rows = 0
-        if seq_len > SEQ_LEN_CHUNK_SIZE:  # For large sequence lengths, process the input in chunks
-            if seq_len % SEQ_LEN_CHUNK_SIZE != 0:
-                pad_rows = SEQ_LEN_CHUNK_SIZE - (seq_len % SEQ_LEN_CHUNK_SIZE)
-                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
-                ttnn.deallocate(x)
-                x = x_padded
-                seq_len += pad_rows
-            x = ttnn.reshape(x, [1, even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE), SEQ_LEN_CHUNK_SIZE, -1])
-
-        output = ttnn.linear(x, **cfg["linear"])
-
-        ttnn.deallocate(x)
-
-        # De-chunk the output if the input was chunked
-        _, num_chunks, _, output_dim = output.shape
-        if num_chunks > 1:
-            output = ttnn.reshape(output, [1, 1, -1, output_dim])
-            if pad_rows > 0:
-                output = ttnn.slice(output, [0, 0, 0, 0], [1, 1, original_seq_len, output_dim])
+        output = cls._fwd_prefill(x, cfg)
 
         assert output.memory_config() == cfg["output_memory_config"]
 

@@ -591,14 +591,20 @@ def test_ds_embedding_single_device(
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
+    # Match embedding output memory config from model config
+    if mode == "decode":
+        embedding_memory_config = ttnn.L1_MEMORY_CONFIG
+    else:
+        embedding_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     # Pad input if necessary
     if input_seq_len % ttnn.TILE_SIZE == 0:
         tt_output = ttnn.embedding(
-            tt_input_ids, tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+            tt_input_ids, tt_weight, memory_config=embedding_memory_config, layout=ttnn.TILE_LAYOUT
         )
     else:
         x_padded = ttnn.pad(tt_input_ids, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - input_seq_len % ttnn.TILE_SIZE)], 0)
-        tt_output = ttnn.embedding(x_padded, tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.embedding(x_padded, tt_weight, memory_config=embedding_memory_config, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(x_padded)
 
     # Convert output to torch
