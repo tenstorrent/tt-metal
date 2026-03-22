@@ -286,11 +286,9 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
+        // VC2 requires: RT option enabled + VC1 active + Blackhole + no UDM/mux
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         config.requires_vc2 = rtoptions.get_enable_fabric_vc2() && is_blackhole && !is_udm_mode && !is_mux_extension;
-        TT_FATAL(
-            !rtoptions.get_enable_fabric_vc2(),
-            "TT_METAL_ENABLE_FABRIC_VC2 is not yet supported — VC2 feature is under development");
     }
 
     return config;

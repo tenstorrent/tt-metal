@@ -38,6 +38,14 @@ using WorkerToFabricEdmSenderImpl =
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
+// VC2 worker adapter: same template as VC0/VC1 but uses stream ID 30
+// (VC2 sender free-slots increment-on-write register, established in Phase 1/4)
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+using WorkerToFabricEdmSenderVC2Impl =
+    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS, 30>;
+
+using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
+
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
     void update_credits_and_slots(WorkerToFabricEdmSender*);
