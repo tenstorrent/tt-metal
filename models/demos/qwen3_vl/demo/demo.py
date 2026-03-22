@@ -470,8 +470,14 @@ def test_demo(
             pad_embedding=pad_embedding_tt,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
-        # Get user-specific rotary position embeddings
-        cos, sin, rope_deltas = multimodal_rope_from_hf(inputs, reference_model, model_args, pad_token_id=pad_token_id)
+        # Align RoPE length with the stacked prefill tensor (power-of-2 padding from preprocess), not a second estimate from ids alone.
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
+            inputs,
+            reference_model,
+            model_args,
+            pad_token_id=pad_token_id,
+            rope_padded_seq_len=int(input_prefill_pt.shape[1]),
+        )
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -505,8 +511,11 @@ def test_demo(
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
-        # Initial positions continuing from prefill, no need to offset by rope_deltas
-        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        # Decode `current_pos` is the KV write index (see paged_update_cache). Prefill filled slots
+        # 0 .. prefill_lens[b]-1; the first generated token must be written at prefill_lens[b], not at
+        # decoding_pos (real prompt length). Using the latter misaligns RoPE vs HF (past_len + rope_delta)
+        # and corrupts generation whenever prefill_seq_len > actual_prompt_len (power-of-2 padding).
+        current_pos = torch.tensor([prefill_lens[b] for b in range(batch_size)], dtype=torch.int64)
 
         # Start decoding
         iteration = 0

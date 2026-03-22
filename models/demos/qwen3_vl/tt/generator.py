@@ -67,14 +67,21 @@ class Generator(WarmupForwardMixin):
 
         prefill_seq_len = batch_seq_len
         max_batch = getattr(self.model_args, "max_batched_prefill_size", 32)
+        # Batched prefill + vision deepstack is not supported: deepstack is stacked and flattened with
+        # embeddings in a way that mismatches multimodal rope / per-user prompt lengths and yields
+        # nonsense logits. Use the per-user path (same as batch_size==1) whenever deepstack exists.
+        has_vision_deepstack = deepstack_visual_embeds is not None
         use_batched_prefill = (
             batch > 1
+            and not has_vision_deepstack
             and prefill_seq_len * min(batch, max_batch) < MAX_BATCHED_PREFILL_SEQ_LEN
             and self._ttt_generator.data_parallel == 1
             and not getattr(self.model_args, "disable_batched_prefill", False)
             and page_table is not None
             and kv_cache is not None
         )
+        if batch > 1 and has_vision_deepstack:
+            logger.info("Prefill: per-user mode (batched text prefill off when vision deepstack is used).")
 
         if use_batched_prefill:
             chunk_size = min(batch, max_batch)
@@ -161,7 +168,10 @@ class Generator(WarmupForwardMixin):
             deepstack_batched = []
             for layer_idx in range(num_layers):
                 layer_tensors = [deepstack_visual_embeds[user_idx][layer_idx] for user_idx in range(batch_size)]
-                deepstack_batched.append(torch.stack(layer_tensors))
+                if isinstance(layer_tensors[0], torch.Tensor):
+                    deepstack_batched.append(torch.stack(layer_tensors))
+                else:
+                    deepstack_batched.append(ttnn.stack(layer_tensors, dim=0))
 
         prefill_input, rot_mats_prefill, page_table_tt, _, deepstack_prefill = self.model.prepare_inputs_prefill(
             tokens,

@@ -30,6 +30,11 @@ def merge_vision_tokens(
         raise ValueError(
             f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
         )
+    if input_embeds.shape[-1] != image_embeds.shape[-1]:
+        raise ValueError(
+            f"Vision hidden dim {image_embeds.shape[-1]} != text embedding dim {input_embeds.shape[-1]} "
+            "(mesh compose / shard layout likely wrong for image_embeds)."
+        )
 
     mask = input_ids == hf_config.image_token_id
     mask_unsqueezed = mask.unsqueeze(-1)
@@ -60,25 +65,72 @@ def merge_vision_tokens_ttnn(
     image_embeds are ttnn embedded vision tokens
     """
 
-    B, S, H = input_embeds.shape
-    input_ids = input_ids.view(-1)
-    mask_indices = torch.where(input_ids == hf_config.image_token_id)[0]
-    if len(mask_indices) == 0:
+    mesh = model_args.mesh_device
+    cs = model_args.cluster_shape
+    if (input_ids == hf_config.image_token_id).sum().item() == 0:
         input_embeds_out = ttnn.zeros_like(input_embeds)
         return ttnn.copy(input_embeds, input_embeds_out), deepstack_visual_embeds
-    mask_indices = mask_indices.view(image_embeds.shape[0], 1).expand(image_embeds.shape[0], image_embeds.shape[1])
-    mask_indices_tt = ttnn.from_torch(
-        mask_indices, device=model_args.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+
+    text_torch = ttnn.to_torch(
+        input_embeds,
+        dtype=torch.bfloat16,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1),
     )
-    input_embeds = ttnn.reshape(input_embeds, (-1, H))
-    zeros = ttnn.zeros_like(input_embeds)
-    input_embeds = ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)
-    input_embeds = ttnn.reshape(input_embeds, (B, S, H))
+    if isinstance(image_embeds, torch.Tensor):
+        img_torch = image_embeds.to(device=text_torch.device, dtype=torch.bfloat16)
+    else:
+        n_rows = int(image_embeds.shape[0])
+        img_torch = ttnn.to_torch(
+            image_embeds,
+            dtype=torch.bfloat16,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),
+        )
+        img_torch = img_torch[:n_rows, :]
+
+    ds_torch = None
     if deepstack_visual_embeds is not None:
-        for i in range(len(deepstack_visual_embeds)):
-            deepstack_visual_embeds[i] = ttnn.scatter(zeros, 0, mask_indices_tt, deepstack_visual_embeds[i])
-            deepstack_visual_embeds[i] = ttnn.reshape(deepstack_visual_embeds[i], (B, S, H))
-    return input_embeds, deepstack_visual_embeds
+        ds_torch = []
+        for ds in deepstack_visual_embeds:
+            if isinstance(ds, torch.Tensor):
+                ds_torch.append(ds.to(device=text_torch.device, dtype=torch.bfloat16))
+            else:
+                t = ttnn.to_torch(
+                    ds,
+                    dtype=torch.bfloat16,
+                    mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),
+                )
+                ds_torch.append(t[: int(ds.shape[0]), :])
+
+    text_torch, ds_torch = merge_vision_tokens(
+        input_ids,
+        text_torch,
+        img_torch,
+        hf_config,
+        deepstack_visual_embeds=ds_torch,
+    )
+
+    mapper = ttnn.ShardTensor2dMesh(mesh, dims=(None, 2), mesh_shape=cs)
+    input_out = ttnn.from_torch(
+        text_torch,
+        device=mesh,
+        dtype=input_embeds.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mapper,
+    )
+    if ds_torch is not None:
+        deepstack_out = [
+            ttnn.from_torch(
+                d,
+                device=mesh,
+                dtype=input_embeds.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            for d in ds_torch
+        ]
+    else:
+        deepstack_out = None
+    return input_out, deepstack_out
 
 
 def preprocess_inputs_prefill(
@@ -127,7 +179,8 @@ def preprocess_inputs_prefill(
         deepstack_visual_embeds_i = (
             [
                 torch.nn.functional.pad(
-                    deepstack_visual_embeds[j][i], (0, 0, 0, prefill_seq_len - deepstack_visual_embeds[j][i].shape[0])
+                    deepstack_visual_embeds[j][i][:actual_prompt_len, :],
+                    (0, 0, 0, prefill_seq_len - actual_prompt_len),
                 )
                 for j in range(len(deepstack_visual_embeds))
             ]
@@ -170,15 +223,16 @@ def preprocess_inputs_prefill_ttnn(
     if max_prefill_len is None:
         max_prefill_len = model_args.max_seq_len
 
+    batch_size = int(input_embeds.shape[0])
     # Print the length of encoded prompts (sequence length dimension)
-    logger.info("Encoded prompt lengths:" + ", ".join(str(prompt.shape[0]) for prompt in input_embeds))
+    logger.info("Encoded prompt lengths:" + ", ".join(str(int(input_embeds[i].shape[0])) for i in range(batch_size)))
 
-    max_prompt_len = max(prompt.shape[0] for prompt in input_embeds)
+    max_prompt_len = max(int(input_embeds[i].shape[0]) for i in range(batch_size))
     assert (
         max_prompt_len <= max_prefill_len
     ), f"Max prompt length {max_prompt_len} exceeds max prefill len {max_prefill_len} and clipping and retokenizing is not supported for Qwen2.5 VL"
 
-    logger.info(f"# of users: {input_embeds.shape[0]}")
+    logger.info(f"# of users: {batch_size}")
     input_prefill = []
     decoding_pos = []
     prefill_lens = []
@@ -186,7 +240,8 @@ def preprocess_inputs_prefill_ttnn(
 
     # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
-    for i, input_embed in enumerate(input_embeds):
+    for i in range(batch_size):
+        input_embed = input_embeds[i]
         # Determine the actual length of the prompt using the attention_mask
         # Assumes attention_mask[i] corresponds to input_embeds[i]
         # and has 1 for actual tokens, 0 for padding.
@@ -200,11 +255,13 @@ def preprocess_inputs_prefill_ttnn(
         input_padding = ttnn.expand(pad_embedding, (prefill_seq_len - actual_prompt_len, -1))
         input_prefill_i = ttnn.concat([input_embed[:actual_prompt_len, :], input_padding], dim=0)
         input_prefill.append(input_prefill_i)
+        # Match text path: trim batch-padded sequence to this user's real length before prefill padding.
+        # Otherwise deepstack still carries S_max rows (junk after actual_prompt_len) while embeddings do not.
         deepstack_visual_embeds_i = (
             [
                 ttnn.pad(
-                    deepstack_visual_embeds[j][i],
-                    [(0, prefill_seq_len - deepstack_visual_embeds[j][i].shape[0]), (0, 0)],
+                    deepstack_visual_embeds[j][i][:actual_prompt_len, :],
+                    [(0, prefill_seq_len - actual_prompt_len), (0, 0)],
                     0,
                 )
                 for j in range(len(deepstack_visual_embeds))
@@ -245,22 +302,39 @@ def multimodal_rope_from_hf(
     reference_model,
     model_args,
     pad_token_id,
+    rope_padded_seq_len: int | None = None,
 ):
     """
     Unlike the reference model, we will precompute cos and sin for the entire sequence length including the generated tokens
+
+    rope_padded_seq_len: If set (e.g. ``input_prefill_pt.shape[1]`` after ``preprocess_inputs_prefill_ttnn``), pad HF
+    inputs and build RoPE to exactly that length so cos/sin match the tensor passed to prefill. When omitted, length
+    is derived only from ``input_ids`` (can drift from preprocess if embedding vs token row lengths differ).
     """
 
-    max_seq_len = min(model_args.max_seq_len, max(2 ** math.ceil(math.log(inputs.input_ids.shape[-1], 2)), 128))
+    base_len = inputs.input_ids.shape[-1]
+    if rope_padded_seq_len is not None:
+        if rope_padded_seq_len < base_len:
+            raise ValueError(f"rope_padded_seq_len ({rope_padded_seq_len}) must be >= input_ids length ({base_len})")
+        max_seq_len = min(model_args.max_seq_len, rope_padded_seq_len)
+    else:
+        max_seq_len = min(model_args.max_seq_len, max(2 ** math.ceil(math.log(base_len, 2)), 128))
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
-    )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
-
-    # Create a mask that is all 1s for the full max_seq_len, ensuring RoPE calculations cover all positions.
-    # The original inputs.attention_mask might have 0s for padding within its original length,
-    # which we want to ignore for the purpose of RoPE precomputation up to max_seq_len.
-    padded_attention_mask = torch.ones_like(
-        padded_inputs, dtype=inputs.attention_mask.dtype, device=inputs.attention_mask.device
     )
+    pad_w = max_seq_len - inputs.input_ids.shape[-1]
+    if inputs.attention_mask is None:
+        padded_attention_mask = torch.nn.functional.pad(
+            torch.ones_like(inputs.input_ids, dtype=torch.long, device=inputs.input_ids.device),
+            (0, pad_w),
+            value=0,
+        )
+    else:
+        padded_attention_mask = torch.nn.functional.pad(
+            inputs.attention_mask,
+            (0, pad_w),
+            value=0,
+        )
 
     # Qwen3VLForConditionalGeneration.forward:
     position_ids, rope_deltas = reference_model.model.get_rope_index(

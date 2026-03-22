@@ -271,7 +271,8 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             self.model_args,
         )
         ttnn.deallocate(text_embeds_tt)
-        ttnn.deallocate(image_embeds)
+        if not isinstance(image_embeds, torch.Tensor):
+            ttnn.deallocate(image_embeds)
         pad_embedding_tt = get_pad_embedding(self.reference_model, pad_token_id, self.model_args)
         (
             input_prefill_pt,
@@ -288,7 +289,11 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         ttnn.deallocate(pad_embedding_tt)
         # Get user-specific rotary position embeddings
         cos, sin, rope_deltas = multimodal_rope_from_hf(
-            inputs, self.reference_model, self.model_args, pad_token_id=pad_token_id
+            inputs,
+            self.reference_model,
+            self.model_args,
+            pad_token_id=pad_token_id,
+            rope_padded_seq_len=int(input_prefill_pt.shape[1]),
         )
         rot_mats = (cos, sin)
 

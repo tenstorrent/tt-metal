@@ -21,8 +21,11 @@ class ModelOptimizations:
 
 
 class VisionModelArgs(ModelArgs):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, vision_prefill_chunk_size=1, **kwargs):
         super().__init__(*args, **kwargs)
+        # Cap how many images share one TT vision prefill (batched attention). Lower uses less DRAM;
+        # 1 matches the old per-image loop. None = no chunking (all images in one forward).
+        self.vision_prefill_chunk_size = vision_prefill_chunk_size
 
         # Core dimensions from HF config
         self.dim = self.hf_config.vision_config.hidden_size
