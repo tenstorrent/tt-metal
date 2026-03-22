@@ -25,7 +25,7 @@ CREATE TABLE ttnn_ops_v5.ttnn_operation (
     operation_name      TEXT NOT NULL UNIQUE,
     base_operation_name TEXT GENERATED ALWAYS AS (
         REGEXP_REPLACE(operation_name,
-            '^(ttnn::|experimental::|ttnn::experimental::|ttnn::transformer::)', '')
+            '^(ttnn::experimental::|ttnn::transformer::|experimental::|ttnn::)', '')
     ) STORED,
     create_ts           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
