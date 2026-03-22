@@ -27,4 +27,5 @@ scontrol show hostnames | python ${PP_ROOT}/make_rankfile.py -n ${RANKS_PER_HOST
 # run fabric verification
 tt-run --verbose \
     --mpi-args "--oversubscribe --map-by rankfile:file=${RANKFILE}" \
+    --rank-binding ${PP_ROOT}/configurations/2galaxy_verification/rank_bindings.yaml \
     python ${PP_ROOT}/ttnn_fabric_verification.py

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rank Binding for 2-Galaxy Fabric Verification
+#
+# Two MPI ranks, one per Galaxy host.
+# Each rank opens a 1x8 mesh (one Galaxy row).
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+
+mesh_graph_desc_path: "configurations/2galaxy_verification/mgd.textproto"
