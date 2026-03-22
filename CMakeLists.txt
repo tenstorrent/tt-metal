@@ -170,6 +170,7 @@ add_compile_options(
     -fvisibility-inlines-hidden
     -Wall
     -Werror
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-error=macro-redefined>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations

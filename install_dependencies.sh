@@ -32,7 +32,7 @@ detect_os() {
     fi
 
     # Detect package manager
-    for mgr in apt dnf yum; do
+    for mgr in apt dnf yum emerge; do
         if command -v "$mgr" >/dev/null 2>&1; then
             PKG_MANAGER="$mgr"
             break
@@ -56,6 +56,9 @@ get_package_family() {
         fedora|centos|rhel|rocky|almalinux)
             PKG_FAMILY="redhat"
             ;;
+	gentoo)
+            PKG_FAMILY="gentoo"
+	    ;;
         *)
             # For distributions that are similar to supported ones
             if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
@@ -85,6 +88,9 @@ is_supported_os() {
         fedora|centos|rhel|rocky|almalinux)
             return 0
             ;;
+        gentoo)
+            return 0
+            ;;
         *)
             if [[ "$OS_ID_LIKE" == *"debian"* ]] || [[ "$OS_ID_LIKE" == *"ubuntu"* ]]; then
                 return 0
@@ -109,6 +115,9 @@ update_package_cache() {
         yum)
             yum makecache
             ;;
+        emerge)
+            emerge --sync
+            ;;
     esac
 }
 
@@ -124,6 +133,9 @@ install_packages() {
         yum)
             yum install -y "${PACKAGES[@]}"
             ;;
+        emerge)
+            emerge "${PACKAGES[@]}"
+            ;;
     esac
 }
 
@@ -136,6 +148,10 @@ validate_packages() {
             ;;
         dnf|yum)
             rpm -q --qf '  %{NAME} %{VERSION}-%{RELEASE}\n' "${PACKAGES[@]}"
+            echo "[INFO] Validation successful!"
+            ;;
+        emerge)
+            qlist -I "${PACKAGES[@]}"
             echo "[INFO] Validation successful!"
             ;;
     esac
@@ -152,6 +168,9 @@ cleanup_package_cache() {
             ;;
         yum)
             yum clean all
+            ;;
+        emerge)
+            eclean-dist -d
             ;;
     esac
 }
@@ -246,6 +265,31 @@ init_packages() {
                 PACKAGES+=("openmpi" "openmpi-devel")
             fi
             ;;
+        gentoo)
+            PACKAGES=(
+                "dev-vcs/git"
+                "sys-devel/gcc"
+                "sys-devel/make"
+                "llvm-core/clang"
+                "dev-build/cmake"
+                "dev-build/ninja"
+                "dev-libs/openssl"
+                "app-arch/xz-utils"
+                "dev-lang/python"
+                "dev-python/uv"
+                "sys-process/numactl"
+                "sys-apps/hwloc"
+                "dev-cpp/tbb"
+                "=dev-libs/capstone-5*"
+                "net-misc/wget"
+                "net-misc/curl"
+                "dev-util/xxd"
+                "dev-tcltk/expect"
+            )
+            if [ "$distributed" -eq 1 ]; then
+                PACKAGES+=("sys-cluster/openmpi")
+            fi
+            ;;
     esac
 }
 
@@ -258,6 +302,9 @@ prep_system() {
             ;;
         redhat)
             prep_redhat_system
+            ;;
+        gentoo)
+            prep_gentoo_system
             ;;
         *)
             echo "[WARNING] No specific system preparation for $OS_ID"
@@ -305,6 +352,17 @@ prep_ubuntu_system() {
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
     # TODO: Implement Red Hat family system preparation
+}
+
+prep_gentoo_system() {
+    echo "[INFO] Preparing Gentoo system..."
+    # Update package repository
+    echo "[INFO] Syncing Portage tree..."
+    emerge --sync
+    
+    # Update system packages
+    echo "[INFO] Updating system packages..."
+    emerge -uDN @world
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
