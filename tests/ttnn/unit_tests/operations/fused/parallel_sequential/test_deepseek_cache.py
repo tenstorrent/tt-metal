@@ -117,9 +117,9 @@ class TestDeepSeekV3Cache:
                 program_config=kv_pc,
             )
 
-            # Build + launch
-            fused = Parallel(q_branch, kv_branch).build()
-            fused.launch()
+            par = Parallel(q_branch, kv_branch)
+            par.run()
+            fo = par._run_fused
 
             # Check cache behavior
             if i == 0:
@@ -127,15 +127,15 @@ class TestDeepSeekV3Cache:
                 assert (
                     len(_BUILD_CACHE) == cache_size_before_build + 1
                 ), f"Iteration 0 should add one cache entry, got {len(_BUILD_CACHE)} (expected {cache_size_before_build + 1})"
-                prev_desc_id = id(fused.descriptor)
+                prev_desc_id = id(fo.descriptor)
             else:
                 # Subsequent iterations: cache hit → no new entries, same descriptor object
                 assert (
                     len(_BUILD_CACHE) == cache_size_before_build + 1
                 ), f"Iteration {i} should hit cache (still {cache_size_before_build + 1} entries), got {len(_BUILD_CACHE)}"
-                assert id(fused.descriptor) == prev_desc_id, (
+                assert id(fo.descriptor) == prev_desc_id, (
                     f"[iter {i}] Cache hit must reuse the cached ProgramDescriptor "
-                    f"(id={id(fused.descriptor)}), not allocate a fresh copy (prev={prev_desc_id})"
+                    f"(id={id(fo.descriptor)}), not allocate a fresh copy (prev={prev_desc_id})"
                 )
 
             # Verify Q norm PCC

@@ -202,11 +202,11 @@ class TestFusedOpRebind:
         ttnn.synchronize_device(device)
 
         clear_build_cache()
-        fused_fresh = Parallel(q_b, kv_b).build()
-        fused_fresh.launch()
+        fused_fresh = Parallel(q_b, kv_b)
+        outs_fused_fresh = fused_fresh.run()
         ttnn.synchronize_device(device)
 
-        for t_new, t_ref in zip(fused_once.output_tensors, fused_fresh.output_tensors):
+        for t_new, t_ref in zip(fused_once.output_tensors, outs_fused_fresh):
             ok, pcc = comp_pcc(ttnn.to_torch(t_new), ttnn.to_torch(t_ref))
             assert ok and pcc >= 0.999, f"rebind vs fresh build PCC {pcc}"
 
@@ -236,13 +236,13 @@ class TestCacheOrderTolerance:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        fused1 = Parallel(q1, kv1).build()
-        fused1.launch()
+        fused1 = Parallel(q1, kv1)
+        outs_fused1 = fused1.run()
         assert len(_BUILD_CACHE) == 1
 
         q2, kv2, _ = _make_branches(device, seed=200)
-        fused2 = Parallel(kv2, q2).build()
-        fused2.launch()
+        fused2 = Parallel(kv2, q2)
+        outs_fused2 = fused2.run()
         assert len(_BUILD_CACHE) == 2, (
             "Reversed branch order must not share the same fusion cache entry "
             f"(output tensor order differs); got {len(_BUILD_CACHE)}"
@@ -260,12 +260,12 @@ class TestCacheHitCorrectness:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        fused1 = Parallel(q1, kv1).build()
-        fused1.launch()
+        fused1 = Parallel(q1, kv1)
+        outs_fused1 = fused1.run()
 
         q2, kv2, _ = _make_branches(device, seed=200)
-        fused2 = Parallel(q2, kv2).build()
-        fused2.launch()
+        fused2 = Parallel(q2, kv2)
+        outs_fused2 = fused2.run()
 
         # Cache hit reuses the same descriptor (no deep copy).
         # patched_generic_op patches only tensor address slots on program cache hit.
@@ -276,16 +276,17 @@ class TestCacheHitCorrectness:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        fused1 = Parallel(q1, kv1).build()
-        fused1.launch()
+        p1 = Parallel(q1, kv1)
+        p1.run()
+        fo1 = p1._run_fused
 
         q2, kv2, _ = _make_branches(device, seed=200)
-        fused2 = Parallel(q2, kv2).build()
+        fo2 = Parallel(q2, kv2).build()
 
         # Cache hit reuses the same ProgramDescriptor but a fresh FusedOp wrapper.
         assert len(_BUILD_CACHE) == 1
-        assert id(fused1.descriptor) == id(fused2.descriptor), "descriptor should be same cached object"
-        assert id(fused1) != id(fused2), "FusedOp wrapper should be fresh each hit"
+        assert id(fo1.descriptor) == id(fo2.descriptor), "descriptor should be same cached object"
+        assert id(fo1) != id(fo2), "FusedOp wrapper should be fresh each hit"
 
     def test_pcc_across_seeds(self, device):
         """10 iterations with different seeds, PCC >= 0.98 on every hit."""
@@ -356,8 +357,8 @@ class TestCacheHitCorrectness:
                 program_config=kv_pc,
             )
 
-            fused = Parallel(q_b, kv_b).build()
-            fused.launch()
+            fused = Parallel(q_b, kv_b)
+            outs_fused = fused.run()
 
             if i == 0:
                 assert len(_BUILD_CACHE) == 1
@@ -386,7 +387,7 @@ class TestCacheEntryStructure:
         clear_build_cache()
 
         q, kv, _ = _make_branches(device, seed=42)
-        Parallel(q, kv).build().launch()
+        Parallel(q, kv).run()
 
         assert len(_BUILD_CACHE) == 1
         entry = next(iter(_BUILD_CACHE.values()))
@@ -403,7 +404,7 @@ class TestCacheEntryStructure:
         clear_build_cache()
 
         q, kv, _ = _make_branches(device, seed=42)
-        Parallel(q, kv).build().launch()
+        Parallel(q, kv).run()
 
         entry = next(iter(_BUILD_CACHE.values()))
         assert not isinstance(entry.cached_descriptor, ttnn.Tensor)
@@ -443,7 +444,7 @@ class TestDeferredFactorySkippedOnFusionCacheHit:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=10)
-        Parallel(q1, kv1).build().launch()
+        Parallel(q1, kv1).run()
         assert len(_BUILD_CACHE) == 1
 
         q2, kv2, _ = _make_branches(device, seed=20)
@@ -472,15 +473,14 @@ class TestCacheLifecycle:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        Parallel(q1, kv1).build().launch()
+        Parallel(q1, kv1).run()
         assert len(_BUILD_CACHE) == 1
 
         clear_build_cache()
         assert len(_BUILD_CACHE) == 0
 
         q2, kv2, _ = _make_branches(device, seed=200)
-        fused = Parallel(q2, kv2).build()
-        fused.launch()
+        Parallel(q2, kv2).run()
         assert len(_BUILD_CACHE) == 1, "Should have re-added a cache entry after clear"
 
     def test_single_op_cached(self, device):
@@ -506,24 +506,26 @@ class TestChangedIoIndices:
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
-        fused = Parallel(q1, kv1).build()
-        fused.launch()
+        p1 = Parallel(q1, kv1)
+        p1.run()
         ttnn.synchronize_device(device)
+        fo1 = p1._run_fused
 
         # First launch: all indices reported as changed (no previous snapshot).
-        first_changed = set(fused._changed_io_indices)
-        n_io = len(fused.input_tensors) + len(fused.output_tensors)
+        first_changed = set(fo1._changed_io_indices)
+        n_io = len(fo1.input_tensors) + len(fo1.output_tensors)
         assert first_changed == set(
             range(n_io)
         ), f"First launch should report all {n_io} indices as changed, got {first_changed}"
 
         # Second launch with new activations but same weights.
         q2, kv2, _ = _make_branches(device, seed=200)
-        fused2 = Parallel(q2, kv2).build()
-        fused2.launch()
+        p2 = Parallel(q2, kv2)
+        p2.run()
         ttnn.synchronize_device(device)
+        fo2 = p2._run_fused
 
-        second_changed = set(fused2._changed_io_indices)
+        second_changed = set(fo2._changed_io_indices)
         # Activations changed (new tensors), weights are same objects → same address.
         # Output tensors are freshly allocated → different addresses.
         # So changed_io_indices should include activation + output slots but not weights.
@@ -585,7 +587,7 @@ class TestLaunchInPlaceBranchIo:
 
 class TestBuildLaunch:
     def test_build_launch_same_as_build_then_launch(self, device):
-        """``Parallel.build_launch()`` equals ``build().launch()`` for same container."""
+        """``Parallel.build_launch()`` matches ``build().launch()`` and ``run()``."""
         clear_build_cache()
         q_op, kv_op, _ = _make_branches(device, seed=77)
         p = Parallel(q_op, kv_op)
@@ -594,14 +596,18 @@ class TestBuildLaunch:
         out_one = p.build_launch()
         ttnn.synchronize_device(device)
         assert list(out_sep) == list(out_one)
+        p.invalidate_run()
+        out_run = p.run()
+        ttnn.synchronize_device(device)
+        assert list(out_sep) == list(out_run)
 
-    def test_parallel_build_launch_twice_uses_cache_hit(self, device):
+    def test_parallel_run_twice_uses_cache_hit(self, device):
         clear_build_cache()
         q_op, kv_op, _ = _make_branches(device, seed=88)
         p = Parallel(q_op, kv_op)
-        p.build_launch()
+        p.run()
         ttnn.synchronize_device(device)
         assert len(_BUILD_CACHE) == 1
-        p.build_launch()
+        p.run()
         ttnn.synchronize_device(device)
         assert len(_BUILD_CACHE) == 1

@@ -177,25 +177,6 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
-def _launch_merged_descriptors(op_descriptors):
-    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
-    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
-    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
-    if not op_descriptors:
-        raise ValueError("op_descriptors cannot be empty")
-
-    merged_descriptor = op_descriptors[0].descriptor
-    if len(op_descriptors) > 1:
-        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
-
-    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
-        tensor for op in op_descriptors for tensor in op.output_tensors
-    ]
-    ttnn.generic_op(io_tensors, merged_descriptor)
-
-    return [op.output_tensors for op in op_descriptors]
-
-
 class MLA1D(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
@@ -1891,12 +1872,9 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
-        # avoid the fusion cache/rebind path here until
-        # Parallel(...).build().launch() is fixed for this decode flow.
-        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
-        tt_q = results[0][0]
-        tt_kv_nope = results[1][0]
+        Parallel(q_norm_desc, kv_norm_desc).run()
+        tt_q = q_norm_desc.output_tensors[0]
+        tt_kv_nope = kv_norm_desc.output_tensors[0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE

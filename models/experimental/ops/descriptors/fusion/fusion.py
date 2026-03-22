@@ -640,6 +640,9 @@ class Sequential:
         identities match. Each ``launch`` still refreshes merged IO from the current
         branch tensor lists (safe for in-place activation swaps).
 
+        ``device`` is optional and inferred from branch tensors when omitted (same as
+        :meth:`build`).
+
         Invalidates automatically when :meth:`add` is used; call
         :meth:`invalidate_run` if you replace entries in ``_items`` in place.
         """
@@ -747,6 +750,9 @@ class Parallel:
         Reuses one :class:`FusedOp` while the fusion cache id and branch op object
         identities match. Each ``launch`` still refreshes merged IO from the current
         branch tensor lists (safe for in-place activation swaps).
+
+        ``device`` is optional and inferred from branch tensors when omitted (same as
+        :meth:`build`).
 
         Invalidates automatically when :meth:`add` is used; call
         :meth:`invalidate_run` if you replace entries in ``_items`` in place.
