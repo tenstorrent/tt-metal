@@ -27,6 +27,7 @@ Usage:
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -69,8 +70,6 @@ def step_clean_previous_outputs(
     dry_run: bool,
 ) -> None:
     """Remove all artifacts from a previous pipeline run so we start fresh."""
-    import shutil
-
     print(f"\n{SEPARATOR}")
     print("Step 0: Clean previous pipeline outputs")
     print(SEPARATOR)
@@ -196,14 +195,10 @@ def step_split_trace(
         if force:
             print(f"  --force: removing stale split directory: {split_dir}")
             if not dry_run:
-                import shutil
-
                 shutil.rmtree(split_dir)
         elif trace_json.is_file() and split_dir.stat().st_mtime < trace_json.stat().st_mtime:
             print(f"  Split directory is older than source JSON, re-splitting: {split_dir}")
             if not dry_run:
-                import shutil
-
                 shutil.rmtree(split_dir)
         else:
             print(f"  Split directory already exists, skipping: {split_dir}")
@@ -374,13 +369,14 @@ def main() -> int:
     if args.dry_run:
         print(f"  Mode:               DRY RUN")
 
-    # Step 0: Remove all artifacts from a previous run
-    step_clean_previous_outputs(
-        module_name=args.module_name,
-        sweep_trace_output=sweep_trace_output,
-        sweep_trace_split_dir=sweep_trace_split_dir,
-        dry_run=args.dry_run,
-    )
+    # Step 0: Remove all artifacts from a previous run (only with --force)
+    if args.force:
+        step_clean_previous_outputs(
+            module_name=args.module_name,
+            sweep_trace_output=sweep_trace_output,
+            sweep_trace_split_dir=sweep_trace_split_dir,
+            dry_run=args.dry_run,
+        )
 
     # Step 1: Generate vectors
     step_generate_vectors(

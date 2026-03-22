@@ -96,8 +96,8 @@ jobs:
         with:
           name: model-trace
           path: |
-            model_tracer/traced_operations/ttnn_operations_master_*_reconstructed.json
-            model_tracer/traced_operations/ttnn_operations_master_*_reconstructed_split/
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split/
           retention-days: 7
 
   run-pipeline:
@@ -272,7 +272,7 @@ jobs:
   validate:
     name: Validate traces
     needs: [run-pipeline, generate-model-trace]
-    if: always() && needs.run-pipeline.result == 'success'
+    if: always() && needs.run-pipeline.result != 'cancelled'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

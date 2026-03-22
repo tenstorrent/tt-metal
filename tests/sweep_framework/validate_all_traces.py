@@ -305,7 +305,12 @@ def match_configs(
 
     model_ids = list(range(len(model_configs)))
     model_serialized = {i: serialize_normalized(model_configs[i].get("arguments", {})) for i in model_ids}
-    consumed_model = set()
+    consumed_model: set[int] = set()
+
+    # Build reverse index: serialized_form -> list of model indices (for O(N+M) exact matching)
+    model_by_ser: dict[str, list[int]] = {}
+    for mi in model_ids:
+        model_by_ser.setdefault(model_serialized[mi], []).append(mi)
 
     sweep_with_ids = []
     for i, sc in enumerate(sweep_configs):
@@ -317,15 +322,14 @@ def match_configs(
     for sid, sc in sweep_with_ids:
         sweep_ser = serialize_normalized(sc.get("arguments", {}))
         matched = False
-        for mi in model_ids:
+        for mi in model_by_ser.get(sweep_ser, []):
             if mi in consumed_model:
                 continue
-            if sweep_ser == model_serialized[mi]:
-                mid = model_configs[mi].get("config_id", mi + 1)
-                result.exact_matches.append(MatchResult(sid, mid, "exact"))
-                consumed_model.add(mi)
-                matched = True
-                break
+            mid = model_configs[mi].get("config_id", mi + 1)
+            result.exact_matches.append(MatchResult(sid, mid, "exact"))
+            consumed_model.add(mi)
+            matched = True
+            break
         if not matched:
             unmatched_sweep_ids.append((sid, sc))
 
@@ -522,12 +526,6 @@ def _classify_leaf_diff(path: str, model_val: Any, sweep_val: Any) -> tuple[int,
     if ".memory_config.hash" in path or path.endswith(".hash"):
         if isinstance(model_val, (int, float)) and isinstance(sweep_val, (int, float)):
             return 1, CATEGORY_LABELS[1]
-
-    if "shard_spec" in path:
-        m_none = model_val is None or model_val == "None"
-        s_none = sweep_val is None or sweep_val == "None"
-        if m_none and s_none:
-            return 2, CATEGORY_LABELS[2]
 
     # shard_spec.grid coordinate values (start.x, start.y, end.x, end.y)
     # are device/run-specific CoreRange coordinates
@@ -854,8 +852,8 @@ def run_validation(
     )
 
     if not pairs:
-        print("ERROR: No matching operation pairs found.", file=sys.stderr)
-        raise SystemExit(1)
+        print("WARNING: No matching operation pairs found.", file=sys.stderr)
+        return []
 
     op_results: list[OpResult] = []
 
@@ -979,6 +977,10 @@ def main() -> int:
         operation=args.operation,
         sweep_trace_dir=sweep_trace_dir,
     )
+
+    if not op_results:
+        print("ERROR: No matching operation pairs found — nothing to validate.", file=sys.stderr)
+        return 1
 
     report = generate_report(model_split_dir, effective_sweep_traces_dir, op_results)
 
