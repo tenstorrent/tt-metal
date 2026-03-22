@@ -20,10 +20,11 @@ srun tt-smi -glx_reset
 # 1 rank per host (each rank opens a 1x8 mesh = one galaxy)
 RANKS_PER_HOST="1"
 
-# generate rankfile to /tmp so there are no dashes in the name (workaround for parsing error)
-scontrol show hostnames | python ${PP_ROOT}/make_rankfile.py -n ${RANKS_PER_HOST} -o /tmp/rankfile.txt
+# generate rankfile to /tmp with unique name (workaround for parsing error with dashes in paths)
+RANKFILE="/tmp/rankfile_${USER}_${SLURM_JOB_ID}.txt"
+scontrol show hostnames | python ${PP_ROOT}/make_rankfile.py -n ${RANKS_PER_HOST} -o ${RANKFILE}
 
 # run fabric verification
 tt-run --verbose \
-    --mpi-args "--oversubscribe --map-by rankfile:file=/tmp/rankfile.txt" \
+    --mpi-args "--oversubscribe --map-by rankfile:file=${RANKFILE}" \
     python ${PP_ROOT}/ttnn_fabric_verification.py
