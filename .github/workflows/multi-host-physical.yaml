@@ -7,6 +7,11 @@ on:
         required: false
         default: true
         type: boolean
+      multihost_tooling:
+        description: 'Run T3K multi-host tooling and MPI job'
+        required: false
+        default: true
+        type: boolean
       glx_2x_multihost:
         description: 'Run Galaxy 2x multi-host job'
         required: false
@@ -117,7 +122,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   tooling-and-mpi-t3k:
-    if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    if: ${{ github.event.inputs.multihost_tooling == 'true' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
