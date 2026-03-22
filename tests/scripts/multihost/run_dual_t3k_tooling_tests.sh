@@ -158,7 +158,7 @@ fi
 # ── Done ───────────────────────────────────────────────────────────────
 end_time=$(date +%s)
 duration=$((end_time - start_time))
-echo "LOG_METAL: run_dual_t3k_tooling_tests $duration seconds to complete"
+echo "LOG_METAL: run_dual_t3k_tooling_tests $duration seconds to complete (fail=$fail)"
 
 if [[ $fail -ne 0 ]]; then
   exit 1

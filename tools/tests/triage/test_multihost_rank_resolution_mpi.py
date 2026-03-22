@@ -87,14 +87,16 @@ _ALL_RANK_VARS = (
 
 def _make_kernels_yaml(rank: int) -> str:
     """Minimal kernels.yaml with a name that encodes the rank for assertions."""
-    return textwrap.dedent(f"""\
+    return textwrap.dedent(
+        f"""\
         - kernel:
             watcher_kernel_id: {rank}
             name: rank_{rank}_matmul_kernel
             path: /fake/path/rank_{rank}/kernel.cpp
             source: void kernel_main() {{}}
             program_id: {rank}
-    """)
+    """
+    )
 
 
 def _make_marker_file(logs_root: str, rank: int) -> Path:
@@ -128,11 +130,13 @@ def _restore_rank_env(saved: dict[str, str | None]) -> None:
 # Cleanup
 # ---------------------------------------------------------------------------
 
+
 def _cleanup_shared_tmpdir() -> None:
     """Remove the shared temp directory (rank 0 only, after barrier)."""
     COMM.Barrier()
     if RANK == 0:
         import shutil
+
         tmpdir = _get_shared_tmpdir()
         if tmpdir and Path(tmpdir).exists():
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -175,9 +179,7 @@ class TestMultihostRankResolutionMPI:
         kernels_yaml = self.my_inspector_dir / "kernels.yaml"
         assert kernels_yaml.exists(), f"Rank {RANK}: kernels.yaml missing"
         content = kernels_yaml.read_text()
-        assert f"rank_{RANK}_matmul_kernel" in content, (
-            f"Rank {RANK}: marker file does not contain expected rank tag"
-        )
+        assert f"rank_{RANK}_matmul_kernel" in content, f"Rank {RANK}: marker file does not contain expected rank tag"
 
     def test_rank_resolution_via_ompi_var(self):
         """Rank 0 sets OMPI_COMM_WORLD_RANK for each rank and verifies resolution."""
@@ -193,16 +195,14 @@ class TestMultihostRankResolutionMPI:
                 os.environ["OMPI_COMM_WORLD_RANK"] = str(target_rank)
                 log_dir = get_log_directory()
                 expected = self.all_inspector_dirs[target_rank]
-                assert log_dir == expected, (
-                    f"OMPI rank {target_rank}: expected {expected}, got {log_dir}"
-                )
+                assert log_dir == expected, f"OMPI rank {target_rank}: expected {expected}, got {log_dir}"
                 # Also verify the data belongs to the correct rank
                 kernels = get_kernels(log_dir)
                 assert kernels, f"No kernels found in {log_dir}"
                 names = [k.name for k in kernels.values()]
-                assert any(f"rank_{target_rank}_" in n for n in names), (
-                    f"Rank {target_rank}: kernel name mismatch in {names}"
-                )
+                assert any(
+                    f"rank_{target_rank}_" in n for n in names
+                ), f"Rank {target_rank}: kernel name mismatch in {names}"
         finally:
             _restore_rank_env(saved)
             # Remove TT_METAL_LOGS_PATH so it doesn't leak
@@ -223,9 +223,7 @@ class TestMultihostRankResolutionMPI:
                 os.environ["PMI_RANK"] = str(target_rank)
                 log_dir = get_log_directory()
                 expected = self.all_inspector_dirs[target_rank]
-                assert log_dir == expected, (
-                    f"PMI rank {target_rank}: expected {expected}, got {log_dir}"
-                )
+                assert log_dir == expected, f"PMI rank {target_rank}: expected {expected}, got {log_dir}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -245,9 +243,7 @@ class TestMultihostRankResolutionMPI:
                 os.environ["TT_MESH_HOST_RANK"] = str(target_rank)
                 log_dir = get_log_directory()
                 expected = self.all_inspector_dirs[target_rank]
-                assert log_dir == expected, (
-                    f"TT_MESH_HOST_RANK rank {target_rank}: expected {expected}, got {log_dir}"
-                )
+                assert log_dir == expected, f"TT_MESH_HOST_RANK rank {target_rank}: expected {expected}, got {log_dir}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -265,9 +261,7 @@ class TestMultihostRankResolutionMPI:
             os.environ["TT_METAL_LOGS_PATH"] = self.logs_root
             log_dir = get_log_directory()
             expected = self.all_inspector_dirs[0]
-            assert log_dir == expected, (
-                f"No rank env: expected rank 0 dir {expected}, got {log_dir}"
-            )
+            assert log_dir == expected, f"No rank env: expected rank 0 dir {expected}, got {log_dir}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -294,9 +288,7 @@ class TestMultihostRankResolutionMPI:
             os.environ["PMI_RANK"] = str(target_pmi)
             log_dir = get_log_directory()
             expected = self.all_inspector_dirs[target_ompi]
-            assert log_dir == expected, (
-                f"Precedence: expected OMPI rank {target_ompi} dir, got {log_dir}"
-            )
+            assert log_dir == expected, f"Precedence: expected OMPI rank {target_ompi} dir, got {log_dir}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -317,15 +309,13 @@ class TestMultihostRankResolutionMPI:
             target = SIZE - 1
             explicit_dir = self.all_inspector_dirs[target]
             log_dir = get_log_directory(log_directory=explicit_dir)
-            assert log_dir == explicit_dir, (
-                f"Explicit override: expected {explicit_dir}, got {log_dir}"
-            )
+            assert log_dir == explicit_dir, f"Explicit override: expected {explicit_dir}, got {log_dir}"
             # Verify data belongs to the right rank
             kernels = get_kernels(log_dir)
             names = [k.name for k in kernels.values()]
-            assert any(f"rank_{target}_" in n for n in names), (
-                f"Explicit override: kernel name mismatch for rank {target}"
-            )
+            assert any(
+                f"rank_{target}_" in n for n in names
+            ), f"Explicit override: kernel name mismatch for rank {target}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -344,9 +334,7 @@ class TestMultihostRankResolutionMPI:
             os.environ["OMPI_COMM_WORLD_RANK"] = "9999"
             log_dir = get_log_directory()
             expected = self.all_inspector_dirs[0]
-            assert log_dir == expected, (
-                f"Invalid rank fallback: expected rank 0 dir {expected}, got {log_dir}"
-            )
+            assert log_dir == expected, f"Invalid rank fallback: expected rank 0 dir {expected}, got {log_dir}"
         finally:
             _restore_rank_env(saved)
             os.environ.pop("TT_METAL_LOGS_PATH", None)
@@ -357,6 +345,7 @@ class TestMultihostRankResolutionMPI:
 # ---------------------------------------------------------------------------
 # Session-scoped cleanup
 # ---------------------------------------------------------------------------
+
 
 def pytest_sessionfinish(session, exitstatus):
     """Clean up the shared tmpdir after all tests complete."""
