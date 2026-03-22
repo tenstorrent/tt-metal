@@ -1492,7 +1492,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_connection_semaphore_id[i] = 0;
             sender_channels_buffer_index_semaphore_id[i] = 0;
         }
-        // VC2 supports a worker connection, so if it's present we'kk add the relevant book-keeping
+        // VC2 supports a worker connection, so if it's present we'll add the relevant book-keeping
         auto* static_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         const auto vc2_flat =

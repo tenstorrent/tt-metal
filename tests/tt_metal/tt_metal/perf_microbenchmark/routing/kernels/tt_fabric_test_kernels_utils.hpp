@@ -458,43 +458,46 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true> {
     }
 };
 
-// Forward declaration for NOC operation function pointer types
-// SenderKernelTrafficConfig is now a template on EdmSenderT, but NOC operations
-// don't depend on EdmSenderT (they only access layout-identical members like
-// packet_header, payload_size_bytes, metadata). We use the default instantiation
-// for function pointer types since all instantiations have identical layout.
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct SenderKernelTrafficConfig;
 
-namespace NocOperationTypes {
-using ParseSetupFunc = void (*)(SenderKernelTrafficConfig<>*, size_t&);
-using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig<>*);
+// NOC op structs and function pointer types are all templated on EdmSenderT.
+// VC_ID is a compile-time arg so each binary contains exactly one EdmSenderT
+// instantiation — function pointer types match call sites exactly, no casting needed.
+template <typename EdmSenderT = WorkerToFabricEdmSender>
+struct NocOperationTypes {
+    using ParseSetupFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*, size_t&);
+    using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*);
 
-struct Operations {
-    ParseSetupFunc parse_and_setup;
-    UpdateHeaderFunc update_header;
+    struct Operations {
+        ParseSetupFunc parse_and_setup;
+        UpdateHeaderFunc update_header;
+    };
 };
-}  // namespace NocOperationTypes
 
 // NOC Operation Class Declarations (implementations after SenderKernelTrafficConfig)
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocWriteSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig<>* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocAtomicSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig<>* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocFusedSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig<>* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocScatterWriteSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig<>* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
 /* ****************************************************************************
@@ -998,23 +1001,22 @@ struct SenderKernelTrafficConfig {
         uint32_t noc_type_raw = get_local_arg_val<uint32_t>(arg_idx++);
         noc_send_type_ = static_cast<NocSendType>(noc_type_raw);
 
-        // Validate NOC send type and set up operations
         switch (noc_send_type_) {
             case NocSendType::NOC_UNICAST_WRITE:
-                noc_ops_.parse_and_setup = NocWriteSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocWriteSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocWriteSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocWriteSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_UNICAST_ATOMIC_INC:
-                noc_ops_.parse_and_setup = NocAtomicSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocAtomicSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocAtomicSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
-                noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocFusedSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_UNICAST_SCATTER_WRITE:
-                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocScatterWriteSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocScatterWriteSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             default: ASSERT(false); break;
         }
@@ -1022,9 +1024,7 @@ struct SenderKernelTrafficConfig {
         ASSERT(noc_ops_.parse_and_setup != nullptr);
         ASSERT(noc_ops_.update_header != nullptr);
 
-        // Cast to default instantiation for function pointer compatibility
-        // (all instantiations have identical layout, only EdmSenderT pointer type differs)
-        noc_ops_.parse_and_setup(reinterpret_cast<SenderKernelTrafficConfig<>*>(this), arg_idx);
+        noc_ops_.parse_and_setup(this, arg_idx);
     }
 
     void setup_payload_buffer(uint32_t payload_buffer_address, uint32_t payload_buffer_size) {
@@ -1139,16 +1139,15 @@ struct SenderKernelTrafficConfig {
 
     bool has_wrapped() const { return payload_buffer_ ? payload_buffer_->has_wrapped() : false; }
 
-    // Friend classes for operation implementations
-    friend struct NocWriteSenderOperations;
-    friend struct NocAtomicSenderOperations;
-    friend struct NocFusedSenderOperations;
-    friend struct NocScatterWriteSenderOperations;
+    friend struct NocWriteSenderOperations<EdmSenderT>;
+    friend struct NocAtomicSenderOperations<EdmSenderT>;
+    friend struct NocFusedSenderOperations<EdmSenderT>;
+    friend struct NocScatterWriteSenderOperations<EdmSenderT>;
 
 private:
     void update_header_for_next_packet() {
         if (payload_buffer_) {
-            noc_ops_.update_header(reinterpret_cast<SenderKernelTrafficConfig<>*>(this));
+            noc_ops_.update_header(this);
         }
     }
 
@@ -1167,7 +1166,7 @@ public:
 
 private:
     NocSendType noc_send_type_;
-    NocOperationTypes::Operations noc_ops_;
+    typename NocOperationTypes<EdmSenderT>::Operations noc_ops_;
 
     union NocFields {
         NocUnicastWriteFields write_fields;
@@ -1184,7 +1183,9 @@ private:
 };
 
 // NOC Operation Implementations (now that SenderKernelTrafficConfig is fully defined)
-inline void NocWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocWriteSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastWriteFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
@@ -1194,7 +1195,8 @@ inline void NocWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficCo
     config->payload_size_bytes = fields.payload_size_bytes;
 }
 
-inline void NocWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig<>* config) {
+template <typename EdmSenderT>
+inline void NocWriteSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     uint32_t dest_address = fields.dst_address + buffer_offset;
@@ -1202,7 +1204,9 @@ inline void NocWriteSenderOperations::update_header_impl(SenderKernelTrafficConf
     config->packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
 }
 
-inline void NocAtomicSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
@@ -1212,11 +1216,14 @@ inline void NocAtomicSenderOperations::parse_and_setup_impl(SenderKernelTrafficC
     config->payload_size_bytes = 0;
 }
 
-inline void NocAtomicSenderOperations::update_header_impl(SenderKernelTrafficConfig<>* config) {
+template <typename EdmSenderT>
+inline void NocAtomicSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     // No-op - atomic operations use fixed addresses
 }
 
-inline void NocFusedSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig<>* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t write_noc_addr =
@@ -1232,7 +1239,8 @@ inline void NocFusedSenderOperations::parse_and_setup_impl(SenderKernelTrafficCo
     config->payload_size_bytes = fields.write_fields.payload_size_bytes;
 }
 
-inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConfig<>* config) {
+template <typename EdmSenderT>
+inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.write_atomic_inc_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     uint32_t write_dest_address = fields.write_fields.dst_address + buffer_offset;
@@ -1245,8 +1253,9 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         fields.write_fields.payload_size_bytes);
 }
 
-inline void NocScatterWriteSenderOperations::parse_and_setup_impl(
-    SenderKernelTrafficConfig<>* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocScatterWriteSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
     ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
@@ -1262,7 +1271,9 @@ inline void NocScatterWriteSenderOperations::parse_and_setup_impl(
     config->payload_size_bytes = fields.payload_size_bytes;
 }
 
-inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig<>* config) {
+template <typename EdmSenderT>
+inline void NocScatterWriteSenderOperations<EdmSenderT>::update_header_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.scatter_write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);

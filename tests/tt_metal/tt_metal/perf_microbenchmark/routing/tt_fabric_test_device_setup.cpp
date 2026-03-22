@@ -878,14 +878,21 @@ void TestDevice::create_sender_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
-        // Determine VC ID for this sender (all configs on a core use same vc_id)
-        uint8_t sender_vc_id = 0;
+        // All configs on a core must share the same vc_id: the kernel is compiled with a single
+        // VC_ID template arg and all EDM connection runtime args are interpreted using that adapter
+        // type. Mixing VC0 and VC2 configs on the same core would silently corrupt connection parsing.
+        const uint8_t first_vc_id =
+            sender.configs_.empty() ? default_worker_vc_id : sender.configs_.front().first.vc_id;
         for (const auto& [config, _] : sender.configs_) {
-            if (config.use_vc2()) {
-                sender_vc_id = vc2_worker_vc_id;
-                break;
-            }
+            TT_FATAL(
+                config.vc_id == first_vc_id,
+                "All sender configs on a core must use the same vc_id, but found vc_id={} and vc_id={} on the same "
+                "core. "
+                "Split configs onto separate cores to mix VCs.",
+                first_vc_id,
+                config.vc_id);
         }
+        uint8_t sender_vc_id = first_vc_id;
 
         // Compile-time args (FLOW_CONTROL_ENABLED removed - now handled per-traffic-config)
         std::vector<uint32_t> ct_args = {

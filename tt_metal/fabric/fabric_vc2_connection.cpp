@@ -163,7 +163,7 @@ void append_fabric_vc2_connection_rt_args(
     const auto vc2_sender_channel_flat = num_vc0_senders + num_vc1_senders;
     const auto total_sender_channels = num_vc0_senders + num_vc1_senders + num_vc2_senders;
 
-    log_info(
+    log_trace(
         tt::LogFabric,
         "VC2 flat index diagnostic: vc0_senders={}, vc1_senders={}, vc2_senders={}, "
         "vc2_flat_idx={}, total_senders={}, config.num_used_sender_channels={}",
@@ -201,7 +201,7 @@ void append_fabric_vc2_connection_rt_args(
 
     // Dump ALL sender channel addresses so we can see the full picture
     for (size_t i = 0; i < total_sender_channels; i++) {
-        log_info(
+        log_trace(
             tt::LogFabric,
             "  sender_ch[{}]: conn_sem=0x{:x}, conn_info=0x{:x}, flow_ctrl=0x{:x}, buf_idx=0x{:x}{}",
             i,
@@ -232,21 +232,21 @@ void append_fabric_vc2_connection_rt_args(
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[vc2_sender_channel_flat],
         .edm_direction = router_direction};
 
-    log_info(tt::LogFabric, "VC2 connection. edm_buffer_base_addr: {}", edm_connection.edm_buffer_base_addr);
-    log_info(tt::LogFabric, "\tVC2 connection. num_buffers_per_channel: {}", edm_connection.num_buffers_per_channel);
-    log_info(tt::LogFabric, "\tVC2 connection. edm_l1_sem_addr: {}", edm_connection.edm_l1_sem_addr);
-    log_info(
+    log_trace(tt::LogFabric, "VC2 connection. edm_buffer_base_addr: {}", edm_connection.edm_buffer_base_addr);
+    log_trace(tt::LogFabric, "\tVC2 connection. num_buffers_per_channel: {}", edm_connection.num_buffers_per_channel);
+    log_trace(tt::LogFabric, "\tVC2 connection. edm_l1_sem_addr: {}", edm_connection.edm_l1_sem_addr);
+    log_trace(
         tt::LogFabric,
         "\tVC2 connection. edm_connection_handshake_addr: {}",
         edm_connection.edm_connection_handshake_addr);
-    log_info(
+    log_trace(
         tt::LogFabric,
         "\tVC2 connection. edm_worker_location_info_addr: {}",
         edm_connection.edm_worker_location_info_addr);
-    log_info(tt::LogFabric, "\tVC2 connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
-    log_info(
+    log_trace(tt::LogFabric, "\tVC2 connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
+    log_trace(
         tt::LogFabric, "\tVC2 connection. buffer_index_semaphore_id: {}", edm_connection.buffer_index_semaphore_id);
-    log_info(tt::LogFabric, "\tVC2 connection. edm_direction: {}", edm_connection.edm_direction);
+    log_trace(tt::LogFabric, "\tVC2 connection. edm_direction: {}", edm_connection.edm_direction);
     append_worker_to_fabric_edm_sender_rt_args(
         edm_connection,
         worker_flow_control_semaphore_id,
