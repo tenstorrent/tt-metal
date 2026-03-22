@@ -92,6 +92,32 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
     }                                 \
     while (0)
 
+// ---------------------------------------------------------------------------
+//  Fault-tolerant test macros (Section 4.4 of ulfm-rank-reinit-architecture.md)
+//
+//  EXPECT_EQ_SURVIVING_RANKS / ASSERT_EQ_SURVIVING_RANKS:
+//    Like the ALL_RANKS variants but semantically indicate that the
+//    communicator has been through revoke_and_shrink() and may have
+//    fewer ranks than the original world.  Functionally identical to
+//    the ALL_RANKS macros (all_reduce on the *current* communicator),
+//    but named differently for readability in fault-tolerance tests.
+//
+//  SKIP_IF_NO_ULFM(ctx):
+//    Skip the current test if ULFM support is not available in this build.
+//    Use at the start of any test that exercises ULFM-specific APIs
+//    (revoke, shrink, agree, etc.).
+// ---------------------------------------------------------------------------
+
+#define EXPECT_EQ_SURVIVING_RANKS(val, ctx) ::multihost::common::expect_equal_all_ranks((val), (ctx))
+#define ASSERT_EQ_SURVIVING_RANKS(val, ctx) ::multihost::common::assert_equal_all_ranks((val), (ctx))
+
+#define SKIP_IF_NO_ULFM(ctx) \
+    do { \
+        if (!(ctx)->supports_fault_tolerance()) { \
+            GTEST_SKIP() << "ULFM support not available in this build"; \
+        } \
+    } while (0)
+
 // ----------------------------------------------------------------------
 //  multihost test main function
 // ----------------------------------------------------------------------
