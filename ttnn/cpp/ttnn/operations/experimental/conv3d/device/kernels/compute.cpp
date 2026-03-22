@@ -273,12 +273,9 @@ void kernel_main() {
                                     // FPU accumulate: copy_tile loads reducer's partial to DST
                                     // at full fp32 precision (datacopy, no SRC truncation), then
                                     // add_tiles(worker, zero) accumulates worker via DST += worker + 0.
-                                    // The zero CB is filled by the writer at kernel startup.
                                     cb_wait_front(cb_zero_tiled, 1);
                                     reconfig_data_format_srca(cb_matmul_interm_tiled);
                                     pack_reconfig_data_format(cb_matmul_interm_tiled);
-                                    copy_tile_init(cb_matmul_interm_tiled);
-                                    add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
                                 }
                                 for (uint32_t i = 0; i < num_workers; i++) {
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
@@ -286,9 +283,12 @@ void kernel_main() {
                                     if constexpr (use_fp32_partials) {
                                         for (uint32_t t = 0; t < output_tiles; t++) {
                                             tile_regs_acquire();
-                                            // Load reducer's partial to DST[0] via datacopy (full fp32)
+                                            // Re-init before each op: copy_tile and add_tiles
+                                            // share the MATH unit config, so each needs its own
+                                            // init per tile iteration.
+                                            copy_tile_init(cb_matmul_interm_tiled);
                                             copy_tile(cb_matmul_interm_tiled, 0, 0);
-                                            // Accumulate worker's partial: DST[0] += worker + 0
+                                            add_tiles_init(cb_reduction_tiled, cb_zero_tiled, true);
                                             add_tiles(cb_reduction_tiled, cb_zero_tiled, 0, 0, 0);
                                             tile_regs_commit();
 
