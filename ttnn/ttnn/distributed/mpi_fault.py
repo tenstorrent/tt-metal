@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from typing import Generator
@@ -137,7 +137,7 @@ def install_ulfm_handler(comm=None) -> None:
 
 @contextmanager
 def ulfm_guard(
-    comm,
+    comm: Any,
     operation_name: str = "collective",
     policy: str = "fast_fail",
 ) -> Generator[None, None, None]:
@@ -213,7 +213,7 @@ def _try_get_failed_ranks(comm) -> list[int]:
         return []
 
 
-def _ulfm_fast_fail(comm, rank: int, error_code: int, operation_name: str) -> None:
+def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) -> None:
     """Print a structured diagnostic and exit.
 
     Mirrors the C++ ``handle_rank_failure`` in

@@ -54,7 +54,8 @@ class ExitCategory(enum.Enum):
     FINALIZE_TIMEOUT = "finalize_timeout"  # MPI_Finalize watchdog triggered (exit 70 + SIGALRM)
     TIMEOUT = "timeout"  # tt-run wall-clock timeout
     INTERRUPTED = "interrupted"  # User interrupt (SIGINT/SIGTERM)
-    INFRA_ERROR = "infra_error"  # Infrastructure / unknown failure
+    INFRA_ERROR = "infra_error"  # Reserved: MPI launcher / PRRTE infrastructure failure
+    # (e.g. mpirun unable to start; not yet returned by interpret_exit_code)
 
 
 # Map well-known signal numbers to human-readable names
