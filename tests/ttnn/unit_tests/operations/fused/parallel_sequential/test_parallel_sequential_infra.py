@@ -162,13 +162,8 @@ def _make_cb_mock(
     )
 
 
-# Saved original so graph topology tests can monkeypatch safely via fixture.
-_REAL_GET_NODE_CORE_RANGE = _graph._get_node_core_range
-
-
-@pytest.fixture(autouse=False)
-def _mock_get_node_core_range(monkeypatch):
-    """Temporarily replace _get_node_core_range with a simplified version for mock ops."""
+def _patch_get_node_core_range_for_mock_ops(monkeypatch):
+    """Mock ops store core ranges on ``kernels[0]`` only; patch graph lookup for tests."""
     monkeypatch.setattr(_graph, "_get_node_core_range", lambda node: node.op.descriptor.kernels[0].core_ranges)
 
 
@@ -726,7 +721,6 @@ class TestMustMatchDefines:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestOpGraphBuilder:
     """Tests for OpGraphBuilder: creation, single-node, build-twice, topology."""
 
@@ -742,19 +736,22 @@ class TestOpGraphBuilder:
         )
         return desc
 
-    def test_single_node_returns_fused_op(self):
+    def test_single_node_returns_fused_op(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         result = _graph.OpGraphBuilder(_graph.OpNode(desc)).build(device=None)
         assert type(result).__name__ == "FusedOp"
 
-    def test_build_twice_raises(self):
+    def test_build_twice_raises(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         desc = self._make_buildable_op()
         builder = _graph.OpGraphBuilder(_graph.OpNode(desc))
         builder.build(device=None)
         with pytest.raises(ValueError, match="Already built"):
             builder.build(device=None)
 
-    def test_overlapping_siblings_rejected(self):
+    def test_overlapping_siblings_rejected(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
             children=[
@@ -765,7 +762,8 @@ class TestOpGraphBuilder:
         with pytest.raises(ValueError, match="overlapping cores"):
             _graph.OpGraphBuilder(root)._validate_topology()
 
-    def test_valid_disjoint_children(self):
+    def test_valid_disjoint_children(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (3, 0))]),
             children=[
@@ -775,7 +773,8 @@ class TestOpGraphBuilder:
         )
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_child_wider_than_parent_accepted(self):
+    def test_child_wider_than_parent_accepted(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (1, 0))]),
             children=[
@@ -785,7 +784,8 @@ class TestOpGraphBuilder:
         )
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_valid_nested_topology(self):
+    def test_valid_nested_topology(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         leaf_0_1 = _graph.OpNode(self._op([((0, 0), (1, 0))]))
         leaf_2_3 = _graph.OpNode(self._op([((2, 0), (3, 0))]))
         mid = _graph.OpNode(self._op([((0, 0), (3, 0))]), children=[leaf_0_1, leaf_2_3])
@@ -793,7 +793,8 @@ class TestOpGraphBuilder:
         root = _graph.OpNode(self._op([((0, 0), (5, 0))]), children=[mid, leaf_4_5])
         _graph.OpGraphBuilder(root)._validate_topology()  # Should not raise
 
-    def test_partial_coverage_accepted(self):
+    def test_partial_coverage_accepted(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         root = _graph.OpNode(
             self._op([((0, 0), (5, 0))]),
             children=[
@@ -917,11 +918,11 @@ class TestNarrowWideTopology:
                 assert not g.has_trailing_barrier
 
 
-@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestEffectiveLeafRange:
     """Tests for OpGraphBuilder._effective_leaf_range."""
 
-    def test_leaf_and_intermediate(self):
+    def test_leaf_and_intermediate(self, monkeypatch):
+        _patch_get_node_core_range_for_mock_ops(monkeypatch)
         elf = _graph.OpGraphBuilder._effective_leaf_range
 
         leaf = _graph.OpNode(_make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))])))

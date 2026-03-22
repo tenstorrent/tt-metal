@@ -80,12 +80,11 @@ def tt(t, device):
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Tensor bundle helpers (use with the ``device`` fixture from tt-metal conftest)
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def test_tensors(device):
+def make_small_norm_tensors(device):
     """Small tensors (1,1,32,128) for single/few-core norm tests."""
     torch.manual_seed(42)
     hidden = 128
@@ -103,8 +102,7 @@ def test_tensors(device):
     }
 
 
-@pytest.fixture
-def multi_tensors(device):
+def make_multi_norm_tensors(device):
     """Larger tensors (1,1,256,128) for multi-core and branching tests (NCHt=8)."""
     torch.manual_seed(42)
     hidden = 128
@@ -130,12 +128,12 @@ def multi_tensors(device):
 class TestInfrastructure:
     """Build-time infrastructure tests (CB extraction, source structure, named args)."""
 
-    def test_cb_extraction(self, device, test_tensors):
+    def test_cb_extraction(self, device):
         """extract_cb_info on LN descriptor, check c_0/c_16."""
         from models.experimental.ops.descriptors.fusion import extract_cb_info
         from models.experimental.ops.descriptors.normalization import layer_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         desc = layer_norm.layer_norm(
             t["tt_input"], core_range_set=cores(0, 0), weight=t["tt_weights"][0], bias=t["tt_biases"][0], epsilon=1e-5
         )
@@ -144,12 +142,12 @@ class TestInfrastructure:
         assert 0 in cb_info, "Should have input CB (c_0)"
         assert 16 in cb_info, "Should have output CB (c_16)"
 
-    def test_fused_source_structure(self, device, test_tensors):
+    def test_fused_source_structure(self, device):
         """2-phase LN->LN: verify phase namespaces and barrier code in fused source."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         ln1 = layer_norm.layer_norm(t["tt_input"], core_range_set=cr, weight=t["tt_weights"][0], epsilon=1e-5)
         ln2 = layer_norm.layer_norm(ln1.output_tensors[0], core_range_set=cr, weight=t["tt_weights"][1], epsilon=1e-5)
@@ -164,12 +162,12 @@ class TestInfrastructure:
         # At least one kernel should have both phases
         assert False, "No kernel contained both phase_0 and phase_1 namespaces"
 
-    def test_named_args_phase_prefix(self, device, test_tensors):
+    def test_named_args_phase_prefix(self, device):
         """2-phase fused: verify phase_1_ prefix on named CT args."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         ln_compute = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -201,12 +199,12 @@ class TestSequentialExecution:
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_phases", [2, 3, 4])
-    def test_norm_chain(self, device, test_tensors, num_phases):
+    def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         ln_compute = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -234,12 +232,12 @@ class TestSequentialExecution:
         check_pcc(golden, fused.output_tensors[0], pcc=0.97, label=f"{num_phases}-phase chain")
 
     @pytest.mark.parametrize("core_x", [3, 5, 7])
-    def test_chain_on_nonzero_core(self, device, test_tensors, core_x):
+    def test_chain_on_nonzero_core(self, device, core_x):
         """2-phase LN->RMS on non-origin single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(core_x, 0)
         ln_compute = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -298,12 +296,12 @@ class TestSequentialExecution:
         golden = torch_rms_norm(torch_layer_norm(torch_input.float(), torch_w.float()), torch_w.float())
         check_pcc(golden, fused.output_tensors[0], label="multicore chain")
 
-    def test_repeated_execution(self, device, test_tensors):
+    def test_repeated_execution(self, device):
         """Same fused op launched 3x — verify no stale state."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         rms1 = rms_norm.rms_norm(t["tt_input"], core_range_set=cr, weight=t["tt_weights"][0], epsilon=1e-5)
         rms2 = rms_norm.rms_norm(rms1.output_tensors[0], core_range_set=cr, weight=t["tt_weights"][1], epsilon=1e-5)
@@ -318,12 +316,12 @@ class TestSequentialExecution:
             fused.launch()
             check_pcc(golden, fused.output_tensors[0], label=f"run {i}")
 
-    def test_single_op_passthrough(self, device, test_tensors):
+    def test_single_op_passthrough(self, device):
         """Single op in Sequential — verify pass-through."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         rms = rms_norm.rms_norm(t["tt_input"], core_range_set=cores(0, 0), weight=t["tt_weights"][0], epsilon=1e-5)
 
         fused = Sequential(rms).build(device)
@@ -732,12 +730,12 @@ class TestMatmulFusion:
 class TestBranchingTopology:
     """Branching (tree) topology tests, including slice ops."""
 
-    def test_two_branch_split(self, device, multi_tensors):
+    def test_two_branch_split(self, device):
         """Stem(8c) -> 2 branches(4c each)."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 7, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -834,7 +832,7 @@ class TestBranchingTopology:
         check_pcc(g_a[:, :, :, :64], a2_slice.output_tensors[0], pcc=0.97, label="A2 (slice)")
         check_pcc(torch_rms_norm(g_stem, ws[3].float()), b.output_tensors[0], pcc=0.97, label="B (RMS)")
 
-    def test_symmetric_binary_tree(self, device, multi_tensors):
+    def test_symmetric_binary_tree(self, device):
         """Stem -> 2 mid -> 4 leaves.
 
         Tree (8 cores):
@@ -844,7 +842,7 @@ class TestBranchingTopology:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         wt = t["tt_weights"]
 
         def rms(inp, cr, wi):
@@ -955,12 +953,12 @@ class TestParallelExecution:
     """Independent parallel execution tests."""
 
     @pytest.mark.parametrize("n_chains", [2, 4])
-    def test_parallel_chains(self, device, test_tensors, n_chains):
+    def test_parallel_chains(self, device, n_chains):
         """N independent fused LN->RMS chains on separate single cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         ln_compute = ttnn.layernorm_default_compute_config(device.arch())
 
         torch_inputs = [torch.randn_like(t["torch_input"]) for _ in range(n_chains)]
@@ -1243,12 +1241,12 @@ class TestParallelExecution:
 class TestSequentialParallelAPI:
     """API surface tests for Sequential/Parallel."""
 
-    def test_sequential_inline(self, device, test_tensors):
+    def test_sequential_inline(self, device):
         """Sequential(rms, rms).build().launch()."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         rms1 = rms_norm.rms_norm(t["tt_input"], core_range_set=cr, weight=t["tt_weights"][0], epsilon=1e-5)
         rms2 = rms_norm.rms_norm(rms1.output_tensors[0], core_range_set=cr, weight=t["tt_weights"][1], epsilon=1e-5)
@@ -1262,12 +1260,12 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, fused.output_tensors[0], pcc=0.99, label="inline")
 
-    def test_sequential_add_method(self, device, test_tensors):
+    def test_sequential_add_method(self, device):
         """s.add(op) matches inline construction."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         cr = cores(0, 0)
         rms1 = rms_norm.rms_norm(t["tt_input"], core_range_set=cr, weight=t["tt_weights"][0], epsilon=1e-5)
         rms2 = rms_norm.rms_norm(rms1.output_tensors[0], core_range_set=cr, weight=t["tt_weights"][1], epsilon=1e-5)
@@ -1283,12 +1281,12 @@ class TestSequentialParallelAPI:
         )
         check_pcc(golden, fused.output_tensors[0], pcc=0.99, label="add method")
 
-    def test_sequential_branching(self, device, multi_tensors):
+    def test_sequential_branching(self, device):
         """Sequential(stem, Parallel(a, b)).build() — API-level branching."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -1654,7 +1652,7 @@ class TestAsymmetricBarrier:
     if the arrive threshold or sync mode dispatch is wrong.
     """
 
-    def test_narrow_stem_wide_branches(self, device, multi_tensors):
+    def test_narrow_stem_wide_branches(self, device):
         """Narrow stem (2 cores) → wide branches (4+4 cores).
 
         6 cores get _NOOP_OP for the stem phase.  arrive_threshold=2 at
@@ -1664,7 +1662,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         # Stem: only 2 cores
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
@@ -1684,7 +1682,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
 
-    def test_single_core_stem_wide_branches(self, device, multi_tensors):
+    def test_single_core_stem_wide_branches(self, device):
         """Extreme asymmetry: 1-core stem → 4+4 core branches.
 
         7 cores get _NOOP_OP.  arrive_threshold=1, release_cores=8.
@@ -1693,7 +1691,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(t["tt_input"], core_range_set=cores(0, 0), weight=t["tt_weights"][0], epsilon=1e-5)
         a = rms_norm.rms_norm(
             stem.output_tensors[0], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
@@ -1709,7 +1707,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
 
-    def test_narrow_wide_repeated_execution(self, device, multi_tensors):
+    def test_narrow_wide_repeated_execution(self, device):
         """Narrow→wide with repeated execution to catch stale semaphores.
 
         Re-execution is the most common source of barrier bugs: stale
@@ -1719,7 +1717,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -1747,7 +1745,7 @@ class TestAsymmetricBarrier:
                 label=f"branch B run {run}",
             )
 
-    def test_multi_level_narrow_wide(self, device, multi_tensors):
+    def test_multi_level_narrow_wide(self, device):
         """Narrow stem → mid-width → wide leaves.  Different arrive counts at each transition.
 
         Tree:
@@ -1765,7 +1763,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         wt = t["tt_weights"]
 
         def rms(inp, cr, wi):
@@ -1801,7 +1799,7 @@ class TestAsymmetricBarrier:
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
             check_pcc(goldens[i], fused.output_tensors[i], label=label)
 
-    def test_narrow_deep_left_wide_right(self, device, multi_tensors):
+    def test_narrow_deep_left_wide_right(self, device):
         """Narrow stem with asymmetric depth AND width.
 
         Tree:
@@ -1816,7 +1814,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         wt = t["tt_weights"]
 
         def rms(inp, cr, wi):
@@ -1881,7 +1879,7 @@ class TestAsymmetricBarrier:
         check_pcc(g_stem[:, :, :, :64], branch_a.output_tensors[0], pcc=0.97, label="A (slice)")
         check_pcc(torch_rms_norm(g_stem, torch_w1.float()), branch_b.output_tensors[0], label="B (RMS)")
 
-    def test_fully_disjoint_parent_children(self, device, multi_tensors):
+    def test_fully_disjoint_parent_children(self, device):
         """Fully disjoint: parent {0,1} → children {2-3, 4-7}.
 
         Parent cores share zero overlap with any child core.  Parent
@@ -1892,7 +1890,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -1910,7 +1908,7 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
 
-    def test_partial_disjoint_one_core_exits(self, device, multi_tensors):
+    def test_partial_disjoint_one_core_exits(self, device):
         """Partial disjoint: parent {0,1} → child {1-7}.
 
         Core 0 does real work in parent but isn't in any child — it gets
@@ -1920,7 +1918,7 @@ class TestAsymmetricBarrier:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -1938,12 +1936,12 @@ class TestAsymmetricBarrier:
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
         check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
 
-    def test_disjoint_repeated_execution(self, device, multi_tensors):
+    def test_disjoint_repeated_execution(self, device):
         """Fully disjoint with repeated execution to catch stale semaphores."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )

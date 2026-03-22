@@ -10,7 +10,12 @@ from typing import Optional
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import DeferredOpDescriptor, LazyOutputList
+from models.experimental.ops.descriptors.op_descriptor import (
+    DeferredOpDescriptor,
+    LazyOutputList,
+    core_range_set_fusion_key,
+    extend_branch_program_cache_key,
+)
 
 
 def _create_layernorm_op_descriptor(
@@ -27,9 +32,13 @@ def _create_layernorm_op_descriptor(
 ) -> "DeferredOpDescriptor":
     """Create a normalization branch descriptor with deferred ``ProgramDescriptor``.
 
-    ``program_cache_key`` matches :meth:`ttnn.LayerNormDeviceOperation.compute_program_hash`
-    (same as the device program cache). Computed without running the program factory.
-    The factory runs only on ``.descriptor`` access (e.g. fusion cache miss).
+    ``program_cache_key`` is based on :meth:`ttnn.LayerNormDeviceOperation.compute_program_hash`
+    (device program cache). For **interleaved** inputs, ``core_range_set`` is not part of that
+    hash but is passed into ``create_descriptor`` — we mix it in via
+    :func:`~models.experimental.ops.descriptors.op_descriptor.extend_branch_program_cache_key`
+    with :func:`~models.experimental.ops.descriptors.op_descriptor.core_range_set_fusion_key`.
+    Computed without running the program factory. The factory runs only on ``.descriptor``
+    access (e.g. fusion cache miss).
 
     **Output tensor allocation is lazy** — ``output_tensors`` is a
     :class:`LazyOutputList` whose slots start as ``None``. Reading a slot
@@ -83,7 +92,13 @@ def _create_layernorm_op_descriptor(
         tensor_args.recip_tensor = recip_tensor
 
     h = ttnn.LayerNormDeviceOperation.compute_program_hash(operation_params, tensor_args)
-    program_cache_key = int(h) & ((1 << 64) - 1)
+    base_key = int(h) & ((1 << 64) - 1)
+    # Interleaved: core_range_set is ``cr_arg`` to create_descriptor and can be absent from ``h``.
+    # Sharded: core grid is already reflected in tensor memory_config / ``h``.
+    if input_tensor.is_sharded():
+        program_cache_key = base_key
+    else:
+        program_cache_key = extend_branch_program_cache_key(base_key, core_range_set_fusion_key(core_range_set))
 
     # Build input list
     inputs = [tensor_args.input]
@@ -96,7 +111,6 @@ def _create_layernorm_op_descriptor(
     if tensor_args.recip_tensor is not None:
         inputs.append(tensor_args.recip_tensor)
 
-    # Lazy output list — allocates on first read, accepts rebind without alloc.
     def _alloc_outputs(slots):
         slots[0] = ttnn.LayerNormDeviceOperation.create_output_tensors(operation_params, tensor_args)
 
@@ -106,7 +120,6 @@ def _create_layernorm_op_descriptor(
     cr_arg = None if input_tensor.is_sharded() else core_range_set
 
     def _run_factory():
-        # output_tensors[0] triggers lazy alloc if not yet materialized.
         out = outputs[0]
         factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
         return factory.create_descriptor(operation_params, tensor_args, out, cr_arg)

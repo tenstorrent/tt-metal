@@ -7,6 +7,41 @@ from typing import Callable, List, NamedTuple, Optional
 import ttnn
 
 
+def core_range_set_fusion_key(core_range_set) -> tuple:
+    """Content-based key for :class:`~ttnn.CoreRangeSet` in fusion branch hashes.
+
+    The Python binding may use object-identity hashing; use this tuple when mixing
+    core placement into :func:`extend_branch_program_cache_key`.
+    """
+    return tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in core_range_set.ranges())
+
+
+def extend_branch_program_cache_key(device_program_hash: int, *extras) -> int:
+    """Mix ``compute_program_hash`` with extra factory-only arguments for fusion lookup.
+
+    Device ops sometimes omit arguments from :meth:`compute_program_hash` that still
+    affect ``create_descriptor`` (e.g. Layernorm ``core_range_set`` for interleaved
+    tensors, passed separately from :class:`~ttnn.LayerNormInputs`). The Python
+    fusion build cache must not treat those configs as identical.
+
+    Args:
+        device_program_hash: Value from ``*_DeviceOperation.compute_program_hash``
+            (typically masked to 64 bits).
+        *extras: Hashable values that participate in program identity but are not
+            covered by the device hash. For core grids prefer
+            :func:`core_range_set_fusion_key` rather than passing ``CoreRangeSet``
+            directly.
+
+    Returns:
+        Integer for :attr:`DeferredOpDescriptor.program_cache_key`. This may differ
+        from ``device_program_hash`` when ``extras`` is non-empty.
+    """
+    base = int(device_program_hash) & ((1 << 64) - 1)
+    if not extras:
+        return base
+    return hash((base, *extras))
+
+
 class LazyOutputList:
     """List-like container whose slots are allocated on first read.
 
@@ -14,8 +49,7 @@ class LazyOutputList:
     fill all slots, then returns the requested one.
 
     On ``__setitem__`` / slice assignment (``[:] = [...]``): writes directly
-    without triggering allocation — this is the hidden-rebind path where cached
-    output tensors are patched in from outside.
+    without triggering allocation — hidden rebind patches cached tensors in.
     """
 
     __slots__ = ("_slots", "_alloc_fn")
@@ -29,31 +63,23 @@ class LazyOutputList:
             self._alloc_fn(self._slots)
             self._alloc_fn = None
 
-    # --- read access triggers lazy alloc ---
-
     def __getitem__(self, idx):
         if isinstance(idx, int):
             if self._slots[idx] is None and self._alloc_fn is not None:
                 self._materialize()
             return self._slots[idx]
-        # slice
         if any(s is None for s in self._slots[idx]) and self._alloc_fn is not None:
             self._materialize()
         return self._slots[idx]
 
-    # --- write access never triggers alloc ---
-
     def __setitem__(self, idx, value):
         self._slots[idx] = value
-        # Any external write (rebind or partial patch) disables the allocator
-        # so a later read of a different slot can't overwrite this one.
         self._alloc_fn = None
 
     def __len__(self):
         return len(self._slots)
 
     def __iter__(self):
-        # Iteration reads all slots — trigger alloc if needed.
         if any(s is None for s in self._slots) and self._alloc_fn is not None:
             self._materialize()
         return iter(self._slots)
@@ -87,8 +113,10 @@ class OpDescriptor(NamedTuple):
 class DeferredOpDescriptor:
     """Branch op with deferred ``ProgramDescriptor`` materialization.
 
-    ``program_cache_key`` is a stable, process-independent integer used for fusion
-    build-cache lookup. It must be computable without calling ``descriptor``.
+    ``program_cache_key`` identifies this branch for fusion build-cache lookup. It
+    must be computable without calling ``descriptor``. Usually it matches the device
+    op's ``compute_program_hash``; when the factory takes side-channel arguments
+    that hash omits, use :func:`extend_branch_program_cache_key`.
 
     The C++ factory runs only when :attr:`descriptor` is first accessed (e.g. fusion
     cache miss, first launch of an eager path, or debugging).
@@ -134,4 +162,11 @@ def is_op_descriptor(item) -> bool:
     return isinstance(item, (OpDescriptor, DeferredOpDescriptor))
 
 
-__all__ = ["OpDescriptor", "DeferredOpDescriptor", "LazyOpDescriptor", "is_op_descriptor"]
+__all__ = [
+    "OpDescriptor",
+    "DeferredOpDescriptor",
+    "LazyOpDescriptor",
+    "core_range_set_fusion_key",
+    "extend_branch_program_cache_key",
+    "is_op_descriptor",
+]

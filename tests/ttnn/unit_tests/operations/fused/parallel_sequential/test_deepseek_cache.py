@@ -129,16 +129,14 @@ class TestDeepSeekV3Cache:
                 ), f"Iteration 0 should add one cache entry, got {len(_BUILD_CACHE)} (expected {cache_size_before_build + 1})"
                 prev_desc_id = id(fused.descriptor)
             else:
-                # Subsequent iterations: cache hit → no new entries
+                # Subsequent iterations: cache hit → no new entries, same descriptor object
                 assert (
                     len(_BUILD_CACHE) == cache_size_before_build + 1
                 ), f"Iteration {i} should hit cache (still {cache_size_before_build + 1} entries), got {len(_BUILD_CACHE)}"
-                # Isolation: each cache hit must return a fresh descriptor copy
-                curr_desc_id = id(fused.descriptor)
-                assert (
-                    curr_desc_id != prev_desc_id
-                ), f"[iter {i}] Cache hit returned same descriptor object (id={curr_desc_id}), expected fresh copy"
-                prev_desc_id = curr_desc_id
+                assert id(fused.descriptor) == prev_desc_id, (
+                    f"[iter {i}] Cache hit must reuse the cached ProgramDescriptor "
+                    f"(id={id(fused.descriptor)}), not allocate a fresh copy (prev={prev_desc_id})"
+                )
 
             # Verify Q norm PCC
             q_golden = torch_rms_norm(torch_q_input.float(), torch_q_weight.float())

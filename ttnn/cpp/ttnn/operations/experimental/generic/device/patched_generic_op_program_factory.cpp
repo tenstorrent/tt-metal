@@ -117,7 +117,17 @@ void patch_program_from_io_tensors(
     tt::tt_metal::host_dispatch_microbench::ScopedTimer _apply_patches_timer(
         tt::tt_metal::host_dispatch_microbench::Slot::PatchedApplySlotPatches);
 
+    const auto check_io_index = [&](std::uint32_t io_idx, const char* ctx) {
+        TT_FATAL(
+            io_idx < cur_addrs.size(),
+            "patched_generic_op: {} io_tensor_index {} out of range ({} io tensors)",
+            ctx,
+            io_idx,
+            cur_addrs.size());
+    };
+
     for (const auto& slot : shared_vars.per_core_runtime_arg_slots) {
+        check_io_index(slot.io_tensor_index, "per-core runtime arg");
         const auto addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;
@@ -127,6 +137,7 @@ void patch_program_from_io_tensors(
     }
 
     for (const auto& slot : shared_vars.common_runtime_arg_slots) {
+        check_io_index(slot.io_tensor_index, "common runtime arg");
         const auto addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;
@@ -136,6 +147,7 @@ void patch_program_from_io_tensors(
     }
 
     for (const auto& slot : shared_vars.cb_tensor_slots) {
+        check_io_index(slot.io_tensor_index, "CB tensor");
         const auto addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;

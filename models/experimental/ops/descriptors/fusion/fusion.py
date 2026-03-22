@@ -11,17 +11,31 @@ only tensor-address slots on repeat launches.
 **Fusion build cache** (``_BUILD_CACHE``): single stable integer key per
 ``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
 Cache lookup never accesses :attr:`DeferredOpDescriptor.descriptor`.
-On a hit, cached device tensors are checked for deallocated mesh storage; stale
-entries for **that** key are dropped so a new mesh after ``close_mesh_device``
-never reuses dead buffers. There is no full-cache sweep (hot-path cost); keys
-that are never queried again may leave inactive rows until
-:func:`clear_build_cache` or process exit. The map is bounded by how many
-distinct fusion shapes you build in one process.
 
-**Steady state:** reuse branch descriptor objects, update their IO lists in place,
-then ``fused.launch()`` (no args) — it refreshes merged IO from the branch refs
-captured at ``build()`` and enqueues. Pass ops to ``launch(*branches)`` only for
-rare rebinds. Alternatively call :meth:`FusedOp.refresh_merged_io` explicitly.
+The cache stores only the fused ``ProgramDescriptor``, semaphores, kernel labels,
+and an output-source map — **no IO tensors**. On a cache hit, a fresh
+:class:`FusedOp` is constructed from the cached descriptor and the caller's
+current branch ops' tensors. This avoids pinning device buffers in the cache.
+
+The cache key includes **mesh identity** (:meth:`MeshDevice.id` when available,
+else Python ``id`` of the device object) from ``build(device=...)`` or inferred
+from branch tensors, so entries never cross different open meshes — required
+because the device program cache behind ``patched_generic_op`` is tied to a
+specific mesh.
+
+**Steady state:** each ``build()`` call creates new branch descriptors (cheap:
+params + hash, no factory), gets a cache hit (reuses the fused
+``ProgramDescriptor``), and ``launch()`` dispatches via ``patched_generic_op``
+which patches only changed tensor-address slots.
+
+**Launch path:** :meth:`FusedOp.launch` copies merged IO from the branch ops
+captured at ``build()`` before dispatch (so in-place branch tensor updates are
+visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
+
+**Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` call
+``build()`` once (until the graph or fusion id changes), then reuse the same
+``FusedOp`` for each ``run()`` while still refreshing merged IO every time — the
+intended pattern for build-once / launch-many without stale handles.
 """
 
 import os
@@ -41,24 +55,26 @@ from models.experimental.ops.descriptors.fusion.common import (
 # =============================================================================
 
 # Fused ``ProgramDescriptor`` + metadata, keyed by ``_fusion_cache_id`` (stable int).
+# No IO tensors are stored — entries are lightweight and never go stale from
+# device buffer deallocation.
 _BUILD_CACHE: Dict[int, "_CacheEntry"] = {}
 
 
 @dataclass
 class _CacheEntry:
-    """Stored in _BUILD_CACHE.  Immutable after construction (except cache eviction).
+    """Stored in ``_BUILD_CACHE``.  Immutable after construction.
 
-    ``fused_op`` and ``cached_ops`` enable **hidden rebind**: on cache hit,
-    ``build()`` patches the cached ops' input tensors from the user's fresh
-    ops and reuses the cached output tensors (same device buffers).
+    Contains everything needed to reconstruct a :class:`FusedOp` on cache hit
+    without re-running codegen/merge. No tensor references are held.
     """
 
     cached_descriptor: Any  # ProgramDescriptor — dispatched via patched_generic_op on hit
     semaphores: tuple  # Keeps GlobalSemaphore L1 alive
     kernel_labels: tuple  # For _apply_kernel_dir file naming
-    output_sources: Tuple[Tuple[int, int], ...]  # (op_idx, tensor_idx) for outputs
-    fused_op: Optional[Any] = None  # FusedOp — returned directly on hidden-rebind hit
-    cached_ops: Optional[Tuple] = None  # Per-position branch ops with stable output tensors
+    # (op_idx, tensor_idx) per merged output; None when the fused op has no outputs.
+    output_sources: Optional[Tuple[Tuple[int, int], ...]]
+    # len(merged input_tensors) after identity dedupe; prealloc on cache hit (no tensor refs).
+    merged_input_len: Optional[int] = None
 
 
 def _flatten_ops(items) -> List[OpDescriptor]:
@@ -106,61 +122,51 @@ def _branch_program_cache_key(op) -> int:
     return ttnn.compute_program_descriptor_hash(op.descriptor)
 
 
-def _fusion_hash_from_ops(items, container_prefix: str, ops: List) -> int:
+def _fusion_mesh_runtime_id(device) -> int:
+    """Process-local mesh identity for fusion cache keys.
+
+    Prefer :meth:`MeshDevice.id` (monotonic mesh id from Metal) over ``id(device)``.
+    """
+    if device is None:
+        return 0
+    mid = getattr(device, "id", None)
+    if callable(mid):
+        try:
+            return int(mid())
+        except (TypeError, ValueError):
+            pass
+    return id(device)
+
+
+def _build_cache_device_id(items, build_device) -> int:
+    """Metal mesh runtime id, or 0 if unknown (no device / no device tensors yet)."""
+    if build_device is not None:
+        return _fusion_mesh_runtime_id(build_device)
+    try:
+        return _fusion_mesh_runtime_id(_extract_device(items))
+    except ValueError:
+        return 0
+
+
+def _fusion_hash_from_ops(items, container_prefix: str, ops: List, device_id: int) -> int:
     """Process-local fusion build-cache id from already-flattened ``ops``."""
     surface = _build_cache_surface_key(items, container_prefix)
-    return hash((surface, tuple(_branch_program_cache_key(op) for op in ops)))
+    return hash((surface, tuple(_branch_program_cache_key(op) for op in ops), device_id))
 
 
-def _fusion_cache_id(items, container_prefix: str) -> int:
-    """Single stable 64-bit fusion build-cache id."""
-    return _fusion_hash_from_ops(items, container_prefix, _flatten_ops(items))
+def _fusion_cache_id(items, container_prefix: str, build_device=None) -> int:
+    """Single stable fusion build-cache id (includes device scope)."""
+    ops = _flatten_ops(items)
+    dev_id = _build_cache_device_id(items, build_device)
+    return _fusion_hash_from_ops(items, container_prefix, ops, dev_id)
 
 
-def _fusion_cache_id_and_ops(items, container_prefix: str) -> Tuple[int, List]:
+def _fusion_cache_id_and_ops(items, container_prefix: str, build_device=None) -> Tuple[int, List]:
     """Return ``(fusion_cache_id, flattened_ops)`` for ``Sequential``/``Parallel`` ``._items``."""
     ops = _flatten_ops(items)
-    cache_id = _fusion_hash_from_ops(items, container_prefix, ops)
+    dev_id = _build_cache_device_id(items, build_device)
+    cache_id = _fusion_hash_from_ops(items, container_prefix, ops, dev_id)
     return cache_id, ops
-
-
-def _tensor_device_storage_ok(tensor) -> bool:
-    """False if *tensor* is a device tensor whose buffer was deallocated (e.g. mesh closed)."""
-    if tensor is None:
-        return True
-    try:
-        if not ttnn.is_tensor_storage_on_device(tensor):
-            return True
-        if not tensor.is_allocated():
-            return False
-        _ = tensor.device()
-        return True
-    except RuntimeError:
-        return False
-
-
-def _fusion_cache_entry_still_live(entry: _CacheEntry) -> bool:
-    """Whether cached branch IO still references live device storage.
-
-    Hidden rebind keeps output tensors from the cold build; after ``close_mesh_device``
-    those ``MeshBuffer``\ s are deallocated while the Python cache entry remains.
-    """
-    if entry.cached_ops is not None:
-        for op in entry.cached_ops:
-            for t in op.input_tensors:
-                if not _tensor_device_storage_ok(t):
-                    return False
-            for t in op.output_tensors:
-                if not _tensor_device_storage_ok(t):
-                    return False
-    elif entry.fused_op is not None:
-        for t in entry.fused_op.input_tensors:
-            if not _tensor_device_storage_ok(t):
-                return False
-        for t in entry.fused_op.output_tensors:
-            if not _tensor_device_storage_ok(t):
-                return False
-    return True
 
 
 def _item_sort_key(item):
@@ -184,6 +190,29 @@ def _make_rebind_output_sources(ops: List, output_source_map) -> Optional[Tuple[
     return tuple((op_id_to_idx[id(op)], t_idx) for op, t_idx in output_source_map)
 
 
+def _infer_output_sources_from_merged(fused_op: "FusedOp", ops: List) -> Tuple[Tuple[int, int], ...]:
+    """Recover (op_idx, tensor_idx) pairs when ``output_source_map`` was empty at cache write.
+
+    Must match tensors in :attr:`FusedOp.output_tensors` to branch ``output_tensors`` by identity.
+    """
+    op_id_to_idx = {id(op): i for i, op in enumerate(ops)}
+    pairs: List[Tuple[int, int]] = []
+    for t in fused_op.output_tensors:
+        tid = id(t)
+        matched = False
+        for op in ops:
+            for t_idx, ot in enumerate(op.output_tensors):
+                if id(ot) == tid:
+                    pairs.append((op_id_to_idx[id(op)], t_idx))
+                    matched = True
+                    break
+            if matched:
+                break
+        if not matched:
+            raise ValueError("fusion cache: merged output tensor not found on branch ops; cannot infer output_sources")
+    return tuple(pairs)
+
+
 def _coerce_mutable_io_opdescriptor(op: OpDescriptor) -> OpDescriptor:
     """Ensure ``input_tensors`` / ``output_tensors`` are lists so in-place rebind works."""
     ins = op.input_tensors if isinstance(op.input_tensors, list) else list(op.input_tensors)
@@ -194,7 +223,7 @@ def _coerce_mutable_io_opdescriptor(op: OpDescriptor) -> OpDescriptor:
 
 
 def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_source_map) -> _CacheEntry:
-    """Record a cache entry from a freshly-built FusedOp."""
+    """Record a slim cache entry from a freshly-built FusedOp (no tensor refs)."""
     # Memoize the descriptor hash so patched_generic_op skips the full
     # kernel/CB/semaphore walk on every launch (O(1) instead of O(descriptor)).
     desc = fused_op.descriptor
@@ -202,29 +231,55 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_sou
         desc.custom_program_hash = ttnn.compute_program_descriptor_hash(desc)
 
     op_id_to_idx = {id(op): idx for idx, op in enumerate(ops)}
-    output_sources = tuple((op_id_to_idx[id(op)], t_idx) for op, t_idx in output_source_map)
+    if output_source_map:
+        output_sources: Optional[Tuple[Tuple[int, int], ...]] = tuple(
+            (op_id_to_idx[id(op)], t_idx) for op, t_idx in output_source_map
+        )
+    elif fused_op.output_tensors:
+        output_sources = _infer_output_sources_from_merged(fused_op, ops)
+    else:
+        output_sources = None
 
     return _CacheEntry(
         cached_descriptor=fused_op.descriptor,
         semaphores=fused_op.semaphores,
         kernel_labels=fused_op.kernel_labels,
         output_sources=output_sources,
-        fused_op=fused_op,
-        cached_ops=tuple(ops),
+        merged_input_len=len(fused_op.input_tensors),
     )
 
 
 def _collect_merged_io_from_ops(entry: _CacheEntry, ops: List) -> Tuple[List, List]:
     """Deduped inputs + outputs for a cache entry (no branch ``.descriptor`` access)."""
-    all_inputs: List = []
     seen_ids: Set[int] = set()
-    for op in ops:
-        for t in op.input_tensors:
-            tid = id(t)
-            if tid not in seen_ids:
-                all_inputs.append(t)
-                seen_ids.add(tid)
-    all_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    n_in = entry.merged_input_len
+    if n_in is not None:
+        all_inputs: List = [None] * n_in
+        i = 0
+        for op in ops:
+            for t in op.input_tensors:
+                tid = id(t)
+                if tid not in seen_ids:
+                    seen_ids.add(tid)
+                    all_inputs[i] = t
+                    i += 1
+        if i != n_in:
+            raise ValueError(
+                "fusion cache: merged_input_len mismatch — branch inputs changed identity "
+                f"since cache write (expected {n_in} deduped inputs, got {i})."
+            )
+    else:
+        all_inputs = []
+        for op in ops:
+            for t in op.input_tensors:
+                tid = id(t)
+                if tid not in seen_ids:
+                    all_inputs.append(t)
+                    seen_ids.add(tid)
+    if entry.output_sources:
+        all_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    else:
+        all_outputs = []
     return all_inputs, all_outputs
 
 
@@ -244,31 +299,25 @@ def _fused_op_from_cache_entry(entry: _CacheEntry, ops: List) -> "FusedOp":
     )
 
 
-def _hidden_rebind_from_cache(entry: _CacheEntry, fresh_ops: List) -> "FusedOp":
-    """Fast cache-hit path: patch cached ops' inputs, reuse cached outputs.
-
-    For each position *i*:
-    1. Copy ``input_tensors`` from the user's fresh op into the cached op
-       (so ``refresh_merged_io`` picks up current inputs).
-    2. Copy the cached op's ``output_tensors`` into the user's fresh op
-       (so the user can read results via ``branch.output_tensors[0]``).
-
-    Output tensors are stable device buffers allocated during the first
-    (cold) build.  Reuse is safe because outputs are write targets — the
-    device overwrites them on each ``launch()``, and command-queue ordering
-    prevents overlap.
-    """
-    cached_ops = entry.cached_ops
-    for i, fresh_op in enumerate(fresh_ops):
-        cached_ops[i].input_tensors[:] = fresh_op.input_tensors
-        fresh_op.output_tensors[:] = cached_ops[i].output_tensors
-    entry.fused_op.refresh_merged_io(list(cached_ops))
-    return entry.fused_op
-
-
 def clear_build_cache() -> None:
     """Clear the fusion build cache."""
     _BUILD_CACHE.clear()
+
+
+def _container_run(container: Any, surface_prefix: str, device=None, kernel_dir: Optional[str] = None):
+    """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`."""
+    cache_device = device
+    if cache_device is None:
+        try:
+            cache_device = _extract_device(container._items)
+        except ValueError:
+            cache_device = None
+    cache_id, ops = _fusion_cache_id_and_ops(container._items, surface_prefix, cache_device)
+    sig = (cache_id, tuple(id(op) for op in ops), kernel_dir)
+    if container._run_fused is None or container._run_signature != sig:
+        container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
+        container._run_signature = sig
+    return container._run_fused.launch()
 
 
 # =============================================================================
@@ -282,13 +331,12 @@ class FusedOp:
     Holds a merged ``OpDescriptor`` (fused ``ProgramDescriptor`` + IO lists) and
     keeps references to global semaphores used by the fused program.
 
-    **Launch:** :meth:`launch` with no arguments refreshes merged IO from the
-    branch ``OpDescriptor`` objects stored at ``build()`` time, then enqueues via
-    ``patched_generic_op`` (device cache patches address slots). Pass
-    ``launch(*branches)`` to refresh from a different op tuple when needed.
+    **Launch:** :meth:`launch` refreshes merged IO from the branch ops stored at
+    ``build()`` time, then dispatches (in-place branch tensor updates are picked
+    up). Pass ``launch(*branches)`` to refresh from other op objects.
 
-    **Refresh IO without launching:** :meth:`refresh_merged_io` (or the
-    ``refresh_merged_io_from_*`` helpers) after mutating branch ops' tensor lists.
+    **Manual refresh:** :meth:`refresh_merged_io` / ``refresh_merged_io_from_*``
+    to update merged lists without launching.
     """
 
     __slots__ = (
@@ -312,6 +360,9 @@ class FusedOp:
         self.op = op
         self.semaphores = semaphores
         self.kernel_labels = kernel_labels
+        # Empty tuple is not None but would skip outputs in refresh_merged_io (same bug as missing map).
+        if rebind_output_sources is not None and len(rebind_output_sources) == 0:
+            rebind_output_sources = None
         self._rebind_output_sources = rebind_output_sources
         self._branch_ops = branch_ops
         self._changed_io_indices = None
@@ -329,15 +380,16 @@ class FusedOp:
         return self.op.output_tensors
 
     def launch(self, *branch_ops_override: Any):
-        """Refresh merged IO from branch ops, enqueue, return outputs.
+        """Enqueue via ``patched_generic_op`` using merged IO; return outputs.
 
-        With no arguments, uses the branch ops captured at ``build()`` time
-        (which ``_hidden_rebind_from_cache`` patches with fresh inputs on
-        cache hit).  With arguments, refreshes from the given ops instead.
+        With no positional arguments, merged IO is copied from the branch ops
+        captured at ``build()`` (so in-place updates to branch tensor lists are
+        visible before dispatch). With one or more positional arguments, those ops
+        are passed to :meth:`refresh_merged_io` instead.
 
-        ``patched_generic_op`` internally diffs io_tensor addresses against
-        the previous dispatch and skips patching unchanged slots (weights,
-        reused outputs).  ``_changed_io_indices`` records which slots changed.
+        ``patched_generic_op`` diffs io_tensor addresses against the previous
+        dispatch and skips patching unchanged slots. ``_changed_io_indices``
+        records which slots changed.
         """
         if branch_ops_override:
             self.refresh_merged_io(list(branch_ops_override))
@@ -367,7 +419,7 @@ class FusedOp:
                     seen_ids.add(tid)
 
         out_list = self.op.output_tensors
-        if self._rebind_output_sources is not None:
+        if self._rebind_output_sources:
             all_outputs = []
             for idx, (pi, ti) in enumerate(self._rebind_output_sources):
                 new_out = ops[pi].output_tensors[ti]
@@ -524,29 +576,37 @@ class Sequential:
         if not items:
             raise ValueError("Sequential() requires at least 1 item")
         self._items = list(items)
+        self._run_fused: Optional[FusedOp] = None
+        self._run_signature: Optional[Tuple] = None
+
+    def invalidate_run(self) -> None:
+        """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
+        self._run_fused = None
+        self._run_signature = None
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
+        self.invalidate_run()
         self._items.append(item)
         return self
 
     def build(self, device=None, kernel_dir: str = None) -> FusedOp:
-        """Merge into one ``FusedOp``. Cache hit skips codegen; see module docstring.
+        """Merge into one ``FusedOp``. Cache hit skips codegen and fills merged IO from branches.
 
         Args:
             device: Inferred from tensors when omitted.
             kernel_dir: If set, kernel sources are written as files (existing files kept).
         """
-        cache_id, ops = _fusion_cache_id_and_ops(self._items, "S")
+        cache_device = device
+        if cache_device is None:
+            try:
+                cache_device = _extract_device(self._items)
+            except ValueError:
+                cache_device = None
+        cache_id, ops = _fusion_cache_id_and_ops(self._items, "S", cache_device)
         entry = _BUILD_CACHE.get(cache_id)
-        if entry is not None and not _fusion_cache_entry_still_live(entry):
-            del _BUILD_CACHE[cache_id]
-            entry = None
         if entry is not None:
-            if entry.fused_op is not None and entry.cached_ops is not None:
-                result = _hidden_rebind_from_cache(entry, ops)
-            else:
-                result = _fused_op_from_cache_entry(entry, ops)
+            result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
             return result
@@ -570,8 +630,20 @@ class Sequential:
         return fused
 
     def build_launch(self, device=None, kernel_dir: str = None):
-        """``build()`` then ``launch()`` (merged IO refreshed from branch ops)."""
+        """``build()`` then ``launch()``."""
         return self.build(device=device, kernel_dir=kernel_dir).launch()
+
+    def run(self, device=None, kernel_dir: str = None):
+        """``build()`` once per stable graph, then ``launch()`` each call.
+
+        Reuses one :class:`FusedOp` while the fusion cache id and branch op object
+        identities match. Each ``launch`` still refreshes merged IO from the current
+        branch tensor lists (safe for in-place activation swaps).
+
+        Invalidates automatically when :meth:`add` is used; call
+        :meth:`invalidate_run` if you replace entries in ``_items`` in place.
+        """
+        return _container_run(self, "S", device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -602,7 +674,7 @@ class Parallel:
 
         # Steady state (same op objects, in-place IO): one call per forward
         parallel = Parallel(op_a, op_b)
-        parallel.build_launch()
+        parallel.run()
 
         # As part of a Sequential
         fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
@@ -612,29 +684,37 @@ class Parallel:
         if len(items) < 2:
             raise ValueError("Parallel() requires at least 2 items")
         self._items = list(items)
+        self._run_fused: Optional[FusedOp] = None
+        self._run_signature: Optional[Tuple] = None
+
+    def invalidate_run(self) -> None:
+        """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
+        self._run_fused = None
+        self._run_signature = None
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
+        self.invalidate_run()
         self._items.append(item)
         return self
 
     def build(self, device=None, kernel_dir: str = None) -> FusedOp:
-        """Merge branches into one ``FusedOp``. Cache hit refreshes IO from branch lists only.
+        """Merge branches into one ``FusedOp``. Cache hit fills merged IO from branch lists.
 
         Args:
             device: Inferred from tensors when omitted.
             kernel_dir: If set, kernel sources are written as files (existing files kept).
         """
-        cache_id, ops = _fusion_cache_id_and_ops(self._items, "P")
+        cache_device = device
+        if cache_device is None:
+            try:
+                cache_device = _extract_device(self._items)
+            except ValueError:
+                cache_device = None
+        cache_id, ops = _fusion_cache_id_and_ops(self._items, "P", cache_device)
         entry = _BUILD_CACHE.get(cache_id)
-        if entry is not None and not _fusion_cache_entry_still_live(entry):
-            del _BUILD_CACHE[cache_id]
-            entry = None
         if entry is not None:
-            if entry.fused_op is not None and entry.cached_ops is not None:
-                result = _hidden_rebind_from_cache(entry, ops)
-            else:
-                result = _fused_op_from_cache_entry(entry, ops)
+            result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
                 result._apply_kernel_dir(kernel_dir)
             return result
@@ -658,8 +738,20 @@ class Parallel:
         return fused
 
     def build_launch(self, device=None, kernel_dir: str = None):
-        """``build()`` then ``launch()`` (merged IO refreshed from branch ops)."""
+        """``build()`` then ``launch()``."""
         return self.build(device=device, kernel_dir=kernel_dir).launch()
+
+    def run(self, device=None, kernel_dir: str = None):
+        """``build()`` once per stable graph, then ``launch()`` each call.
+
+        Reuses one :class:`FusedOp` while the fusion cache id and branch op object
+        identities match. Each ``launch`` still refreshes merged IO from the current
+        branch tensor lists (safe for in-place activation swaps).
+
+        Invalidates automatically when :meth:`add` is used; call
+        :meth:`invalidate_run` if you replace entries in ``_items`` in place.
+        """
+        return _container_run(self, "P", device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
