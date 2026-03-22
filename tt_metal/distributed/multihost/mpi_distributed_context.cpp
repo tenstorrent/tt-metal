@@ -154,10 +154,14 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
 static void handle_rank_failure(
     MPI_Comm comm, int cached_rank, int error_code, const char* operation, FailurePolicy policy) {
     // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
-    std::string failed = "unknown";
-    if (error_code != MPIX_ERR_REVOKED) {
-        failed = identify_failed_ranks(comm);
-    }
+    // Always attempt identify_failed_ranks() regardless of error code — even for
+    // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_failure_ack() may still succeed
+    // (the ack is local state); if it does, subsequent calls to failed_ranks() will
+    // find the acked group.  If it fails, identify_failed_ranks() gracefully returns
+    // "unknown".  Skipping the ack for REVOKED caused failed_ranks() to return empty
+    // on ranks that saw REVOKED instead of PROC_FAILED, because the post-revoke ack
+    // in failed_ranks() would fail.
+    std::string failed = identify_failed_ranks(comm);
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
     MPIX_Comm_revoke(comm);
 
