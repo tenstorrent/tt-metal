@@ -17,8 +17,8 @@ LLK_UBUNTU_BASE_IMAGE="${LLK_UBUNTU_BASE_IMAGE:-ubuntu:22.04}"
 
 # LLK Docker images are built from the submodule content
 LLK_PATH="tt_metal/third_party/tt_llk"
-if [[ ! -d "$LLK_PATH" || ! -f "$LLK_PATH/.github/scripts/get-docker-tag.sh" ]]; then
-  echo "::error::tt_llk submodule is missing or not checked out (expected $LLK_PATH with .github/scripts/get-docker-tag.sh)." >&2
+if [[ ! -d "$LLK_PATH" || ! -f "$LLK_PATH/.github/Dockerfile.base" ]]; then
+  echo "::error::tt_llk submodule is missing or not checked out (expected $LLK_PATH with .github/Dockerfile.base)." >&2
   exit 1
 fi
 
@@ -34,8 +34,10 @@ REPO="${GITHUB_REPOSITORY:-tenstorrent/tt-metal}"
 BASE_IMAGE_NAME=ghcr.io/$REPO/tt-llk-base-ubuntu-22-04
 CI_IMAGE_NAME=ghcr.io/$REPO/tt-llk-ci-ubuntu-22-04
 
-# Compute the hash of the Dockerfile (run from LLK path since script uses relative paths)
-DOCKER_TAG=$(cd "$LLK_PATH" && ./.github/scripts/get-docker-tag.sh)
+# Compute the hash of the Dockerfile (uses migrated script in parent repo)
+# MIGRATION: This now uses .github/scripts/llk-get-docker-tag.sh instead of
+# the submodule's get-docker-tag.sh, so changes to this script will trigger rebuilds
+DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
 echo "Docker tag: $DOCKER_TAG"
 
 # Are we on main branch - use GITHUB_REF_NAME if available (GitHub Actions), otherwise fall back to git

@@ -172,11 +172,13 @@ jobs:
         run: |
           set -euo pipefail
           LLK="tt_metal/third_party/tt_llk"
-          if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/scripts/get-docker-tag.sh" ]; then
-            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/scripts/get-docker-tag.sh). Initialize submodules in CI checkout or fix .gitmodules."
+          # MIGRATION: Uses migrated script in parent repo (.github/scripts/llk-get-docker-tag.sh)
+          # instead of the submodule's script, so changes to build scripts trigger rebuilds
+          if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
+            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
             exit 1
           fi
-          DOCKER_TAG=$(cd "$LLK" && ./.github/scripts/get-docker-tag.sh)
+          DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
           TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
           echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
           if docker manifest inspect "$TAG" > /dev/null 2>&1; then
