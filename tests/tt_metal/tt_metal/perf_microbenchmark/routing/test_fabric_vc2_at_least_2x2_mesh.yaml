@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# VC2 functional tests -- requires TT_METAL_ENABLE_FABRIC_VC2=1 environment variable
+
+Tests:
+  ### VC2 NON-Z NEIGHBOR EXCHANGE ###
+  - name: "VC2NeighborExchangeUnicast"
+    fabric_setup:
+      topology: NeighborExchange
+      use_vc2: true
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [2048]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100
+
+    patterns:
+      - type: neighbor_exchange

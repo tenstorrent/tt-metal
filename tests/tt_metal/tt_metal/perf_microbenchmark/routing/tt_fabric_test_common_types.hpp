@@ -67,6 +67,7 @@ struct ParsedSenderConfig {
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    bool use_vc2 = false;             // VC2: use private VC2 connection API instead of public API
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -105,6 +106,7 @@ struct SenderConfig {
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;  // Link ID for multi-link tests
+    bool use_vc2 = false;  // VC2: use private VC2 connection API instead of public API
 };
 
 // Sync configuration for a single device
@@ -139,6 +141,7 @@ struct TestFabricSetup {
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
     std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
     bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
+    bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
 struct HighLevelPatternConfig {

@@ -432,6 +432,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
         fabric_setup.enable_channel_trimming = parse_scalar<bool>(fabric_setup_yaml["enable_channel_trimming"]);
     }
 
+    if (fabric_setup_yaml["use_vc2"]) {
+        fabric_setup.use_vc2 = parse_scalar<bool>(fabric_setup_yaml["use_vc2"]);
+    }
+
     return fabric_setup;
 }
 
@@ -1043,6 +1047,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
     resolved_sender.noc_id = parsed_sender.noc_id;
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);
+    resolved_sender.use_vc2 = parsed_sender.use_vc2;
 
     resolve_core_config(parsed_sender, resolved_sender);
 
@@ -2027,7 +2032,8 @@ void TestConfigBuilder::add_senders_from_pairs(
 
     test.senders.reserve(test.senders.size() + generated_senders.size());
     for (const auto& [src_node, patterns] : generated_senders) {
-        test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
+        test.senders.emplace_back(
+            ParsedSenderConfig{.device = src_node, .patterns = patterns, .use_vc2 = test.fabric_setup.use_vc2});
     }
 }
 
@@ -2126,6 +2132,7 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
                 split_sender.core = sender.core;
                 split_sender.noc_id = sender.noc_id;
                 split_sender.link_id = sender.link_id;
+                split_sender.use_vc2 = sender.use_vc2;
                 split_sender.patterns = std::move(patterns);
                 new_senders.push_back(std::move(split_sender));
             }
@@ -2391,6 +2398,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
     out << YAML::Key << "link_id";
     out << YAML::Value << config.link_id;
 
+    if (config.use_vc2) {
+        out << YAML::Key << "use_vc2" << YAML::Value << true;
+    }
+
     out << YAML::Key << "patterns";
     out << YAML::Value;
     out << YAML::BeginSeq;
@@ -2520,6 +2531,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     out << YAML::Value << config.num_links;
     if (config.enable_channel_trimming) {
         out << YAML::Key << "enable_channel_trimming" << YAML::Value << true;
+    }
+    if (config.use_vc2) {
+        out << YAML::Key << "use_vc2" << YAML::Value << true;
     }
     out << YAML::EndMap;
 }
