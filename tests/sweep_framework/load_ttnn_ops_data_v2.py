@@ -57,6 +57,12 @@ def _load_manifest(manifest_path=None):
             data = yaml.safe_load(f) or {}
     else:
         data = {}
+        # Create an on-disk skeleton so subsequent append operations produce valid YAML
+        manifest_dir = os.path.dirname(path)
+        if manifest_dir and not os.path.exists(manifest_dir):
+            os.makedirs(manifest_dir, exist_ok=True)
+        with open(path, "w") as f:
+            f.write("targets: {}\nregistry:\n")
     data.setdefault("targets", {})
     data.setdefault("registry", [])
     return data, path
@@ -89,8 +95,13 @@ def _append_registry_entries(entries, path):
             f.write("    hardware: {" + ", ".join(hw_parts) + "}\n")
             f.write(f"    tt_metal_sha: {entry.get('tt_metal_sha') or 'null'}\n")
             f.write(f"    config_count: {entry.get('config_count', 0)}\n")
-            f.write(f"    loaded_at: '{entry.get('loaded_at', '')}'\n")
-            f.write(f"    notes: '{entry.get('notes', '')}'\n")
+            loaded_at = str(entry.get("loaded_at", ""))
+            notes = str(entry.get("notes", ""))
+            # Escape single quotes for YAML single-quoted scalars
+            loaded_at_escaped = loaded_at.replace("'", "''")
+            notes_escaped = notes.replace("'", "''")
+            f.write(f"    loaded_at: '{loaded_at_escaped}'\n")
+            f.write(f"    notes: '{notes_escaped}'\n")
             f.write("\n")
 
 
@@ -1004,10 +1015,16 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=Non
             source_rows = cur.fetchall()
 
             # Use full_config_json for arguments (preserves exact original structure)
+            # psycopg2 may return JSONB as a string in some environments
             if full_config_json:
+                if isinstance(full_config_json, str):
+                    try:
+                        full_config_json = json.loads(full_config_json)
+                    except (TypeError, ValueError):
+                        full_config_json = {}
                 arguments = full_config_json.get("arguments", {})
             else:
-                arguments = []
+                arguments = {}
 
             config_dict = {"arguments": arguments, "config_hash": config_hash}
 
@@ -1179,6 +1196,12 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema="ttnn_ops_
         source_file,
         hf_model_identifier,
     ) in rows:
+        # psycopg2 may return JSONB as a string in some environments
+        if isinstance(full_config_json, str):
+            try:
+                full_config_json = json.loads(full_config_json)
+            except (TypeError, ValueError):
+                full_config_json = {}
         arguments = full_config_json.get("arguments", {}) if full_config_json else {}
 
         exec_machine_info = machine_info.copy()
@@ -1609,7 +1632,13 @@ def reconstruct_single_operation(operation_name, output_path=None):
         )
         source_rows = cur.fetchall()
 
-        arguments = full_config_json.get("arguments", {}) if full_config_json else []
+        # psycopg2 may return JSONB as a string in some environments
+        if isinstance(full_config_json, str):
+            try:
+                full_config_json = json.loads(full_config_json)
+            except (TypeError, ValueError):
+                full_config_json = {}
+        arguments = full_config_json.get("arguments", {}) if full_config_json else {}
         config_dict = {"config_hash": config_hash, "arguments": arguments}
 
         executions = []
