@@ -1518,8 +1518,8 @@ class TestManifestEdgeCases:
         models = _resolve_manifest_with_models(str(f))
         assert models[538] == {"whisper"}  # only whisper, not llama/falcon
 
-    def test_custom_scope_group_name_ignored(self, tmp_path):
-        """Only lead_models and model_traced scopes are recognized."""
+    def test_custom_scope_group_scope_semantics(self, tmp_path):
+        """Custom groups are included for scope=None but ignored for explicit lead_models/model_traced scopes."""
         f = tmp_path / "m.yaml"
         _write_manifest(
             f,
