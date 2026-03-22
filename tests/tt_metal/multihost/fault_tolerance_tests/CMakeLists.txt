@@ -18,6 +18,11 @@ target_include_directories(
 )
 target_link_libraries(fault_tolerance PRIVATE test_metal_common_libs)
 
+# mpi_distributed_context.hpp includes <mpi.h>; distributed links MPI privately so includes do not propagate.
+if(TARGET OpenMPI::MPI)
+    target_link_libraries(fault_tolerance PRIVATE OpenMPI::MPI)
+endif()
+
 # Target for all STL tests regardless of duration
 add_executable(fault_tolerance_tests)
 set_target_properties(
@@ -27,3 +32,6 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 target_link_libraries(fault_tolerance_tests PRIVATE TT::Metalium::Test::Distributed::FaultTolerance)
+if(TARGET OpenMPI::MPI)
+    target_link_libraries(fault_tolerance_tests PRIVATE OpenMPI::MPI)
+endif()

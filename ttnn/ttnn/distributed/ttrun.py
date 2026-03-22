@@ -5,6 +5,7 @@
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
 import atexit
+import enum
 import os
 import shlex
 import signal
@@ -13,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -27,6 +29,208 @@ DEFAULT_JIT_SCRATCH = Path("/tmp/tt-jit-build")
 DEFAULT_CACHE_FALLBACK = Path("/tmp/tt-metal-cache")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+
+# --- Exit code conventions (Section 4.2 of ulfm-rank-reinit-architecture.md) ---
+# These structured exit codes allow CI to distinguish "test bug" from
+# "infrastructure flake", enabling smarter retry policies.
+EXIT_SUCCESS = 0  # All ranks completed successfully
+EXIT_APP_ERROR = 1  # Application/test error (assertion failed, all ranks alive)
+EXIT_RANK_FAILURE = 2  # Rank failure — at least one rank died (infrastructure error)
+EXIT_RECOVERY_FAILED = 3  # Rank failure — recovery attempted but failed
+EXIT_ULFM_FAST_FAIL = 70  # ULFM fast-fail: _exit(70) from C++ handler or Python mpi_fault.py
+EXIT_TIMEOUT = 124  # Wall-clock timeout (same convention as Unix `timeout`)
+EXIT_SIGINT = 130  # 128 + SIGINT (2)
+EXIT_SIGKILL = 137  # 128 + SIGKILL (9) — typically OOM killer
+
+
+class ExitCategory(enum.Enum):
+    """Classification of MPI process exit codes for CI triage."""
+
+    SUCCESS = "success"
+    APP_ERROR = "app_error"  # Test/application logic failure
+    ULFM_FAST_FAIL = "ulfm_fast_fail"  # ULFM detected rank failure, exited 70
+    RANK_SIGNAL = "rank_signal"  # Rank killed by signal (SIGKILL, SIGSEGV, etc.)
+    FINALIZE_TIMEOUT = "finalize_timeout"  # MPI_Finalize watchdog triggered (exit 70 + SIGALRM)
+    TIMEOUT = "timeout"  # tt-run wall-clock timeout
+    INTERRUPTED = "interrupted"  # User interrupt (SIGINT/SIGTERM)
+    INFRA_ERROR = "infra_error"  # Infrastructure / unknown failure
+
+
+# Map well-known signal numbers to human-readable names
+_SIGNAL_NAMES = {
+    1: "SIGHUP",
+    2: "SIGINT",
+    3: "SIGQUIT",
+    4: "SIGILL",
+    6: "SIGABRT",
+    7: "SIGBUS",
+    8: "SIGFPE",
+    9: "SIGKILL",
+    11: "SIGSEGV",
+    13: "SIGPIPE",
+    14: "SIGALRM",
+    15: "SIGTERM",
+}
+
+
+@dataclass
+class ExitCodeInterpretation:
+    """Structured interpretation of an MPI process exit code."""
+
+    raw_code: int
+    category: ExitCategory
+    signal_num: Optional[int]  # If killed by signal, the signal number
+    signal_name: Optional[str]  # Human-readable signal name
+    summary: str  # One-line human-readable summary
+    ci_exit_code: int  # Normalized exit code for CI (0, 1, 2, 3, 124, 130)
+
+
+def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
+    """Interpret an mpirun process return code into a structured result.
+
+    MPI launchers encode exit information in the return code:
+    - 0: all ranks exited successfully
+    - 1-127: application-level exit code from a rank
+    - 128+N: rank killed by signal N (e.g., 137 = 128+9 = SIGKILL)
+    - Negative values (from subprocess.Popen): killed by signal abs(returncode)
+    - 70: ULFM fast-fail (_exit(70) from C++ handler or Python mpi_fault.py)
+
+    Returns:
+        ExitCodeInterpretation with category, signal info, and CI exit code.
+    """
+    if returncode == 0:
+        return ExitCodeInterpretation(
+            raw_code=0,
+            category=ExitCategory.SUCCESS,
+            signal_num=None,
+            signal_name=None,
+            summary="All ranks completed successfully",
+            ci_exit_code=EXIT_SUCCESS,
+        )
+
+    # Negative return code from subprocess: killed by signal
+    if returncode < 0:
+        sig = abs(returncode)
+        sig_name = _SIGNAL_NAMES.get(sig, f"SIG{sig}")
+        if sig == signal.SIGINT:
+            return ExitCodeInterpretation(
+                raw_code=returncode,
+                category=ExitCategory.INTERRUPTED,
+                signal_num=sig,
+                signal_name=sig_name,
+                summary=f"MPI job interrupted by {sig_name}",
+                ci_exit_code=EXIT_SIGINT,
+            )
+        return ExitCodeInterpretation(
+            raw_code=returncode,
+            category=ExitCategory.RANK_SIGNAL,
+            signal_num=sig,
+            signal_name=sig_name,
+            summary=f"Rank killed by {sig_name} ({sig})",
+            ci_exit_code=EXIT_RANK_FAILURE,
+        )
+
+    # Exit code 70: ULFM fast-fail path
+    # The C++ handler (_exit(70)) and Python mpi_fault.py (sys.exit(70)) both
+    # use 70 (EX_SOFTWARE) to signal "rank failure detected via ULFM".
+    # This also covers MPI_Finalize watchdog timeout (SIGALRM -> _exit(70)).
+    if returncode == EXIT_ULFM_FAST_FAIL:
+        return ExitCodeInterpretation(
+            raw_code=70,
+            category=ExitCategory.ULFM_FAST_FAIL,
+            signal_num=None,
+            signal_name=None,
+            summary="ULFM fast-fail: rank failure detected (exit 70)",
+            ci_exit_code=EXIT_RANK_FAILURE,
+        )
+
+    # Exit code 124: timeout (from tt-run's own timeout or Unix timeout(1))
+    if returncode == EXIT_TIMEOUT:
+        return ExitCodeInterpretation(
+            raw_code=124,
+            category=ExitCategory.TIMEOUT,
+            signal_num=None,
+            signal_name=None,
+            summary="MPI job exceeded wall-clock timeout",
+            ci_exit_code=EXIT_TIMEOUT,
+        )
+
+    # Exit code 128+N: rank killed by signal N
+    if returncode > 128:
+        sig = returncode - 128
+        sig_name = _SIGNAL_NAMES.get(sig, f"SIG{sig}")
+
+        # SIGALRM (14) with exit 142 (128+14) may indicate MPI_Finalize watchdog
+        if sig == signal.SIGALRM:
+            return ExitCodeInterpretation(
+                raw_code=returncode,
+                category=ExitCategory.FINALIZE_TIMEOUT,
+                signal_num=sig,
+                signal_name="SIGALRM",
+                summary="MPI_Finalize watchdog timeout (SIGALRM)",
+                ci_exit_code=EXIT_RANK_FAILURE,
+            )
+
+        # SIGINT -> user interrupt
+        if sig == signal.SIGINT:
+            return ExitCodeInterpretation(
+                raw_code=returncode,
+                category=ExitCategory.INTERRUPTED,
+                signal_num=sig,
+                signal_name=sig_name,
+                summary=f"MPI job interrupted ({sig_name})",
+                ci_exit_code=EXIT_SIGINT,
+            )
+
+        # SIGKILL often means OOM killer
+        oom_hint = " (possible OOM kill)" if sig == signal.SIGKILL else ""
+        return ExitCodeInterpretation(
+            raw_code=returncode,
+            category=ExitCategory.RANK_SIGNAL,
+            signal_num=sig,
+            signal_name=sig_name,
+            summary=f"Rank killed by {sig_name} ({sig}){oom_hint}",
+            ci_exit_code=EXIT_RANK_FAILURE,
+        )
+
+    # Exit codes 1-127 (excluding 70): application/test error
+    return ExitCodeInterpretation(
+        raw_code=returncode,
+        category=ExitCategory.APP_ERROR,
+        signal_num=None,
+        signal_name=None,
+        summary=f"Application error (exit code {returncode})",
+        ci_exit_code=EXIT_APP_ERROR,
+    )
+
+
+def _log_exit_interpretation(interp: ExitCodeInterpretation) -> None:
+    """Log a structured diagnostic for the exit code interpretation.
+
+    Matches the output format described in Section 6.3 of the architecture doc.
+    """
+    if interp.category == ExitCategory.SUCCESS:
+        logger.info(f"{TT_RUN_PREFIX} {interp.summary}")
+        return
+
+    # Build structured diagnostic block
+    lines = [
+        f"{TT_RUN_PREFIX} {'='*60}",
+        f"{TT_RUN_PREFIX} EXIT CODE INTERPRETATION",
+        f"{TT_RUN_PREFIX}   Raw exit code : {interp.raw_code}",
+        f"{TT_RUN_PREFIX}   Category      : {interp.category.value}",
+    ]
+    if interp.signal_num is not None:
+        lines.append(f"{TT_RUN_PREFIX}   Signal        : {interp.signal_name} ({interp.signal_num})")
+    lines.append(f"{TT_RUN_PREFIX}   Summary       : {interp.summary}")
+    lines.append(f"{TT_RUN_PREFIX}   CI exit code  : {interp.ci_exit_code}")
+    lines.append(f"{TT_RUN_PREFIX} {'='*60}")
+
+    # Use error level for rank failures, warning for app errors
+    log_fn = logger.error if interp.ci_exit_code == EXIT_RANK_FAILURE else logger.warning
+    for line in lines:
+        log_fn(line)
+
 
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
@@ -76,6 +280,64 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         )
     elif verbose:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
+
+
+# Cached result for OpenMPI version detection (None = not yet checked)
+_openmpi_major_version: Optional[int] = None
+
+
+def _detect_openmpi_major_version() -> Optional[int]:
+    """Detect the major version of the installed OpenMPI by parsing mpirun --version.
+
+    Returns:
+        The major version number (e.g. 4 or 5), or None if detection fails.
+    """
+    global _openmpi_major_version
+    if _openmpi_major_version is not None:
+        return _openmpi_major_version
+
+    try:
+        result = subprocess.run(
+            ["mpirun", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # OpenMPI output looks like: "mpirun (Open MPI) 5.0.3" or similar
+        for line in result.stdout.splitlines():
+            if "Open MPI" in line:
+                # Extract version string after "Open MPI) "
+                # e.g. "mpirun (Open MPI) 5.0.3" -> "5.0.3"
+                parts = line.split(")")
+                if len(parts) >= 2:
+                    version_str = parts[-1].strip()
+                    major = int(version_str.split(".")[0])
+                    _openmpi_major_version = major
+                    return major
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        # Best-effort detection: failures are expected on systems without mpirun
+        # or when the output format changes. Log at debug and fall back to None.
+        logger.debug(f"{TT_RUN_PREFIX} Failed to detect OpenMPI version: {exc}")
+
+    return None
+
+
+def _get_abort_on_failure_mca_param() -> str:
+    """Return the MCA param name for 'abort all ranks on non-zero exit'.
+
+    OpenMPI 5.x replaced the ORTE runtime layer with PRRTE and renamed many
+    MCA parameters. ``orte_abort_on_non_zero_status`` still works as an alias
+    in 5.x, but the canonical name is ``prte_abort_on_non_zero_status``.
+
+    We detect the OpenMPI major version from ``mpirun --version`` and return
+    the correct parameter name. If detection fails, we default to the orte_
+    variant which is accepted (with a deprecation warning) on both 4.x and 5.x.
+    """
+    major = _detect_openmpi_major_version()
+    if major is not None and major >= 5:
+        return "prte_abort_on_non_zero_status"
+    # Safe default: works on 4.x natively and on 5.x via alias
+    return "orte_abort_on_non_zero_status"
 
 
 class RankBinding(BaseModel):
@@ -716,6 +978,10 @@ def build_mpi_command(
 
     cmd = [mpi_launcher]
 
+    # Enable ULFM fault-tolerance mode when using mpirun-ulfm
+    if mpi_launcher and "ulfm" in os.path.basename(mpi_launcher):
+        cmd.extend(["--with-ft", "ulfm"])
+
     # Check if --bind-to is already specified in mpi_args
     bind_to_already_specified = False
     if mpi_args:
@@ -1143,7 +1409,14 @@ def main(
         # These interfaces cannot route traffic between hosts and can cause MPI
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
+        abort_param = _get_abort_on_failure_mca_param()
         multihost_args = [
+            # Abort all ranks immediately when any rank exits non-zero.
+            # This is the primary safety net for jobs where ULFM is unavailable
+            # or the failure doesn't surface through an MPI call.
+            "--mca",
+            abort_param,
+            "1",
             "--mca",
             "btl",
             "self,tcp",
@@ -1155,6 +1428,9 @@ def main(
         if tcp_interface:
             # If a specific interface is requested, use include instead of exclude
             multihost_args = [
+                "--mca",
+                abort_param,
+                "1",
                 "--mca",
                 "btl",
                 "self,tcp",
@@ -1250,8 +1526,23 @@ def main(
     signal.signal(signal.SIGINT, _signal_handler)
 
     try:
-        proc.wait()
-        sys.exit(proc.returncode)
+        # Respect an optional wall-clock timeout so CI jobs don't hang forever
+        # when a remote rank crashes without triggering ULFM or orte abort.
+        # Set TT_RUN_TIMEOUT (seconds) in the environment to enable.
+        _timeout_str = os.environ.get("TT_RUN_TIMEOUT", "")
+        _timeout: Optional[float] = float(_timeout_str) if _timeout_str else None
+        try:
+            proc.wait(timeout=_timeout)
+        except subprocess.TimeoutExpired:
+            logger.error(f"{TT_RUN_PREFIX} MPI job exceeded TT_RUN_TIMEOUT={_timeout_str}s — killing process group")
+            _kill_process_group()
+            sys.exit(EXIT_TIMEOUT)  # 124, same convention as the Unix `timeout` command
+
+        # Interpret the mpirun exit code to produce structured diagnostics
+        # for CI triage (Section 4.2 of ulfm-rank-reinit-architecture.md).
+        interp = interpret_exit_code(proc.returncode)
+        _log_exit_interpretation(interp)
+        sys.exit(interp.ci_exit_code)
     except OSError as e:
         _kill_process_group()
         raise click.ClickException(f"Error launching mpirun: {e}")

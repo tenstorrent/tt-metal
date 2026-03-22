@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <atomic>
 #include <mpi.h>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <vector>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -31,6 +35,49 @@ private:
     int error_code_{0};
     std::string message_;
     std::string error_string_;
+};
+
+// ---------------------------------------------------------------------------
+// Failure policy: controls how MPIContext reacts when a remote rank dies.
+//
+// FAST_FAIL (default):
+//   Detect failure → revoke communicator → log diagnostic → _exit(70).
+//   Clean, fast, CI-friendly.  No application code changes needed.
+//
+// FAULT_TOLERANT:
+//   Detect failure → revoke communicator → log diagnostic → throw
+//   MPIRankFailureException.  The caller catches, calls revoke_and_shrink()
+//   to obtain a healthy communicator, and continues work with a reduced
+//   world.  Requires ULFM support at build time.
+//
+// To switch, call ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT)
+// before entering your communication loop.
+// ---------------------------------------------------------------------------
+enum class FailurePolicy {
+    FAST_FAIL,       // Detect failure → revoke → log → _exit(70).
+    FAULT_TOLERANT,  // Detect failure → revoke → log → throw MPIRankFailureException.
+};
+
+// Exception thrown in FAULT_TOLERANT mode when a remote rank dies.
+// Carries enough context for the caller to decide how to recover.
+class MPIRankFailureException : public DistributedException {
+public:
+    MPIRankFailureException(Rank detecting_rank, int error_code, std::string failed_ranks_str);
+
+    Rank rank() const noexcept override;
+    int error_code() const noexcept override;
+    const std::string& message() const noexcept override;
+    const std::string& error_string() const noexcept override;
+
+    // Comma-separated list of world-ranks that failed (e.g. "2, 5").
+    const std::string& failed_ranks() const noexcept;
+
+private:
+    Rank rank_{0};
+    int error_code_{0};
+    std::string message_;
+    std::string error_string_;
+    std::string failed_ranks_;
 };
 
 // ---------------------------------------------------------------------
@@ -107,6 +154,18 @@ public:
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
     [[nodiscard]] bool is_revoked() override;
+    void set_failure_policy(FailurePolicy policy);
+
+    // Returns the agreed-upon value across all surviving ranks.
+    // Essential before calling revoke_and_shrink() to ensure all survivors
+    // are coordinated.  If any rank passes false, the result is false.
+    // Returns std::nullopt if not compiled with ULFM support.
+    std::optional<bool> agree(bool local_value) const override;
+
+    // Returns the set of ranks detected as failed since the last
+    // revoke_and_shrink() call.  Only populated under FAULT_TOLERANT policy.
+    // Cleared when revoke_and_shrink() succeeds.
+    std::vector<Rank> failed_ranks() const override;
 
     /* ------------- message snooping ------------- */
     std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
@@ -124,6 +183,12 @@ private:
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
     int size_{0};
+    std::atomic<bool> revoked_{false};  // set when MPIX_Comm_revoke() is called
+    FailurePolicy failure_policy_{FailurePolicy::FAST_FAIL};
+
+    // Protects comm_, group_, rank_, size_ mutations in revoke_and_shrink()
+    // against concurrent reads in other member functions.
+    mutable std::mutex comm_mutex_;
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
     inline static ContextPtr current_world_;
