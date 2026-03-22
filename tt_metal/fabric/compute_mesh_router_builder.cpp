@@ -749,8 +749,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     if (ctx.is_2D_routing) {
         defines["FABRIC_2D"] = "";
 
-        // FABRIC_2D_VC1_ACTIVE: Set when router has VC1
-        bool vc1_active = channel_mapping_.get_num_virtual_channels() > 1;
+        // FABRIC_2D_VC1_ACTIVE: Set when router actually has VC1 channels
+        bool vc1_active = channel_mapping_.get_num_sender_channels_for_vc(1) > 0;
         if (vc1_active) {
             defines["FABRIC_2D_VC1_ACTIVE"] = "";
         }
