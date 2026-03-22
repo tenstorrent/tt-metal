@@ -7,6 +7,9 @@
 #   1. ttrun env passthrough multihost pytest (validates tt-run launch infrastructure)
 #   2. ULFM fault tolerance tests (MPI fault detection / recovery control plane)
 #   3. Single-node ULFM gap tests (exercise fast-fail, watchdog, terminate handler)
+#   4. Python unit tests: ttrun exit code interpretation
+#   5. Python unit tests: mpi_fault.py failure paths
+#   6. Triage tool unit tests
 
 set -eo pipefail
 
@@ -78,6 +81,30 @@ echo "LOG_METAL: Running mpi_fault.py Python tests"
   --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/test_mpi_fault_python.xml" \
   "${repo_root}/tests/ttnn/distributed/test_mpi_fault_python.py") ; fail=$((fail + $?))
+
+# ── 6. Triage tool unit tests ─────────────────────────────────────────
+#
+# test_parse_inspector_logs_paths.py: pure Python, no hardware needed.
+# test_triage.py: requires ttexalens + real hardware; failures are
+#   reported but do not block the tooling suite (ttexalens may not be
+#   installed in all environments).
+echo "LOG_METAL: Running triage unit tests (parse_inspector_logs_paths)"
+(cd /tmp && env -u PYTHONPATH python3 -m pytest \
+  --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  --confcutdir="${repo_root}/tools/tests/triage" \
+  --junitxml="${repo_root}/generated/test_reports/test_parse_inspector_logs_paths.xml" \
+  "${repo_root}/tools/tests/triage/test_parse_inspector_logs_paths.py") ; fail=$((fail + $?))
+
+echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexalens)"
+(cd /tmp && env -u PYTHONPATH python3 -m pytest \
+  --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  --confcutdir="${repo_root}/tools/tests/triage" \
+  --junitxml="${repo_root}/generated/test_reports/test_triage.xml" \
+  "${repo_root}/tools/tests/triage/test_triage.py") ; triage_exit=$?
+if [[ $triage_exit -ne 0 ]]; then
+  echo "LOG_METAL: WARNING: test_triage.py exited $triage_exit (may need ttexalens + hardware)"
+  fail=$((fail + triage_exit))
+fi
 
 # ── Done ───────────────────────────────────────────────────────────────
 end_time=$(date +%s)
