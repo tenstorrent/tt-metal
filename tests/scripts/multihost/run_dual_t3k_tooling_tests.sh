@@ -95,6 +95,13 @@ echo "LOG_METAL: Running triage unit tests (parse_inspector_logs_paths)"
   --junitxml="${repo_root}/generated/test_reports/test_parse_inspector_logs_paths.xml" \
   "${repo_root}/tools/tests/triage/test_parse_inspector_logs_paths.py") ; fail=$((fail + $?))
 
+echo "LOG_METAL: Running triage end-to-end multihost rank resolution tests"
+(cd /tmp && env -u PYTHONPATH python3 -m pytest \
+  --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
+  --confcutdir="${repo_root}/tools/tests/triage" \
+  --junitxml="${repo_root}/generated/test_reports/test_multihost_rank_resolution.xml" \
+  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution.py") ; fail=$((fail + $?))
+
 echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexalens + inspector)"
 # test_triage.py is a full integration test: it starts a hang application,
 # connects to the live Inspector RPC or reads from generated/inspector/, and
