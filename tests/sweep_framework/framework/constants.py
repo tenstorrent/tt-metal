@@ -34,7 +34,7 @@ def _load_lead_models_from_manifest():
     try:
         import yaml
 
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         manifest_path = os.path.join(repo_root, "model_tracer", "sweep_manifest.yaml")
         if os.path.exists(manifest_path):
             with open(manifest_path) as f:
