@@ -2197,6 +2197,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     receiver_channel_pointers_ch1.reset();
 #endif  // FABRIC_2D_VC1_ACTIVE
 
+#if defined(FABRIC_2D_VC2_SERVICED)
+    auto outbound_to_receiver_channel_pointer_ch2 =
+        outbound_to_receiver_channel_pointers.template get<VC2_RECEIVER_CHANNEL>();
+#endif  // FABRIC_2D_VC2_SERVICED
+
     if constexpr (skip_src_ch_id_update) {
         receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
     }
@@ -2479,6 +2484,23 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         routing_table,
                         local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
+
+#if defined(FABRIC_2D_VC2_SERVICED)
+                    // VC2: single sender channel (worker-injected, single-hop neighbour exchange)
+                    tx_progress |= run_sender_channel_step<
+                        VC2_RECEIVER_CHANNEL,
+                        VC2_SENDER_CHANNEL_START,
+                        false>(  // No first-level ack for VC2
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch2,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+#endif  // FABRIC_2D_VC2_SERVICED
                 }
             }
 

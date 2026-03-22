@@ -771,6 +771,12 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC1_SERVICED"] = "";
         }
 
+        // FABRIC_2D_VC2_SERVICED: Set when router has VC2 sender channels
+        bool vc2_active = channel_mapping_.get_num_sender_channels_for_vc(2) > 0;
+        if (vc2_active) {
+            defines["FABRIC_2D_VC2_SERVICED"] = "";
+        }
+
         // FABRIC_2D_VC0_CROSSOVER_TO_VC1: Set for inter-mesh routers that perform VC0→VC1 crossover
         // Inter-mesh routers crossover incoming VC0 traffic to downstream intra-mesh VC1
         bool vc0_crossover_to_vc1 = is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh;
