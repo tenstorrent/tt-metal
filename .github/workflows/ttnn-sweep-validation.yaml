@@ -210,14 +210,21 @@ jobs:
             --suite-name model_traced \
             --master-trace "$MODEL_TRACE"
 
-          # Step 2: Discover generated vector files and run each module under the tracer
+          # Step 2: Discover generated vector files and run each unique module under the tracer
           FAILED_MODULES=()
           TOTAL_MODULES=0
+          declare -A SEEN_MODULES
 
-          for VECTOR_FILE in tests/sweep_framework/vectors_export/model_traced.*__*.json; do
+          for VECTOR_FILE in tests/sweep_framework/vectors_export/model_traced.*.json; do
             [ -f "$VECTOR_FILE" ] || continue
             BASENAME=$(basename "$VECTOR_FILE" .json)
             MODULE_NAME=$(echo "$BASENAME" | sed 's/__.*$//')
+
+            # Skip if we already processed this module (mesh + non-mesh files)
+            if [[ -n "${SEEN_MODULES[$MODULE_NAME]:-}" ]]; then
+              continue
+            fi
+            SEEN_MODULES[$MODULE_NAME]=1
 
             MODULE_TAIL="${MODULE_NAME#model_traced.}"
             SWEEP_TRACE="model_tracer/traced_operations/sweep_trace_${MODULE_TAIL}.json"

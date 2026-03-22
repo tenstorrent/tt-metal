@@ -406,8 +406,13 @@ def _extract_mesh(config: dict) -> dict | None:
 
 
 def _normalize_for_hash(obj: Any) -> Any:
-    """Mirror the tracer's _normalize_for_hash so diffs only show TRUE
-    hash-affecting differences."""
+    """Normalize configs for hash-diff diagnostics.
+
+    Based on, but more permissive than, generic_ops_tracer.py::_normalize_for_hash.
+    Beyond the tracer's behavior (dropping numeric ``hash`` fields, canonicalizing
+    ``shard_spec: null`` → ``"None"``), this helper also strips environment- and
+    device-specific fields to produce clearer diagnostics. Hash-diff output here
+    may therefore be stricter than the tracer's actual ``config_hash`` computation."""
     if isinstance(obj, dict):
         as_list = _shape_dict_to_list(obj)
         if as_list is not None:
@@ -439,8 +444,6 @@ def _normalize_for_hash(obj: Any) -> Any:
             nv = _normalize_for_hash(v)
             if k == "shard_spec" and nv is None:
                 nv = "None"
-            if k == "shard_spec" and isinstance(nv, dict):
-                nv.pop("grid", None)
             result[k] = nv
         return result
     elif isinstance(obj, list):

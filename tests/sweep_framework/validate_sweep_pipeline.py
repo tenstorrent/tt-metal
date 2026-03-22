@@ -335,7 +335,7 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force re-split of trace directories even if they already exist",
+        help="Force a clean re-run: delete existing sweep trace, split dirs, and vector exports, then re-generate and re-split",
     )
 
     args = parser.parse_args()
