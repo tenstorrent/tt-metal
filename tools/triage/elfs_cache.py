@@ -120,6 +120,8 @@ class ElfsCache:
                 return self._cache[elf_path]
 
         # Parse outside the lock so ESTALE retries (up to ~10s) don't block other threads.
+        # This is intentional double-lock: the cache is checked again under the lock below
+        # to ensure only one result is stored (first writer wins).
         try:
             parsed_elf = self._parse_elf_with_estale_retry(elf_path)
         except FileNotFoundError as exc:

@@ -63,6 +63,10 @@ Inspector RPC port (per rank)
 
 The Inspector gRPC server port is **base port + world rank** when a rank is detected from the environment (same precedence as above). The default base is **50051**, so rank 3 uses **50054** unless you override ``TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS`` / ``--inspector-rpc-port``.
 
+.. note::
+
+   **Port overflow**: ``base_port + max_rank`` must not exceed 65535. With the default base of 50051, up to ~15,000 ranks are safe. For larger jobs, lower the base port: set ``TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=5000`` (or pass ``--inspector-rpc-port 5000``) to leave sufficient headroom.
+
 When using **tt-run** (``ttnn.distributed.ttrun``), the default ``--inspector-rpc-port`` **50051** is adjusted the same way so timeout-launched triage on a non-zero rank connects to that rank’s Inspector.
 
 Environment variables (summary)

@@ -26,6 +26,8 @@ The effective Inspector gRPC port is **base port + MPI world rank** (default bas
 
 For Python distributed launches, **tt-run** (`ttnn.distributed.ttrun`) rank-scopes `TT_METAL_LOGS_PATH` and `TT_METAL_JIT_SCRATCH`, keeps `TT_METAL_CACHE` shared by default, strips CI/runner noise from the MPI launcher environment, and matches the Inspector port rule above when using the default RPC port. See `tt-run --help`.
 
+"Rank-scoping" means tt-run rewrites the path to include `<hostname>_rank_<N>`, so each rank writes to its own sub-directory. For example, if `TT_METAL_LOGS_PATH=/shared/logs`, rank 3 on host `node1` writes to `/shared/logs/node1_rank_3/generated/inspector/`.
+
 ### Further reading
 
 Authoritative detail: [``triage.rst``](../../../docs/source/tt-metalium/tools/triage.rst) (Sphinx: **Tools → tt-triage**).

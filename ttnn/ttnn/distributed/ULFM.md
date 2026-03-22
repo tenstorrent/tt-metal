@@ -93,7 +93,8 @@ For Python-level MPI usage:
 
 ```
 Code   Meaning                          Source
-70     EX_SOFTWARE — ULFM fast-fail     Layer 1 (_exit(70) after detecting rank failure)
+70     EX_SOFTWARE — ULFM fast-fail     Layer 1 (_exit(70) in handle_rank_failure(),
+                                         tt_metal/distributed/multihost/mpi_distributed_context.cpp)
 124    Timeout                           Layer 3 (TT_RUN_TIMEOUT expired, SIGKILL sent)
 ```
 

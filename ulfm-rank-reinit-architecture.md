@@ -28,6 +28,10 @@
 
 ## Implementation Status
 
+> ⚠️ **Scope of this branch**: This branch implements ULFM *detection* (Layers 1–3: revocation,
+> shrink, fast-fail exit code propagation). Rank respawn, hardware reset, and work redistribution
+> (Phase 2–3) are **NOT YET IMPLEMENTED**. Items marked ⏳ in the table below are future work.
+
 Status of bugs/gaps identified in this document against branch `nsexton/0-multihost-triage`:
 
 ```

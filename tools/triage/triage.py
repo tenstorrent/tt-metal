@@ -66,8 +66,15 @@ except ImportError as e:
 def _check_requirements() -> None:
     """Print a user-friendly install hint and exit if required packages are missing.
 
-    Call this at the start of the CLI entry point so that ``import triage`` in
-    tests does not produce output or terminate the process.
+    Call this at the start of the CLI entry point (``main()``) to surface a
+    clear error message instead of a raw ``ImportError``.
+
+    Note: this module requires ``rich`` and ``ttexalens`` at import time
+    (lines below this function). If those packages are not installed, the module
+    itself cannot be imported and this function is unreachable. The try-except
+    at module level only guards ``ttexalens.tt_exalens_init`` / ``capnp``.
+    Tests that do ``import triage`` (e.g. ``test_triage.py``) therefore require
+    the full dependency stack to be installed.
     """
     if _ttexalens_import_error is not None:
         RST = "\033[0m" if utils.should_use_color() else ""
@@ -341,7 +348,17 @@ class TriageScript:
 
 
 def summarize_failure_message(message: str | None) -> str:
-    """Extract a concise single-line summary from a traceback or error message."""
+    """Extract a concise single-line summary from a traceback or error message.
+
+    Uses a heuristic that scans lines in reverse and returns the first line that
+    does not look like a Python traceback frame (i.e. does not start with
+    "Traceback", "File ", "During handling of the above exception", or "^").
+
+    Limitation: lines containing these substrings as part of the actual error
+    message (e.g. ``RuntimeError: File descriptor exhausted``) will be skipped
+    incorrectly. The function falls back to the last line if all lines match
+    the filter.
+    """
     if not message:
         return "No failure details available."
 
