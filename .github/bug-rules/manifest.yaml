@@ -1,0 +1,23 @@
+rules:
+  ccl-ring-buffer-mismatch:
+    file: ccl-ring-buffer-mismatch.md
+    severity: blocking
+    suggest_fix: true
+    model: null
+    group: null
+    paths:
+      - "tt_metal/impl/ccl/**"
+      - "ttnn/cpp/ttnn/operations/ccl/**"
+    labels:
+      - "area:ccl"
+
+  reshape-dim-check:
+    file: reshape-dim-check.md
+    severity: warning
+    suggest_fix: false
+    model: null
+    group: null
+    paths:
+      - "ttnn/cpp/ttnn/operations/data_movement/**"
+    labels:
+      - "area:ops"
