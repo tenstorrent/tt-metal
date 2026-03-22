@@ -185,7 +185,8 @@ static void handle_rank_failure(
     int error_code,
     const char* operation,
     FailurePolicy policy,
-    std::vector<Rank>* failed_ranks_cache) {
+    std::vector<Rank>* failed_ranks_cache,
+    std::mutex* failed_ranks_cache_mutex) {
     // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
     // Always attempt identify_failed_ranks() regardless of error code — even for
     // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_failure_ack() may still succeed
@@ -204,6 +205,7 @@ static void handle_rank_failure(
     if (failed_ranks_cache) {
         auto parsed = parse_failed_ranks_string(failed);
         if (!parsed.empty()) {
+            std::lock_guard<std::mutex> lock(*failed_ranks_cache_mutex);
             *failed_ranks_cache = std::move(parsed);
         }
     }
@@ -263,13 +265,16 @@ inline void mpi_check_ctx(
     [[maybe_unused]] MPI_Comm comm,
     int cached_rank,
     [[maybe_unused]] FailurePolicy policy,
-    [[maybe_unused]] std::vector<Rank>* failed_ranks_cache = nullptr) {
+    [[maybe_unused]] std::vector<Rank>* failed_ranks_cache = nullptr,
+    [[maybe_unused]] std::mutex* failed_ranks_cache_mutex = nullptr) {
     if (error_code == MPI_SUCCESS) {
         return;
     }
 #if OMPI_HAS_ULFM
     if (is_ulfm_failure(error_code)) {
-        handle_rank_failure(comm, cached_rank, error_code, call_text, policy, failed_ranks_cache);
+        handle_rank_failure(
+            comm, cached_rank, error_code, call_text, policy,
+            failed_ranks_cache, failed_ranks_cache_mutex);
         // In FAST_FAIL mode this is [[noreturn]].
         // In FAULT_TOLERANT mode handle_rank_failure throws, so we also never reach here.
         return;  // unreachable, but silences compiler warnings
@@ -288,7 +293,8 @@ bool was_mpi_finalized() noexcept {
 // MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
 // MPI_CHECK_CTX -- ULFM-aware, for MPIContext member functions
 #define MPI_CHECK(call) mpi_check((call), #call)
-#define MPI_CHECK_CTX(call) mpi_check_ctx((call), #call, comm_, rank_, failure_policy_, &cached_failed_ranks_)
+#define MPI_CHECK_CTX(call) \
+    mpi_check_ctx((call), #call, comm_, rank_, failure_policy_, &cached_failed_ranks_, &failed_ranks_cache_mutex_)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
@@ -840,7 +846,10 @@ void MPIContext::revoke_and_shrink() {
     }
 
     revoked_.clear(std::memory_order_release);  // cleared: new communicator is healthy
-    cached_failed_ranks_.clear();  // new comm has no known failures
+    {
+        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
+        cached_failed_ranks_.clear();  // new comm has no known failures
+    }
 #endif
 }
 
@@ -906,12 +915,14 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     MPIX_Comm_failure_ack(comm_);  // best-effort; ignore return code
     MPI_Group failed_group = MPI_GROUP_NULL;
     if (MPIX_Comm_failure_get_acked(comm_, &failed_group) != MPI_SUCCESS) {
+        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
     int failed_size = 0;
     MPI_Group_size(failed_group, &failed_size);
     if (failed_size == 0) {
         MPI_Group_free(&failed_group);
+        std::lock_guard<std::mutex> cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
     MPI_Group world_group = MPI_GROUP_NULL;

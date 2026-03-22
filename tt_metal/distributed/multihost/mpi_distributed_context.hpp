@@ -218,14 +218,17 @@ private:
     //
     // Cleared by revoke_and_shrink() when the communicator is replaced.
     //
-    // THREAD-SAFETY NOTE: cached_failed_ranks_ is currently NOT protected by
-    // comm_mutex_.  It is written by handle_rank_failure() (called from
-    // MPI_CHECK_CTX on the thread executing the failed MPI operation) and read
-    // by failed_ranks() and cleared by revoke_and_shrink().  This is safe only
-    // if revoke_and_shrink() is called from the same thread that detected the
-    // failure — the intended usage pattern.  TODO: extend comm_mutex_ to cover
-    // cached_failed_ranks_ once the single-thread invariant is verified or
-    // relaxed.
+    // Protects cached_failed_ranks_ across three concurrent access paths:
+    //   - Write: handle_rank_failure() via MPI_CHECK_CTX on any thread executing
+    //            a failed MPI operation.
+    //   - Read:  failed_ranks() const member (any thread).
+    //   - Clear: revoke_and_shrink() when replacing the communicator.
+    //
+    // Kept separate from comm_mutex_ to avoid holding a mutex during blocking MPI
+    // calls: comm_mutex_ gates comm_/group_/rank_/size_ updates; this mutex gates
+    // only the failed-rank cache, which is a fast in-memory operation.  Acquiring
+    // both simultaneously is never required, so there is no lock-ordering concern.
+    mutable std::mutex failed_ranks_cache_mutex_;
     mutable std::vector<Rank> cached_failed_ranks_;
 
     // Protects comm_, group_, rank_, size_ mutations in revoke_and_shrink()
