@@ -694,13 +694,13 @@ if persistent_buffers_list is None:  # or persistent_buffers is None for all_gat
 **Results**:
 | ISL  | Status | Notes |
 |------|--------|-------|
-| 8k   | **PASS** (76s) | Traced prefill now works with fix |
-| 16k  | HANG | Trace execution hangs; 16k persistent buffers may not be properly allocated |
-| 32k  | OOM | DRAM fragmentation during CCL intermediate buffer; eager mode fails |
+| 8k   | **PASS** (76s) | Traced prefill works |
+| 16k  | **PASS** (33s) | Traced prefill works after sync CCL fix (see 2026-03-22 session) |
+| 32k  | SLOW | Sync CCL eager mode functional but ~30+ min (impractical) |
+| 64k  | SLOW | Sync CCL eager mode functional but ~30+ min (impractical) |
 
 **Next Steps**:
-- 16k: Verify persistent CCL buffers are allocated for seqlen=16384; check for other CCL ops using barrier sync
-- 32k: Reduce KV cache size or CCL buffer size to fit in DRAM
+- 32k/64k: Need async CCL with proper barrier handling or extended traced support for practical performance
 
 **Block Hash**: `ea833ade1f3`
 4. `OLMo3ForCausalLM.prefill_forward` disables prefill trace (`enable_trace=False`): the CCL is closed between decode→prefill transitions, putting CCL semaphores in a state inconsistent with any previously captured prefill trace. Kernels remain compiled/cached after the first call.
@@ -738,6 +738,39 @@ if persistent_buffers_list is None:  # or persistent_buffers is None for all_gat
 - 1L decode: 0.7ms/iter (44.7k tok/s). 64L decode: 40.6ms/iter (789 tok/s).
 - Fixed prefill QKV weight separation (padded for decode, unpadded for prefill).
 - E2E demo passing (1L + 64L traced decode).
+
+### 2026-03-22 — 16k ISL Traced Prefill Working (sync CCL fix)
+
+**Status**: **16k ISL PASSING** with sync CCL ops for OLMo prefill. Demo test `isl-16k-b1` completes with coherent output. 32k/64k functional but impractically slow (~30+ min eager mode).
+
+**Root Cause**:
+The async CCL ops (`reduce_scatter_minimal_async`, `all_gather_async`) cause issues in OLMo prefill:
+- Barrier semaphore deadlock in traced execution (even with persistent buffers)
+- DRAM OOM from large intermediate buffers at 32k+ ISLs
+
+**Fix** (`llama_ccl.py`):
+```python
+# OLMo prefill: Use sync CCL ops without sub-device requirement
+if self.is_olmo and self.mode == "prefill":
+    ttnn_tensor_out = ttnn.reduce_scatter(...)  # sync, not async
+    # and similarly for all_gather
+```
+
+**Results (batch=1)**:
+| ISL  | Mode  | Status | TTFT (ms) | Decode (tok/s) |
+|------|-------|--------|-----------|----------------|
+| 16k  | traced | **PASS** | 2728      | 16.8          |
+| 32k  | eager | functional | ~30+ min (impractical) | — |
+| 64k  | eager | functional | ~30+ min (impractical) | — |
+
+**Notes**:
+- 16k traced prefill is 2× the 8k TTFT (~1.3s), as expected.
+- 32k/64k run in eager mode (sync CCL per layer, no trace reuse) — too slow for practical use.
+- For 32k+ ISL, need either async CCL with proper barrier handling or extended traced support.
+
+**Block Hash**: `3f95041d6ca`
+
+---
 
 ### 2026-03-10–12
 - Full bring-up from reference through TTNN. All components implemented.
