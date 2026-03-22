@@ -20,7 +20,7 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
 from ....utils.test import line_params, ring_params
 
-DEVICE_PARAMS = {"trace_region_size": 48000000}
+DEVICE_PARAMS = {"trace_region_size": 90000000}
 
 
 def t2v_metrics(mesh_device, height):
@@ -217,7 +217,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 4
+    num_inference_steps = 40
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -238,7 +238,7 @@ def test_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         with torch.no_grad():
-            signpost("start_warmup")
+            signpost("buffer initialization warmup")  # initialize buffers
             pipeline(
                 prompt=prompts[0],
                 image_prompt=image_prompt,
@@ -246,6 +246,16 @@ def test_pipeline_performance(
                 width=width,
                 num_frames=num_frames,
                 num_inference_steps=2,  # Small number of steps to reduce test time.
+            )
+            signpost("trace warmup")
+            pipeline(
+                prompt=prompts[0],
+                image_prompt=image_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=2,  # Small number of steps to reduce test time.
+                traced=traced,
             )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -281,6 +291,9 @@ def test_pipeline_performance(
                 signpost("end_inference")
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
+
+    pipeline.release_traces()
+
     if hasattr(result, "frames"):
         frames = result.frames
     else:
