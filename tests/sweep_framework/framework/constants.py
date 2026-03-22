@@ -9,22 +9,52 @@ This module contains constants that are used across multiple modules
 in the sweep framework to ensure consistency and avoid duplication.
 """
 
+import logging
 import re
+import os
 from typing import Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 # Lead models are models that are prioritized for sweep testing.
 # These patterns are matched against the source path in traced operations
 # to identify which vectors belong to lead model workloads.
 #
+# Source of truth: model_tracer/sweep_manifest.yaml (targets with scope: lead_models)
+# This list is derived from the manifest at import time.
+# Fallback to hardcoded list if manifest is unavailable (e.g., in CI without checkout).
+#
 # Used by:
 #   - sweeps_parameter_generator.py: To filter vector generation for lead models only
-#   - master_config_loader.py: To filter configurations when loading from master JSON
-#
-# To add a new lead model, add the model directory name pattern here.
-# Example: "llama3" would match source paths containing "llama3"
-LEAD_MODELS = [
-    "deepseek_v3",
-]
+#   - master_config_loader_v2.py: To filter configurations when loading from master JSON
+
+
+def _load_lead_models_from_manifest():
+    """Derive LEAD_MODELS patterns from sweep_manifest.yaml lead_models targets."""
+    try:
+        import yaml
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        manifest_path = os.path.join(repo_root, "model_tracer", "sweep_manifest.yaml")
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                data = yaml.safe_load(f) or {}
+            lead_entries = data.get("targets", {}).get("lead_models", [])
+            patterns = []
+            for t in lead_entries:
+                m = t.get("model")
+                if isinstance(m, list):
+                    patterns.extend(m)
+                elif m:
+                    patterns.append(m)
+            if patterns:
+                return patterns
+    except Exception as e:
+        logger.debug("Could not load LEAD_MODELS from manifest: %s", e)
+    return ["deepseek_v3"]
+
+
+LEAD_MODELS = _load_lead_models_from_manifest()
 
 
 # =============================================================================
