@@ -22,17 +22,29 @@ if [[ ! -d "$LLK_PATH" || ! -f "$LLK_PATH/.github/Dockerfile.base" ]]; then
   exit 1
 fi
 
+REPO="${GITHUB_REPOSITORY:-tenstorrent/tt-metal}"
+BASE_IMAGE_NAME=ghcr.io/$REPO/tt-llk-base-ubuntu-22-04
+CI_IMAGE_NAME=ghcr.io/$REPO/tt-llk-ci-ubuntu-22-04
+
 LLK_BASE_DOCKERFILE_PATCHED=$(mktemp)
-trap 'rm -f "${LLK_BASE_DOCKERFILE_PATCHED}"' EXIT
+LLK_CI_DOCKERFILE_PATCHED=$(mktemp)
+trap 'rm -f "${LLK_BASE_DOCKERFILE_PATCHED}" "${LLK_CI_DOCKERFILE_PATCHED}"' EXIT
+
+# Patch Dockerfile.base to use the specified Ubuntu base image
 awk -v img="$LLK_UBUNTU_BASE_IMAGE" '
   $0 == "FROM ubuntu:22.04" { print "FROM " img; next }
   { print }
 ' "$LLK_PATH/.github/Dockerfile.base" >"$LLK_BASE_DOCKERFILE_PATCHED"
 echo "LLK Dockerfile.base rootfs: ${LLK_UBUNTU_BASE_IMAGE}"
 
-REPO="${GITHUB_REPOSITORY:-tenstorrent/tt-metal}"
-BASE_IMAGE_NAME=ghcr.io/$REPO/tt-llk-base-ubuntu-22-04
-CI_IMAGE_NAME=ghcr.io/$REPO/tt-llk-ci-ubuntu-22-04
+# Patch Dockerfile.ci to use the Metal repo's base image location instead of tt-llk
+awk -v base_img="$BASE_IMAGE_NAME" '
+  /^FROM ghcr\.io\/tenstorrent\/tt-llk\/tt-llk-base-ubuntu-22-04:/ {
+    sub(/ghcr\.io\/tenstorrent\/tt-llk\/tt-llk-base-ubuntu-22-04/, base_img)
+  }
+  { print }
+' "$LLK_PATH/.github/Dockerfile.ci" >"$LLK_CI_DOCKERFILE_PATCHED"
+echo "LLK Dockerfile.ci base image: ${BASE_IMAGE_NAME}"
 
 # Compute the hash of the Dockerfile (uses migrated script in parent repo)
 # MIGRATION: This now uses .github/scripts/llk-get-docker-tag.sh instead of
@@ -53,7 +65,6 @@ build_and_push() {
     local image_name=$1
     local dockerfile=$2
     local on_main=$3
-    local from_image="${4-}"
 
     if docker manifest inspect $image_name:$DOCKER_TAG > /dev/null 2>&1; then
         echo "Image $image_name:$DOCKER_TAG already exists"
@@ -86,7 +97,6 @@ build_and_push() {
         --push \
         --output type=image,compression=zstd,oci-mediatypes=true \
         --build-arg FROM_TAG=$DOCKER_TAG \
-        ${from_image:+--build-arg FROM_IMAGE=$from_image} \
         $tags \
         -f $dockerfile \
         $LLK_PATH
@@ -95,8 +105,8 @@ build_and_push() {
 # Build base image (patched Dockerfile: see LLK_UBUNTU_BASE_IMAGE above)
 build_and_push "$BASE_IMAGE_NAME" "$LLK_BASE_DOCKERFILE_PATCHED" "$ON_MAIN"
 
-# Build CI image from LLK submodule
-build_and_push "$CI_IMAGE_NAME" "$LLK_PATH/.github/Dockerfile.ci" "$ON_MAIN"
+# Build CI image from LLK submodule (using patched Dockerfile.ci with correct base image reference)
+build_and_push "$CI_IMAGE_NAME" "$LLK_CI_DOCKERFILE_PATCHED" "$ON_MAIN"
 
 echo "All LLK images built and pushed successfully"
 echo "CI_IMAGE_NAME:"
