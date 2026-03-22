@@ -49,40 +49,27 @@ int main(int argc, char* argv[]) {
         if (iterations == 0) {
             throw std::runtime_error("iterations must be greater than zero");
         }
-        std::cout << "Starting Pipeline Manager" << std::endl;
         pipeline_manager.start();
-        for (uint32_t step = 0; step < iterations; ++step) {
-            std::cout << "Writing Token " << step << std::endl;
-            pipeline_manager.write_over_socket(initial_token);
-            std::cout << "Token Written" << std::endl;
-            const uint32_t token_id = pipeline_manager.read_over_socket();
-            std::cout << "Token Read" << std::endl;
-        }
-        // std::cout << "Pipeline Manager Started" << std::endl;
-        // std::thread writer_thread([&pipeline_manager, initial_token, iterations]() {
-        //     for (uint32_t step = 0; step < iterations; ++step) {
-        //         std::cout << "Writing Token " << step << std::endl;
-        //         pipeline_manager.write_over_socket(initial_token);
-        //         std::cout << "Token Written" << std::endl;
+        std::cout << "Pipeline Manager Started" << std::endl;
+        std::thread writer_thread([&pipeline_manager, initial_token, iterations]() {
+            for (uint32_t step = 0; step < iterations; ++step) {
+                pipeline_manager.write_over_socket(initial_token);
+            }
+        });
 
-        //     }
-        // });
+        std::thread reader_thread([&pipeline_manager, iterations]() {
+            auto start_time = std::chrono::high_resolution_clock::now();
+            for (uint32_t step = 0; step < iterations; ++step) {
+                const uint32_t token_id = pipeline_manager.read_over_socket();
+            }
+            auto end_time = std::chrono::high_resolution_clock::now();
+            std::cout << "Time taken to read " << iterations << " tokens: "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count() << "ms"
+                      << std::endl;
+        });
 
-        // std::thread reader_thread([&pipeline_manager, iterations]() {
-        //     auto start_time = std::chrono::high_resolution_clock::now();
-        //     for (uint32_t step = 0; step < iterations; ++step) {
-        //         std::cout << "Reading Token " << step << std::endl;
-        //         const uint32_t token_id = pipeline_manager.read_over_socket();
-        //         std::cout << "Token Read" << std::endl;
-        //     }
-        //     auto end_time = std::chrono::high_resolution_clock::now();
-        //     std::cout << "Time taken to read " << iterations << " tokens: " <<
-        //     std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count() << "ms" <<
-        //     std::endl;
-        // });
-
-        // writer_thread.join();
-        // reader_thread.join();
+        writer_thread.join();
+        reader_thread.join();
 
         pipeline_manager.stop();
 
