@@ -204,7 +204,7 @@ void kernel_main() {
                             // matmul. Also reconfigure unpacker srcA from Float32 (left by previous untilize) to
                             // bf16 so the tilize correctly reads bf16 vol2col data.
                             if constexpr (use_fp32_partials) {
-                                pack_reconfig_data_format(cb_matmul_interm_tiled, cb_vol2col_tiled);
+                                pack_reconfig_data_format(cb_vol2col_tiled);
                                 reconfig_data_format_srca(cb_vol2col_rm);
                             }
 
