@@ -137,11 +137,15 @@ fi
 # rank's environment.  Pure Python — no hardware needed.
 MPIRUN_WRAPPER="${repo_root}/tests/tt_metal/multihost/mpirun_wrapper.sh"
 echo "LOG_METAL: Running MPI multiprocess rank resolution test (-np 4)"
-$MPIRUN_WRAPPER -np 4 --oversubscribe --allow-run-as-root \
+# Notes:
+#   - Wrapped in subshell so set -e doesn't fire before fail accumulation.
+#   - No --junitxml: mpirun spawns 4 simultaneous pytest processes that would
+#     all write to the same file and corrupt it.  Exit code is sufficient.
+#   - --oversubscribe / --allow-run-as-root: required for CI container envs.
+("$MPIRUN_WRAPPER" -np 4 --oversubscribe --allow-run-as-root \
   python3 -m pytest \
   --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
-  --junitxml="${repo_root}/generated/test_reports/test_multihost_rank_resolution_mpi.xml" \
-  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py" ; fail=$((fail + $?))
+  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py") || fail=$((fail + $?))
 
 # ── Done ───────────────────────────────────────────────────────────────
 end_time=$(date +%s)
