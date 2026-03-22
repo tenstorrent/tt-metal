@@ -157,15 +157,21 @@ jobs:
           path: /work/model_tracer/traced_operations/
 
       - name: Display configuration
+        env:
+          MODULE_NAME: ${{ github.event.inputs.module_name }}
+          ARCH: ${{ github.event.inputs.arch }}
+          RUNNER: ${{ github.event.inputs['runner-label'] }}
+          MESH_SHAPE: ${{ github.event.inputs.mesh_shape }}
+          SCOPE: ${{ github.event.inputs.model_traced_scope }}
         run: |
           echo "========================================"
           echo " Sweep Validation Pipeline"
           echo "========================================"
-          echo "  Module:       ${{ github.event.inputs.module_name }}"
-          echo "  Arch:         ${{ github.event.inputs.arch }}"
-          echo "  Runner:       ${{ github.event.inputs['runner-label'] }}"
-          echo "  Mesh shape:   ${{ github.event.inputs.mesh_shape }}"
-          echo "  Scope:        ${{ github.event.inputs.model_traced_scope }}"
+          echo "  Module:       $MODULE_NAME"
+          echo "  Arch:         $ARCH"
+          echo "  Runner:       $RUNNER"
+          echo "  Mesh shape:   $MESH_SHAPE"
+          echo "  Scope:        $SCOPE"
           echo "  Trace ver:    v2 (fixed)"
           echo "========================================"
 
@@ -176,24 +182,28 @@ jobs:
 
       - name: Run validation pipeline (single module)
         if: github.event.inputs.module_name != 'all'
+        env:
+          MODULE_NAME: ${{ github.event.inputs.module_name }}
+          MODEL_TRACE: ${{ steps.trace-path.outputs.model_trace }}
+          MESH_SHAPE: ${{ github.event.inputs.mesh_shape }}
+          ARCH: ${{ github.event.inputs.arch }}
         run: |
           python3 tests/sweep_framework/validate_sweep_pipeline.py \
-            --model-trace "${{ steps.trace-path.outputs.model_trace }}" \
-            --module-name "${{ github.event.inputs.module_name }}" \
+            --model-trace "$MODEL_TRACE" \
+            --module-name "$MODULE_NAME" \
             --suite model_traced \
-            --mesh-shape "${{ github.event.inputs.mesh_shape }}" \
-            --arch-name "${{ github.event.inputs.arch }}" \
+            --mesh-shape "$MESH_SHAPE" \
+            --arch-name "$ARCH" \
             --force
 
       - name: Run validation pipeline (all model_traced modules)
         if: github.event.inputs.module_name == 'all'
+        env:
+          MODEL_TRACE: ${{ steps.trace-path.outputs.model_trace }}
+          MESH_SHAPE: ${{ github.event.inputs.mesh_shape }}
+          ARCH_NAME: ${{ github.event.inputs.arch }}
+          SCOPE: ${{ github.event.inputs.model_traced_scope }}
         run: |
-          MODEL_TRACE="${{ steps.trace-path.outputs.model_trace }}"
-          MESH_SHAPE="${{ github.event.inputs.mesh_shape }}"
-          ARCH_NAME="${{ github.event.inputs.arch }}"
-
-          SCOPE="${{ github.event.inputs.model_traced_scope }}"
-
           # Step 1: Generate vectors for model_traced modules (scope: $SCOPE)
           python3 tests/sweep_framework/sweeps_parameter_generator.py \
             --model-traced "$SCOPE" \
@@ -290,6 +300,7 @@ jobs:
           path: model_tracer/traced_operations/
 
       - name: Download sweep traces
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: sweep-traces

@@ -634,12 +634,14 @@ def discover_sweep_traces(
 
     if sweep_trace_dir is not None:
         sweep_split_dirs = [sweep_trace_dir] if sweep_trace_dir.is_dir() else []
-    else:
+    elif sweep_traces_dir.is_dir():
         sweep_split_dirs = sorted(
             d
             for d in sweep_traces_dir.iterdir()
             if d.is_dir() and "sweep_trace" in d.name and d.name.endswith("_split")
         )
+    else:
+        sweep_split_dirs = []
 
     for ssd in sweep_split_dirs:
         if op_filter:
@@ -826,17 +828,6 @@ def _trunc(val: Any, max_len: int = 60) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _find_config_by_id(
-    configs: list[dict],
-    config_id: int,
-) -> dict | None:
-    for i, c in enumerate(configs):
-        cid = c.get("config_id", i + 1)
-        if cid == config_id:
-            return c
-    return None
-
-
 def run_validation(
     model_split_dir: Path,
     sweep_traces_dir: Path,
@@ -883,10 +874,13 @@ def run_validation(
 
             result = match_configs(op_name, model_configs, sweep_configs)
 
+            model_by_cid = {c.get("config_id", i + 1): c for i, c in enumerate(model_configs)}
+            sweep_by_cid = {c.get("config_id", i + 1): c for i, c in enumerate(sweep_configs)}
+
             all_matched = result.exact_matches + result.close_matches
             for m in all_matched:
-                model_cfg = _find_config_by_id(model_configs, m.model_config_id)
-                sweep_cfg = _find_config_by_id(sweep_configs, m.sweep_config_id)
+                model_cfg = model_by_cid.get(m.model_config_id)
+                sweep_cfg = sweep_by_cid.get(m.sweep_config_id)
                 if model_cfg and sweep_cfg:
                     diag = diagnose_hash_pair(
                         op_name,
