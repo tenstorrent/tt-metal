@@ -124,8 +124,19 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 inline int multihost_main(int argc, char** argv) {
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
+    // Parse argv/env into gtest flags before reading --output (GTEST_OUTPUT).
+    ::testing::InitGoogleTest(&argc, argv);
+
     // If GTEST_OUTPUT is set to a directory, add the rank to the path to make it unique
     std::string gtest_output_str = GTEST_FLAG_GET(output);
+    // Docker / shell sometimes leaves wrapping quotes in the value, which breaks the
+    // "xml:path" prefix and triggers "unrecognized output format" warnings.
+    while (!gtest_output_str.empty() && gtest_output_str.front() == '"') {
+        gtest_output_str.erase(0, 1);
+    }
+    while (!gtest_output_str.empty() && gtest_output_str.back() == '"') {
+        gtest_output_str.pop_back();
+    }
     if (!gtest_output_str.empty()) {
         const size_t colon = gtest_output_str.find(':');
 
@@ -151,7 +162,6 @@ inline int multihost_main(int argc, char** argv) {
         std::string final_output = prefix + path.string() + "/";
         GTEST_FLAG_SET(output, final_output);
     }
-    ::testing::InitGoogleTest(&argc, argv);
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 

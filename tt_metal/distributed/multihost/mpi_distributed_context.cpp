@@ -394,6 +394,11 @@ inline void init_env(int& argc, char**& argv) {
         // letting the process hang in teardown.
         std::set_terminate(mpi_terminate_handler);
 
+        // Install the finalize watchdog handler once at init. The atexit path
+        // only arms alarm(2) before MPI_Finalize; tests (e.g. FinalizeWatchdogPath)
+        // expect sigaction(SIGALRM) to show a custom handler while the process runs.
+        signal(SIGALRM, mpi_finalize_alarm_handler);
+
         // Ensure MPI_Finalize is called when the program exits.
         // Guard with a watchdog: if MPI_Finalize does not return within
         // MPI_FINALIZE_TIMEOUT_SECS, another rank is presumed dead/stuck
@@ -411,7 +416,6 @@ inline void init_env(int& argc, char**& argv) {
             }
             // Arm the watchdog before entering the collective.
             // If it fires, mpi_finalize_alarm_handler calls _exit(70).
-            signal(SIGALRM, mpi_finalize_alarm_handler);
             alarm(MPI_FINALIZE_TIMEOUT_SECS);
             MPI_Finalize();
             alarm(0);  // disarm — finalize completed normally

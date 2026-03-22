@@ -109,7 +109,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -162,7 +162,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -214,7 +214,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -267,7 +267,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent

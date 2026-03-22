@@ -318,7 +318,8 @@ TEST(FaultTolerance, FinalizeWatchdogPath) {
     //
     // We cannot directly test that MPI_Finalize hangs (that would hang
     // the test), but we CAN verify:
-    // 1. SIGALRM handler is installed (it's set up in init_env())
+    // 1. SIGALRM handler is installed (registered in init_env() after MPI_Init;
+    //    atexit only arms alarm() before MPI_Finalize)
     // 2. The handler calls _exit(70)
     //
     // The actual MPI_Finalize hang scenario is tested by the shell-level
