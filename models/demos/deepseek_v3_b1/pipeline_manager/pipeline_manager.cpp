@@ -85,7 +85,11 @@ struct PipelineManager::Impl {
 
     void start() { start_threads(); }
 
-    void stop() { stop_threads(); }
+    void stop() {
+        stop_threads();
+        writer_socket_.barrier();
+        reader_socket_.barrier();
+    }
 
     void write_token(uint32_t token_id) {
         ensure_started();
@@ -296,6 +300,10 @@ struct PipelineManager::Impl {
         token_stream.emit_complete(request.request_id, generated_token_ids);
     }
 
+    void write_over_socket(uint32_t token_id) { writer_socket_.write_token(token_id); }
+
+    uint32_t read_over_socket() { return reader_socket_.read_token(); }
+
     H2DWriterSocket writer_socket_;
     D2HReaderSocket reader_socket_;
     std::thread writer_thread_;
@@ -328,6 +336,10 @@ void PipelineManager::stop() { impl_->stop(); }
 void PipelineManager::write_token(uint32_t token_id) { impl_->write_token(token_id); }
 
 uint32_t PipelineManager::read_token() { return impl_->read_token(); }
+
+void PipelineManager::write_over_socket(uint32_t token_id) { impl_->write_over_socket(token_id); }
+
+uint32_t PipelineManager::read_over_socket() { return impl_->read_over_socket(); }
 
 void PipelineManager::run_one_shot(PipelineManagerRequest& request, std::ostream& output_stream) {
     impl_->run_one_shot(request, output_stream);
