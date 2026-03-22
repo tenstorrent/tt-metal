@@ -9,45 +9,77 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-// Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
-// This will become a constructor for the Program class.
+//------------------------------------------------
+// Temporary Metal 2.0 APIs
+// (experimental namespace free functions)
+//------------------------------------------------
+
+// Create a Program object from a ProgramSpec
+// (This will become a constructor for the Program class)
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false);
+
+// Configure the mutable parameters of an existing Program
+// (This will become a member function for the Program class)
+// This performs a copy from the ProgramRunParams to the Program's internal data structures.
+//
+// COMPLETENESS: You must specify runtime_args for every (kernel, node) pair that
+// requires runtime arguments. Missing entries will cause an error.
+//
+// For high-performance inner loops, prefer the in-place power user API below.
+// If stateful behavior of parameters is required, use the power user API.
+void SetProgramRunParameters(Program& program, const ProgramRunParams& parameters);
+
+// Power-user API for updating the mutable parameters of a Program in-place.
+// ProgramRunParamsView is a non-owning view into the Program's command buffers,
+// enabling in-place modification of mutable Program parameters.
+// (Sketch only; not yet implemented)
+ProgramRunParamsView GetProgramRunParamsView(Program& program);
+
+// Useful? Might want to expose a const view for debug/test use?
+// ProgramRunParamsConstView GetProgramRunParamsConstView(const Program& program);
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
 
+// The code below is not compiled!
+// This is a placeholder for the "post-experimental" desired Program object semantics.
+// For now, it's here as documentation only.
 #if 0
 
-// Program object semantics
+// Desired Program object semantics
 //   - unique ownership
 //   - moveable, non-copyable
 //   - RAII semantics
 //
+//  The RAII "resource" here is the host-side dispatch command buffers.
+//
 // Invariant: A constructed Program is always valid.
 //  - All legality checks are performed at construction time
 //    (including JIT compilation of kernels)
-
-
-// Future plan:
-//   The Program object is a user-managed RAII object... but only for 10 seconds.
-//   When you add your Program to a MeshWorkload, you transfer ownership to the MeshWorkload.
-//   The Program object's lifetime is that of its containing MeshWorkload.
-//   The current Program has a broken ownership model. It only pretends that you can own it.
 //
-//   Instead, the MeshWorkload API should directly take the ProgramSpec, and construct the
-//   Program object internally:
+// Tentative plan:
+//   Current implementation (broken semantics):
+//     The Program object looks like a user-managed RAII object... but only for 10 seconds.
+//     - When you add your Program to a MeshWorkload, you transfer ownership to the MeshWorkload.
+//     - The Program object's lifetime is actually that of its containing MeshWorkload.
+//     - The dispatch command buffers aren't actually created until you enqueue the Program.
+//     - But since you can only enqueue a MeshWorkload, the initial Program object (that you
+//       temporarily hold) never actually owns anything while you hold it. Huh??
 //
-//      my_mesh_workload.add_program(device_range, ProgramSpec{...});
+//   Proposed new semantics:
+//     Create a MeshWorkload constructor that takes a vector/set of ProgramSpecs.
+//     - Clear ownership model: MeshWorkload owns the creates Programs.
+//     - Dispatch command buffers are created at construction, not at first enqueue.
+//     - Still preserves the MeshWorkload multi-threaded Program creation optimization.
 //
-//   Then the ownership model is clean and obvious.
-//   All the Program public APIs below would then be accessed via the MeshWorkload.
-//   And, we could potentially implement an automatic TTNN-style program cache.
-
+//     Note: We will still need a standalone Program constructor from a ProgramSpec for the
+//     slow dispatch use case. But, it will TT_FATAL unless slow dispatch is enabled.
+//     No fast dispatch data structures are created via this API.
 
 
 class Program {
 public:
     ///////////////////////////////////////////////////////////////
-    // Construction
+    // Special member functions
     ///////////////////////////////////////////////////////////////
 
     // Program constructor:
@@ -56,7 +88,7 @@ public:
     //   - All Program creation work (including kernel JIT compilation) is performed at construction time.
     //     (Not at enqueue time, as previously done.)
     //   - Throws if construction fails
-    explicit Program(const ProgramSpec& spec);
+    explicit Program(const ProgramSpec& spec); // slow dispatch only
 
     // Destructor frees all resources
     // Program object owns host-side, device-mapped memory resources only.
@@ -69,7 +101,6 @@ public:
     Program& operator=(Program&&) noexcept = default;
 
 
-
     ///////////////////////////////////////////////////////////////
     // Parameterization
     ///////////////////////////////////////////////////////////////
@@ -77,14 +108,9 @@ public:
     // Single descriptor API for program execution parameters
     void set_run_parameters(const ProgramRunParams& parameters);
 
-    // Alternative APIs for setting the program execution parameters
-    // These enable a minor optimization -- arguments can be constructed in-place,
-    // within the existing Program's dispatch data structures (e.g., kernel arguments).
-    // This is a slightly clunkier API, but it saves copying data at runtime.
-    void set_runtime_arguments(...);
-    void set_common_runtime_arguments(...);
-    void set_dfb_size_parameters(...);
-    void set_dfb_borrowed_memory_parameters(...);
+    // Alternative API for setting the program execution parameters in-place,
+    // modifying the underlying dispatch command buffers directly.
+    ProgramRunParamsView get_run_params_view();
 
 
     ///////////////////////////////////////////////////////////////
