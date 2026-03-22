@@ -9,11 +9,34 @@ MPIRankFailureError exception, and graceful degradation without mpi4py.
 These run without a real MPI runtime by mocking mpi4py where needed.
 """
 
+import importlib.util
+import pathlib
 import sys
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# mpi_fault.py lives at ttnn/ttnn/distributed/mpi_fault.py in the source tree
+# but is NOT installed into the ttnn site-package.  Load it by absolute path
+# so the tests work regardless of which ttnn package is active.
+_mpi_fault_path = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "mpi_fault.py"
+
+
+def _load_mpi_fault_from_source() -> object:
+    """Load mpi_fault.py directly from the source tree.
+
+    This bypasses the installed ttnn package (which does not include
+    mpi_fault.py) and executes the source file in a fresh module object
+    registered under 'ttnn.distributed.mpi_fault'.  Any import statements
+    inside mpi_fault.py still go through builtins.__import__, so patches
+    (e.g. mocking mpi4py) applied at call-time are honoured.
+    """
+    spec = importlib.util.spec_from_file_location("ttnn.distributed.mpi_fault", _mpi_fault_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["ttnn.distributed.mpi_fault"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 # =====================================================================
 # Utility: fresh import of mpi_fault with mocked mpi4py
@@ -79,12 +102,12 @@ def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
                 return real_import(name, *args, **kwargs)
 
             with patch("builtins.__import__", side_effect=fake_import):
-                import ttnn.distributed.mpi_fault as mpi_fault_mod
+                mpi_fault_mod = _load_mpi_fault_from_source()
 
                 yield mpi_fault_mod
                 return
 
-        import ttnn.distributed.mpi_fault as mpi_fault_mod
+        mpi_fault_mod = _load_mpi_fault_from_source()
 
         yield mpi_fault_mod
     finally:

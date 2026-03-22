@@ -16,10 +16,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Import the module under test.  ttrun.py lives at ttnn/ttnn/distributed/ttrun.py
-# and uses click/pydantic/yaml at import time, so we need them on the path.
-sys.path.insert(0, "")
-import ttnn.distributed.ttrun as ttrun_mod
+# ttrun.py lives at ttnn/ttnn/distributed/ttrun.py in the source tree but is
+# NOT installed into the ttnn site-package.  Load it directly by path and
+# register it in sys.modules so that 'from ttnn.distributed.ttrun import ...'
+# works regardless of which ttnn package (source vs installed) is active.
+import importlib.util
+import pathlib
+
+_ttrun_path = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "ttrun.py"
+if "ttnn.distributed.ttrun" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location("ttnn.distributed.ttrun", _ttrun_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules["ttnn.distributed.ttrun"] = _mod
+    _spec.loader.exec_module(_mod)
+ttrun_mod = sys.modules["ttnn.distributed.ttrun"]
 from ttnn.distributed.ttrun import (
     EXIT_APP_ERROR,
     EXIT_RANK_FAILURE,
