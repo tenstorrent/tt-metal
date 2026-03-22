@@ -11,6 +11,7 @@ jobs:
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/bug-check')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     permissions:
       contents: read

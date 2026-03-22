@@ -127,7 +127,7 @@ def format_pr_comment(finding: Finding) -> str:
     return "\n".join(parts)
 
 
-def format_summary_comment(findings: list[Finding]) -> str:
+def format_summary_comment(findings: list[Finding], inline_failed: int = 0) -> str:
     """Format a summary comment for the PR."""
     blocking = [f for f in findings if f.severity == "blocking"]
     warnings = [f for f in findings if f.severity == "warning"]
@@ -145,5 +145,11 @@ def format_summary_comment(findings: list[Finding]) -> str:
     for f in findings:
         tag = "BLOCKING" if f.severity == "blocking" else "WARNING"
         lines.append(f"- [{tag}] `{f.rule_id}` in `{f.file}:{f.line}`: {f.message}")
+
+    if inline_failed:
+        lines.append(
+            f"\n> **Note:** {inline_failed} inline comment(s) could not be posted "
+            "(the line may no longer exist in the latest commit). See the list above for all findings."
+        )
 
     return "\n".join(lines)

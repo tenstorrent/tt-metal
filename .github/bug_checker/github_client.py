@@ -12,6 +12,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 REPO = "tenstorrent/tt-metal"
+MAX_DIFF_LINES = 8000
 
 
 @dataclass
@@ -55,6 +56,13 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
 
     # Fetch diff
     diff = _gh("pr", "diff", str(pr_number), "--repo", REPO)
+    diff_lines = diff.splitlines()
+    if len(diff_lines) > MAX_DIFF_LINES:
+        logger.warning(
+            f"PR diff is {len(diff_lines)} lines; truncating to {MAX_DIFF_LINES}. "
+            "Findings may be incomplete for files beyond the truncation point."
+        )
+        diff = "\n".join(diff_lines[:MAX_DIFF_LINES]) + "\n\n# [diff truncated — too large for full analysis]"
 
     changed_files = [f["path"] for f in pr_data.get("files", [])]
     labels = [l["name"] for l in pr_data.get("labels", [])]

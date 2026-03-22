@@ -83,6 +83,8 @@ def run_bug_check(
 
 def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None:
     """Post findings as inline PR comments plus a summary comment."""
+    inline_posted = 0
+    inline_failed = 0
     for finding in findings:
         try:
             body = format_pr_comment(finding)
@@ -93,14 +95,14 @@ def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None
                 line=finding.line,
                 commit_sha=pr_info.head_sha,
             )
+            inline_posted += 1
         except Exception as e:
-            logger.warning(
-                f"Failed to post inline comment for {finding.rule_id} " f"at {finding.file}:{finding.line}: {e}"
-            )
+            inline_failed += 1
+            logger.warning(f"Failed to post inline comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
 
     # Post summary comment
     try:
-        summary = format_summary_comment(findings)
+        summary = format_summary_comment(findings, inline_failed=inline_failed)
         post_pr_comment(pr_number=pr_info.number, body=summary)
     except Exception as e:
         logger.warning(f"Failed to post summary comment: {e}")

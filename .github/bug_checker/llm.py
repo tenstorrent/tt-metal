@@ -167,6 +167,12 @@ class LLMSession:
         message = fields.get("message", "").strip()
 
         if not file_path or not message:
+            missing = [f for f, v in (("file", file_path), ("message", message)) if not v]
+            logger.warning(
+                f"Dropping malformed finding block in rule {rule_id} — "
+                f"missing required field(s): {', '.join(missing)}. "
+                f"Block (first 200 chars): {block.strip()[:200]!r}"
+            )
             return None
 
         try:

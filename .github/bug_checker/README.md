@@ -107,5 +107,5 @@ A rule is selected if **either** a path or a label matches.
 ## Running Tests
 
 ```bash
-python -m pytest .github/bug-checker/tests/ -v --noconftest
+python -m pytest .github/bug_checker/tests/ -v
 ```
