@@ -247,7 +247,9 @@ def _ulfm_fast_fail(comm, rank: int, error_code: int, operation_name: str) -> No
     try:
         comm_size = comm.Get_size()
     except Exception:
-        pass
+        # If we cannot query the communicator size, keep the sentinel -1.
+        # This is a best-effort diagnostic only and should not affect handling.
+        ...
 
     print(
         f"\n{'='*72}\n"
