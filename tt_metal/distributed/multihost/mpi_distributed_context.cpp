@@ -465,12 +465,19 @@ inline void init_env(int& argc, char**& argv) {
             if (finalized) {
                 return;  // already called (e.g. explicit finalize earlier)
             }
-            // Arm the watchdog before entering the collective.
-            // If it fires, mpi_finalize_alarm_handler calls _exit(70).
-            alarm(MPI_FINALIZE_TIMEOUT_SECS);
+            // RAII guard: arm the watchdog on construction, disarm on destruction.
+            // Ensures alarm(0) is called even if future code between here and
+            // MPI_Finalize is restructured (MPI_Finalize itself does not throw,
+            // but defensive RAII is idiomatic C++).
+            struct AlarmGuard {
+                explicit AlarmGuard(unsigned secs) { alarm(secs); }
+                ~AlarmGuard() { alarm(0); }
+            } guard(MPI_FINALIZE_TIMEOUT_SECS);
             MPI_Finalize();
-            alarm(0);  // disarm — finalize completed normally
-            signal(SIGALRM, SIG_DFL);
+            // alarm(0) is called by ~AlarmGuard above.
+            // Do NOT call signal(SIGALRM, SIG_DFL) here: calling signal() inside
+            // an atexit handler is unnecessary (the process is exiting) and
+            // potentially hazardous if other atexit handlers interact with SIGALRM.
         });
     });
 }
@@ -799,7 +806,7 @@ void MPIContext::revoke_and_shrink() {
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
     }
-    revoked_.store(true, std::memory_order_release);
+    revoked_.test_and_set(std::memory_order_release);
 
     MPI_Comm new_comm = MPI_COMM_NULL;
     MPI_Group new_group = MPI_GROUP_NULL;
@@ -832,16 +839,19 @@ void MPIContext::revoke_and_shrink() {
         this->size_ = new_size;
     }
 
-    revoked_.store(false, std::memory_order_release);  // cleared: new communicator is healthy
+    revoked_.clear(std::memory_order_release);  // cleared: new communicator is healthy
     cached_failed_ranks_.clear();  // new comm has no known failures
 #endif
 }
 
 bool MPIContext::is_revoked() {
-    // revoked_ is set atomically in revoke_and_shrink() and in handle_rank_failure().
+    // revoked_ is set in revoke_and_shrink() and cleared after a successful shrink.
     // This is correct for both ULFM and non-ULFM builds: without ULFM, revocation
-    // never happens so the flag is always false.
-    return revoked_.load(std::memory_order_acquire);
+    // never happens so the flag is always clear.
+    // NOTE: This is a snapshot read; the communicator may become revoked between
+    // this call and the next MPI operation.  Callers must not rely on this value
+    // being stable across multiple statements.
+    return revoked_.test(std::memory_order_acquire);
 }
 
 void MPIContext::set_failure_policy(FailurePolicy policy) {

@@ -201,7 +201,7 @@ private:
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
     int size_{0};
-    std::atomic<bool> revoked_{false};  // set when MPIX_Comm_revoke() is called
+    std::atomic_flag revoked_{};  // set when MPIX_Comm_revoke() is called; cleared after shrink
     FailurePolicy failure_policy_{FailurePolicy::FAST_FAIL};
 
     // Detection-time cache of failed ranks, populated by handle_rank_failure()
@@ -217,10 +217,26 @@ private:
     // remains empty and failed_ranks() will return {}.
     //
     // Cleared by revoke_and_shrink() when the communicator is replaced.
+    //
+    // THREAD-SAFETY NOTE: cached_failed_ranks_ is currently NOT protected by
+    // comm_mutex_.  It is written by handle_rank_failure() (called from
+    // MPI_CHECK_CTX on the thread executing the failed MPI operation) and read
+    // by failed_ranks() and cleared by revoke_and_shrink().  This is safe only
+    // if revoke_and_shrink() is called from the same thread that detected the
+    // failure — the intended usage pattern.  TODO: extend comm_mutex_ to cover
+    // cached_failed_ranks_ once the single-thread invariant is verified or
+    // relaxed.
     mutable std::vector<Rank> cached_failed_ranks_;
 
     // Protects comm_, group_, rank_, size_ mutations in revoke_and_shrink()
-    // against concurrent reads in other member functions.
+    // against concurrent reads in other member functions (e.g. send/recv threads
+    // reading comm_ without holding this mutex).
+    //
+    // INVARIANT: revoke_and_shrink() MUST be called from a single designated
+    // thread.  No concurrent MPI calls should be in flight while shrink is in
+    // progress.  The design does not support concurrent shrink+MPI; attempts to
+    // do so produce a data race on comm_ between the shrink comm_ update and
+    // concurrent MPI_CHECK_CTX reads of comm_.
     mutable std::mutex comm_mutex_;
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
