@@ -5,8 +5,9 @@
 # VC2 functional tests -- requires TT_METAL_ENABLE_FABRIC_VC2=1 environment variable
 
 Tests:
-  ### VC2 NON-Z NEIGHBOR EXCHANGE ###
+  ## VC2 NON-Z NEIGHBOR EXCHANGE ###
   - name: "VC2MeshNeighbourExchange"
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
       use_vc2: true
@@ -18,7 +19,252 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 100
+      num_packets: 40000
 
     patterns:
       - type: neighbor_exchange
+
+  - name: "VC2MeshNeighbourExchangeVC2"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [2048]
+
+    defaults:
+      ftype: unicast
+      num_packets: 40000
+
+    patterns:
+      - type: neighbor_exchange
+        vc_id: 2
+      - type: neighbor_exchange
+        vc_id: 0
+
+  - name: "MeshNeighbourExchangeVC2Unidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 4096
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+
+  - name: "MeshNeighbourExchangeVC0UnidirectionalInactiveVC2"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 4096
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+
+  - name: "MeshNeighbourExchangeVC0Unidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 4096
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+
+  - name: "MeshNeighbourExchangeVC0VC2Unidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 4096
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+
+
+  - name: "MeshNeighbourExchangeVC0Bidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1]
+    #   ntype: [unicast_write]
+    #   size: [2048]
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        # vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1]
+      - device: [0, [0, 1]] # Source is physical chip 0
+        # vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]] # Destination is physical chip 1
+
+  - name: "VC2MeshNeighbourExchangeVC0Bidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [2048]
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1]
+      - device: [0, [0, 1]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]] # Destination is physical chip 1
+
+  - name: "VC2MeshNeighbourExchangeVC2Bidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    parametrization_params:
+      num_links: [1]
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1]
+      - device: [0, [0, 1]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]] # Destination is physical chip 1
+
+  - name: "VC2MeshNeighbourExchangeVC0VC2Bidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      use_vc2: true
+
+    parametrization_params:
+      num_links: [1]
+
+    senders:
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+      - device: [0, [0, 0]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 1]] # Destination is physical chip 1
+      - device: [0, [0, 1]] # Source is physical chip 0
+        vc_id: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]] # Destination is physical chip 1
+      - device: [0, [0, 1]] # Source is physical chip 0
+        vc_id: 2
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 40000
+            destination:
+              device: [0, [0, 0]] # Destination is physical chip 1

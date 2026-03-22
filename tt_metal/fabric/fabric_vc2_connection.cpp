@@ -155,22 +155,98 @@ void append_fabric_vc2_connection_rt_args(
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be FabricStaticSizedChannelsAllocator");
 
-    // VC2 sender is at the last flat index: after all VC0 and VC1 senders
-    const auto vc2_sender_channel =
-        static_channel_allocator->get_num_sender_channels(0) + static_channel_allocator->get_num_sender_channels(1);
+    // VC2 sender is at the last flat index: after all VC0 and VC1 senders.
+    // Used for flat edm_config arrays (indexed across all VCs).
+    const auto num_vc0_senders = static_channel_allocator->get_num_sender_channels(0);
+    const auto num_vc1_senders = static_channel_allocator->get_num_sender_channels(1);
+    const auto num_vc2_senders = static_channel_allocator->get_num_sender_channels(2);
+    const auto vc2_sender_channel_flat = num_vc0_senders + num_vc1_senders;
+    const auto total_sender_channels = num_vc0_senders + num_vc1_senders + num_vc2_senders;
+
+    log_info(
+        tt::LogFabric,
+        "VC2 flat index diagnostic: vc0_senders={}, vc1_senders={}, vc2_senders={}, "
+        "vc2_flat_idx={}, total_senders={}, config.num_used_sender_channels={}",
+        num_vc0_senders,
+        num_vc1_senders,
+        num_vc2_senders,
+        vc2_sender_channel_flat,
+        total_sender_channels,
+        edm_config.num_used_sender_channels);
+    TT_FATAL(
+        vc2_sender_channel_flat < edm_config.num_used_sender_channels,
+        "VC2 flat index {} is out of bounds for edm_config arrays (num_used_sender_channels={}). "
+        "Allocator counts: vc0={}, vc1={}, vc2={}",
+        vc2_sender_channel_flat,
+        edm_config.num_used_sender_channels,
+        num_vc0_senders,
+        num_vc1_senders,
+        num_vc2_senders);
+    TT_FATAL(num_vc2_senders > 0, "VC2 connection requested but allocator reports 0 VC2 sender channels");
+
+    // Cross-check: verify the addresses at the VC2 flat index are non-zero
+    TT_FATAL(
+        edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat] != 0,
+        "VC2 connection_semaphore_address is 0 at flat index {}. "
+        "This indicates the config did not allocate L1 for the VC2 sender channel.",
+        vc2_sender_channel_flat);
+    TT_FATAL(
+        edm_config.sender_channels_worker_conn_info_base_address[vc2_sender_channel_flat] != 0,
+        "VC2 worker_conn_info_base_address is 0 at flat index {}.",
+        vc2_sender_channel_flat);
+    TT_FATAL(
+        edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat] != 0,
+        "VC2 flow_control_semaphore_address is 0 at flat index {}.",
+        vc2_sender_channel_flat);
+
+    // Dump ALL sender channel addresses so we can see the full picture
+    for (size_t i = 0; i < total_sender_channels; i++) {
+        log_info(
+            tt::LogFabric,
+            "  sender_ch[{}]: conn_sem=0x{:x}, conn_info=0x{:x}, flow_ctrl=0x{:x}, buf_idx=0x{:x}{}",
+            i,
+            edm_config.sender_channels_connection_semaphore_address[i],
+            edm_config.sender_channels_worker_conn_info_base_address[i],
+            edm_config.sender_channels_local_flow_control_semaphore_address[i],
+            edm_config.sender_channels_buffer_index_semaphore_address[i],
+            (i == vc2_sender_channel_flat) ? " <-- VC2" : "");
+    }
+
+    // VC2 has exactly one sender channel at VC-relative index 0.
+    // The allocator's 2D API requires (vc_id=2, channel_id=0).
+    static constexpr size_t vc2_id = 2;
+    static constexpr size_t vc2_channel_idx = 0;
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(vc2_sender_channel),
-        .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(vc2_sender_channel),
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[vc2_sender_channel],
+        .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(vc2_id, vc2_channel_idx),
+        .num_buffers_per_channel =
+            static_channel_allocator->get_sender_channel_number_of_slots(vc2_id, vc2_channel_idx),
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat],
+        .edm_connection_handshake_addr =
+            edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat],
+        .edm_worker_location_info_addr =
+            edm_config.sender_channels_worker_conn_info_base_address[vc2_sender_channel_flat],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[vc2_sender_channel],
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[vc2_sender_channel_flat],
         .edm_direction = router_direction};
 
+    log_info(tt::LogFabric, "VC2 connection. edm_buffer_base_addr: {}", edm_connection.edm_buffer_base_addr);
+    log_info(tt::LogFabric, "\tVC2 connection. num_buffers_per_channel: {}", edm_connection.num_buffers_per_channel);
+    log_info(tt::LogFabric, "\tVC2 connection. edm_l1_sem_addr: {}", edm_connection.edm_l1_sem_addr);
+    log_info(
+        tt::LogFabric,
+        "\tVC2 connection. edm_connection_handshake_addr: {}",
+        edm_connection.edm_connection_handshake_addr);
+    log_info(
+        tt::LogFabric,
+        "\tVC2 connection. edm_worker_location_info_addr: {}",
+        edm_connection.edm_worker_location_info_addr);
+    log_info(tt::LogFabric, "\tVC2 connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
+    log_info(
+        tt::LogFabric, "\tVC2 connection. buffer_index_semaphore_id: {}", edm_connection.buffer_index_semaphore_id);
+    log_info(tt::LogFabric, "\tVC2 connection. edm_direction: {}", edm_connection.edm_direction);
     append_worker_to_fabric_edm_sender_rt_args(
         edm_connection,
         worker_flow_control_semaphore_id,
