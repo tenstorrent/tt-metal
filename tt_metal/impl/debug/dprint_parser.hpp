@@ -63,8 +63,24 @@ public:
     DevicePrintParser(const DevicePrintParser&) = delete;
     DevicePrintParser& operator=(const DevicePrintParser&) = delete;
 
-    using ArgumentValue =
-        std::variant<bool, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, float, double>;
+    struct TileSliceDynamic {
+        TileSliceHostDev<0> header;
+        std::vector<uint8_t> data;
+    };
+
+    using ArgumentValue = std::variant<
+        bool,
+        int8_t,
+        uint8_t,
+        int16_t,
+        uint16_t,
+        int32_t,
+        uint32_t,
+        int64_t,
+        uint64_t,
+        float,
+        double,
+        TileSliceDynamic>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;
