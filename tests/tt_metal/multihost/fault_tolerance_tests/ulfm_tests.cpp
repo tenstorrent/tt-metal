@@ -7,6 +7,7 @@
 #include "tt_metal/distributed/multihost/mpi_distributed_context.hpp"
 #include <csignal>
 #include <cstdlib>
+#include <mpi-ext.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -640,16 +641,25 @@ TEST(FaultTolerance, FailedRanksAfterDetection) {
     bool detected = false;
     try {
         ctx->barrier();
-    } catch (const DistributedException&) {
+    } catch (const DistributedException& ex) {
         detected = true;
+        const int err = ex.error_code();
 
-        // Before shrink: failed_ranks() should include rank 1
-        // Note: this queries the OLD (pre-shrink) communicator
+        // Before shrink: failed_ranks() should include rank 1.
+        // Note: this queries the OLD (pre-shrink) communicator.
         auto failed = ctx->failed_ranks();
-        // We expect at least 1 failed rank (may include rank 1)
-        // The exact list depends on ULFM timing, so we just verify non-empty
-        EXPECT_FALSE(failed.empty())
-            << "Rank " << rank << ": failed_ranks() should be non-empty after detecting failure";
+
+        // Ranks that saw MPIX_ERR_PROC_FAILED can reliably identify failed
+        // ranks via ULFM failure_ack/get_acked (or from the detection-time
+        // cache).  Ranks that saw MPIX_ERR_REVOKED may not be able to: the
+        // communicator was already revoked by another rank before this rank
+        // could ack, so failure_ack fails and the cache may be empty.
+        // Accept empty for REVOKED; require non-empty for PROC_FAILED.
+        if (err != MPIX_ERR_REVOKED) {
+            EXPECT_FALSE(failed.empty())
+                << "Rank " << rank << ": failed_ranks() should be non-empty after detecting failure"
+                << " (error_code=" << err << ")";
+        }
 
         ctx->revoke_and_shrink();
 

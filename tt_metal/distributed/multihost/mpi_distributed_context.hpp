@@ -186,6 +186,14 @@ private:
     std::atomic<bool> revoked_{false};  // set when MPIX_Comm_revoke() is called
     FailurePolicy failure_policy_{FailurePolicy::FAST_FAIL};
 
+    // Cache of failed ranks detected at the moment handle_rank_failure() runs.
+    // Populated by handle_rank_failure() before throwing MPIRankFailureException.
+    // This is critical for ranks that see MPIX_ERR_REVOKED: by the time they
+    // call failed_ranks(), the communicator is already revoked so ULFM ack/get_acked
+    // returns empty.  The cache preserves whatever identify_failed_ranks() found.
+    // Cleared by revoke_and_shrink() when the communicator is replaced.
+    mutable std::vector<Rank> cached_failed_ranks_;
+
     // Protects comm_, group_, rank_, size_ mutations in revoke_and_shrink()
     // against concurrent reads in other member functions.
     mutable std::mutex comm_mutex_;
