@@ -25,13 +25,16 @@ Usage:
 """
 
 import argparse
+import glob
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 TRACED_OPS_DIR = REPO_ROOT / "model_tracer" / "traced_operations"
+VECTORS_EXPORT_DIR = REPO_ROOT / "tests" / "sweep_framework" / "vectors_export"
 
 SEPARATOR = "=" * 70
 
@@ -58,6 +61,57 @@ def _run(cmd: list[str], env: dict[str, str] | None = None, dry_run: bool = Fals
 def _module_basename(module_name: str) -> str:
     """Extract the last dotted component: 'model_traced.foo_model_traced' -> 'foo_model_traced'."""
     return module_name.rsplit(".", 1)[-1]
+
+
+def step_clean_previous_outputs(
+    module_name: str,
+    sweep_trace_output: Path,
+    sweep_trace_split_dir: Path,
+    dry_run: bool,
+) -> None:
+    """Remove all artifacts from a previous pipeline run so we start fresh."""
+    print(f"\n{SEPARATOR}")
+    print("Step 0: Clean previous pipeline outputs")
+    print(SEPARATOR)
+
+    removed = 0
+
+    # 1. Sweep trace JSON
+    if sweep_trace_output.is_file():
+        print(f"  Removing sweep trace: {sweep_trace_output}")
+        if not dry_run:
+            sweep_trace_output.unlink()
+        removed += 1
+    else:
+        print(f"  Sweep trace already absent: {sweep_trace_output}")
+
+    # 2. Sweep trace split directory
+    if sweep_trace_split_dir.is_dir():
+        print(f"  Removing sweep trace split dir: {sweep_trace_split_dir}")
+        if not dry_run:
+            shutil.rmtree(sweep_trace_split_dir)
+        removed += 1
+    else:
+        print(f"  Sweep trace split dir already absent: {sweep_trace_split_dir}")
+
+    # 3. Vector export files matching this module (mesh-qualified and exact-match)
+    patterns = [
+        VECTORS_EXPORT_DIR / f"{module_name}__*",
+        VECTORS_EXPORT_DIR / f"{module_name}.json",
+    ]
+    all_matches: list[Path] = []
+    for pat in patterns:
+        all_matches.extend(sorted(Path(p) for p in glob.glob(str(pat))))
+    if all_matches:
+        for path in all_matches:
+            print(f"  Removing vector file: {path}")
+            if not dry_run:
+                path.unlink()
+        removed += len(all_matches)
+    else:
+        print(f"  No existing vector files matching: {module_name}*")
+
+    print(f"  Cleaned {removed} artifact(s)")
 
 
 def step_generate_vectors(
@@ -130,6 +184,7 @@ def step_split_trace(
     split_dir: Path,
     label: str,
     dry_run: bool,
+    force: bool = False,
 ) -> None:
     """Split a trace JSON by operation using split_model_trace.py."""
     print(f"\n{SEPARATOR}")
@@ -137,8 +192,17 @@ def step_split_trace(
     print(SEPARATOR)
 
     if split_dir.is_dir() and any(split_dir.iterdir()):
-        print(f"  Split directory already exists, skipping: {split_dir}")
-        return
+        if force:
+            print(f"  --force: removing stale split directory: {split_dir}")
+            if not dry_run:
+                shutil.rmtree(split_dir)
+        elif trace_json.is_file() and split_dir.stat().st_mtime < trace_json.stat().st_mtime:
+            print(f"  Split directory is older than source JSON, re-splitting: {split_dir}")
+            if not dry_run:
+                shutil.rmtree(split_dir)
+        else:
+            print(f"  Split directory already exists, skipping: {split_dir}")
+            return
 
     cmd = [
         sys.executable,
@@ -198,8 +262,7 @@ def step_print_validation_pairs(
         for op_dir_name, model_file, sweep_file in matched:
             op_display = op_dir_name.replace("_", ".")
             chat_input = (
-                f"Use the validate-sweep-trace cursor rule to validate {op_display}. "
-                f"Model: {model_file} Sweep: {sweep_file}"
+                f"Use @validate-sweep-trace.mdc to validate {op_display}. " f"Model: {model_file} Sweep: {sweep_file}"
             )
             print(f"    {op_display}:")
             print(f"      Chat input: {chat_input}")
@@ -269,6 +332,11 @@ def main() -> int:
         action="store_true",
         help="Print the commands that would be executed without running them",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force a clean re-run: delete existing sweep trace, split dirs, and vector exports, then re-generate and re-split",
+    )
 
     args = parser.parse_args()
 
@@ -301,6 +369,15 @@ def main() -> int:
     if args.dry_run:
         print(f"  Mode:               DRY RUN")
 
+    # Step 0: Remove all artifacts from a previous run (only with --force)
+    if args.force:
+        step_clean_previous_outputs(
+            module_name=args.module_name,
+            sweep_trace_output=sweep_trace_output,
+            sweep_trace_split_dir=sweep_trace_split_dir,
+            dry_run=args.dry_run,
+        )
+
     # Step 1: Generate vectors
     step_generate_vectors(
         module_name=args.module_name,
@@ -325,6 +402,7 @@ def main() -> int:
         split_dir=sweep_trace_split_dir,
         label="sweep trace (3/4)",
         dry_run=args.dry_run,
+        force=args.force,
     )
 
     # Step 4: Ensure model trace is split
@@ -333,6 +411,7 @@ def main() -> int:
         split_dir=model_trace_split_dir,
         label="model trace (4/4)",
         dry_run=args.dry_run,
+        force=args.force,
     )
 
     # Print validation pairs
