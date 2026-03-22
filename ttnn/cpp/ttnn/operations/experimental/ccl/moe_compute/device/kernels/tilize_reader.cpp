@@ -433,7 +433,7 @@ void kernel_main() {
 
         // Get local CB addresses (same relative address as drain core)
         uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+        uint32_t local_scores_addr = get_write_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
 
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
@@ -730,14 +730,8 @@ void kernel_main() {
         cb_push_back(total_chunks_cb_id, one_page);
 
         // ========== Write expert_activation buffer to DRAM ==========
-        // Write activated rows + sentinel row (with -1 in token_id) to DRAM
-        // Cap off expert_activation buffer with sentinel row
-        uint32_t* sentinel_row_ptr =
-            reinterpret_cast<uint32_t*>(expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-        sentinel_row_ptr[0] = static_cast<uint32_t>(-1);  // token_id = -1 indicates end
-
-        // Write to DRAM: activated rows + sentinel = (num_activated_tokens + 1) rows
-        uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
+        // Write to DRAM: activated rows (num_activated_tokens) rows
+        uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
         noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         // Barrier for this write is at the very end of the kernel

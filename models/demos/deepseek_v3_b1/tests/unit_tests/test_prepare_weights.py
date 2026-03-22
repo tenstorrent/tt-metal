@@ -14,6 +14,7 @@ Tests for prepare_weights: per-layer prepare/save/load on 4x2 mesh.
 """
 
 import time
+from dataclasses import fields as dataclass_fields
 
 import pytest
 import torch
@@ -94,6 +95,9 @@ def _core_range_set_to_tuples(crs):
     return sorted(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in crs.ranges())
 
 
+_OVERLAPPED_TENSOR_SKIPPED_FIELDS = {"fused_tensor"}
+
+
 def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -> None:
     """Assert two OverlappedTensors have matching metadata (not fused_tensor identity)."""
     assert a.tensor_shape == b.tensor_shape
@@ -101,7 +105,12 @@ def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -
     assert a.dtype == b.dtype
     assert a.tile_shape == b.tile_shape
     assert a.byte_offset == b.byte_offset
+    assert a.total_size == b.total_size
     assert _core_range_set_to_tuples(a.core_range_set) == _core_range_set_to_tuples(b.core_range_set)
+    checked = {"tensor_shape", "shard_shape", "dtype", "tile_shape", "byte_offset", "total_size", "core_range_set"}
+    all_fields = {f.name for f in dataclass_fields(OverlappedTensor)}
+    unchecked = all_fields - checked - _OVERLAPPED_TENSOR_SKIPPED_FIELDS
+    assert not unchecked, f"OverlappedTensor has new fields not covered by assertion: {unchecked}"
 
 
 def _assert_on_device(tensor: ttnn.Tensor) -> None:
@@ -130,6 +139,16 @@ _PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]
 _PLACEMENTS_SHARD_NONE_0 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
 _PLACEMENTS_SHARD_0_1 = [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
 _PLACEMENTS_REPLICATE = [ttnn.PlacementReplicate()]
+
+
+# DRAMStreamingMatmul requires gate/up/down expert tensors contiguous per projection (see #40302)
+def _assert_moe_layer_routed_experts_dram_contiguous(layer: DeepSeekV3MoELayerWeights) -> None:
+    """MoE DRAMStreamingMatmul requires gate/up/down expert tensors contiguous per projection (device only)."""
+    MoERoutedExpertWeights(
+        routed_gate_proj=layer.routed_gate_proj,
+        routed_up_proj=layer.routed_up_proj,
+        routed_down_proj=layer.routed_down_proj,
+    ).validate_contiguous_dram()
 
 
 def _assert_layer_on_device_with_topology(
@@ -183,6 +202,7 @@ def _assert_layer_on_device_with_topology(
             _assert_topology(layer.routed_gate_proj[e], _PLACEMENTS_REPLICATE)
             _assert_topology(layer.routed_up_proj[e], _PLACEMENTS_REPLICATE)
             _assert_topology(layer.routed_down_proj[e], _PLACEMENTS_REPLICATE)
+        _assert_moe_layer_routed_experts_dram_contiguous(layer)
 
 
 # HF state dict shapes (out_features, in_features) for linears; full logical for 4x2 mesh. See DEEPSEEK_PREPARE_WEIGHTS_DESIGN_DOC.md §5.
@@ -388,11 +408,19 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
-    routed = prepare_routed_expert_weights(bdw, state, 0, is_moe=True, num_routed_experts=NUM_ROUTED_EXPERTS)
+    routed = prepare_routed_expert_weights(
+        bdw,
+        state,
+        0,
+        is_moe=True,
+        num_routed_experts=NUM_ROUTED_EXPERTS,
+        move_to_device=True,
+    )
     assert isinstance(routed, MoERoutedExpertWeights)
     assert len(routed.routed_gate_proj) == NUM_ROUTED_EXPERTS
     assert len(routed.routed_up_proj) == NUM_ROUTED_EXPERTS
     assert len(routed.routed_down_proj) == NUM_ROUTED_EXPERTS
+    routed.validate_contiguous_dram()
 
 
 @pytest.mark.parametrize(
@@ -562,14 +590,28 @@ def test_dump_load_routed_expert_weights_4x2(bh_2d_mesh_device, tmp_path):
     routed_down_proj = []
     logger.info("Loading routed experts back onto the same submesh...")
     t0 = time.perf_counter()
+    # Same order as load_moe_routed_experts / get_tt_moe_routed_expert_weights: all gates, then ups, then downs
+    # (DRAMStreamingMatmul indexes experts via base + i * stride per projection).
     for e in range(NUM_ROUTED_EXPERTS):
         expert_dir = experts_dir / f"e_{e:03d}"
-        logger.info("Loading expert {}...", e)
+        logger.info("Loading gate expert {}...", e)
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=submesh))
+    for e in range(NUM_ROUTED_EXPERTS):
+        expert_dir = experts_dir / f"e_{e:03d}"
+        logger.info("Loading up expert {}...", e)
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=submesh))
+    for e in range(NUM_ROUTED_EXPERTS):
+        expert_dir = experts_dir / f"e_{e:03d}"
+        logger.info("Loading down expert {}...", e)
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=submesh))
     elapsed = time.perf_counter() - t0
     logger.info("Loaded routed experts back onto the same submesh in {:.3f}s", elapsed)
+
+    MoERoutedExpertWeights(
+        routed_gate_proj=routed_gate_proj,
+        routed_up_proj=routed_up_proj,
+        routed_down_proj=routed_down_proj,
+    ).validate_contiguous_dram()
 
     assert len(routed_gate_proj) == NUM_ROUTED_EXPERTS
     assert len(routed_up_proj) == NUM_ROUTED_EXPERTS

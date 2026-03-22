@@ -6,6 +6,8 @@
 
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/assert.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -34,8 +36,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  *          K=32 -> returns 32 (exactly 1 tile)
  *          K=33 -> returns 64 (2 tiles needed)
  */
-uint32_t get_nearest_supported_k_value(const uint32_t k) {
-    return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
+uint32_t get_nearest_supported_k_value(const uint32_t k, const uint32_t tile_width) {
+    return tile_width * tt::div_up(k, tile_width);
 }
 
 /**
@@ -101,7 +103,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
 
     // Calculate the expected final logical shape after all transformations
@@ -112,7 +114,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
     // If we had to round up K for op, slice down to the requested K value
     if (adjusted_k != k) {
-        const auto output_shape = result[0].padded_shape();
+        const auto output_shape = result[0].logical_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
@@ -123,12 +125,15 @@ std::vector<Tensor> post_topk_transform_tensor(
     }
 
     // Rank restoration - convert from op-required 4D back to original rank
-    if (orig_rank < 4) {
+    if (orig_rank < 4 && orig_rank > 1) {
         // For tensors originally < 4D, squeeze out the extra dimensions that were added
+        // This doesn't work for 1D tensors in tile layout, because their padded shape is
+        // (1, 1, 32, 32) in tile layout, which cannot be squeezed to 1D since only
+        // dimensions of size 1 can be squeezed. We handle that case separately below
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
-    } else if (orig_rank > 4) {
-        // For tensors originally > 4D, reshape back to original higher-dimensional structure
+    } else if (orig_rank != 4) {
+        // For tensors originally > 4D, or 1D, reshape back to original higher-dimensional structure
         ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result_shape[result_shape.size() - 1] = k;  // Update last dimension to K
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
@@ -193,20 +198,117 @@ std::vector<Tensor> topk(
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+
     // Analyze input tensor properties to determine required transformations
-    auto rank = input_tensor.padded_shape().rank();
-    const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
+    std::size_t rank_st = input_tensor.logical_shape().rank();
+    TT_FATAL(rank_st <= std::numeric_limits<int8_t>::max(), "Rank is too large to convert to int8_t");
+    const int8_t rank = static_cast<int8_t>(rank_st);
+
+    TT_FATAL(
+        (dim >= -rank && dim <= (rank - 1)) || (rank == 0 && (dim == 0 || dim == -1)),
+        "Dimension for topk is out of range (expected to be in range of [{}, {}])",
+        -rank,
+        rank - 1);
+
+    const bool is_dim_last_idx = (dim == -1 || dim == rank - 1 || (rank == 0 && dim == 0));
     const bool is_rank_le_4d = rank <= 4;
 
     // Normalize negative dimension index and validate K parameter
-    const auto adjusted_dim = dim < 0 ? dim + rank : dim;
+    // Rank 0 means scalar, so the only valid dimension is 0.
+    const int8_t adjusted_dim = (rank == 0) ? 0 : ((dim < 0) ? (dim + rank) : dim);
+
     TT_FATAL(
-        input_tensor.logical_shape()[adjusted_dim] >= k,
+        (rank == 0 && k <= 1) || input_tensor.logical_shape()[adjusted_dim] >= k,
         "K cannot be larger than the dimension size! K={}, dimension size={}",
         k,
-        input_tensor.logical_shape()[adjusted_dim]);
+        (rank == 0) ? 1 : input_tensor.logical_shape()[adjusted_dim]);
     ttnn::Shape desired_final_shape = original_lshape;
-    desired_final_shape[adjusted_dim] = k;
+    if (rank != 0) {
+        desired_final_shape[adjusted_dim] = k;
+    }
+
+    if (preallocated_output_tensors.has_value()) {
+        const Tensor& preallocated_values = std::get<0>(preallocated_output_tensors.value());
+        const Tensor& preallocated_indices = std::get<1>(preallocated_output_tensors.value());
+        TT_FATAL(is_device_tensor(preallocated_values), "Preallocated output values tensor must be on device");
+        TT_FATAL(is_device_tensor(preallocated_indices), "Preallocated output indices tensor must be on device");
+
+        TT_FATAL(
+            preallocated_values.logical_shape() == desired_final_shape,
+            "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
+            preallocated_values.logical_shape(),
+            desired_final_shape);
+        TT_FATAL(
+            preallocated_indices.logical_shape() == desired_final_shape,
+            "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
+            preallocated_indices.logical_shape(),
+            desired_final_shape);
+    }
+
+    // When input is a scalar, PyTorch returns the copy of the input tensor (that is the 1 top element)
+    // as values. This happens when k = 1 (which makes sense), but also when k = 0 (which is unusual,
+    // but for now we simply match its behavior).
+    if (rank == 0 && (k == 1 || k == 0)) {
+        // Caller requested top 1 elements from a scalar tensor.
+        // We need to return a copy of the input tensor as is (that is the 1 top element), and
+        // a scalar tensor containing a single 0 as the index (matches what PyTorch does).
+        if (!preallocated_output_tensors.has_value()) {
+            return {
+                ttnn::clone(
+                    input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt),
+                ttnn::full(
+                    desired_final_shape,
+                    0,
+                    tt::tt_metal::DataType::UINT16,
+                    input_tensor.layout(),
+                    *(input_tensor.device()),
+                    memory_config.value_or(input_tensor.memory_config()))};
+        }
+
+        // If the output tensors were preallocated, they should already have
+        // the correct shapes (validated above), so fill the values with the input tensor
+        // and a zero as the index and return.
+        auto& [values, indices] = preallocated_output_tensors.value();
+        ttnn::copy(input_tensor, values);
+
+        // Creating indices tensor on host and copying to device (there is no direct way to write
+        // to a device tensor with a scalar value).
+        const TensorSpec& indices_spec = indices.tensor_spec();
+        TT_FATAL(indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
+        // Although we only need to store one value, have to account for extra padding
+        // in the tile layout. So host buffer size needs to match device buffer size.
+        auto indices_vec =
+            std::vector<uint16_t>(indices_spec.physical_shape().height() * indices_spec.physical_shape().width(), 0);
+        Tensor host_indices(
+            tt::tt_metal::HostBuffer(std::move(indices_vec)), desired_final_shape, DataType::UINT16, indices.layout());
+        copy_to_device(host_indices, indices);
+
+        return {values, indices};
+    }
+
+    // For a zero volume input tensor, return a zero volume tensor with the shape adjusted for k.
+    // Same if k is 0 (i.e. top 0 elements were requested).
+    if (input_tensor.logical_volume() == 0 || k == 0) {
+        if (!preallocated_output_tensors.has_value()) {
+            auto make_zero_volume_tensor = [&] {
+                return ttnn::full(
+                    desired_final_shape,
+                    0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
+                    input_tensor.dtype(),
+                    input_tensor.layout(),
+                    *input_tensor.device(),
+                    memory_config.value_or(input_tensor.memory_config()));
+            };
+
+            return {make_zero_volume_tensor(), make_zero_volume_tensor()};
+        }
+
+        // If the output tensors were preallocated, they should already have
+        // the correct shapes (validated above), so just return them as is.
+        auto& [values, indices] = preallocated_output_tensors.value();
+        return {values, indices};
+    }
 
     // Set up memory and execution configurations with defaults if not provided
     const auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -218,7 +320,9 @@ std::vector<Tensor> topk(
 
     // OP constraint: K must be tile-aligned (multiple of 32 elements)
     // Round up to nearest supported value for OP execution
-    const uint32_t adjusted_k = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t adjusted_k =
+        operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k, tile_width);
 
     // Dimension reordering - move target dimension to last position
     Tensor transposed_tensor = ::reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
@@ -250,21 +354,12 @@ std::vector<Tensor> topk(
     // Preprocess optional output tensors if provided
     std::optional<std::tuple<Tensor, Tensor>> output_tensors = std::nullopt;
     if (preallocated_output_tensors.has_value()) {
-        TT_FATAL(
-            std::get<0>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
-            "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<0>(preallocated_output_tensors.value()).logical_shape(),
-            desired_final_shape);
-        TT_FATAL(
-            std::get<1>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
-            "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
-            std::get<1>(preallocated_output_tensors.value()).logical_shape(),
-            desired_final_shape);
-        const auto values_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+        const auto preallocated_values = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
             std::get<0>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
-        const auto indices_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
-            std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
-        output_tensors = {values_tensor, indices_tensor};
+        const auto preallocated_indices =
+            operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+                std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
+        output_tensors = {preallocated_values, preallocated_indices};
     } else {
         output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
     }

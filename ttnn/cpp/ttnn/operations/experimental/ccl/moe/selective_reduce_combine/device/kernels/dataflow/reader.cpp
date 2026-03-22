@@ -79,9 +79,10 @@ void kernel_main() {
     constexpr uint32_t aligned_activations_page_size = aligned_token_activations_page_size_bytes / sizeof(uint32_t);
 
     constexpr auto dense_token_maps_ta_args = TensorAccessorArgs<0>();
-    constexpr auto dense_token_counts_ta_args = TensorAccessorArgs<1>();
-    constexpr auto token_activations_ta_args = TensorAccessorArgs<2>();
-
+    constexpr auto dense_token_counts_ta_args =
+        TensorAccessorArgs<dense_token_maps_ta_args.next_compile_time_args_offset()>();
+    constexpr auto token_activations_ta_args =
+        TensorAccessorArgs<dense_token_counts_ta_args.next_compile_time_args_offset()>();
     uint32_t arg_index = 0;
     const auto dense_token_maps_addr = get_arg_val<uint32_t>(arg_index++);
     const auto dense_token_counts_addr = get_arg_val<uint32_t>(arg_index++);
@@ -97,7 +98,7 @@ void kernel_main() {
 
     // read dense token counts
     cb_reserve_back(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_read_ptr(token_counts_cb_id);
+    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
     const uint64_t token_counts_noc_addr = get_noc_addr(0, token_counts_addrgen);
     noc_async_read(token_counts_noc_addr, token_counts_l1_addr, token_counts_page_size_bytes);
     noc_async_read_barrier();

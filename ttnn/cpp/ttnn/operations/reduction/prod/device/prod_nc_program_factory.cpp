@@ -4,7 +4,6 @@
 #include "prod_nc_program_factory.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -12,8 +11,6 @@
 #include <string>
 
 namespace ttnn::prim {
-
-using namespace tt::constants;
 
 ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     const ProdNcParams& operation_attributes, const ProdNcInputs& tensor_args, Tensor& /*tensor_return_value*/) {
@@ -35,16 +32,21 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     const auto& input_shape = input.padded_shape();
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = input.tensor_spec().tile().get_tile_hw();
 
     [[maybe_unused]] const auto N = input_shape[0];
     const auto C = input_shape[1];
-    const auto Ht = input_shape[2] / TILE_HEIGHT;
-    const auto Wt = input_shape[3] / TILE_WIDTH;
+    const auto Ht = input_shape[2] / tile_height;
+    const auto Wt = input_shape[3] / tile_width;
+    TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={})", Ht, Wt);
+
     const auto HtWt = Ht * Wt;
     const auto CHtWt = C * Ht * Wt;
     const auto num_reduce_input_tile = input_shape[dim];
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
-    const auto num_output_tiles = output.physical_volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / tile_hw;
 
     log_debug(tt::LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
@@ -60,6 +62,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
+    TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
 
     const uint32_t in0_t = 2;        // input
     const uint32_t in1_t = 1;        // zero

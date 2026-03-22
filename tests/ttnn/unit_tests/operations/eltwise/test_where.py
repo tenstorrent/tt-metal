@@ -634,10 +634,13 @@ def test_addcdiv_edgcase_fp32(device):
     assert torch_equal_nan(output_tensor1, golden_tensor)
 
 
-def test_ttnn_where_forge_nan(device):
-    C = torch.ones(1, 4, 1, dtype=torch.float32)
-    T = torch.randn(1, 4, 768, dtype=torch.float32)
-    F = torch.ones(1, 4, 768, dtype=torch.float32) * float("nan")
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape", [((1, 4, 1), (1, 1, 768), (1, 4, 768)), ((1, 4, 768), (1, 4, 768), (1, 4, 768))]
+)
+def test_ttnn_where_forge_nan(device, a_shape, b_shape, c_shape):
+    C = torch.ones(a_shape, dtype=torch.float32)
+    T = torch.randn(b_shape, dtype=torch.float32)
+    F = torch.ones(c_shape, dtype=torch.float32) * float("nan")
     golden = torch.where(C != 0, T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -838,3 +841,62 @@ def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant
     result = ttnn.to_torch(ttnn_result)
 
     assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 7, 32, 96]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "scalar_true, scalar_false",
+    [
+        (15.5, 31.2),
+        (0.0, -11.33),
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true, scalar_false, condition):
+    torch.manual_seed(0)
+
+    ttnn_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
+
+    C = make_condition_tensor(shape, dtype, condition)
+
+    golden = torch.where(C.bool(), scalar_true, scalar_false)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, scalar_true, scalar_false, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    if dtype == torch.bfloat16:
+        assert_with_pcc(result, golden)
+    else:
+        assert torch_equal_nan(result, golden)

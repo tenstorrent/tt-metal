@@ -7,9 +7,9 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
+ttnn::Tensor dit_rms_norm_unary_fused(
     const ttnn::Tensor& input_tensor,
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
@@ -21,6 +21,9 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
+    auto rank = input_tensor.logical_shape().size();
+    TT_FATAL(rank > 0 && input_tensor.logical_volume() >= 0, "Input tensor must have rank > 0 and logical volume >= 0");
+
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     const bool approx_mode = true;
@@ -28,7 +31,9 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
     auto kernel_config_val = compute_kernel_config.value_or(
         init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
 
-    kernel_config_val.fp32_dest_acc_en = input_tensor.dtype() == DataType::FLOAT32;
+    if (!compute_kernel_config.has_value()) {
+        kernel_config_val.fp32_dest_acc_en = (input_tensor.dtype() == DataType::FLOAT32);
+    }
 
     return ttnn::prim::layer_norm(
         input_tensor,
@@ -47,4 +52,4 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
         activation);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

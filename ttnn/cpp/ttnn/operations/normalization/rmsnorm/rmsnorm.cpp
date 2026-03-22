@@ -43,13 +43,16 @@ Tensor rms_norm(
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
         auto result = ttnn::divide(
-            input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
+            input_tensor,
+            ttnn::abs(input_tensor, output_memory_config),
+            /*output_dtype=*/std::nullopt,
+            output_memory_config);
 
         if (weight.has_value()) {
-            result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::multiply(result, weight.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         if (bias.has_value()) {
-            result = ttnn::add(result, bias.value(), /*alpha=*/std::nullopt, output_memory_config);
+            result = ttnn::add(result, bias.value(), /*output_dtype=*/std::nullopt, output_memory_config);
         }
         return result;
     }
@@ -64,7 +67,10 @@ Tensor rms_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(
+            input_tensor.shard_spec(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
         std::nullopt,  // dtype
         prim::LayerNormType::RMSNORM);
