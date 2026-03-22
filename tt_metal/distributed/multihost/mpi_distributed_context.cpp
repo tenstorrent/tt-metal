@@ -871,10 +871,28 @@ std::optional<bool> MPIContext::agree(bool local_value) const {
 std::vector<Rank> MPIContext::failed_ranks() const {
 #if OMPI_HAS_ULFM
     // Query ULFM for currently-acked failed ranks on this communicator.
-    // Try ack first (best-effort), then get_acked. On a revoked communicator
-    // ack may fail, but get_acked may still return previously acked failures.
-    // If both fail or return empty, fall back to the cache populated by
-    // handle_rank_failure() at detection time.
+    //
+    // Attempt MPIX_Comm_failure_ack() first (best-effort, ignore return code).
+    // On a non-revoked comm this records any pending failures; on an already-
+    // revoked comm it returns MPIX_ERR_REVOKED, which we silently ignore.
+    // Then call MPIX_Comm_failure_get_acked() to retrieve the acked group.
+    //
+    // POTENTIAL FAILURE CASE — REVOKED-path ranks:
+    //   A rank that sees MPIX_ERR_REVOKED (77) receives a communicator that was
+    //   revoked by a peer *before* this rank processed the failure.  By the time
+    //   this method runs, MPIX_Comm_failure_ack() returns MPIX_ERR_REVOKED, so
+    //   MPIX_Comm_failure_get_acked() sees no acked failures and returns an empty
+    //   group → failed_size == 0 → we fall through to cached_failed_ranks_.
+    //
+    //   cached_failed_ranks_ was populated by handle_rank_failure() before
+    //   MPIX_Comm_revoke() propagated — so for ranks where identify_failed_ranks()
+    //   succeeded at detection time, the cache will carry the right answer.  If
+    //   identify_failed_ranks() also failed (e.g., the comm was already fully
+    //   revoked when handle_rank_failure() ran), the cache is empty and this
+    //   method returns {}.
+    //
+    //   When reliable failed-rank identification is required, compare communicator
+    //   size before vs. after revoke_and_shrink() — the delta is always accurate.
     MPIX_Comm_failure_ack(comm_);  // best-effort; ignore return code
     MPI_Group failed_group = MPI_GROUP_NULL;
     if (MPIX_Comm_failure_get_acked(comm_, &failed_group) != MPI_SUCCESS) {

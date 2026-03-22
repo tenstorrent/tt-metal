@@ -649,12 +649,20 @@ TEST(FaultTolerance, FailedRanksAfterDetection) {
         // Note: this queries the OLD (pre-shrink) communicator.
         auto failed = ctx->failed_ranks();
 
-        // Ranks that saw MPIX_ERR_PROC_FAILED can reliably identify failed
-        // ranks via ULFM failure_ack/get_acked (or from the detection-time
-        // cache).  Ranks that saw MPIX_ERR_REVOKED may not be able to: the
-        // communicator was already revoked by another rank before this rank
-        // could ack, so failure_ack fails and the cache may be empty.
-        // Accept empty for REVOKED; require non-empty for PROC_FAILED.
+        // Failure-path dependent: not all ranks can identify failed ranks.
+        //
+        // MPIX_ERR_PROC_FAILED (75): rank saw the failure directly.
+        //   MPIX_Comm_failure_ack() succeeds and MPIX_Comm_failure_get_acked()
+        //   returns the failed group — failed_ranks() is reliably non-empty.
+        //
+        // MPIX_ERR_REVOKED (77): another rank already called MPIX_Comm_revoke()
+        //   before this rank processed the failure.  On the already-revoked
+        //   communicator, MPIX_Comm_failure_ack() returns MPIX_ERR_REVOKED, so
+        //   MPIX_Comm_failure_get_acked() finds no acked failures.  The
+        //   detection-time cache (cached_failed_ranks_) *may* contain data if
+        //   identify_failed_ranks() succeeded before the revoke fully propagated,
+        //   but it is not guaranteed.  Accept an empty result for REVOKED-path
+        //   ranks; require non-empty only for PROC_FAILED-path ranks.
         if (err != MPIX_ERR_REVOKED) {
             EXPECT_FALSE(failed.empty())
                 << "Rank " << rank << ": failed_ranks() should be non-empty after detecting failure"

@@ -165,6 +165,24 @@ public:
     // Returns the set of ranks detected as failed since the last
     // revoke_and_shrink() call.  Only populated under FAULT_TOLERANT policy.
     // Cleared when revoke_and_shrink() succeeds.
+    //
+    // KNOWN LIMITATION — REVOKED-path ranks may return empty:
+    //   When a rank detects failure via MPIX_ERR_REVOKED (error 77) rather than
+    //   MPIX_ERR_PROC_FAILED (error 75), it means another rank already called
+    //   MPIX_Comm_revoke() before this rank saw the failure.  On an already-revoked
+    //   communicator, MPIX_Comm_failure_ack() returns MPIX_ERR_REVOKED itself, so
+    //   MPIX_Comm_failure_get_acked() cannot record the failed-rank set.
+    //
+    //   To mitigate this, handle_rank_failure() caches identified ranks in
+    //   cached_failed_ranks_ *before* calling MPIX_Comm_revoke(), and this
+    //   method falls back to that cache if the live ULFM query returns empty.
+    //   However, if identify_failed_ranks() also failed (e.g., the communicator
+    //   was already revoked when handle_rank_failure() ran), the cache will be
+    //   empty and this method returns {}.
+    //
+    //   Reliable alternative: compare communicator size before vs. after
+    //   revoke_and_shrink() — the delta gives the count of lost ranks, even
+    //   when ULFM cannot identify them by rank number.
     std::vector<Rank> failed_ranks() const override;
 
     /* ------------- message snooping ------------- */
@@ -186,11 +204,18 @@ private:
     std::atomic<bool> revoked_{false};  // set when MPIX_Comm_revoke() is called
     FailurePolicy failure_policy_{FailurePolicy::FAST_FAIL};
 
-    // Cache of failed ranks detected at the moment handle_rank_failure() runs.
-    // Populated by handle_rank_failure() before throwing MPIRankFailureException.
-    // This is critical for ranks that see MPIX_ERR_REVOKED: by the time they
-    // call failed_ranks(), the communicator is already revoked so ULFM ack/get_acked
-    // returns empty.  The cache preserves whatever identify_failed_ranks() found.
+    // Detection-time cache of failed ranks, populated by handle_rank_failure()
+    // *before* MPIX_Comm_revoke() is called and before throwing
+    // MPIRankFailureException.
+    //
+    // This cache exists to work around the REVOKED-path failure case (see the
+    // failed_ranks() comment above).  Ranks that receive MPIX_ERR_REVOKED have
+    // a revoked communicator by the time they enter handle_rank_failure(); the
+    // best-effort MPIX_Comm_failure_ack() in identify_failed_ranks() may still
+    // succeed at that point (the ack is local state), allowing the failed group
+    // to be captured here.  If identify_failed_ranks() also fails, the cache
+    // remains empty and failed_ranks() will return {}.
+    //
     // Cleared by revoke_and_shrink() when the communicator is replaced.
     mutable std::vector<Rank> cached_failed_ranks_;
 
