@@ -1237,25 +1237,41 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
-        # Only use barrier_semaphore when persistent buffers are not available.
-        # Barrier sync inside a captured trace causes deadlocks.
-        barrier_semaphore = None
-        if persistent_buffers_list is None:
-            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
-        ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
-            input_tensor=input_tensor_mesh,
-            persistent_output_buffers=persistent_buffers_list,
-            dim=dim,
-            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            barrier_semaphore=barrier_semaphore,
-            num_links=num_links,
-            memory_config=memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-            subdevice_id=self.worker_sub_device_id,
-            cluster_axis=cluster_axis,
-            num_workers_per_link=num_workers_per_link,
-        )
+        # OLMo prefill: Use regular reduce_scatter without sub-device requirement.
+        # This avoids barrier_semaphore which deadlocks inside captured traces,
+        # and avoids DRAM OOM from async CCL's large intermediate buffers.
+        if self.is_olmo and self.mode == "prefill":
+            ttnn_tensor_out = ttnn.reduce_scatter(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Ring,
+                num_links=num_links,
+                subdevice_id=None,
+            )
+        else:
+            # Only use barrier_semaphore when persistent buffers are not available.
+            # Barrier sync inside a captured trace causes deadlocks.
+            barrier_semaphore = None
+            if persistent_buffers_list is None:
+                barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+            ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor=input_tensor_mesh,
+                persistent_output_buffers=persistent_buffers_list,
+                dim=dim,
+                multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][
+                    self.gather_idx[cluster_axis]
+                ],
+                barrier_semaphore=barrier_semaphore,
+                num_links=num_links,
+                memory_config=memory_config,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                subdevice_id=self.worker_sub_device_id,
+                cluster_axis=cluster_axis,
+                num_workers_per_link=num_workers_per_link,
+            )
 
         # reshape input back
         ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen, ttnn_tensor_out.shape[-1]))
@@ -1360,27 +1376,42 @@ class TT_CCL:
         # persistent_buffers = None
 
         num_links = 4
-        # Only use barrier_semaphore when persistent buffers are not available.
-        # Barrier sync inside a captured trace causes deadlocks.
-        barrier_semaphore = None
-        if persistent_buffers is None:
-            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
-        if reverse_order:
-            all_gather_function = ttnn.experimental.all_gather_async_reversed
+        # OLMo prefill: Use regular all_gather without sub-device requirement.
+        # This avoids barrier_semaphore which deadlocks inside captured traces,
+        # and avoids DRAM OOM from async CCL's large intermediate buffers.
+        if self.is_olmo and self.mode == "prefill":
+            ttnn_tensor_out = ttnn.all_gather(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                topology=ttnn.Topology.Ring,
+                num_links=num_links,
+                memory_config=memory_config,
+            )
         else:
-            all_gather_function = ttnn.experimental.all_gather_async
-        ttnn_tensor_out = all_gather_function(
-            input_tensor=input_tensor_mesh,
-            persistent_output_buffer=persistent_buffers,
-            dim=dim,
-            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            num_links=num_links,
-            barrier_semaphore=barrier_semaphore,
-            memory_config=memory_config,
-            topology=ttnn.Topology.Ring,
-            subdevice_id=self.worker_sub_device_id,
-            cluster_axis=cluster_axis,
-        )
+            # Only use barrier_semaphore when persistent buffers are not available.
+            # Barrier sync inside a captured trace causes deadlocks.
+            barrier_semaphore = None
+            if persistent_buffers is None:
+                barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+            if reverse_order:
+                all_gather_function = ttnn.experimental.all_gather_async_reversed
+            else:
+                all_gather_function = ttnn.experimental.all_gather_async
+            ttnn_tensor_out = all_gather_function(
+                input_tensor=input_tensor_mesh,
+                persistent_output_buffer=persistent_buffers,
+                dim=dim,
+                multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][
+                    self.gather_idx[cluster_axis]
+                ],
+                num_links=num_links,
+                barrier_semaphore=barrier_semaphore,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Ring,
+                subdevice_id=self.worker_sub_device_id,
+                cluster_axis=cluster_axis,
+            )
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
