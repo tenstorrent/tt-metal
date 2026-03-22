@@ -64,6 +64,7 @@ echo "LOG_METAL: Running single-node ULFM gap tests"
 echo "LOG_METAL: Running ttrun exit code interpretation tests"
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
   --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/test_ttrun_exit_codes.xml" \
   "${repo_root}/tests/ttnn/distributed/test_ttrun_exit_codes.py") ; fail=$((fail + $?))
 
@@ -74,6 +75,7 @@ echo "LOG_METAL: Running ttrun exit code interpretation tests"
 echo "LOG_METAL: Running mpi_fault.py Python tests"
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
   --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+  --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/test_mpi_fault_python.xml" \
   "${repo_root}/tests/ttnn/distributed/test_mpi_fault_python.py") ; fail=$((fail + $?))
 
