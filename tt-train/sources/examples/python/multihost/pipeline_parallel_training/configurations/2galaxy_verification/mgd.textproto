@@ -3,15 +3,16 @@
 #
 # Mesh Graph Descriptor for 2-Galaxy Fabric Verification (Blackhole)
 #
-# Topology: Two Galaxy units (1×32 each = 32 devices) connected via Ethernet
+# Topology: Two meshes (1×8 each = 8 devices) connected via Ethernet
+# Each mesh is a logical 1x8 slice matching the MeshShape(1, 8) opened by the script.
 
 # --- Meshes ---------------------------------------------------------------
 
 mesh_descriptors {
-  name: "Galaxy_4x8"
+  name: "Mesh_1x8"
   arch: BLACKHOLE
-  device_topology { dims: [ 1, 32 ] }  # Galaxy: 32 devices (4 rows × 8 cols)
-  host_topology   { dims: [ 1, 1 ] }   # Single host per Galaxy
+  device_topology { dims: [ 1, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2
     policy: RELAXED
@@ -24,12 +25,12 @@ graph_descriptors {
   name: "G0"
   type: "FABRIC"
 
-  instances { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "Mesh_1x8" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "Mesh_1x8" mesh_id: 1 } }
 
   connections {
-    nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "Mesh_1x8" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Mesh_1x8" mesh_id: 1 } }
     channels { count: 4 policy: RELAXED }
     directional: false
   }
