@@ -523,12 +523,13 @@ class LMHeadSampling:
         rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
         mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
         matmul_eh_cb = 9  # [MTP] EH projection weights on matmul cores (tensor-backed)
-        embedding_cb = mcast_src_cb  # [MTP] Reuses CB 8 — mcast consumes it before embedding DRAM read
+        embedding_cb = 10  # [MTP] Reuses CB 8 — mcast consumes it before embedding DRAM read
         h_gamma_cb = 11  # [MTP] RMSNorm gamma weights for hidden states on sender core (tensor-backed)
         e_gamma_cb = 12  # [MTP] RMSNorm gamma weights for embeddings on sender core (tensor-backed)
         mcast_eh_src_cb = 15  # [MTP] Fused [h_norm|e_norm] on sender core, both RMSNorms write here directly
         embedding_done_cb = 20  # [MTP] Signal CB: NCRISC pushes after embedding, TRISC waits before e_rmsnorm
         mcast_done_cb = 21  # [MTP] Signal from BRISC to NCRISC on sender core that mcast is done and its safe for NCRISC to use embedding_cb
+        ermsnorm_done_cb = 22  # [MTP]
         argmax_winner_cb = 3
         argmax_gather_cb = 4
         argmax_indices_cb = 5
@@ -671,7 +672,7 @@ class LMHeadSampling:
                         max(matmul_bbox.end.y, mcast_sender_core.y),
                     ),
                 )
-
+                print(f"[lm_head_sampling] mcast_grid={mcast_grid}", flush=True)
                 mcast_grid_set = ttnn.CoreRangeSet([mcast_grid])
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
@@ -680,6 +681,7 @@ class LMHeadSampling:
                     eh_matmul_noc = ttnn.NOC.NOC_0
                     eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
                     eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
+                    print(f"[lm_head_sampling] eh_matmul_core_grid={eh_matmul_core_grid}", flush=True)
                     eh_bank_id_core_values = []
                     eh_vc_core_values = []
                     eh_bank_ids = []
@@ -703,6 +705,7 @@ class LMHeadSampling:
                         mcast_receiver_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(c, r), ttnn.CoreCoord(c, r)))
                 mcast_receiver_grid = ttnn.CoreRangeSet(mcast_receiver_ranges)
 
+                print(f"[lm_head_sampling] mcast_receiver_grid={mcast_receiver_grid}", flush=True)
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
 
@@ -1057,6 +1060,7 @@ class LMHeadSampling:
                     ("sender_noc_y", int(core_noc_y) if enable_mtp_on_device else 0),
                     ("embedding_done_cb", embedding_done_cb if enable_mtp_on_device else 0),
                     ("mcast_done_cb", mcast_done_cb if enable_mtp_on_device else 0),
+                    ("ermsnorm_done_cb", ermsnorm_done_cb if enable_mtp_on_device else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
                     ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
@@ -1121,6 +1125,7 @@ class LMHeadSampling:
                     ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("mcast_done_cb", mcast_done_cb if enable_mtp_on_device else 0),
+                    ("ermsnorm_done_cb", ermsnorm_done_cb if enable_mtp_on_device else 0),
                     ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp_on_device else 0),
                     ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp_on_device else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
@@ -1186,6 +1191,7 @@ class LMHeadSampling:
                     ),
                     ("embedding_done_cb", embedding_done_cb if enable_mtp_on_device else 0),
                     ("mcast_done_cb", mcast_done_cb if enable_mtp_on_device else 0),
+                    ("ermsnorm_done_cb", ermsnorm_done_cb if enable_mtp_on_device else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp_on_device else 0),
                     ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if enable_mtp_on_device else 0),
@@ -1438,6 +1444,19 @@ class LMHeadSampling:
                     e_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                     e_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
+                    embedding_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
+                    embedding_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=embedding_cb,
+                        data_format=data_format,
+                        page_size=rms_tile_size,
+                        tile=embedding_tile_descriptor,
+                    )
+                    embedding_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=rms_num_tiles * rms_tile_size,
+                        core_ranges=mcast_sender_core_grid,
+                        format_descriptors=[embedding_cb_format],
+                    )
+
                     # CB 15: mcast_eh_src - fused [h_norm|e_norm] on sender core
                     # Both h_rmsnorm and e_rmsnorm write directly here (no separate e_norm_cb needed)
                     # Uses packed RMS tile format (7+7=14 tiles of 32x32) matching RMSNorm output format
@@ -1476,10 +1495,10 @@ class LMHeadSampling:
                         )
                         mcast_eh_dst_cb_descriptor = ttnn.CBDescriptor(
                             total_size=eh_num_tiles_k * input_tile_size,
-                            core_ranges=all_cores,
+                            core_ranges=mcast_receiver_grid,
                             format_descriptors=[mcast_eh_dst_cb_format],
                         )
-                        mcast_eh_receiver_data_addr = 0
+                        mcast_eh_receiver_data_addr = ttnn.get_cb_address(mcast_eh_dst_cb_descriptor)
 
                     # CB 9: EH projection weights - tensor-backed working buffer for DRAM streaming (triple-buffered)
                     if eh_proj_working_buf_tensor is not None:
@@ -1528,6 +1547,17 @@ class LMHeadSampling:
                         format_descriptors=[mcast_done_cb_format],
                     )
 
+                    ermsnorm_done_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=ermsnorm_done_cb,
+                        data_format=data_format,
+                        page_size=16,
+                    )
+                    ermsnorm_done_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=16,
+                        core_ranges=mcast_sender_core_grid,
+                        format_descriptors=[ermsnorm_done_cb_format],
+                    )
+
                     mtp_cb_descriptors = [
                         h_gamma_cb_descriptor,
                         e_gamma_cb_descriptor,
@@ -1537,6 +1567,8 @@ class LMHeadSampling:
                         matmul_out_eh_cb_descriptor,
                         emb_done_cb_descriptor,
                         mcast_done_cb_descriptor,
+                        ermsnorm_done_cb_descriptor,
+                        embedding_cb_descriptor,
                     ]
 
                 # CB list
@@ -1663,11 +1695,7 @@ class LMHeadSampling:
                 # Append mcast receiver data addresses as BRISC runtime args [13] and [14]
                 # (0 = kernel uses get_write_ptr fallback)
                 brisc_bcast_common_args.append(mcast_receiver_data_addr)
-                brisc_bcast_common_args.append(
-                    (mcast_eh_receiver_data_addr if mcast_eh_dst_working_buf_tensor is not None else 0)
-                    if enable_mtp_on_device
-                    else 0
-                )
+                brisc_bcast_common_args.append(mcast_eh_receiver_data_addr if enable_mtp_on_device else 0)
 
                 # ================================================================
                 # Unified kernel descriptor
@@ -1702,6 +1730,12 @@ class LMHeadSampling:
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_mcast_receiver_core",
                             core_range=mcast_receiver_grid,
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_mcast_grid_core",
+                            core_range=mcast_grid_set,
                             value=1,
                             other_value=0,
                         ),

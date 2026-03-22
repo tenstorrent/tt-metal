@@ -347,8 +347,9 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
+                DPRINT << "BRISC mcast wait for src CB" << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
-
+                DPRINT << "BRISC mcast wait for src CB done" << ENDL();
                 // Send data with state
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
@@ -369,12 +370,28 @@ struct Mcast {
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
 
-                noc_async_posted_writes_flushed();
+                DPRINT << "BRISC mcast flush posted writes" << ENDL();
+
+                {
+                    uint32_t noc_ctrl_val = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+                    uint32_t hw_posted = NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT);
+                    uint32_t sw_self =
+                        get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index);
+                    uint32_t sw_other =
+                        get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index);
+                    DPRINT << "MCAST_FLUSH ctrl=0x" << HEX() << noc_ctrl_val << DEC() << " hw=" << hw_posted
+                           << " sw_self=" << sw_self << " sw_other=" << sw_other << " cb=" << args.src_cb << ENDL();
+                }
+                // noc_async_posted_writes_flushed();
+                noc_async_write_barrier();
 
                 // Pop the source CB after sending
+                DPRINT << "BRISC mcast pop src CB start" << ENDL();
                 if constexpr (pop_src) {
+                    DPRINT << "BRISC mcast pop src CB" << ENDL();
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
+                DPRINT << "BRISC mcast send data done" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
@@ -383,11 +400,13 @@ struct Mcast {
             if constexpr (IsReceiverCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
+                DPRINT << "NCRISC waiting for mcast" << ENDL();
                 // Reserve space in destination CB before mcast writes to it
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << "NCRISC reserved dest CB" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
-
+                DPRINT << "NCRISC set dest sem" << ENDL();
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             } else if constexpr (IsMcastGridCore) {

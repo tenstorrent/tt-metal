@@ -714,22 +714,22 @@ class LMHeadStage(StageKind):
         )
 
         mcast_eh_dst_working_buf = None
-        if self._enable_mtp:
-            eh_k = LMHeadStage.K + embedding_dim
-            mcast_eh_dst_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(mcast_receiver_grid, (LMHeadStage.M, eh_k), ttnn.ShardOrientation.ROW_MAJOR),
-            )
-            mcast_eh_dst_working_buf = ttnn.from_torch(
-                torch.zeros((num_devices * num_receiver_cores, eh_k), dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                tile=LMHeadStage.A_TILE,
-                device=mesh_device,
-                memory_config=mcast_eh_dst_mem_config,
-                mesh_mapper=mesh_mapper,
-            )
+        # if self._enable_mtp:
+        #     eh_k = LMHeadStage.K + embedding_dim
+        #     mcast_eh_dst_mem_config = ttnn.MemoryConfig(
+        #         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #         ttnn.BufferType.L1,
+        #         ttnn.ShardSpec(mcast_receiver_grid, (LMHeadStage.M, eh_k), ttnn.ShardOrientation.ROW_MAJOR),
+        #     )
+        #     mcast_eh_dst_working_buf = ttnn.from_torch(
+        #         torch.zeros((num_devices * num_receiver_cores, eh_k), dtype=torch.bfloat16),
+        #         dtype=ttnn.bfloat16,
+        #         layout=ttnn.TILE_LAYOUT,
+        #         tile=LMHeadStage.A_TILE,
+        #         device=mesh_device,
+        #         memory_config=mcast_eh_dst_mem_config,
+        #         mesh_mapper=mesh_mapper,
+        #     )
 
         lmhead_input_socket = pipeline_block.get_downstream_socket()
         lmhead_output_socket = pipeline_block.get_upstream_socket()

@@ -358,6 +358,7 @@ struct DRAMStreamingMatmul {
                     }
                     tile_regs_release();
                 }
+                DPRINT << "TRISC dram streaming matmul push output cb" << ENDL();
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
             custom_mm_block_uninit<dense_packing>();
@@ -369,6 +370,7 @@ struct DRAMStreamingMatmul {
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);
             }
+            DPRINT << "TRISC dram streaming matmul pop in0 done" << ENDL();
 #endif
         }
     };  // class Op

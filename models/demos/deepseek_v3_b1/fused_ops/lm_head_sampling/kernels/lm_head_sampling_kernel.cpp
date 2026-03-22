@@ -76,6 +76,7 @@ struct Core {
     // ── Per-core role flags (1 on assigned cores, 0 elsewhere) ──────
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
+    static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
     static constexpr bool is_argmax_core = is_matmul_core;
@@ -382,6 +383,7 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(14);
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
@@ -393,7 +395,7 @@ void kernel_main() {
         mcast_eh_src_cb,
         get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
         Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) : 0,
-        get_write_ptr(mcast_eh_dst_cb),
+        mcast_eh_dst_addr_override != 0 ? mcast_eh_dst_addr_override : get_write_ptr(mcast_eh_dst_cb),
     };
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -485,13 +487,13 @@ void kernel_main() {
 #endif
 
     deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
+        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_matmul_core, true>
             mcast;
     deepseek_b1_ops::Mcast::Op<
         McastEhCTArgs,
         Core::enable_mtp && Core::is_input_core,
-        Core::enable_mtp && Core::is_mcast_receiver_core,
-        Core::enable_mtp && Core::is_mcast_receiver_core,
+        Core::enable_mtp && Core::is_mcast_grid_core,
+        Core::enable_mtp && Core::is_eh_matmul_core,
         true>
         mcast_eh;
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
@@ -544,9 +546,9 @@ void kernel_main() {
         // Phase 0.5: First RMSNorm (TRISC only)
         // When MTP is enabled, don't pop the input so CB 0 data persists for h_rmsnorm reuse.
         // ====================================================================
-        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, !Core::enable_mtp> rmsnorm;
         {
             DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, !Core::enable_mtp> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
@@ -559,15 +561,10 @@ void kernel_main() {
         }
 
 #if defined(COMPILE_FOR_BRISC)
-        // Signal NCRISC on the input core that the mcast is done and the
-        // mcast_src CB (which shares L1 with embedding_cb) is safe to reuse.
-        // Without this gate, NCRISC's embedding DRAM fetch can overwrite the
-        // mcast source before BRISC has finished reading and sending it.
         if constexpr (Core::enable_mtp && Core::is_input_core) {
-            constexpr uint32_t mcast_done_cb = get_named_compile_time_arg_val("mcast_done_cb");
-            DPRINT << "BRISC signal mcast done" << ENDL();
-            cb_reserve_back(mcast_done_cb, 1);
-            cb_push_back(mcast_done_cb, 1);
+            DPRINT << "DBG[0] POST_MCAST hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
+                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
+                   << ENDL();
         }
 #endif
 
@@ -578,6 +575,15 @@ void kernel_main() {
             DeviceZoneScopedN("MATMUL");
             matmul(matmul_args);
         }
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::enable_mtp && Core::is_input_core) {
+            DPRINT << "DBG[1] POST_MATMUL hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
+                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
+                   << ENDL();
+        }
+#endif
+
         // ====================================================================
         // Phase 3: Argmax Sampling
         // ====================================================================
@@ -585,6 +591,14 @@ void kernel_main() {
             DeviceZoneScopedN("ARGMAX");
             sampling_op(sampling_args);
         }
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::enable_mtp && Core::is_input_core) {
+            DPRINT << "DBG[2] POST_ARGMAX hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
+                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
+                   << ENDL();
+        }
+#endif
 
         if constexpr (Core::enable_mtp) {
             // ====================================================================
@@ -634,11 +648,8 @@ void kernel_main() {
             if constexpr (Core::is_input_core) {
                 // Wait until BRISC has finished mcast (popped mcast_src CB which shares L1
                 // with embedding_cb).  BRISC signals via mcast_done_cb after mcast completes.
-                constexpr uint32_t mcast_done_cb = get_named_compile_time_arg_val("mcast_done_cb");
                 // DPRINT << "NCRISC wait for mcast done b4" << ENDL();
-                DPRINT << "NCRISC embedding lookup" << ENDL();
-                cb_wait_front(mcast_done_cb, 1);
-                cb_pop_front(mcast_done_cb, 1);
+
                 constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
                 constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
                 constexpr uint32_t e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
@@ -674,8 +685,9 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_rmsnorm_core) {
-                deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, true, true> h_rmsnorm;
                 {
+                    DPRINT << "TRISC starting h_rmsnorm" << ENDL();
+                    deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                     DeviceZoneScopedN("MTP_H_RMSNORM");
                     h_rmsnorm(rmsnorm_args);
                 }
@@ -691,13 +703,10 @@ void kernel_main() {
                 // Wait for NCRISC embedding push before reading CB — the embedding CB is
                 // reused from the rmsnorm output CB, so without this gate TRISC can race
                 // ahead and consume the stale rmsnorm tiles instead of the embedding tiles.
-                constexpr uint32_t emb_done_cb = get_named_compile_time_arg_val("embedding_done_cb");
-                cb_wait_front(emb_done_cb, 1);
-                cb_pop_front(emb_done_cb, 1);
                 DPRINT << "TRISC starting e_rmsnorm" << ENDL();
-                deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                 {
                     DeviceZoneScopedN("MTP_E_RMSNORM");
+                    deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                     e_rmsnorm(rmsnorm_args);
                 }
             }
@@ -707,27 +716,17 @@ void kernel_main() {
         // [MTP] Second mcast — multicast [h_norm|e_norm] from sender to all cores
         // ====================================================================
         {
+            DPRINT << "BRISC starting mcast_eh" << ENDL();
             DeviceZoneScopedN("MTP_EH_MCAST");
             mcast_eh(mcast_eh_args);
         }
-
-#if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_mcast_receiver_core && !Core::is_eh_matmul_core) {
-            DPRINT << "NCRISC pop eh dst cb NON MM" << ENDL();
-            constexpr uint32_t eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-            constexpr uint32_t eh_dst_pages = get_named_compile_time_arg_val("mcast_eh_dst_num_pages");
-            cb_wait_front(eh_dst_cb, eh_dst_pages);
-            DPRINT << "NCRISC pop eh dst cb done NON MM" << ENDL();
-            cb_pop_front(eh_dst_cb, eh_dst_pages);
-        }
-#endif
 
         // ====================================================================
         // [MTP] EH matmul using DRAM streaming + NCRISC drain (single #if block)
         // ====================================================================
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
-            DPRINT << "NCRISC eh matmul core" << ENDL();
+            // DPRINT << "NCRISC eh matmul core" << ENDL();
             deepseek_b1_ops::DRAMStreamingMatmul::
                 Op<EHDRAMMMCTArgs, true, true, false, eh_cb_in1_buf_addr, false, false, 2>
                     eh_matmul;
@@ -738,27 +737,10 @@ void kernel_main() {
         }
 #endif
 
-        // ====================================================================
-        // [MTP] Pop CB 18 on non-EH-matmul receiver cores to prevent hang
-        // in persistent mode. These cores receive the EH mcast but don't run
-        // the EH matmul, so CB 18 is never consumed. Without this pop,
-        // cb_reserve_back(CB 18) blocks on iteration 2.
-        // ====================================================================
-        // #if defined(COMPILE_FOR_NCRISC)
-        //         if constexpr (Core::is_mcast_receiver_core && !Core::is_eh_matmul_core) {
-        //             constexpr uint32_t eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-        //             constexpr uint32_t eh_dst_pages = get_named_compile_time_arg_val("mcast_eh_dst_num_pages");
-        //             DPRINT << "NCRISC pop eh dst cb" << eh_dst_cb << ENDL();
-        //             cb_wait_front(eh_dst_cb, eh_dst_pages);
-        //             DPRINT << "NCRISC pop eh dst cb done" << ENDL();
-        //             cb_pop_front(eh_dst_cb, eh_dst_pages);
-        //         }
-        // #endif
-
 #if defined(COMPILE_FOR_NCRISC)
         uint32_t eh_out_cb = get_named_compile_time_arg_val("matmul_eh_out");
         uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
-        DPRINT << "NCRISC eh_out_w=" << eh_out_w << ENDL();
+        // DPRINT << "NCRISC eh_out_w=" << eh_out_w << ENDL();
         if constexpr (Core::is_eh_matmul_core) {
             DPRINT << "NCRISC eh_matmul_core wait" << ENDL();
             cb_wait_front(eh_out_cb, eh_out_w);
@@ -781,10 +763,10 @@ void kernel_main() {
             constexpr uint32_t num_cores = 8;
             volatile tt_l1_ptr uint32_t* eh_matmul_done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("eh_matmul_done_semaphore_id")));
-            DPRINT << "BRISC argmax final core wait for EH matmul done sem" << ENDL();
-            DPRINT << "BRISC argmax final core num_mm_cores=" << num_mm_cores << ENDL();
+            // DPRINT << "BRISC argmax final core wait for EH matmul done sem" << ENDL();
+            // DPRINT << "BRISC argmax final core num_mm_cores=" << num_mm_cores << ENDL();
             noc_semaphore_wait(eh_matmul_done_sem, num_cores);
-            DPRINT << "BRISC argmax final core wait for EH matmul done sem done" << ENDL();
+            // DPRINT << "BRISC argmax final core wait for EH matmul done sem done" << ENDL();
             noc_semaphore_set(eh_matmul_done_sem, 0);
             sampling_op.send_deferred_socket_output_brisc(sampling_args);
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
