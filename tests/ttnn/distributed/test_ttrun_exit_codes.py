@@ -19,6 +19,7 @@ import pytest
 # Import the module under test.  ttrun.py lives at ttnn/ttnn/distributed/ttrun.py
 # and uses click/pydantic/yaml at import time, so we need them on the path.
 sys.path.insert(0, "")
+import ttnn.distributed.ttrun as ttrun_mod
 from ttnn.distributed.ttrun import (
     EXIT_APP_ERROR,
     EXIT_RANK_FAILURE,
@@ -28,14 +29,12 @@ from ttnn.distributed.ttrun import (
     EXIT_TIMEOUT,
     EXIT_ULFM_FAST_FAIL,
     ExitCategory,
-    ExitCodeInterpretation,
     _SIGNAL_NAMES,
     _detect_openmpi_major_version,
     _get_abort_on_failure_mca_param,
     _log_exit_interpretation,
     interpret_exit_code,
 )
-
 
 # =====================================================================
 # ExitCategory enum completeness
@@ -296,9 +295,7 @@ class TestPRRTEDetection:
 
     def setup_method(self):
         """Reset cached version between tests."""
-        import ttnn.distributed.ttrun as ttrun_mod
-
-        ttrun_mod._openmpi_major_version = None
+        ttrun_mod._detect_openmpi_major_version.cache_clear()
 
     def test_detect_openmpi_5(self):
         """Standard OpenMPI 5.x output."""
@@ -364,9 +361,7 @@ class TestPRRTEDetection:
 
     def test_abort_param_openmpi_4(self):
         """OpenMPI 4 should use orte_ prefix."""
-        import ttnn.distributed.ttrun as ttrun_mod
-
-        ttrun_mod._openmpi_major_version = None
+        ttrun_mod._detect_openmpi_major_version.cache_clear()
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 4.1.6\n"
         with patch("subprocess.run", return_value=mock_result):
@@ -381,9 +376,7 @@ class TestPRRTEDetection:
 
     def test_cached_version_reused(self):
         """Second call should use cached value, not re-run subprocess."""
-        import ttnn.distributed.ttrun as ttrun_mod
-
-        ttrun_mod._openmpi_major_version = None
+        ttrun_mod._detect_openmpi_major_version.cache_clear()
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 5.0.0\n"
         with patch("subprocess.run", return_value=mock_result) as mock_run:

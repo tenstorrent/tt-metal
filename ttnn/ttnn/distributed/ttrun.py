@@ -6,6 +6,7 @@
 
 import atexit
 import enum
+import functools
 import os
 import shlex
 import signal
@@ -282,20 +283,16 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
-# Cached result for OpenMPI version detection (None = not yet checked)
-_openmpi_major_version: Optional[int] = None
-
-
+@functools.lru_cache(maxsize=1)
 def _detect_openmpi_major_version() -> Optional[int]:
     """Detect the major version of the installed OpenMPI by parsing mpirun --version.
+
+    The result is cached via lru_cache so subprocess is only invoked once per process.
+    Call ``_detect_openmpi_major_version.cache_clear()`` in tests to reset the cache.
 
     Returns:
         The major version number (e.g. 4 or 5), or None if detection fails.
     """
-    global _openmpi_major_version
-    if _openmpi_major_version is not None:
-        return _openmpi_major_version
-
     try:
         result = subprocess.run(
             ["mpirun", "--version"],
@@ -312,7 +309,6 @@ def _detect_openmpi_major_version() -> Optional[int]:
                 if len(parts) >= 2:
                     version_str = parts[-1].strip()
                     major = int(version_str.split(".")[0])
-                    _openmpi_major_version = major
                     return major
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
         # Best-effort detection: failures are expected on systems without mpirun

@@ -39,8 +39,9 @@ class ElfsCache:
     Thread-safe cache for ParsedElfFile objects.
 
     This class provides a thread-safe API for caching and retrieving ParsedElfFile
-    objects parsed from ELF files. It automatically parses and caches ELF files
-    on first access and returns cached instances on subsequent requests.
+    objects parsed from ELF files. Cache writes are synchronized, but concurrent
+    callers for the same path may each parse the ELF independently — only the first
+    result is stored. Subsequent requests always return the cached instance.
     """
 
     def __init__(self, context: Context):

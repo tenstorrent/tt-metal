@@ -164,10 +164,7 @@ def _import_ttrun_module():
 ttrun = _import_ttrun_module()
 
 ENV_BLOCKLIST = ttrun.ENV_BLOCKLIST
-ENV_BLOCKLIST_PREFIXES = ttrun.ENV_BLOCKLIST_PREFIXES
-ENV_LAUNCHER_ONLY_BLOCKLIST = ttrun.ENV_LAUNCHER_ONLY_BLOCKLIST
 FORCE_NAME_ONLY_MPI_EXPORT_VARS = ttrun.FORCE_NAME_ONLY_MPI_EXPORT_VARS
-RANK_SCOPED_PATH_ENV_VARS = ttrun.RANK_SCOPED_PATH_ENV_VARS
 RankBinding = ttrun.RankBinding
 TTRunConfig = ttrun.TTRunConfig
 apply_rank_scoped_paths = ttrun.apply_rank_scoped_paths
@@ -932,18 +929,14 @@ def _write_probe_script(path: Path) -> None:
     The sentinel prefix lets us reliably parse rank env data from mpirun's
     tagged output which may include other log lines.
     """
-    path.write_text(
-        textwrap.dedent(
-            """\
+    path.write_text(textwrap.dedent("""\
             import json, os, sys
             rank = os.environ.get("OMPI_COMM_WORLD_RANK", "?")
             payload = json.dumps(dict(os.environ), separators=(",", ":"))
             # Flush explicitly — mpirun buffers stdout across ranks
             sys.stdout.write(f"TT_ENV_PROBE:{rank}:{payload}\\n")
             sys.stdout.flush()
-        """
-        )
-    )
+        """))
 
 
 def _write_rank_binding_yaml(

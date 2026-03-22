@@ -11,10 +11,9 @@ These run without a real MPI runtime by mocking mpi4py where needed.
 
 import sys
 from contextlib import contextmanager
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # =====================================================================
 # Utility: fresh import of mpi_fault with mocked mpi4py
