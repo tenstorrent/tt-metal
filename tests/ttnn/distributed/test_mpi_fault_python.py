@@ -38,6 +38,7 @@ def _load_mpi_fault_from_source() -> object:
     spec.loader.exec_module(mod)
     return mod
 
+
 # =====================================================================
 # Utility: fresh import of mpi_fault with mocked mpi4py
 # =====================================================================
