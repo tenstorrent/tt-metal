@@ -15,8 +15,8 @@ Owner:
 """
 
 
-import os
 from dataclasses import dataclass
+from pathlib import Path
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
@@ -56,11 +56,39 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
+_DANGEROUS_PATH_PREFIXES = (
+    "/proc/",  # Kernel/process virtual filesystem
+    "/sys/",  # Kernel sysfs
+    "/dev/",  # Device files
+    "/etc/",  # System configuration (passwords, keys, etc.)
+    "/run/",  # Runtime state files (PIDs, sockets)
+    "/boot/",  # Bootloader and kernel images
+    "/var/",  # System logs, etc.
+)
+
+
+def _is_safe_path(file_path: str) -> bool:
+    """Validate that the file path is safe to open (no path traversal or dangerous system paths)."""
+    if not file_path:
+        return False
+    normalized = Path(file_path)
+    if ".." in normalized.parts:
+        return False
+    if normalized.is_absolute():
+        normalized_str = str(normalized)
+        if any(normalized_str.startswith(prefix) for prefix in _DANGEROUS_PATH_PREFIXES):
+            return False
+    return True
+
+
 def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
 
-    if not os.path.exists(file):
+    if not _is_safe_path(file):
+        return "?invalid file path?"
+
+    if not Path(file).exists():
         return "?file not found?"
     try:
         with open(file, "r") as f:
@@ -133,6 +161,8 @@ def dump_lightweight_asserts(
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            if dispatcher_core_data is None or dispatcher_core_data.kernel_path is None:
+                return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
             text_section = elf.get_section_by_name(".text")
             if text_section is None or dispatcher_core_data.kernel_offset is None:
@@ -186,8 +216,12 @@ def dump_lightweight_asserts(
                 for var in callstack_data.kernel_callstack_with_message.callstack[0].locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+        # Gracefully handle None dispatcher_core_data or kernel_name (e.g. during timeout/corrupted device state)
+        kernel_name = None
+        if callstack_data.dispatcher_core_data is not None:
+            kernel_name = getattr(callstack_data.dispatcher_core_data, "kernel_name", None)
         return LightweightAssertInfo(
-            kernel_name=callstack_data.dispatcher_core_data.kernel_name,
+            kernel_name=kernel_name,
             kernel_callstack_with_message=LightweightAssertCallstackWithCode(
                 assert_code, callstack_data.kernel_callstack_with_message
             ),

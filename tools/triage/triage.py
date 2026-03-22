@@ -240,14 +240,15 @@ class TriageScript:
 
     @staticmethod
     def load(script_path: str) -> "TriageScript":
-        script_path = os.path.abspath(script_path)
-        base_path = os.path.dirname(script_path)
+        script_path_obj = Path(script_path).resolve()
+        script_path = str(script_path_obj)
+        base_path = str(script_path_obj.parent)
         appended = False
-        if not base_path in sys.path:
+        if base_path not in sys.path:
             sys.path.append(base_path)
             appended = True
         try:
-            script_name = os.path.splitext(os.path.basename(script_path))[0]
+            script_name = script_path_obj.stem
             script_module = importlib.import_module(script_name)
 
             # Check if script has a configuration
@@ -281,7 +282,7 @@ class TriageScript:
                 )
 
             triage_script = TriageScript(
-                name=os.path.basename(script_path),
+                name=script_path_obj.name,
                 path=script_path,
                 config=deepcopy(script_config),
                 module=script_module,
@@ -297,7 +298,7 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+                triage_script.config.depends = [str(Path(base_path) / dep) for dep in triage_script.config.depends]
 
             return triage_script
         finally:
@@ -326,6 +327,75 @@ class TriageScript:
                 assert dep in scripts, f"Dependency {dep} for script {script.name} not found."
                 script.depends.append(scripts[dep])
         return scripts
+
+
+def summarize_failure_message(message: str | None) -> str:
+    """Extract a concise single-line summary from a traceback or error message."""
+    if not message:
+        return "No failure details available."
+
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    if not lines:
+        return "No failure details available."
+
+    for line in reversed(lines):
+        if line.startswith("Traceback"):
+            continue
+        if line.startswith("File "):
+            continue
+        if line.startswith("During handling of the above exception"):
+            continue
+        if line == "^":
+            continue
+        return line
+    return lines[-1]
+
+
+def add_contextual_failure_hint(script_name: str | None, summary: str, message: str | None) -> str:
+    """Append script-aware hints to otherwise generic exception summaries."""
+    script_name = script_name or ""
+    full_message = message or ""
+
+    if (
+        script_name == "check_arc.py"
+        and "TypeError: 'NoneType' object is not iterable" in summary
+        and "heartbeat_samples" in full_message
+    ):
+        return (
+            f"{summary} (check_arc could not collect heartbeat samples; this usually means upstream device data "
+            "collection failed. Check prior failures from run_checks.py / metal_device_id_mapping.py / inspector data.)"
+        )
+
+    return summary
+
+
+def format_failure_message_lines(message: str | None, indent: str = "    ") -> list[str]:
+    if not message:
+        return [f"{indent}No additional details available."]
+    return [f"{indent}{line}" if line.strip() else indent for line in message.splitlines()]
+
+
+def get_failed_dependencies(script: "TriageScript") -> list["TriageScript"]:
+    return [dep for dep in script.depends if dep.failed]
+
+
+def build_dependency_failure_lines(script: "TriageScript") -> list[str]:
+    failed_dependencies = get_failed_dependencies(script)
+    if not failed_dependencies:
+        return ["No failed dependencies were recorded."]
+
+    lines = ["Failed dependencies:"]
+    for failed_dep in failed_dependencies:
+        summary = summarize_failure_message(failed_dep.failure_message)
+        summary = add_contextual_failure_hint(failed_dep.name, summary, failed_dep.failure_message)
+        lines.append(f"- {failed_dep.name}: {summary}")
+    lines.append(
+        "Action: fix dependency failures above. For inspector-related failures, verify --inspector-log-path or "
+        "--inspector-rpc-host/--inspector-rpc-port and that TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
+        "In multi-rank runs, ensure TT_METAL_LOGS_PATH contains <hostname>_rank_N directories and that "
+        "the Inspector RPC port (base_port + rank) is correctly matched between C++ and triage tools."
+    )
+    return lines
 
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
@@ -447,7 +517,7 @@ def parse_arguments(
 
     docs: dict[str, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    my_name = Path(__file__).stem
     docs[my_name] = __doc__
     for script in scripts.values():
         docs[script.name] = script.documentation
@@ -590,7 +660,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
             for failure in failures:
                 utils.ERROR(f"    {failure}")
             if script.failed:
-                utils.ERROR(f"    {script.failure_message}")
+                summary = summarize_failure_message(script.failure_message)
+                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
+                utils.ERROR(f"    Summary: {summary}")
+                if script.failure_message and script.failure_message.strip() != summary:
+                    utils.ERROR("    Details:")
+                    for detail_line in format_failure_message_lines(script.failure_message, indent="      "):
+                        utils.ERROR(detail_line)
 
                 import textwrap
 
@@ -819,11 +895,13 @@ def run_script(
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
-        application_path = os.path.dirname(__file__)
-        if not os.path.isabs(script_path):
-            script_path = os.path.join(application_path, script_path)
-        script_path = os.path.abspath(script_path)
-        if not os.path.exists(script_path):
+        script_path_obj = Path(script_path)
+        if not script_path_obj.is_absolute():
+            application_path = Path(__file__).parent
+            script_path_obj = application_path / script_path
+        script_path_obj = script_path_obj.resolve()
+        script_path = str(script_path_obj)
+        if not script_path_obj.exists():
             raise FileNotFoundError(f"Script {script_path} does not exist.")
 
     # Load script and its dependencies
@@ -845,7 +923,9 @@ def run_script(
     result: Any = None
     for script in script_queue:
         if not all(not dep.failed for dep in script.depends):
-            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
+            dependency_lines = build_dependency_failure_lines(script)
+            dependency_message = "\n".join(dependency_lines)
+            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.\n{dependency_message}")
         else:
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
@@ -883,20 +963,20 @@ def main():
     parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
-    application_path = os.path.abspath(os.path.dirname(__file__))
-    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
+    application_path = Path(__file__).resolve().parent
+    this_file_name = Path(__file__).name
+    script_files = [f.name for f in application_path.iterdir() if f.suffix == ".py" and f.name != this_file_name]
 
     # To avoid multiple imports of this script, we add it to sys.modules
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    my_name = Path(__file__).stem
     if my_name not in sys.modules:
         sys.modules[my_name] = sys.modules["__main__"]
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
     scripts: dict[str, TriageScript] = {}
-    base_path = application_path
     for script in script_files:
-        script_path = os.path.join(base_path, script)
+        script_path = str(application_path / script)
         try:
             triage_script = TriageScript.load(script_path)
             if triage_script.config.disabled:
@@ -948,10 +1028,15 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
+                    dependency_lines = build_dependency_failure_lines(script)
                     utils.INFO(f"{script.name}:")
                     utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    for dependency_line in dependency_lines:
+                        utils.WARN(f"  {dependency_line}")
                     script.failed = True
-                    script.failure_message = "Cannot run script due to failed dependencies."
+                    script.failure_message = "Cannot run script due to failed dependencies.\n" + "\n".join(
+                        dependency_lines
+                    )
                 else:
                     start_time = time()
                     result = script.run(args=args, context=context)
@@ -963,7 +1048,13 @@ def main():
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
                             if script.failure_message is not None:
-                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                                summary = summarize_failure_message(script.failure_message)
+                                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
+                                utils.ERROR(f"  Data provider script failed: {summary}")
+                                if script.failure_message.strip() != summary:
+                                    utils.ERROR("  Details:")
+                                    for detail_line in format_failure_message_lines(script.failure_message, "    "):
+                                        utils.ERROR(detail_line)
                             else:
                                 utils.ERROR(f"  Data provider script did not return any data.")
                         elif execution_time:
@@ -986,9 +1077,8 @@ def main():
     triage_summary_path = args["--triage-summary-path"]
     if triage_summary_path:
         try:
-            os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
-            with open(triage_summary_path, "w") as f:
-                f.write(_build_triage_summary(script_queue))
+            Path(triage_summary_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(triage_summary_path).write_text(_build_triage_summary(script_queue))
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")

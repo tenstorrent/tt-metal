@@ -18,6 +18,7 @@ Owner:
 from collections import defaultdict
 import json
 import os
+from pathlib import Path
 import subprocess
 
 from triage import ScriptConfig, log_warning, run_script, log_check_location
@@ -44,7 +45,7 @@ def _get_git_commit_hash() -> str:
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            cwd=Path(__file__).resolve().parent.parent.parent,
         )
         if out.returncode == 0 and out.stdout:
             return out.stdout.strip()

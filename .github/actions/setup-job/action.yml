@@ -95,6 +95,21 @@ runs:
         echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+        # Base firmware (brisc/ncrisc/trisc) has fixed memory region size limits. When watcher is
+        # enabled, NOC sanitization, CB bounds checking, and other instrumentation is compiled in,
+        # causing overflow (e.g. brisc needs ~8KB vs 6KB limit). WATCHER_NOINLINE alone (which removes
+        # always_inline to reduce inlining overhead) is insufficient. Two additional flags are needed:
+        #
+        # WATCHER_DISABLE_ASSERT: removes assert-checking globals and code from base firmware directly
+        # via #ifndef WATCHER_DISABLE_ASSERT guards in brisc.cc. This reduces code size in firmware.
+        #
+        # WATCHER_DISABLE_DISPATCH: injects FORCE_WATCHER_OFF=1 into dispatch kernel program builds
+        # (cq_prefetch, cq_dispatch) via fd_kernel.cpp, disabling watcher there. Does not affect base
+        # firmware directly, but prevents overflow in the dispatch kernel programs built on top of it.
+        #
+        # This matches the combination used by scripts/run_safe_pytest.sh for dev/triage runs.
+        echo "TT_METAL_WATCHER_DISABLE_ASSERT=1" >> $GITHUB_ENV
+        echo "TT_METAL_WATCHER_DISABLE_DISPATCH=1" >> $GITHUB_ENV
       shell: bash
 
     - name: Set up env vars for lightweight kernel asserts

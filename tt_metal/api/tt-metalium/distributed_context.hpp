@@ -8,6 +8,7 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <optional>
+#include <vector>
 #include <cstddef>
 #include <cstdint>
 #include <complex>
@@ -241,6 +242,14 @@ public:
 
     virtual void revoke_and_shrink() = 0;
     [[nodiscard]] virtual bool is_revoked() = 0;
+
+    // ULFM consensus: all surviving ranks agree on a boolean value.
+    // Returns std::nullopt if not supported (e.g. single-host or non-ULFM build).
+    [[nodiscard]] virtual std::optional<bool> agree(bool /*local_value*/) const { return std::nullopt; }
+
+    // Returns ranks detected as failed on the current communicator.
+    // Empty if not supported or no failures detected.
+    [[nodiscard]] virtual std::vector<Rank> failed_ranks() const { return {}; }
 
     //--- Message snooping -----------------------------------------------
     // Probe for an incoming message from 'source' with 'tag'. Return the size of the message in bytes

@@ -11,3 +11,5 @@ TT_METAL_HOME=$(cd $SCRIPT_DIR && git rev-parse --show-toplevel)
 
 $MPIRUN --with-ft ulfm -np 8 $TT_METAL_HOME/build/test/tt_metal/fault_tolerance_tests --gtest_filter=FaultTolerance.ShrinkAfterRankFailure
 $MPIRUN --with-ft ulfm -np 8 $TT_METAL_HOME/build/test/tt_metal/fault_tolerance_tests --gtest_filter=FaultTolerance.DisableBrokenBlock
+$MPIRUN --with-ft ulfm -np 4 $TT_METAL_HOME/build/test/tt_metal/fault_tolerance_tests --gtest_filter=FaultTolerance.AgreeConsensus
+$MPIRUN --with-ft ulfm -np 4 $TT_METAL_HOME/build/test/tt_metal/fault_tolerance_tests --gtest_filter=FaultTolerance.FailurePolicySwitching
