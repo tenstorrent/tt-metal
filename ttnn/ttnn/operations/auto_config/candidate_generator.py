@@ -20,6 +20,11 @@ from typing import Any, Dict, List
 import ttnn
 
 from ttnn.operations.auto_config.base import ConfigCandidate
+from ttnn.operations.auto_config.math_fidelity import (
+    MathFidelity,
+    valid_fidelities,
+    default_fidelity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -413,30 +418,60 @@ def generate_matmul_candidates(features: Dict[str, Any]) -> List[ConfigCandidate
     producing multiple alternatives instead of a single choice. Each family
     is capped at MAX_CANDIDATES_PER_FAMILY to prevent combinatorial explosion.
 
+    Math fidelity is iterated as a first-class dimension: each program config
+    candidate is duplicated across all valid fidelities for the input dtype pair.
+
     Returns:
-        List of ConfigCandidate objects.
+        List of ConfigCandidate objects, each carrying a math_fidelity field.
     """
-    candidates = []
+    base_candidates = []
 
     # Path 1: MultiCast 1D (tall and wide variants)
-    candidates.extend(_generate_multicast_1d_candidates(features))
-    logger.debug(f"MultiCast1D: {len(candidates)} candidates so far")
+    base_candidates.extend(_generate_multicast_1d_candidates(features))
+    logger.debug(f"MultiCast1D: {len(base_candidates)} candidates so far")
 
     # Path 2: MultiCast 2D
-    candidates.extend(_generate_multicast_2d_candidates(features))
-    logger.debug(f"After MultiCast2D: {len(candidates)} candidates")
+    base_candidates.extend(_generate_multicast_2d_candidates(features))
+    logger.debug(f"After MultiCast2D: {len(base_candidates)} candidates")
 
     # Path 3: Reuse (for batched B)
-    candidates.extend(_generate_reuse_candidates(features))
+    base_candidates.extend(_generate_reuse_candidates(features))
 
     # Path 4: DRAM-sharded
-    candidates.extend(_generate_dram_sharded_candidates(features))
+    base_candidates.extend(_generate_dram_sharded_candidates(features))
 
     # Path 5: Minimal matmul (experimental)
     try:
-        candidates.extend(_generate_minimal_matmul_candidates(features))
+        base_candidates.extend(_generate_minimal_matmul_candidates(features))
     except Exception:
         pass  # MinimalMatmul not available
+
+    # --- Math fidelity expansion ---
+    # Get valid fidelities for the dtype pair from features.
+    # Duplicate each base candidate across all valid fidelities.
+    fidelities = features.get("math_fidelity_valid")
+    if fidelities and len(fidelities) > 0:
+        candidates = []
+        for cand in base_candidates:
+            for fid in fidelities:
+                # Create a new candidate with this fidelity attached
+                fid_cand = ConfigCandidate(
+                    config=cand.config,
+                    config_family=cand.config_family,
+                    backend=cand.backend,
+                    params={**cand.params, "math_fidelity": fid.name},
+                    math_fidelity=fid,
+                )
+                candidates.append(fid_cand)
+        logger.debug(
+            f"Fidelity expansion: {len(base_candidates)} base × "
+            f"{len(fidelities)} fidelities = {len(candidates)} total"
+        )
+    else:
+        # No fidelity info — use default (HiFi4) for all candidates
+        candidates = base_candidates
+        for cand in candidates:
+            cand.math_fidelity = MathFidelity.HiFi4
 
     logger.debug(f"Total candidates generated: {len(candidates)}")
     return candidates

@@ -239,9 +239,17 @@ def validate_candidate(
     config_family: str,
     backend: str,
     features: Dict[str, Any],
+    candidate_fidelity: Any = None,
 ) -> Tuple[bool, str]:
     """
     Run all validation checks on a candidate configuration.
+
+    Args:
+        config: The program config object.
+        config_family: Config family name (e.g. "MultiCast1D").
+        backend: Backend name (e.g. "matmul").
+        features: Extracted features dict.
+        candidate_fidelity: Optional MathFidelity from the candidate.
 
     Returns:
         (is_valid, reason) tuple.
@@ -282,8 +290,8 @@ def validate_candidate(
     if not is_valid:
         return False, reason
 
-    # 8. Math fidelity constraints
-    candidate_fidelity = features.get("math_fidelity_default")
+    # 8. Math fidelity constraints — uses candidate's own fidelity
+    # (not the default from features, which would always pass)
     if candidate_fidelity is not None and isinstance(candidate_fidelity, MathFidelity):
         is_valid, reason = validate_math_fidelity(candidate_fidelity, features)
         if not is_valid:

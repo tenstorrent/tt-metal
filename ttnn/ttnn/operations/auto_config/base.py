@@ -32,12 +32,14 @@ class ConfigCandidate:
     is_valid: bool = True
     validation_reason: str = "valid"
     measured_latency_us: Optional[float] = None
+    math_fidelity: Optional[Any] = None  # MathFidelity enum value for this candidate
 
     def __repr__(self) -> str:
         status = "valid" if self.is_valid else f"invalid({self.validation_reason})"
+        fid = f", fidelity={self.math_fidelity.name}" if self.math_fidelity is not None else ""
         return (
             f"ConfigCandidate(family={self.config_family}, backend={self.backend}, "
-            f"score={self.score:.2f}, status={status})"
+            f"score={self.score:.2f}, status={status}{fid})"
         )
 
 
