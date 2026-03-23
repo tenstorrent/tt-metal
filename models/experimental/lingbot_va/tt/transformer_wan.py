@@ -5,15 +5,15 @@
 TTNN WanTransformer3DModel for Lingbot-VA.
 
 Reuses WanPatchEmbed, WanTimeTextImageEmbedding, and utilities from models.tt_dit.
-Defines WanTransformerBlock and WanAttention locally (no wan2_2 dependency).
+Defines WanTransformerBlock using native TT WanAttention
 Adds Lingbot-VA-specific: in_channels=48, action_embedder, condition_embedder_action,
 action_proj_out, and dual forward paths (video + action).
 """
 
 from __future__ import annotations
 
-import torch
 import os
+import torch
 from loguru import logger
 
 import ttnn
@@ -29,9 +29,22 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
-from models.experimental.lingbot_va.reference.transformer_wan import WanAttention as TorchWanAttention
 
+from .attention_wan import WanAttention
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
+
+
+def _align_modulation_to_spatial_layout(spatial_1BND: ttnn.Tensor, t: ttnn.Tensor) -> ttnn.Tensor:
+    """Match spatial [1,1,L,C]: drop stray [...,1,...] dims; permute [1,L,1,C] -> [1,1,L,C]."""
+    if len(t.shape) == 5 and int(t.shape[3]) == 1:
+        a, b, c, _, e = (int(t.shape[i]) for i in range(5))
+        t = ttnn.reshape(t, (a, b, c, e))
+    if len(spatial_1BND.shape) != 4 or len(t.shape) != 4:
+        return t
+    b0, b1, seq, c = (int(spatial_1BND.shape[i]) for i in range(4))
+    if int(t.shape[0]) == b0 and int(t.shape[1]) == seq and int(t.shape[2]) == 1 and int(t.shape[3]) == c and b1 == 1:
+        return ttnn.permute(t, (0, 2, 1, 3))
+    return t
 
 
 # Lingbot-VA config (from reference model.py)
@@ -91,22 +104,26 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.attn1 = TorchWanAttention(
+        self.attn1 = WanAttention(
             dim=dim,
-            heads=num_heads,
-            dim_head=dim // num_heads,
+            num_heads=num_heads,
             eps=eps,
-            cross_attention_dim_head=None,
-            attn_mode="torch",
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=True,
         )
 
-        self.attn2 = TorchWanAttention(
+        self.attn2 = WanAttention(
             dim=dim,
-            heads=num_heads,
-            dim_head=dim // num_heads,
+            num_heads=num_heads,
             eps=eps,
-            cross_attention_dim_head=dim // num_heads,
-            attn_mode="torch",
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=False,
         )
 
         self.norm2 = (
@@ -150,6 +167,7 @@ class WanTransformerBlock(Module):
             dtype=ttnn.float32,
         )
 
+        # HiFi4 + fp32 dest acc for FFN (matches attention SDPA/to_out quality targets for PCC).
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -164,12 +182,6 @@ class WanTransformerBlock(Module):
 
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
-        attn1_state = pop_substate(state, "attn1")
-        attn2_state = pop_substate(state, "attn2")
-        if attn1_state:
-            self.attn1.load_state_dict(attn1_state, strict=True)
-        if attn2_state:
-            self.attn2.load_state_dict(attn2_state, strict=True)
 
     def forward(
         self,
@@ -199,108 +211,74 @@ class WanTransformerBlock(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
-        T_dim = temb_1BTD.shape[2]
-        if T_dim == 6:
-            shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
-            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(
-                shifted_temb_1BTD, 6, dim=2
-            )
+        # Reference block always uses timestep_proj shaped like [B, L, 6, C] (or flattened [B, L, 6*C] for robotwin).
+        sst = self.scale_shift_table.data
+        td = temb_1BTD
+        if len(td.shape) == 5:
+            # [1, B, L, 6, C] after per-position time embed (matches reference unflatten(2, (6, -1))).
+            shifted_temb = sst + td
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted_temb, 6, dim=3)
+        elif len(td.shape) == 4 and td.shape[2] == 6:
+            # Legacy broadcast: [1, B, 6, C]
+            shifted_temb = sst + td
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted_temb, 6, dim=2)
         else:
-            sst = self.scale_shift_table.data
+            # Flattened per-token path [1, B, N, 6 * C_local] (e.g. robotwin / prepare_per_token_conditioning).
             sst_flat = ttnn.reshape(sst, (1, 1, 1, sst.shape[-2] * sst.shape[-1]))
-            shifted = temb_1BTD + sst_flat
-            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted, 6, dim=-1)
+            shifted_temb = td + sst_flat
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted_temb, 6, dim=-1)
+
+        shift_msa = _align_modulation_to_spatial_layout(spatial_1BND, shift_msa)
+        scale_msa = _align_modulation_to_spatial_layout(spatial_1BND, scale_msa)
+        gate_msa = _align_modulation_to_spatial_layout(spatial_1BND, gate_msa)
+        c_shift_msa = _align_modulation_to_spatial_layout(spatial_1BND, c_shift_msa)
+        c_scale_msa = _align_modulation_to_spatial_layout(spatial_1BND, c_scale_msa)
+        c_gate_msa = _align_modulation_to_spatial_layout(spatial_1BND, c_gate_msa)
 
         gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
         c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
 
-        def _tt_to_torch_bnd(x: ttnn.Tensor) -> torch.Tensor:
-            t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
-            if t.dim() == 4:
-                t = t[0]
-            elif t.dim() > 4:
-                while t.dim() > 3:
-                    t = t.squeeze(0)
-            if t.dim() == 2:
-                t = t.unsqueeze(0)
-            return t.contiguous()
-
-        def _torch_to_tt_1bnd(x: torch.Tensor) -> ttnn.Tensor:
-            if x.dim() == 3:
-                x = x.unsqueeze(0)
-            return bf16_tensor(x.to(torch.bfloat16), device=self.mesh_device)
-
-        def _rope_to_rotary_emb(rope_cos_tt: ttnn.Tensor, rope_sin_tt: ttnn.Tensor) -> torch.Tensor:
-            cos_t = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_tt)[0]).float()
-            sin_t = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_tt)[0]).float()
-            while cos_t.dim() > 3 and cos_t.shape[0] == 1:
-                cos_t = cos_t.squeeze(0)
-                sin_t = sin_t.squeeze(0)
-            if cos_t.dim() == 2:
-                cos_t = cos_t.unsqueeze(0)
-                sin_t = sin_t.unsqueeze(0)
-            half = cos_t.shape[-1] // 2
-            return torch.complex(cos_t[..., :half], sin_t[..., :half])[:, :, None, :].contiguous()
-
-        # 1) Self-attention
-        # Use explicit modulation for per-token conditioning and dynamic layernorm for global conditioning.
-        per_token = T_dim != 6
-        if per_token:
-            spatial_normed_1BND = self.norm1(spatial_1BND)
-            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
-                1.0 + scale_msa, spatial_normed_1BND.dtype
-            ) + ttnn.typecast(shift_msa, spatial_normed_1BND.dtype)
-            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
-            attn_output = self.attn1(
-                spatial_normed_t,
-                spatial_normed_t,
-                spatial_normed_t,
-                rotary_emb_t,
-                update_cache=update_cache,
-                cache_name=cache_name,
-            )
-            attn_output = _torch_to_tt_1bnd(attn_output)
-            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
-        else:
-            spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=(1.0 + scale_msa), dynamic_bias=shift_msa)
-            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
-            attn_output = self.attn1(
-                spatial_normed_t,
-                spatial_normed_t,
-                spatial_normed_t,
-                rotary_emb_t,
-                update_cache=update_cache,
-                cache_name=cache_name,
-            )
-            attn_output = _torch_to_tt_1bnd(attn_output)
-            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
-
-        # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND) if self.norm2 is not None else spatial_1BND
-
-        spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-        prompt_t = _tt_to_torch_bnd(prompt_1BLP)
-        attn_output_1BND = self.attn2(
-            spatial_normed_t,
-            prompt_t,
-            prompt_t,
-            None,
-            update_cache=0,
-            cache_name=cache_name,
+        # Match reference WanTransformerBlock: FP32 LayerNorm then explicit (1+scale)*x+shift, then cast to activations dtype.
+        x_dtype = spatial_1BND.dtype
+        spatial_normed_1BND = self.norm1(spatial_1BND, dtype=ttnn.float32)
+        spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(1.0 + scale_msa, ttnn.float32) + ttnn.typecast(
+            shift_msa, ttnn.float32
         )
-        attn_output_1BND = _torch_to_tt_1bnd(attn_output_1BND)
+        spatial_normed_1BND = ttnn.typecast(spatial_normed_1BND, x_dtype)
+
+        attn1_common = dict(
+            spatial_1BND=spatial_normed_1BND,
+            N=N,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            addcmul_residual=spatial_1BND,
+            addcmul_gate=gate_msa,
+            cached_k=cached_k,
+            cached_v=cached_v,
+        )
+        k_cur = v_cur = None
+        if return_kv:
+            spatial_1BND, k_cur, v_cur = self.attn1(**attn1_common, return_kv=True)
+        else:
+            spatial_1BND = self.attn1(**attn1_common, return_kv=False)
+
+        if self.norm2 is not None:
+            spatial_normed_1BND = ttnn.typecast(self.norm2(spatial_1BND, dtype=ttnn.float32), x_dtype)
+        else:
+            spatial_normed_1BND = spatial_1BND
+        attn_output_1BND = self.attn2(
+            spatial_1BND=spatial_normed_1BND,
+            N=N,
+            prompt_1BLP=prompt_1BLP,
+        )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
-        # 3) Feed Forward
-        if per_token:
-            spatial_normed_1BND = self.norm3(spatial_1BND)
-            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
-                1.0 + c_scale_msa, spatial_normed_1BND.dtype
-            ) + ttnn.typecast(c_shift_msa, spatial_normed_1BND.dtype)
-        else:
-            spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=(1.0 + c_scale_msa), dynamic_bias=c_shift_msa)
+        spatial_normed_1BND = self.norm3(spatial_1BND, dtype=ttnn.float32)
+        spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(1.0 + c_scale_msa, ttnn.float32) + ttnn.typecast(
+            c_shift_msa, ttnn.float32
+        )
+        spatial_normed_1BND = ttnn.typecast(spatial_normed_1BND, x_dtype)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -309,10 +287,15 @@ class WanTransformerBlock(Module):
 
         spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa)
+        # Reference: hidden_states.float() + ff_output.float() * c_gate (fp32 residual, then cast).
+        spatial_1BND = ttnn.typecast(
+            ttnn.typecast(spatial_1BND, ttnn.float32)
+            + ttnn.typecast(spatial_ff_1BND, ttnn.float32) * ttnn.typecast(c_gate_msa, ttnn.float32),
+            x_dtype,
+        )
 
         if return_kv:
-            return (spatial_1BND, cached_k, cached_v)
+            return (spatial_1BND, k_cur, v_cur)
         return spatial_1BND
 
 
@@ -574,8 +557,10 @@ class WanTransformer3DModel(Module):
                     f"patch_embedding.weight must be 2D (Linear) or 5D (conv), got ndim={patch_weight.ndim}"
                 )
         patch_bias = state.get("patch_embedding.bias")
-        if patch_bias is not None and patch_bias.ndim == 1:
-            state["patch_embedding.bias"] = patch_bias.reshape(1, -1)
+        if patch_bias is not None:
+            # WanPatchEmbed expects proj_bias (see embeddings.WanPatchEmbed._prepare_torch_state).
+            state["patch_embedding.proj_bias"] = patch_bias.reshape(1, -1)
+            del state["patch_embedding.bias"]
 
     def get_rope_features(self, grid_id: torch.Tensor):
         """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L)."""
@@ -588,27 +573,42 @@ class WanTransformer3DModel(Module):
         """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L). Pads for sequence parallel."""
         logger.debug("Preparing rope features for shape {}", grid_id.shape)
         grid_id_tt = bf16_tensor(grid_id, device=self.mesh_device)
-        rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)  # each [1, L, 128]
-        B, L, D = rope_cos_tt.shape
-        rope_cos_11LD = ttnn.reshape(rope_cos_tt, (1, 1, L, D))
-        rope_sin_11LD = ttnn.reshape(rope_sin_tt, (1, 1, L, D))
+        rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)
+        # WanRotaryPosEmbed returns [B, L, D] with B = grid_id batch (e.g. 2 for classifier-free guidance).
+        sh_cos = tuple(rope_cos_tt.shape)
+        if len(sh_cos) == 4 and int(sh_cos[0]) == 1:
+            rope_cos_1BLD = rope_cos_tt
+            rope_sin_1BLD = rope_sin_tt
+            B_rope, L, D = int(sh_cos[1]), int(sh_cos[2]), int(sh_cos[3])
+        elif len(sh_cos) == 3:
+            B_rope, L, D = int(sh_cos[0]), int(sh_cos[1]), int(sh_cos[2])
+            if B_rope != int(grid_id.shape[0]):
+                logger.warning(
+                    "rope batch {} != grid_id batch {}; using rope layout for reshape",
+                    B_rope,
+                    int(grid_id.shape[0]),
+                )
+            rope_cos_1BLD = ttnn.reshape(rope_cos_tt, (1, B_rope, L, D))
+            rope_sin_1BLD = ttnn.reshape(rope_sin_tt, (1, B_rope, L, D))
+        else:
+            raise RuntimeError(f"rope expected [B,L,D] or [1,B,L,D], got shape {sh_cos}")
         num_devices = self.parallel_config.sequence_parallel.factor
         padded_len = get_padded_vision_seq_len(L, num_devices)
         if padded_len > L:
             pad_len = padded_len - L
             zeros = ttnn.zeros(
-                (1, 1, pad_len, D), device=self.mesh_device, dtype=rope_cos_11LD.dtype, layout=ttnn.TILE_LAYOUT
+                (1, B_rope, pad_len, D), device=self.mesh_device, dtype=rope_cos_1BLD.dtype, layout=ttnn.TILE_LAYOUT
             )
-            rope_cos_11LD = ttnn.concat([rope_cos_11LD, zeros], dim=2)
-            rope_sin_11LD = ttnn.concat([rope_sin_11LD, zeros], dim=2)
+            rope_cos_1BLD = ttnn.concat([rope_cos_1BLD, zeros], dim=2)
+            rope_sin_1BLD = ttnn.concat([rope_sin_1BLD, zeros], dim=2)
         if num_devices == 1:
-            tt_rope_cos_1HND = ttnn.typecast(rope_cos_11LD, ttnn.float32)
-            tt_rope_sin_1HND = ttnn.typecast(rope_sin_11LD, ttnn.float32)
+            tt_rope_cos_1HND = ttnn.typecast(rope_cos_1BLD, ttnn.float32)
+            tt_rope_sin_1HND = ttnn.typecast(rope_sin_1BLD, ttnn.float32)
         else:
             # Multi-device SP: shard via from_torch (no in-place shard of device tensor)
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-            rope_cos_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_11LD)[0])
-            rope_sin_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_11LD)[0])
+            rope_cos_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_1BLD)[0])
+            rope_sin_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_1BLD)[0])
             tt_rope_cos_1HND = from_torch(
                 rope_cos_torch, device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
             )
@@ -617,6 +617,42 @@ class WanTransformer3DModel(Module):
             )
         tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def _reference_latent_time_steps_cpu(
+        self,
+        timestep: torch.Tensor,
+        B: int,
+        F: int,
+        H: int,
+        W: int,
+        action_mode: bool,
+    ) -> torch.Tensor:
+        """Match reference `_time_embed` / `repeat_interleave` layout: one scalar timestep per latent token [B, L]."""
+        p0, p1, p2 = self.patch_size
+        if action_mode:
+            mult = H * W
+            patch_F = F
+        else:
+            mult = (H // p1) * (W // p2)
+            patch_F = F // p0
+        if timestep.ndim == 2:
+            assert (
+                timestep.shape[0] == B and timestep.shape[1] == patch_F
+            ), f"timestep 2D expected ({B}, {patch_F}), got {tuple(timestep.shape)}"
+            ts_2d = timestep.float()
+        else:
+            assert timestep.ndim == 1 and timestep.shape[0] == B
+            ts_2d = timestep.unsqueeze(1).expand(B, patch_F).float()
+        return torch.repeat_interleave(ts_2d, mult, dim=1)
+
+    def _pad_latent_time_steps_cpu(self, latent_ts: torch.Tensor) -> torch.Tensor:
+        """Right-pad timesteps to match SP-padded vision length (replicate last token)."""
+        B, L = latent_ts.shape
+        L_pad = get_padded_vision_seq_len(L, self.parallel_config.sequence_parallel.factor)
+        if L_pad <= L:
+            return latent_ts
+        tail = latent_ts[:, -1:].expand(B, L_pad - L)
+        return torch.cat([latent_ts, tail], dim=1)
 
     def prepare_text_conditioning(
         self,
@@ -632,13 +668,16 @@ class WanTransformer3DModel(Module):
             )
         return embedder.forward_text(encoder_hidden_states)
 
-    def prepare_timestep_conditioning(self, timestep: torch.Tensor, action_mode: bool = False):
-        assert timestep.ndim == 1
-        timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
+    def prepare_timestep_conditioning(self, latent_time_steps: torch.Tensor, action_mode: bool = False):
+        """Match reference `WanTimeTextImageEmbedding.forward`: [B, L] -> temb [1,B,L,D], proj [1,B,L,6,C]."""
+        assert latent_time_steps.ndim == 2
+        latent_time_steps = latent_time_steps.to(torch.float32)
+        B, L = latent_time_steps.shape
+        tt_ts = float32_tensor(latent_time_steps.reshape(1, B, L, 1), device=self.mesh_device)
         embedder = self.condition_embedder_action if action_mode else self.condition_embedder
-        tt_temb_11BD, tt_timestep_proj_1BTD = embedder.forward_timestep(timestep, timestep_seq_len=None)
-        tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
-        return tt_temb_11BD, tt_timestep_proj_1BTD
+        tt_temb, tt_timestep_proj = embedder.forward_timestep(tt_ts, timestep_seq_len=None)
+        tt_timestep_proj = unflatten(tt_timestep_proj, -1, (6, -1))
+        return tt_temb, tt_timestep_proj
 
     def prepare_per_token_conditioning(
         self,
@@ -670,14 +709,20 @@ class WanTransformer3DModel(Module):
         unique_ts = torch.unique(timestep_per_frame)
         ts_to_proj: dict[float, tuple] = {}
         for t_val in unique_ts:
-            temb_i, proj_i = self.prepare_timestep_conditioning(t_val.unsqueeze(0), action_mode)
+            lt = torch.full((1, 1), float(t_val.item()), dtype=torch.float32)
+            temb_i, proj_i = self.prepare_timestep_conditioning(lt, action_mode)
             temb_host = ttnn.to_torch(ttnn.get_device_tensors(temb_i)[0])
             proj_host = ttnn.to_torch(ttnn.get_device_tensors(proj_i)[0])
             ts_to_proj[t_val.item()] = (temb_host, proj_host)
 
+        if not ts_to_proj:
+            raise RuntimeError(
+                "prepare_per_token_conditioning: empty timestep set "
+                f"(timestep_per_frame shape {tuple(timestep_per_frame.shape)}, unique_ts numel={unique_ts.numel()})."
+            )
         temb_sample = next(iter(ts_to_proj.values()))
         D_temb = temb_sample[0].shape[-1]
-        D_proj6 = temb_sample[1].shape[-2] * temb_sample[1].shape[-1]
+        D_proj6 = temb_sample[1].numel()
 
         per_token_temb = torch.zeros(1, B, N_padded, D_temb, dtype=torch.float32)
         per_token_proj = torch.zeros(1, B, N_padded, D_proj6, dtype=torch.float32)
@@ -702,22 +747,20 @@ class WanTransformer3DModel(Module):
 
     def prepare_conditioning(
         self,
-        timestep: torch.Tensor,
+        latent_time_steps: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         action_mode: bool = False,
     ):
-        assert timestep.ndim == 1
-        tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep, action_mode=action_mode)
+        assert latent_time_steps.ndim == 2
+        tt_temb_1BLD, tt_timestep_proj = self.prepare_timestep_conditioning(latent_time_steps, action_mode=action_mode)
         tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states, action_mode=action_mode)
-        return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
+        return tt_temb_1BLD, tt_timestep_proj, tt_prompt_1BLP
 
     def preprocess_spatial_input_host(self, spatial: torch.Tensor):
         """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for sequence parallel.
         Patch vector order must match reference: (C, p0, p1, p2) as in rearrange
         'b c (f p1) (h p2) (w p3) -> b (f h w) (c p1 p2 p3)'."""
         B, C, F, H, W = spatial.shape
-        if B != 1:
-            raise NotImplementedError("Batch size > 1 is not currently supported")
         logger.debug("Preprocessing spatial input with shape {}", spatial.shape)
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
@@ -829,8 +872,10 @@ class WanTransformer3DModel(Module):
                 N_padded=N_padded,
             )
         else:
+            latent_ts = self._reference_latent_time_steps_cpu(timestep, B, F, H, W, action_mode)
+            latent_ts = self._pad_latent_time_steps_cpu(latent_ts)
             temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
-                timestep, prompt, action_mode=action_mode
+                latent_ts, prompt, action_mode=action_mode
             )
 
         if action_mode:
@@ -844,9 +889,9 @@ class WanTransformer3DModel(Module):
             spatial_1BNI, N = self.preprocess_spatial_input(spatial)
             spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        # Disable TT cache-return path when using torch attention in WanTransformerBlock.
-        use_cache = False
-        caches = self._attn_caches.get(cache_name) if use_cache else None
+        caches_list = self._attn_caches.get(cache_name)
+        use_cache = caches_list is not None and len(caches_list) == len(self.blocks)
+        caches = caches_list if use_cache else None
 
         block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
         dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
@@ -877,10 +922,12 @@ class WanTransformer3DModel(Module):
                 torch.save(tproj, os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
             else:
                 torch.save(
-                    _to_torch_cpu(temb_11BD).squeeze(0).squeeze(0),
+                    _to_torch_cpu(temb_11BD)[0, :, :N, :].contiguous(),
                     os.path.join(dump_dir, f"temb_tt{suffix}.pt"),
                 )
-                torch.save(_to_torch_cpu(block_temb)[0], os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
+                tproj = _to_torch_cpu(block_temb)[0, :, :N, :, :].contiguous()
+                tproj = tproj.reshape(B, N, 6, -1).contiguous()
+                torch.save(tproj, os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
 
         for block_idx, block in enumerate(self.blocks):
             cached_k_tt = None
@@ -963,13 +1010,20 @@ class WanTransformer3DModel(Module):
             spatial_norm_1BND = self.norm_out(spatial_1BND, dtype=ttnn.float32)
             spatial_norm_1BND = spatial_norm_1BND * (1 + scale_norm) + shift_norm
         else:
-            scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
-            shift_norm, scale_norm = ttnn.chunk(scale_shift_1BSD, 2, -2)
-            spatial_norm_1BND = self.norm_out(
-                spatial_1BND,
-                dynamic_weight=(1 + scale_norm),
-                dynamic_bias=shift_norm,
-                dtype=ttnn.float32,
+            # Reference: scale_shift_table[None] + temb[:, :, None, :] -> [B, L, 2, D]
+            sst = self.scale_shift_table.data
+            sst_5d = ttnn.reshape(sst, (1, 1, 1, 2, sst.shape[-1]))
+            temb_5d = ttnn.unsqueeze(temb_11BD, 3)
+            scale_shift_1BSD = sst_5d + temb_5d
+            shift_norm, scale_norm = ttnn.chunk(scale_shift_1BSD, 2, dim=3)
+            shift_norm = ttnn.squeeze(shift_norm, dim=3)
+            scale_norm = ttnn.squeeze(scale_norm, dim=3)
+            # Per-token [1,1,L,D] cannot be passed as dit_layernorm dynamic_weight (gamma must be TILE with height 32).
+            spatial_norm_1BND = self.norm_out(spatial_1BND, dtype=ttnn.float32)
+            shift_norm = _align_modulation_to_spatial_layout(spatial_norm_1BND, shift_norm)
+            scale_norm = _align_modulation_to_spatial_layout(spatial_norm_1BND, scale_norm)
+            spatial_norm_1BND = spatial_norm_1BND * ttnn.typecast(1.0 + scale_norm, ttnn.float32) + ttnn.typecast(
+                shift_norm, ttnn.float32
             )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(

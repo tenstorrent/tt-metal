@@ -52,14 +52,18 @@ class WanResidualDownBlock(Module):
             self.downsampler = None
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
-        # x is in (B, T, H, W, C) format
-        x_copy = ttnn.clone(x)
+        # x is (B, T, H, W, C). conv_in / prior blocks may be ROW_MAJOR; resnets need TILE; WanResample needs ROW_MAJOR.
+        x_in_rm = ttnn.to_layout(ttnn.clone(x), ttnn.ROW_MAJOR_LAYOUT)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         for resnet in self.resnets:
             x = resnet(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
         if self.downsampler is not None:
-            x, logical_h = self.downsampler(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
-        x_copy = ttnn.to_layout(x_copy, ttnn.ROW_MAJOR_LAYOUT)
-        avg_shortcut_out = self.avg_shortcut(x_copy)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x, _ = self.downsampler(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        avg_shortcut_out = self.avg_shortcut(x_in_rm)
         avg_shortcut_out = ttnn.to_layout(avg_shortcut_out, ttnn.TILE_LAYOUT)
-        return x + avg_shortcut_out
+        return ttnn.add(x, avg_shortcut_out)

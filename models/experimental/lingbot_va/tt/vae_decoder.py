@@ -163,6 +163,9 @@ class WanResidualDecoder3d(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        # WanCausalConv3d is ROW_MAJOR; WanMidBlock / residual path expect TILE (matches WanDecoder3d).
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         # mid_block
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 

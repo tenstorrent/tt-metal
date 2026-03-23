@@ -97,13 +97,19 @@ class WanResidualUpBlock(Module):
         if feat_idx is None:
             feat_idx = [0]
 
+        # Branch for avg_shortcut uses the block input (layout as received).
         x_copy = ttnn.clone(x_BTHWC)
+        # Prior block may return ROW_MAJOR after shortcut add; resnets require TILE (WanUpBlock always feeds TILE).
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
         for resnet in self.resnets:
             x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         if self.upsampler is not None:
-            x_BTHWC, logical_h = self.upsampler(x_BTHWC, logical_h, feat_cache, feat_idx)
+            # WanResidualBlock is TILE; WanResample/WanConv2d need ROW_MAJOR (same as WanUpBlock).
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_upsampled_BTHWC, logical_h = self.upsampler(x_BTHWC, logical_h, feat_cache, feat_idx)
+            x_BTHWC = ttnn.to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
 
         if self.avg_shortcut is not None:
             shortcut = self.avg_shortcut(x_copy, first_chunk=first_chunk)

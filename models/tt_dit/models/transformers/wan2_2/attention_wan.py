@@ -314,13 +314,20 @@ class WanAttention(Module):
             )
             return out
 
-        v_BHNE = create_heads(v_1BNF)
+        # nlp_create_qkv_heads requires shape [batch, 1, seq, hidden]; Wan linear uses [1, B, L, hidden].
+        v_in = (
+            ttnn.permute(v_1BNF, (1, 0, 2, 3))
+            if len(v_1BNF.shape) == 4 and int(v_1BNF.shape[0]) == 1 and int(v_1BNF.shape[1]) > 1
+            else v_1BNF
+        )
+        v_BHNE = create_heads(v_in)
 
         # Rope
 
         if prompt_1BLP is None:
             # Self attention
-            if self.parallel_config.sequence_parallel.factor > 1:
+            sdpa_batch = int(q_BHNE.shape[0])
+            if self.parallel_config.sequence_parallel.factor > 1 and sdpa_batch == 1:
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,

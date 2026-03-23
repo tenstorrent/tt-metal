@@ -61,8 +61,10 @@ python3 models/experimental/lingbot_va/tests/demo/lingbot_va_inference.py \
 **Options:**
 
 - `--generate` – use generate path only (no infer).
-- `--num-chunks` – number of chunks to generate (default: 10).
+- `--num-chunks` / `--video-fps` – defaults from `reference/configs/__init__.py` on `VA_CONFIGS["robotwin"]` (`num_chunks_to_infer`, `demo_video_fps`).
 - `--save-dir` – directory where `demo.mp4` is written (e.g. `.../out_generate/demo.mp4`).
+
+**RobotWin model config** is vendored from [lingbot-va `wan_va/configs`](https://github.com/Robbyant/lingbot-va/tree/main/wan_va/configs) as `reference/configs/shared_config.py` and `reference/configs/va_robotwin_cfg.py` (re-exported via `reference.utils`). Demo-only keys `num_chunks_to_infer` and `demo_video_fps` are appended in `reference/configs/__init__.py`.
 
 **Output:** Prints the path to the saved video (e.g. `.../out_generate/demo.mp4`).
 

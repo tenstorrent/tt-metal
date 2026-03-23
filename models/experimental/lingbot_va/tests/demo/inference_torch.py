@@ -59,6 +59,10 @@ OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
 OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
+_ROBOTWIN_CFG = VA_CONFIGS["robotwin"]
+_DEFAULT_NUM_CHUNKS_GEN = int(getattr(_ROBOTWIN_CFG, "num_chunks_to_infer", 10))
+_DEFAULT_DEMO_VIDEO_FPS = int(getattr(_ROBOTWIN_CFG, "demo_video_fps", 10))
+
 # Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
 # Use a distinct name from inference_ttnn so the two scripts never share the same VAE cache.
 VAE_ENC_CACHE_FILENAME = "vae_encoded_obs_torch.pt"
@@ -440,6 +444,7 @@ def _encode_obs(models, state, obs):
     cache_path = getattr(config, "vae_enc_cache_path", None)
     if cache_path and os.path.isfile(cache_path):
         logger.info("Loading VAE encode output from cache: %s", cache_path)
+        print(f"  Loading cached VAE encode (fast): {cache_path}", flush=True)
         video_latent = torch.load(cache_path, map_location=device, weights_only=True)
         return video_latent.to(dtype)
 
@@ -513,7 +518,7 @@ def _reset_state(models, state, prompt):
     save_root = config.save_root
 
     logger.info("Reset.")
-    state["use_cfg"] = False  # Fixed to batch_size=1 for this demo
+    state["use_cfg"] = config.guidance_scale > 1
     state["frame_st_id"] = 0
     state["init_latent"] = None
 
@@ -587,6 +592,10 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     action_mask = state["action_mask"]
 
     if frame_st_id == 0:
+        print(
+            "  Encoding observation → init latent (streaming VAE; can take several minutes, no tqdm here)…",
+            flush=True,
+        )
         init_latent = _encode_obs(models, state, obs)
         state["init_latent"] = init_latent
 
@@ -618,9 +627,10 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     use_cfg = state["use_cfg"]
     init_latent = state["init_latent"]
     patch_size = config.patch_size
+    chunk_label = frame_st_id // max(frame_chunk_size, 1) + 1
 
     with torch.no_grad():
-        for i, t in enumerate(tqdm(timesteps)):
+        for i, t in enumerate(tqdm(timesteps, desc=f"torch ch{chunk_label} video", file=sys.stdout)):
             last_step = i == len(timesteps) - 1
             latent_cond = init_latent[:, :, 0:1].to(dtype) if frame_st_id == 0 else None
             input_dict = _prepare_latent_input(
@@ -660,7 +670,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 latents = scheduler.step(video_noise_pred, t, latents, return_dict=False)
             latents[:, :, 0:1] = latent_cond if frame_st_id == 0 else latents[:, :, 0:1]
 
-        for i, t in enumerate(tqdm(action_timesteps)):
+        for i, t in enumerate(tqdm(action_timesteps, desc=f"torch ch{chunk_label} action", file=sys.stdout)):
             last_step = i == len(action_timesteps) - 1
             action_cond = (
                 torch.zeros(
@@ -836,12 +846,19 @@ def run_generate(
     images_dir: str | Path,
     prompt: str,
     save_dir: str | Path,
-    num_chunks: int = 10,
+    num_chunks: int | None = None,
+    video_fps: int | None = None,
 ) -> str:
     """
     Run multi-chunk video generation (same behavior as VA_Server.generate).
     Loads init obs from images_dir, runs num_chunks of inference, decodes to video, saves demo.mp4.
+    When num_chunks or video_fps is None, uses VA_CONFIGS['robotwin'] (num_chunks_to_infer, demo_video_fps).
     """
+    rw = VA_CONFIGS["robotwin"]
+    if num_chunks is None:
+        num_chunks = int(getattr(rw, "num_chunks_to_infer", 10))
+    if video_fps is None:
+        video_fps = int(getattr(rw, "demo_video_fps", 10))
     checkpoint_path = Path(checkpoint_path).resolve()
     images_dir = Path(images_dir).resolve()
     if not checkpoint_path.is_dir():
@@ -875,14 +892,23 @@ def run_generate(
 
     pred_latent_lst = []
     pred_action_lst = []
-    print(f"Generating {config.num_chunks_to_infer} chunks")
-    for chunk_id in range(config.num_chunks_to_infer):
-        actions, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
+    nchunks = config.num_chunks_to_infer
+    print(
+        f"Generating {nchunks} chunks (each: VAE encode on chunk0, then ~{config.num_inference_steps} video + "
+        f"~{config.action_num_inference_steps} action diffusion steps; CFG doubles transformer batch).",
+        flush=True,
+    )
+    for chunk_id in range(nchunks):
+        fsi = chunk_id * config.frame_chunk_size
+        print(f"--- Chunk {chunk_id + 1}/{nchunks} (frame_st_id={fsi}) ---", flush=True)
+        actions, latents = _infer_impl(models, state, init_obs, frame_st_id=fsi)
         actions = torch.from_numpy(actions)
         pred_latent_lst.append(latents)
         pred_action_lst.append(actions)
+        print(f"  Chunk {chunk_id + 1}/{nchunks} done.", flush=True)
 
     pred_latent = torch.cat(pred_latent_lst, dim=2)
+    print("Decoding latents → RGB and writing demo.mp4 …", flush=True)
     transformer = models["transformer"]
     streaming_vae = models["streaming_vae"]
     streaming_vae_half = models["streaming_vae_half"]
@@ -898,7 +924,7 @@ def run_generate(
     if getattr(config, "enable_offload", True):
         models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
     decoded_video = _decode_one_video(models, pred_latent, "np")[0]
-    export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
+    export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=video_fps)
     return str(Path(save_dir) / "demo.mp4")
 
 
@@ -956,8 +982,20 @@ def main() -> None:
     parser.add_argument(
         "--num-chunks",
         type=int,
-        default=2,
-        help="Number of chunks for generate() (only used with --generate). Default: 10.",
+        default=_DEFAULT_NUM_CHUNKS_GEN,
+        help=(
+            "For --generate: transformer chunks to run. Latent T grows by frame_chunk_size (2) per chunk. "
+            f"Default: {_DEFAULT_NUM_CHUNKS_GEN} (reference.configs va_robotwin_cfg.num_chunks_to_infer)."
+        ),
+    )
+    parser.add_argument(
+        "--video-fps",
+        type=int,
+        default=_DEFAULT_DEMO_VIDEO_FPS,
+        help=(
+            "Frames per second for demo.mp4 with --generate. "
+            f"Default: {_DEFAULT_DEMO_VIDEO_FPS} (va_robotwin_cfg.demo_video_fps)."
+        ),
     )
     args = parser.parse_args()
 
@@ -983,6 +1021,7 @@ def main() -> None:
         print("Images dir:", images_dir)
         print("Prompt:", repr(args.prompt))
         print("Num chunks:", args.num_chunks)
+        print("Video FPS:", args.video_fps)
         print("Save dir:", save_dir)
         print("=" * 60)
         out_path = run_generate(
@@ -991,6 +1030,7 @@ def main() -> None:
             args.prompt,
             save_dir,
             num_chunks=args.num_chunks,
+            video_fps=args.video_fps,
         )
         print("Generated video saved to:", out_path)
         return

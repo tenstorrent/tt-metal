@@ -512,8 +512,6 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
-        for key, val in input_dict.items():
-            print(f"{key}: {val.shape}")
         if train_mode:
             return self.forward_train(input_dict)
         if action_mode:  # action input emb

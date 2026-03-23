@@ -203,28 +203,56 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
+        # wan_fused_rmsnorm_* requires logical shape [1, 1, seq, hidden]. Wan activations use [1, B, L, hidden]
+        # (e.g. classifier-free guidance); merge batch into seq for the fused kernels, then reshape back to
+        # [B, num_heads, L, head_dim] for SDPA (batch-major).
+        b0, b1, L_seq, Hdim = (int(x.shape[i]) for i in range(4))
+        merge_batch_into_seq = b0 == 1 and b1 > 1
+        if merge_batch_into_seq:
+            x_work = ttnn.reshape(x, (1, 1, b1 * L_seq, Hdim))
+            rope_cos_w = rope_cos
+            rope_sin_w = rope_sin
+            if trans_mat is not None:
+                if rope_cos is None or rope_sin is None:
+                    raise ValueError("rope_cos and rope_sin are required when trans_mat is set")
+                Br, Lr, Dr = int(rope_cos.shape[1]), int(rope_cos.shape[2]), int(rope_cos.shape[3])
+                if Br != b1 or Lr != L_seq:
+                    raise ValueError(
+                        f"rope shape (1, {Br}, {Lr}, {Dr}) must match x inner batch/seq (B={b1}, L={L_seq})"
+                    )
+                rope_cos_w = ttnn.reshape(rope_cos, (1, 1, b1 * L_seq, Dr))
+                rope_sin_w = ttnn.reshape(rope_sin, (1, 1, b1 * L_seq, Dr))
+        else:
+            x_work = x
+            rope_cos_w = rope_cos
+            rope_sin_w = rope_sin
+
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+            x_work, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             stats = self.ccl_manager.all_gather_persistent_buffer(
                 stats,
-                dim=len(x.shape) - 1,
+                dim=len(x_work.shape) - 1,
                 mesh_axis=self.mesh_axis,
             )
 
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
-            x,
+            x_work,
             stats,
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             transformation_mat=trans_mat,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
+            rope_cos=rope_cos_w,
+            rope_sin=rope_sin_w,
         )
+
+        if merge_batch_into_seq:
+            head_dim = Hdim // num_heads_per_device
+            x = ttnn.reshape(x, (b1, num_heads_per_device, L_seq, head_dim))
         return x
 
 

@@ -169,13 +169,23 @@ class WanAttention(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
+        # HiFi4 + no approx on QKV / to_out matmuls (native substitute for torch SDP + Linear precision).
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+    def clear_pred_cache(self, cache_name: str) -> None:
+        """Reference API; Lingbot KV lives on WanTransformer3DModel._attn_caches."""
+
+    def clear_cache(self, cache_name: str) -> None:
+        """Reference API; Lingbot KV lives on WanTransformer3DModel._attn_caches."""
+
+    def init_kv_cache(self, *args, **kwargs) -> None:
+        """Reference API; parent create_empty_cache fills _attn_caches — no buffers on TT attn."""
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
@@ -224,26 +234,36 @@ class WanAttention(Module):
                 bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
                 state["to_kv.bias"] = bias.squeeze(-1)
 
+    def _to_out_weight_for_mm(self) -> ttnn.Tensor:
+        """Gathered weight [K, N_local] for matmul (matches ColParallelLinear.forward)."""
+        to_out = self.to_out
+        if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis
+            )
+            return ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        return to_out.weight.data
+
+    @staticmethod
+    def _addcmul_gate_fits_fused_kernel(addcmul_gate: ttnn.Tensor, n_out: int) -> bool:
+        # dit_minimal_matmul_addcmul_fused requires ternary_b logical shape [1, N] (broadcast on M).
+        sh = addcmul_gate.shape
+        return len(sh) >= 2 and sh[-2] == 1 and sh[-1] == n_out
+
     def _to_out_fused_addcmul(
         self,
         x: ttnn.Tensor,
         addcmul_residual: ttnn.Tensor,
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
+        *,
+        weight: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
-
-        # Handle FSDP weight gathering (mirrors ColParallelLinear.forward)
-        if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
-            weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis
-            )
-            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
-        else:
-            weight = to_out.weight.data
-
+        if weight is None:
+            weight = self._to_out_weight_for_mm()
         M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
         matmul_config = get_matmul_config(M, K, N_out, core_grid)
@@ -259,6 +279,22 @@ class WanAttention(Module):
             compute_kernel_config=compute_kernel_config or to_out.compute_config,
         )
         return output
+
+    def _to_out_unfused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_residual: ttnn.Tensor,
+        addcmul_gate: ttnn.Tensor,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        """Same math as fused op when gate is full [M, N] / per-token (fused kernel only supports gate [1, N])."""
+        # Match fused path blocking (see grid_88 (256, 3072, 3072)); avoid default 8x8x8 L1 overflow on WH.
+        proj = self.to_out(
+            x,
+            compute_kernel_config=compute_kernel_config or self.mm_compute_kernel_config,
+            default_block_size=(2, 4, 16),
+        )
+        return ttnn.add(addcmul_residual, ttnn.mul(proj, addcmul_gate))
 
     def forward(
         self,
@@ -289,7 +325,8 @@ class WanAttention(Module):
         Otherwise, run cross-attention on prompt.
 
         When addcmul_residual and addcmul_gate are both provided (self-attention only),
-        the to_out projection and residual addcmul are fused into a single op:
+        uses dit_minimal_matmul_addcmul_fused when gate broadcasts as [1, N]; otherwise
+        to_out + mul + add (per-token gate, e.g. robotwin / [1,B,L,C] temb).
             output = addcmul_residual + to_out(attn_output) * addcmul_gate
 
         Outputs:
@@ -338,7 +375,13 @@ class WanAttention(Module):
             )
             return out
 
-        v_BHNE = create_heads(v_1BNF)
+        # nlp_create_qkv_heads requires shape [batch, 1, seq, hidden]; Wan linear uses [1, B, L, hidden].
+        v_in = (
+            ttnn.permute(v_1BNF, (1, 0, 2, 3))
+            if len(v_1BNF.shape) == 4 and int(v_1BNF.shape[0]) == 1 and int(v_1BNF.shape[1]) > 1
+            else v_1BNF
+        )
+        v_BHNE = create_heads(v_in)
 
         if self.is_self and return_kv:
             k_cur, v_cur = k_BHNE, v_BHNE
@@ -353,7 +396,14 @@ class WanAttention(Module):
 
         if prompt_1BLP is None:
             # Self attention (use standard SDPA when KV cache is used; ring does not support it)
-            if self.parallel_config.sequence_parallel.factor > 1 and cached_k is None and not return_kv:
+            # Ring path assumes SDPA batch dim 1; batched CFG uses [B, H, L, D] from norms + create_heads.
+            sdpa_batch = int(q_BHNE.shape[0])
+            if (
+                self.parallel_config.sequence_parallel.factor > 1
+                and cached_k is None
+                and not return_kv
+                and sdpa_batch == 1
+            ):
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
@@ -413,10 +463,20 @@ class WanAttention(Module):
             )
 
         if addcmul_residual is not None and addcmul_gate is not None:
-            # Fused to_out projection + addcmul (self-attention only)
-            spatial_1BND = self._to_out_fused_addcmul(
-                spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
-            )
+            to_out_weight = self._to_out_weight_for_mm()
+            n_out = to_out_weight.padded_shape[-1]
+            if self._addcmul_gate_fits_fused_kernel(addcmul_gate, n_out):
+                spatial_1BND = self._to_out_fused_addcmul(
+                    spatial_1BND,
+                    addcmul_residual,
+                    addcmul_gate,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    weight=to_out_weight,
+                )
+            else:
+                spatial_1BND = self._to_out_unfused_addcmul(
+                    spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
+                )
         else:
             spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 

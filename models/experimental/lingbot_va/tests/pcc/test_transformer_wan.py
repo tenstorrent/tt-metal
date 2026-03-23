@@ -147,11 +147,14 @@ def _make_action_grid_id(
     return grid_id
 
 
-# Video path: (1,1) submesh; cache or mmap load.
+# Video path: prefer (1,1) mesh so single-card machines run; optional (1,2) parent + (1,1) submesh when 2 devices exist.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param((1, 1), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1_device_mesh"),
+        pytest.param(
+            (1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="2_device_parent_submesh_1x1"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -294,12 +297,15 @@ ACTION_PER_FRAME = 16
 F_ACTION = 8
 
 
-# Action path: (1,1) submesh; cache or mmap load.
+# Action path: same mesh options as video path.
 # Demo uses F_action=frame_chunk_size=2, action_per_frame=16, prompt_seq_len=512.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param((1, 1), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1_device_mesh"),
+        pytest.param(
+            (1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="2_device_parent_submesh_1x1"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

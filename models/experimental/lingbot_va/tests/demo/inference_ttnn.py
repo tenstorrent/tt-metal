@@ -14,8 +14,9 @@ All model components used for inference are TTNN (no PyTorch fallbacks):
   decoder and use PyTorch decode only.
 - Transformer: TTNN WanTransformer3DModel (tt.utils.load_transformer).
 
-PyTorch is used for: tokenizer, schedulers, base VAE config object, and optionally VAE decode
-in run_generate() when TT decoder is not used or OOMs.
+PyTorch is used for: tokenizer, schedulers, base VAE config object, HF UMT5 on CPU for CFG
+negative embeddings when the TT text encoder is not loaded (stale text_emb cache), and optionally
+VAE decode in run_generate() when TT decoder is not used or OOMs.
 
 1. Build the input dict from three camera images (same format as client→server).
 2. Run inference using the same logic as VA_Server.infer() from wan_va_server.py:
@@ -87,6 +88,10 @@ OBS_CAM_HIGH = "observation.images.cam_high"
 OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
 OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
+
+_ROBOTWIN_CFG = VA_CONFIGS["robotwin"]
+_DEFAULT_NUM_CHUNKS_GEN = int(getattr(_ROBOTWIN_CFG, "num_chunks_to_infer", 10))
+_DEFAULT_DEMO_VIDEO_FPS = int(getattr(_ROBOTWIN_CFG, "demo_video_fps", 10))
 
 # Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
 # Use a distinct name from inference_torch so the two scripts never share the same VAE cache.
@@ -161,9 +166,16 @@ class _TTTransformerAdapter:
         # When dumping for transformer compare test, use per-token conditioning so TT norm_out
         # matches reference (reference always has per-token scale/shift for final norm).
         if dump_iter is not None and timestep_per_frame is None:
-            B = spatial.shape[0]
-            F = spatial.shape[2]
-            timestep_per_frame = timestep.unsqueeze(0).expand(B, F).to(torch.float32)
+            B, Ffrm = spatial.shape[0], spatial.shape[2]
+            # Prefer full [B, F] timesteps (cond frame 0 vs noisy frames differ); do not use
+            # timestep = timesteps[:, 0] here — that drops per-frame values and can break conditioning.
+            if timesteps.dim() == 2 and timesteps.shape[1] == Ffrm:
+                if timesteps.shape[0] == B:
+                    timestep_per_frame = timesteps.to(torch.float32)
+                elif timesteps.shape[0] == 1:
+                    timestep_per_frame = timesteps.expand(B, -1).to(torch.float32)
+            if timestep_per_frame is None:
+                timestep_per_frame = timestep.unsqueeze(0).expand(B, Ffrm).to(torch.float32)
 
         return self._tt_model(
             spatial=spatial,
@@ -355,6 +367,12 @@ def _try_load_text_emb_cache(config, prompt, device, dtype):
         prompt_embeds = cached["prompt_embeds"].to(device=device, dtype=dtype)
         neg = cached.get("negative_prompt_embeds")
         negative_prompt_embeds = neg.to(device=device, dtype=dtype) if neg is not None else None
+        if getattr(config, "guidance_scale", 1) > 1 and negative_prompt_embeds is None:
+            logger.warning(
+                "Text emb cache %s has no negative_prompt_embeds; CFG will encode an empty prompt on first forward. "
+                "Delete this file to re-save cache with both embeddings.",
+                cache_path,
+            )
         return prompt_embeds, negative_prompt_embeds
     except Exception as e:
         logger.warning("Failed to load text emb cache: %s", e)
@@ -439,7 +457,9 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     device = models["device"]
     dtype = models["dtype"]
     tokenizer = models["tokenizer"]
-    text_encoder = models["text_encoder"]
+    text_encoder = models.get("text_encoder")
+    if text_encoder is None:
+        raise RuntimeError("TT text encoder is missing; load it before _get_t5_prompt_embeds.")
 
     prompt = [prompt] if isinstance(prompt, str) else prompt
     prompt = [prompt_clean(u) for u in prompt]
@@ -478,6 +498,87 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     return prompt_embeds.to(device)
 
 
+def _get_t5_prompt_embeds_hf_cpu(models, prompt, num_videos_per_prompt=1, max_sequence_length=512):
+    """HF UMT5 on CPU — same padding/layout as _get_t5_prompt_embeds, without loading TT UMT5 on mesh.
+
+    Used when CFG needs negative embeddings but the TT text encoder is absent or reloading it fails
+    (e.g. device state while the transformer is already loaded).
+    """
+    from transformers import UMT5EncoderModel
+
+    device = models["device"]
+    dtype = models["dtype"]
+    tokenizer = models["tokenizer"]
+    ckpt = str(Path(models["config"].wan22_pretrained_model_name_or_path).resolve() / "text_encoder")
+
+    prompt = [prompt] if isinstance(prompt, str) else prompt
+    prompt = [prompt_clean(u) for u in prompt]
+    batch_size = len(prompt)
+
+    text_inputs = tokenizer(
+        prompt,
+        padding="max_length",
+        max_length=max_sequence_length,
+        truncation=True,
+        add_special_tokens=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+    text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+    seq_lens = mask.gt(0).sum(dim=1).long()
+
+    enc = UMT5EncoderModel.from_pretrained(ckpt, torch_dtype=dtype, local_files_only=True).to("cpu")
+    enc.eval()
+    with torch.no_grad():
+        hidden = enc(input_ids=text_input_ids, attention_mask=mask).last_hidden_state
+    del enc
+    gc.collect()
+
+    prompt_embeds = hidden.float()
+    prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+    prompt_embeds = torch.stack(
+        [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
+        dim=0,
+    )
+    _, seq_len, _ = prompt_embeds.shape
+    prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+    prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+    return prompt_embeds.to(device=device, dtype=dtype)
+
+
+def _ensure_negative_prompt_embeds(models, state) -> None:
+    """Fill state['negative_prompt_embeds'] when CFG is on but cache/state omitted it (e.g. old text_emb_cache)."""
+    if not state.get("use_cfg"):
+        return
+    if state.get("negative_prompt_embeds") is not None:
+        return
+    if state.get("prompt_embeds") is None:
+        raise RuntimeError("CFG requires prompt_embeds before negative_prompt_embeds can be built.")
+    config = models["config"]
+    batch_size = state["prompt_embeds"].shape[0]
+    logger.warning(
+        "negative_prompt_embeds missing (often stale text_emb_cache saved with guidance_scale<=1); "
+        "encoding empty-prompt embeddings via HF UMT5 on CPU (avoids loading a second TT text encoder on mesh)."
+    )
+    negative_prompt = batch_size * [""]
+    neg = _get_t5_prompt_embeds_hf_cpu(models, prompt=negative_prompt, num_videos_per_prompt=1, max_sequence_length=512)
+    state["negative_prompt_embeds"] = neg
+    cache_path = getattr(config, "text_emb_cache_path", None)
+    if cache_path and state.get("_prompt_embeds_prompt") is not None:
+        try:
+            torch.save(
+                {
+                    "prompt": state["_prompt_embeds_prompt"],
+                    "prompt_embeds": state["prompt_embeds"].cpu(),
+                    "negative_prompt_embeds": state["negative_prompt_embeds"].cpu(),
+                },
+                cache_path,
+            )
+            logger.info("Updated text_emb cache with negative_prompt_embeds: %s", cache_path)
+        except Exception as e:
+            logger.warning("Could not update text_emb cache: %s", e)
+
+
 def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
     device = models["device"]
     dtype = models["dtype"]
@@ -499,9 +600,9 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
         except Exception as e:
             logger.warning("Failed to load text emb cache: %s", e)
 
-    if "text_encoder" not in models:
+    if models.get("text_encoder") is None:
         raise RuntimeError(
-            "Text encoder was freed after phase 1; text embeddings must be loaded from cache. "
+            "Text encoder was freed or never loaded; text embeddings must be loaded from cache. "
             "Ensure text_emb_cache_path exists and matches the current prompt, or run with cache populated first."
         )
     prompt_embeds = _get_t5_prompt_embeds(
@@ -573,6 +674,7 @@ def _postprocess_action(models, state, action):
 
 
 def _repeat_input_for_cfg(models, state, input_dict):
+    _ensure_negative_prompt_embeds(models, state)
     use_cfg = state["use_cfg"]
     prompt_embeds = state["prompt_embeds"]
     negative_prompt_embeds = state["negative_prompt_embeds"]
@@ -733,7 +835,8 @@ def _reset_state(models, state, prompt):
     save_root = config.save_root
 
     logger.info("Reset.")
-    state["use_cfg"] = False
+    # Must match classifier-free guidance: upstream robotwin uses guidance_scale=5.
+    state["use_cfg"] = config.guidance_scale > 1
     state["frame_st_id"] = 0
     state["init_latent"] = None
 
@@ -1082,6 +1185,7 @@ def run_inference(
     config.world_size = 1
     if save_dir is None:
         save_dir = _SCRIPT_DIR / "out_inference"
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
     config.save_root = str(save_dir)
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
@@ -1131,12 +1235,19 @@ def run_generate(
     images_dir: str | Path,
     prompt: str,
     save_dir: str | Path,
-    num_chunks: int = 10,
+    num_chunks: int | None = None,
+    video_fps: int | None = None,
 ) -> str:
     """
     Run multi-chunk video generation (same behavior as VA_Server.generate).
     Loads init obs from images_dir, runs num_chunks of inference, decodes to video, saves demo.mp4.
+    When num_chunks or video_fps is None, uses VA_CONFIGS['robotwin'] (num_chunks_to_infer, demo_video_fps).
     """
+    rw = VA_CONFIGS["robotwin"]
+    if num_chunks is None:
+        num_chunks = int(getattr(rw, "num_chunks_to_infer", 10))
+    if video_fps is None:
+        video_fps = int(getattr(rw, "demo_video_fps", 10))
     checkpoint_path = Path(checkpoint_path).resolve()
     images_dir = Path(images_dir).resolve()
     if not checkpoint_path.is_dir():
@@ -1156,6 +1267,7 @@ def run_generate(
     config.local_rank = 0
     config.rank = 0
     config.world_size = 1
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
     config.save_root = str(save_dir)
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
@@ -1257,7 +1369,7 @@ def run_generate(
         if getattr(config, "enable_offload", True):
             models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
-    export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
+    export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=video_fps)
     return str(Path(save_dir) / "demo.mp4")
 
 
@@ -1315,12 +1427,25 @@ def main() -> None:
     parser.add_argument(
         "--num-chunks",
         type=int,
-        default=2,
-        help="Number of chunks for generate() (only used with --generate). Default: 10.",
+        default=_DEFAULT_NUM_CHUNKS_GEN,
+        help=(
+            "For --generate: transformer chunks to run. Latent T grows by frame_chunk_size (2) per chunk. "
+            f"Default: {_DEFAULT_NUM_CHUNKS_GEN} (reference.configs va_robotwin_cfg.num_chunks_to_infer)."
+        ),
+    )
+    parser.add_argument(
+        "--video-fps",
+        type=int,
+        default=_DEFAULT_DEMO_VIDEO_FPS,
+        help=(
+            "Frames per second for demo.mp4 with --generate. "
+            f"Default: {_DEFAULT_DEMO_VIDEO_FPS} (va_robotwin_cfg.demo_video_fps)."
+        ),
     )
     args = parser.parse_args()
 
     save_dir = args.save_dir or str(_SCRIPT_DIR / "out_inference")
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
     images_dir = Path(args.images_dir) if args.images_dir else _REPO_ROOT / "example" / "robotwin"
 
     if args.generate:
@@ -1342,6 +1467,7 @@ def main() -> None:
         print("Images dir:", images_dir)
         print("Prompt:", repr(args.prompt))
         print("Num chunks:", args.num_chunks)
+        print("Video FPS:", args.video_fps)
         print("Save dir:", save_dir)
         print("=" * 60)
         out_path = run_generate(
@@ -1350,6 +1476,7 @@ def main() -> None:
             args.prompt,
             save_dir,
             num_chunks=args.num_chunks,
+            video_fps=args.video_fps,
         )
         print("Generated video saved to:", out_path)
         return
