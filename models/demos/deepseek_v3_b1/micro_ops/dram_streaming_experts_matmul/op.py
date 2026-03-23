@@ -418,9 +418,7 @@ class DRAMStreamingExpertsMatmul:
 
         # ========== UNIFIED KERNEL DESCRIPTOR ==========
         # Core logic is in unified_kernels/dram_streaming_matmul.hpp
-        KERNEL_PATH = (
-            "models/demos/deepseek_v3_b1/micro_ops/dram_streaming_matmul/kernels/dram_streaming_matmul_kernel.cpp"
-        )
+        KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/dram_streaming_experts_matmul/kernels/dram_streaming_experts_matmul_kernel.cpp"
 
         # Number of output tiles for mul (using 16x16 tiles)
         # Total elements per core = M * per_core_N * tile_width
