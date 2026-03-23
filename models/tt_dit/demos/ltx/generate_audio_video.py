@@ -316,41 +316,36 @@ def main():
         audio_waveform = None
         has_audio = False
 
-    # 7. Export
+    # 7. Export video + audio combined using official pipeline's encode_video
     video_pixels = video_pixels.float().clamp(-1, 1)
     video_pixels = (video_pixels + 1) / 2
-    video_np = (video_pixels[0].permute(1, 2, 3, 0).numpy() * 255).astype("uint8")
+    video_uint8 = (video_pixels[0].permute(1, 2, 3, 0) * 255).to(torch.uint8)  # (F, H, W, 3)
 
-    # Save video
-    try:
-        from diffusers.utils import export_to_video
-
-        # export_to_video expects list of numpy frames (H, W, 3) or (F, H, W, 3)
-        export_to_video(list(video_np), args.output, fps=args.fps)
-        logger.info(f"Video saved to {os.path.abspath(args.output)}")
-    except (ImportError, Exception) as e:
-        logger.warning(f"export_to_video failed ({e}), trying imageio")
-        try:
-            import imageio
-
-            imageio.mimwrite(args.output, video_np, fps=args.fps, codec="libx264")
-            logger.info(f"Video saved to {os.path.abspath(args.output)}")
-        except Exception:
-            import numpy as np
-
-            np.save(args.output.replace(".mp4", ".npy"), video_np)
-            logger.info(f"Saved as numpy: {args.output.replace('.mp4', '.npy')}")
-
-    # Save audio separately if available
     if has_audio and audio_waveform is not None:
-        audio_path = args.output.replace(".mp4", "_audio.wav")
         try:
-            import torchaudio
+            from ltx_core.types import Audio
+            from ltx_pipelines.utils.media_io import encode_video
 
-            torchaudio.save(audio_path, audio_waveform.float().cpu().squeeze(0), 16000)
-            logger.info(f"Audio saved to {os.path.abspath(audio_path)}")
+            audio_obj = Audio(waveform=audio_waveform.float().cpu(), sampling_rate=16000)
+            encode_video(
+                video=video_uint8,
+                fps=fps,
+                audio=audio_obj,
+                output_path=args.output,
+                video_chunks_number=1,
+            )
+            logger.info(f"Video+audio saved to {os.path.abspath(args.output)}")
         except Exception as e:
-            logger.warning(f"Audio save failed: {e}")
+            logger.warning(f"Combined export failed ({e}), saving separately")
+            has_audio = False
+
+    if not has_audio or audio_waveform is None:
+        # Fallback: save video only
+        import imageio
+
+        video_np = video_uint8.numpy()
+        imageio.mimwrite(args.output, video_np, fps=fps, codec="libx264")
+        logger.info(f"Video saved to {os.path.abspath(args.output)}")
 
     logger.info(f"Done! Denoise: {denoise_time:.1f}s")
 
