@@ -100,6 +100,11 @@ class Generator(WarmupForwardMixin):
         self.prefill_traces_warmup = True
 
         self.model.switch_mode("prefill")
+        # Reset all CCL global semaphores before the first CCL op. Without this, stale L1
+        # semaphore values from a prior run's process (which persists across Python restarts)
+        # cause the first warmup CCL call to deadlock waiting for a semaphore that never clears.
+        logger.info("Resetting CCL global semaphores to clear any stale device state")
+        self.model.tt_ccl.reset_global_semaphores()
         logger.info("Warming up prefill traces for all supported sequence lengths")
         supported_seqlens = (
             self.model.tt_ccl.support_seqlens

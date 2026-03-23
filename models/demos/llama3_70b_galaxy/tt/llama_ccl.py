@@ -116,7 +116,7 @@ class TT_CCL:
                 self.agmm_ff2_buffer_idx = 0
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [16384, 8192, 4096, 2048, 1024, 128]
+            self.support_seqlens = [8192, 4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -133,6 +133,27 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
+
+    def reset_global_semaphores(self):
+        """Reset all global CCL semaphores to 0 to clear stale L1 state from prior runs."""
+        for axis in range(2):
+            for sem in self.barrier_semaphore_handles[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem_or_list in self.gather_semaphore_handles[axis]:
+                if isinstance(sem_or_list, list):
+                    for sem in sem_or_list:
+                        ttnn.reset_global_semaphore_value(sem, 0)
+                else:
+                    ttnn.reset_global_semaphore_value(sem_or_list, 0)
+            for sem_list in self.reduce_semaphore_handles[axis]:
+                for sem in sem_list:
+                    ttnn.reset_global_semaphore_value(sem, 0)
+        for attr in ("from_semaphore_handles", "to_semaphore_handles"):
+            if hasattr(self, attr):
+                for axis in range(2):
+                    for sem in getattr(self, attr)[axis]:
+                        ttnn.reset_global_semaphore_value(sem, 0)
+        self.reset_gather_and_buffer_idx()
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
@@ -1237,12 +1258,13 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
+        barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            barrier_semaphore=barrier_semaphore,
             num_links=num_links,
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1349,12 +1371,14 @@ class TT_CCL:
         if "SDPA" in buffer_key:
             # SDPA input is 8x (4= ring_size (number of devices in ring), 2 = number of chunks per device) shorter than the sequence length
             seqlen = seqlen * 8
+
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
         )
         # persistent_buffers = None
 
         num_links = 4
+        barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1365,7 +1389,7 @@ class TT_CCL:
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            barrier_semaphore=barrier_semaphore,
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,

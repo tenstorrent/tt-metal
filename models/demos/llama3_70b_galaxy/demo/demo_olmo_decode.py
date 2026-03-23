@@ -309,6 +309,14 @@ def run_olmo_demo(
         return user_tokens, pt_user
 
     # Step 1: Warmup / compile run (eager, first user)
+    # Reset all CCL global semaphores before the first CCL op. Semaphore values in device
+    # L1 persist across Python process restarts; if a prior run left them non-zero the
+    # first CCL call below will deadlock waiting for a semaphore that never clears.
+    # synchronize_device after reset ensures all cross-chip Ethernet writes have fully
+    # propagated on every chip before the first CCL op starts.
+    logger.info("Resetting CCL global semaphores to clear any stale device state...")
+    tt_model.tt_ccl.reset_global_semaphores()
+
     logger.info("Prefill warmup (compile)...")
     profiler.start("compile_prefill")
     warmup_tokens, warmup_pt = _build_prefill_inputs(0)
@@ -591,6 +599,15 @@ def run_olmo_demo(
         if iteration >= num_decode_tokens:
             users_decoding = False
 
+    # Wait for all in-flight device ops (including last decode trace's CCL semaphore
+    # resets) to complete, then explicitly zero all global semaphores while the device
+    # is idle. This leaves L1 semaphores at 0 so the next pytest process can start
+    # without a hardware reset.
+    ttnn.synchronize_device(mesh_device)
+    tt_model.tt_ccl.reset_global_semaphores()
+    if hasattr(tt_model, "tt_ccl_prefill"):
+        tt_model.tt_ccl_prefill.reset_global_semaphores()
+    ttnn.synchronize_device(mesh_device)
     ttnn.release_trace(mesh_device, decode_trace_id)
 
     # Print per-user output for coherency check
@@ -852,7 +869,7 @@ def run_olmo_demo(
         ),
         # ── ISL sweep: batch=1, 10 decode tokens, 64 layers ──────────────────────────────
         # paged_cache_max_seq_len = 8 × max_num_blocks  (batch_size_per_device_group=8 on TG)
-        (  # isl-128-b1: ~128-token prefill + 200 decode
+        (  # isl-128-b1: ~128-token prefill + 200 decode (greedy, for coherence check)
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
@@ -863,7 +880,7 @@ def run_olmo_demo(
             400,  # ~200 prefill (with chat template) + 200 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -878,7 +895,7 @@ def run_olmo_demo(
             1034,  # ~1024 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -893,7 +910,22 @@ def run_olmo_demo(
             2058,  # ~2048 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # isl-2k-long-b1: ~2k-token prefill + ~200 decode tokens (greedy coherence check)
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
+            False,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            2248,  # ~2048 prefill + 200 decode
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -908,7 +940,7 @@ def run_olmo_demo(
             4106,  # ~4096 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -923,7 +955,7 @@ def run_olmo_demo(
             8201,  # 8191 prefill tokens + 10 decode (pads to 8192)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -938,7 +970,7 @@ def run_olmo_demo(
             16393,  # 16383 prefill tokens + 10 decode (pads to 16384)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # capacity: 32768 tokens
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -954,7 +986,7 @@ def run_olmo_demo(
             32777,  # 32767 prefill tokens + 10 decode (pads to 32768)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4128},  # capacity: 33,024 tokens/user
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -970,7 +1002,7 @@ def run_olmo_demo(
             65545,  # 65535 prefill tokens + 10 decode (pads to 65536)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 8208},  # capacity: 65,664 tokens/user
-            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
+            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -1050,6 +1082,7 @@ def run_olmo_demo(
         "isl-128-b1",  # ISL sweep: 128-token prefill, batch=1
         "isl-1k-b1",  # ISL sweep: 1k-token prefill, batch=1
         "isl-2k-b1",  # ISL sweep: 2k-token prefill, batch=1
+        "isl-2k-long-b1",  # 2k prefill + ~2k decode for coherence verification
         "isl-4k-b1",  # ISL sweep: 4k-token prefill, batch=1
         "isl-8k-b1",  # ISL sweep: 8k-token prefill, batch=1 (traced, pre-allocated CCL buffers)
         "isl-16k-b1",  # ISL sweep: 16k-token prefill, batch=1 (traced, pre-allocated CCL buffers)
