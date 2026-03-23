@@ -50,6 +50,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_winner_cb"),
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
@@ -93,6 +94,7 @@ void kernel_main() {
     using SamplingComputeCTArgs = deepseek_b1_ops::TopKSampling::ComputeCTArgs<
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
         get_named_compile_time_arg_val("sampling_max_cb"),
         get_named_compile_time_arg_val("sampling_sum_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb")>;

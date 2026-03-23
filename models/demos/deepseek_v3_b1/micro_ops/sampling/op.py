@@ -424,6 +424,7 @@ class SamplingOp:
         max_cb = 4
         sum_cb = 5
         scaler_cb = 6
+        softmax_exp_cb = 7
         semaphore_id = 0
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
@@ -460,11 +461,13 @@ class SamplingOp:
             ("sampling_mesh_local_send_slot_offset", 0),
             ("sampling_softmax_in_cb", softmax_in_cb),
             ("sampling_softmax_out_cb", softmax_out_cb),
+            ("sampling_softmax_exp_cb", softmax_exp_cb),
             ("sampling_scaler_cb", scaler_cb),
         ]
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
             ("sampling_softmax_out_cb", softmax_out_cb),
+            ("sampling_softmax_exp_cb", softmax_exp_cb),
             ("sampling_max_cb", max_cb),
             ("sampling_sum_cb", sum_cb),
             ("sampling_scaler_cb", scaler_cb),
@@ -587,6 +590,15 @@ class SamplingOp:
                 ttnn.CBFormatDescriptor(buffer_index=scaler_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
             ],
         )
+        softmax_exp_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=softmax_exp_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                )
+            ],
+        )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
@@ -604,6 +616,7 @@ class SamplingOp:
                 max_cb_descriptor,
                 sum_cb_descriptor,
                 scaler_cb_descriptor,
+                softmax_exp_cb_descriptor,
             ],
             semaphores=[receiver_semaphore_descriptor],
         )

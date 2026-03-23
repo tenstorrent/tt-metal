@@ -31,8 +31,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 
-template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
-void softmax_sub_exp_bcast_cols_inplace() {
+template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
+void softmax_sub_exp_bcast_cols() {
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
     cb_wait_front(in0_cb, rows * cols);
@@ -43,14 +43,14 @@ void softmax_sub_exp_bcast_cols_inplace() {
             sub_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             exp_tile<true>(0);
             tile_regs_commit();
-            cb_pop_front(in0_cb, 1);
-            cb_reserve_back(in0_cb, 1);
+            cb_reserve_back(out_cb, 1);
             tile_regs_wait();
-            pack_tile(0, in0_cb);
-            cb_push_back(in0_cb, 1);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
             tile_regs_release();
         }
     }
+    cb_pop_front(in0_cb, rows * cols);
 }
 
 template <
@@ -156,6 +156,7 @@ struct TopKSampling {
         uint32_t WinnerCBId = 0xFFFFFFFF,
         uint32_t SoftmaxInCBId = 0xFFFFFFFF,
         uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
+        uint32_t SoftmaxExpCBId = 0xFFFFFFFF,
         uint32_t ScalerCBId = 0xFFFFFFFF>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
@@ -189,6 +190,7 @@ struct TopKSampling {
         static constexpr uint32_t winner_cb_id = WinnerCBId;
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
 
         // Gather buffer layout (globally split for LLK compatibility):
@@ -216,10 +218,17 @@ struct TopKSampling {
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
 
-    template <uint32_t SoftmaxInCBId, uint32_t SoftmaxOutCBId, uint32_t MaxCBId, uint32_t SumCBId, uint32_t ScalerCBId>
+    template <
+        uint32_t SoftmaxInCBId,
+        uint32_t SoftmaxOutCBId,
+        uint32_t SoftmaxExpCBId,
+        uint32_t MaxCBId,
+        uint32_t SumCBId,
+        uint32_t ScalerCBId>
     struct ComputeCTArgs {
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
         static constexpr uint32_t max_cb = MaxCBId;
         static constexpr uint32_t sum_cb = SumCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
@@ -673,19 +682,18 @@ struct TopKSampling {
                     CTArgs::max_cb,
                     1,
                     1>();
-                softmax_sub_exp_bcast_cols_inplace<CTArgs::softmax_in_cb, CTArgs::max_cb, 1, 1>();
+                softmax_sub_exp_bcast_cols<CTArgs::softmax_in_cb, CTArgs::max_cb, CTArgs::softmax_exp_cb, 1, 1>();
                 softmax_reduce_c<
                     PoolType::SUM,
                     ReduceDim::REDUCE_ROW,
-                    CTArgs::softmax_in_cb,
+                    CTArgs::softmax_exp_cb,
                     CTArgs::scaler_cb,
                     CTArgs::sum_cb,
                     1,
                     1>();
                 softmax_recip_block_inplace(CTArgs::sum_cb, 1);
-                softmax_mul_block_bcast_cols(CTArgs::softmax_in_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
+                softmax_mul_block_bcast_cols(CTArgs::softmax_exp_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
             }
-            (void)args;
 #endif
         }
     };
