@@ -33,8 +33,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
-    uint32_t in0_B,
-    uint32_t in1_B,
+    uint32_t B,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -117,13 +116,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (in0_B * num_blocks > 1) {
+    if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (in1_B * num_blocks > 1) {
+    if (B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
@@ -385,8 +384,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             (std::uint32_t)in0_block_w,
             (std::uint32_t)in0_block_h,
             // batch args
-            (std::uint32_t)in0_B,  // batch
-            (std::uint32_t)in1_B   // batch
+            (std::uint32_t)B  // batch
         };
     } else {
         in0_sender_compile_time_args = {
@@ -416,8 +414,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)in0_B,  // in0_batch
-            (std::uint32_t)in1_B,  // in1_batch
+            (std::uint32_t)B,      // batch
 
             // sparsity args
             (std::uint32_t)0,      // batchB
@@ -452,7 +449,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         (std::uint32_t)(num_blocks_y - 1),  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)in1_B,        // batch
+        (std::uint32_t)B,            // batch
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
@@ -511,8 +508,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)false   // get_batch_from_reader
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
@@ -526,7 +523,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)B,  // batch
 
         // WRITER
         // out tensor args
@@ -839,8 +836,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        in0_B,                   // in0_batch,
-        in1_B,                   // in1_batch,
+        B,                       // batch,
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
@@ -1671,8 +1667,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto in0_B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
-    const auto in1_B = fuse_batch ? 1 : get_batch_size(b_shape_padded);
+    const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
@@ -1730,8 +1725,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
-        in0_B,
-        in1_B,
+        B,
         Mt,
         Nt,
         Kt,

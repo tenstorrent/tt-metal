@@ -25,9 +25,7 @@ void kernel_main() {
     uint32_t out_subblock_h = get_compile_time_arg_val(8);           // inner row block size in tiles
     uint32_t out_subblock_w = get_compile_time_arg_val(9);           // inner column block size in tiles
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    uint32_t in0_batch = get_compile_time_arg_val(11);               // in0 batch dim
-    uint32_t in1_batch = get_compile_time_arg_val(12);               // in1 batch dim
-    uint32_t max_batch_size = (in0_batch > in1_batch) ? in0_batch : in1_batch;
+    uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     uint32_t in1_cb_id = tt::CBIndex::c_1;
@@ -42,7 +40,7 @@ void kernel_main() {
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
 
-    for (uint32_t b = 0; b < max_batch_size; b++) {
+    for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;

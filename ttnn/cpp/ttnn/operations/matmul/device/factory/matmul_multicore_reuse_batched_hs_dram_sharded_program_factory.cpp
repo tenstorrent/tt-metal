@@ -469,8 +469,7 @@ create_program_batch_sharded(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        batches_per_core,        // in0_batch (batches per core)
-        batches_per_core,        // in1_batch (batches per core)
+        batches_per_core,        // batch (batches per core)
         out_block_tiles,         // out_block_num_tiles
         untilize_out ? 1u : 0u,  // untilize_out
         0u,                      // get_batch_from_reader

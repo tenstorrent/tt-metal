@@ -95,10 +95,9 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(8);  // inner row block size in tiles
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(9);  // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    constexpr uint32_t in0_batch = get_compile_time_arg_val(11);               // in0 batch dim
-    constexpr uint32_t in1_batch = get_compile_time_arg_val(12);               // in1 batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(13);     // number of tiles in out_block
-    constexpr bool untilize_out = get_compile_time_arg_val(14);                // untilize output
+    constexpr uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
+    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(12);     // number of tiles in out_block
+    constexpr bool untilize_out = get_compile_time_arg_val(13);                // untilize output
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -123,19 +122,18 @@ void kernel_main() {
     constexpr bool spill = num_blocks > 1;
 
     mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-    constexpr uint32_t max_batch_size = (in0_batch > in1_batch) ? in0_batch : in1_batch;
-    for (uint32_t b = 0; b < max_batch_size; b++) {
+    for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
-        if constexpr (max_batch_size > 1) {
+        if constexpr (batch > 1) {
             PACK((llk_pack_relu_config(ReluType::NO_RELU)));
         }
 #endif
 
-        if constexpr (max_batch_size > 1) {
+        if constexpr (batch > 1) {
             PACK((pack_reconfig_data_format(mm_partials_cb_id)));
         }
 
@@ -367,7 +365,7 @@ void kernel_main() {
             }
             pack_untilize_uninit(mm_partials_cb_id);
         }
-        if constexpr (max_batch_size > 1) {
+        if constexpr (batch > 1) {
             // reconfigure init for matmul
             mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef FUSE_BIAS

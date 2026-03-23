@@ -161,13 +161,12 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
-    constexpr uint32_t in0_batch = get_compile_time_arg_val(13);               // in0 batch dim
-    constexpr uint32_t in1_batch = get_compile_time_arg_val(14);               // in1 batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(15);     // number of tiles in out_block
-    constexpr bool untilize_out = get_compile_time_arg_val(16);                // untilize output
+    constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
+    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
+    constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(17);
-    constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(18);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
+    constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(17);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -200,13 +199,10 @@ void kernel_main() {
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
-
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
-    constexpr uint32_t max_batch_size = (in0_batch > in1_batch) ? in0_batch : in1_batch;
-
-    for (uint32_t b = 0; b < max_batch_size; b++) {
+    for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid = false;
@@ -225,12 +221,12 @@ void kernel_main() {
 
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
-                if constexpr (max_batch_size > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
+                if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
                 }
 #endif
 
-                if constexpr (max_batch_size > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
+                if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
@@ -486,7 +482,7 @@ void kernel_main() {
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
-                if constexpr (max_batch_size > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
+                if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 #ifdef FUSE_BIAS
                     // reconfigure unpacker df for src A and src B
                     reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);

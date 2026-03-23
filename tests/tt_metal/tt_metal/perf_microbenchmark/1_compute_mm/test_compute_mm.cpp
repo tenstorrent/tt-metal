@@ -951,8 +951,7 @@ tt_metal::Program create_program_single_core(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        1,                       // in0 batch
-        1,                       // in1 batch
+        1,                       // batch
         Mt * Nt,
         0};
 
@@ -1162,8 +1161,7 @@ tt_metal::Program create_program(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        1,                       // in0 batch
-        1,                       // in1 batch
+        1,                       // batch
         per_core_Mt * per_core_Nt};
 
     CoreRange all_cores(
