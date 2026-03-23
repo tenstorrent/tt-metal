@@ -73,7 +73,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::CBHandle data_cb_id,
+    tt::tt_metal::CBHandle data_cb_handle,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& tensor_return_value,

@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental {
