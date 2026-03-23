@@ -42,7 +42,7 @@ private:
 
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
-    std::atomic_flag initialized_ = {};
+    std::atomic_flag initialized_;
 };
 
 }  // namespace tt::tt_metal
