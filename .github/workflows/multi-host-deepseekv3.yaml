@@ -76,7 +76,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
 jobs:
   build-artifact:

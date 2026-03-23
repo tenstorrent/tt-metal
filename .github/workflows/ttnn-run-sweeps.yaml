@@ -624,10 +624,6 @@ on:
           - WARNING
           - CRITICAL
         default: "INFO"
-      use_database:
-        description: "Load configs from PostgreSQL database instead of JSON file"
-        type: boolean
-        default: false
       mesh_shape:
         description: "Filter by mesh shape (e.g., '2x4')."
         type: string
@@ -686,7 +682,7 @@ jobs:
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Use Database:         ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Use Database:         ${{ ((github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))) && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "│ Cron (if scheduled): ${{ github.event.schedule || 'N/A' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
@@ -715,7 +711,7 @@ jobs:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
     if: |
-      github.event.inputs.use_database == 'true' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')) ||
       github.event.schedule == '0 3 * * *' ||
       github.event.schedule == '0 2 * * *'
     steps:
@@ -729,22 +725,41 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install psycopg2-binary
+          pip install psycopg2-binary pyyaml
 
-      - name: Generate JSON from database
+      - name: Generate JSON for lead_models run
+        if: |
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') ||
+          (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *')
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
-          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
-            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
-            ttnn_ops_v2_5
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/sweep_manifest.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            lead_models
 
-      - name: Upload master JSON artifacts
+      - name: Generate JSON for model_traced run
+        if: |
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
+          (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/sweep_manifest.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            model_traced
+
+      - name: Upload master JSON artifact
+        if: |
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)')) ||
+          github.event.schedule == '0 2 * * *' ||
+          github.event.schedule == '0 3 * * *'
         uses: actions/upload-artifact@v4
         with:
           name: ttnn-operations-master-json
-          path: |
-            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
           retention-days: 1
   ttnn-generate-sweeps:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
@@ -802,7 +817,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 📥 Download database-generated JSON
         if: |
-          github.event.inputs.use_database == 'true' ||
+          (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')) ||
           github.event.schedule == '0 3 * * *' ||
           github.event.schedule == '0 2 * * *'
         uses: actions/download-artifact@v4
@@ -1024,7 +1039,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ ((github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))) && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -1069,7 +1084,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ ((github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))) && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -1172,7 +1187,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ ((github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))) && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -1215,7 +1230,7 @@ jobs:
           echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
           echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_memory == 'true' && 'true' || 'false') }}"
           echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
-          echo "│ Use Database:         ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ ((github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))) && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
