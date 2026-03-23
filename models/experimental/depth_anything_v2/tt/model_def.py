@@ -1,4 +1,4 @@
-﻿# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -125,8 +125,19 @@ def ttnn_conv2d(
 
 
 def ttnn_upsample(x, scale_factor):
-    """Nearest-neighbour (or bilinear) upsample.  x is (B, C, H, W)."""
-    return ttnn.upsample(x, scale_factor=scale_factor)
+    """Nearest-neighbour upsample.  x is (B, C, H, W).
+
+    ttnn.upsample expects NHWC format, so we transpose before and after.
+    """
+    # (B, C, H, W) -> (B, H, W, C)
+    x = ttnn.transpose(x, -2, -1)    # (B, C, W, H)
+    x = ttnn.transpose(x, -3, -1)    # (B, H, W, C)
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.upsample(x, scale_factor=scale_factor)
+    # (B, H', W', C) -> (B, C, H', W')
+    x = ttnn.transpose(x, -3, -1)    # (B, C, W', H')
+    x = ttnn.transpose(x, -2, -1)    # (B, C, H', W')
+    return x
 
 
 # ============================================================================
@@ -297,6 +308,20 @@ class TtDPTFusionStage:
                 x = feat_i
             else:
                 x_up = ttnn_upsample(x, scale_factor=2)
+
+                # Fix spatial mismatch from odd grid sizes.
+                # e.g. 37 / stride-2 = 19; 19 * 2 = 38 ≠ 37.
+                # Slice the upsampled tensor to match the target feature's dims.
+                _, _, h_target, w_target = feat_i.shape
+                _, _, h_up, w_up = x_up.shape
+                if h_up != h_target or w_up != w_target:
+                    x_up = ttnn.to_layout(x_up, ttnn.ROW_MAJOR_LAYOUT)
+                    x_up = ttnn.slice(
+                        x_up,
+                        (0, 0, 0, 0),
+                        (x_up.shape[0], x_up.shape[1], h_target, w_target),
+                    )
+
                 x_up = _dram_tile(x_up)
                 feat_i = _dram_tile(feat_i)
                 x = ttnn.add(x_up, feat_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
