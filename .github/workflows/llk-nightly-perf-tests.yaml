@@ -1,0 +1,23 @@
+name: 🌙 LLK Nightly Performance Tests
+# ============================================================================
+# Nightly performance test pipeline for LLK.
+# Adapted from tt_llk/.github/workflows/nightly-perf-tests.yml
+#
+# This workflow runs performance tests as part of the nightly pipeline.
+# Triggered manually via workflow_dispatch for testing before connecting to
+# the scheduled nightly pipeline.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  nightly-performance-tests:
+    name: "🚀 Nightly Performance Tests"
+    uses: ./.github/workflows/llk-run-perf-tests.yaml
+    secrets: inherit

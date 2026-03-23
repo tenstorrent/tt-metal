@@ -1,0 +1,72 @@
+name: 🌙 LLK Nightly Tests
+# ============================================================================
+# Standalone nightly test pipeline for LLK.
+# Adapted from tt_llk/.github/workflows/nightly.yml
+#
+# This workflow runs comprehensive nightly tests on both Wormhole and Blackhole.
+# Triggered manually via workflow_dispatch for testing before connecting to
+# the scheduled nightly pipeline.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytest_markers:
+        description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
+        required: false
+        default: "not perf"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  nightly-test-wormhole:
+    name: "🌀 Nightly Tests (Wormhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    needs: docker
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      random_order: false
+      timeout_minutes: 360
+      coverage: true
+      use_durations: false
+
+  nightly-test-blackhole:
+    name: "🕳️ Nightly Tests (Blackhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    needs: docker
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      random_order: false
+      timeout_minutes: 360
+      coverage: true
+      use_durations: false
+
+  nightly-summary:
+    name: "📊 Nightly Summary"
+    if: always()
+    needs:
+      - nightly-test-wormhole
+      - nightly-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check nightly test results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}

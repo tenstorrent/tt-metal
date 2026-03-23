@@ -1,0 +1,217 @@
+name: "⚙️ LLK Setup and Test"
+# ============================================================================
+# Reusable workflow to run LLK tests in a container.
+# Adapted from tt_llk/.github/workflows/setup-and-test.yml
+#
+# This workflow:
+# 1. Sets up the test matrix based on test_splits
+# 2. Installs SFPI compiler in the LLK submodule
+# 3. Runs pytest with compile-producer and compile-consumer phases
+# 4. Uploads test results and artifacts
+# ============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        description: "The Docker image to use for the container"
+        required: true
+        type: string
+      runs_on:
+        description: "The runner to use for the job"
+        required: true
+        type: string
+      test_splits:
+        description: "Number of test groups to split tests into (e.g., 4)"
+        required: true
+        type: number
+      pytest_markers:
+        description: "Pytest mark expression to select/deselect tests (e.g., 'not perf', 'nightly or not perf')"
+        required: false
+        default: "not perf and not quasar"
+        type: string
+      timeout_minutes:
+        description: "Timeout in minutes for the test job"
+        required: false
+        default: 80
+        type: number
+      random_order:
+        description: "Enable randomized test order"
+        required: false
+        default: false
+        type: boolean
+      coverage:
+        description: "Enable code coverage testing for entire test suite"
+        required: false
+        default: false
+        type: boolean
+      use_durations:
+        description: "Use previously collected test durations for balanced splitting"
+        required: false
+        default: true
+        type: boolean
+      log_level:
+        description: "Loguru log level for test output (TRACE, DEBUG, INFO, WARNING, ERROR)"
+        required: false
+        default: "WARNING"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/third_party/tt_llk
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          matrix=$(echo "[$(seq -s, 1 ${{ inputs.test_splits }})]")
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+  setup-and-test:
+    needs: generate-matrix
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test_group: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    container:
+      image: ${{ inputs.docker_image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    name: "🦄 Run tests (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    steps:
+      # Step 1: Checkout the repository with submodules
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      # Step 2: Install SFPI
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+
+      # Step 3: Download test duration data for balanced splitting
+      # This will fail gracefully if no duration file exists
+      - name: Download test duration data
+        if: ${{ inputs.use_durations }}
+        uses: dawidd6/action-download-artifact@v12
+        continue-on-error: true
+        with:
+          workflow: llk-collect-test-durations.yaml
+          workflow_conclusion: success
+          branch: main
+          name: llk-test-durations-${{ contains(inputs.runs_on, 'n150') && 'wormhole' || 'blackhole' }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/
+          if_no_artifact_found: warn
+          search_artifacts: true
+          check_artifacts: true
+
+      # Step 4: Run the tests
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          TEST_SPLITS: ${{ inputs.test_splits }}
+          LOGURU_LEVEL: ${{ inputs.log_level }}
+        run: |
+          CHIP_ARCH=unknown
+          if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
+            CHIP_ARCH=blackhole
+          fi
+          export CHIP_ARCH
+          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
+          SPLITS=$TEST_SPLITS
+          cd tests/python_tests/
+
+          COVERAGE_FLAG=""
+          if [[ "${{ inputs.coverage }}" == "true" ]]; then
+            COVERAGE_FLAG="--coverage"
+          fi
+
+          DURATIONS_FLAG=""
+          if [[ "${{ inputs.use_durations }}" == "true" ]] && [[ -f ".test_durations" ]]; then
+            DURATIONS_FLAG="--durations-path=.test_durations"
+            echo "Using duration-based test splitting from .test_durations"
+          else
+            echo "Duration file not found or not enabled, using default splitting"
+          fi
+
+          echo "Compiling artefacts"
+          pytest $COVERAGE_FLAG --compile-producer -n 10 \
+                -m "${{ inputs.pytest_markers }}" \
+                ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
+                --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
+                --timeout=60 \
+                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
+
+          echo "Running tests"
+          pytest $COVERAGE_FLAG --compile-consumer -x \
+                -m "${{ inputs.pytest_markers }}" \
+                ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
+                --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
+                --override-ini="addopts=-v" --timeout=60 \
+                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml .
+
+          junitparser merge pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml \
+                   pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml \
+                   pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml
+
+      # Step 5: Zip performance data if perf tests were run
+      - name: Zip performance data
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('${{ env.LLK_PATH }}/perf_data/**') != ''
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests/python_tests/
+          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
+          echo "Performance data zipped successfully"
+
+      # Step 6: Upload performance data
+      - name: Upload performance data
+        uses: actions/upload-artifact@v4
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('${{ env.LLK_PATH }}/tests/python_tests/perf_data-*.zip') != ''
+        with:
+          name: llk-perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: llk-test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: >-
+            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
+                && 'llk-perf-' || 'llk-' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
+
+      # Step 7: Publish the test results
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test_group }}.xml
+          include_passed: true
+          annotate_only: true

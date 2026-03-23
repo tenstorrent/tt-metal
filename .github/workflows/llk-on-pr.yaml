@@ -1,0 +1,183 @@
+name: 🛠️ LLK PR Pipeline
+# ============================================================================
+# Standalone PR pipeline for LLK testing.
+# Adapted from tt_llk/.github/workflows/on-pr.yml
+#
+# This workflow runs on workflow_dispatch for manual testing before connecting
+# to the actual PR gate. It detects which LLK directories changed and runs
+# the appropriate tests.
+#
+# Tests run:
+# - Wormhole: when tt_llk_wormhole_b0/** changes
+# - Blackhole: when tt_llk_blackhole/** changes
+# - Quasar: when tt_llk_quasar/** changes (compile only)
+# - Performance: when **/*perf** or **/*profiler** files change
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_all_tests:
+        description: "Run all tests regardless of changes"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/third_party/tt_llk
+
+concurrency:
+  # Use github.run_id on main branch (never cancel)
+  # Use github.ref on other branches
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: "🔍 Detect changes"
+    runs-on: ubuntu-latest
+    outputs:
+      wormhole: ${{ steps.filter.outputs.wormhole_any_changed }}
+      blackhole: ${{ steps.filter.outputs.blackhole_any_changed }}
+      tests: ${{ steps.filter.outputs.tests_any_changed }}
+      github: ${{ steps.filter.outputs.github_any_changed }}
+      documentation: ${{ steps.filter.outputs.documentation_any_changed }}
+      performance: ${{ steps.filter.outputs.performance_any_changed }}
+      quasar: ${{ steps.filter.outputs.quasar_any_changed }}
+      any_changed: ${{ steps.filter.outputs.any_changed }}
+    steps:
+      - name: Checkout code with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 200
+          submodules: recursive
+
+      - name: Detect which directories changed
+        uses: tj-actions/changed-files@v47
+        id: filter
+        with:
+          files_yaml: |
+            wormhole:
+              - '${{ env.LLK_PATH }}/tt_llk_wormhole_b0/**'
+            blackhole:
+              - '${{ env.LLK_PATH }}/tt_llk_blackhole/**'
+            quasar:
+              - '${{ env.LLK_PATH }}/tt_llk_quasar/**'
+              - '${{ env.LLK_PATH }}/tests/sources/quasar/**'
+              - '${{ env.LLK_PATH }}/tests/python_tests/quasar/**'
+            tests:
+              - '${{ env.LLK_PATH }}/tests/**'
+              - '!${{ env.LLK_PATH }}/tests/sources/quasar/**'
+              - '!${{ env.LLK_PATH }}/tests/python_tests/quasar/**'
+            github:
+              - '${{ env.LLK_PATH }}/.github/**'
+            documentation:
+              - '${{ env.LLK_PATH }}/docs/**'
+              - '${{ env.LLK_PATH }}/**/*.md'
+              - '${{ env.LLK_PATH }}/**/*.rst'
+            performance:
+              - '${{ env.LLK_PATH }}/**/*perf**'
+              - '${{ env.LLK_PATH }}/**/*profiler**'
+
+  docker:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  setup-and-test-wormhole:
+    name: "🌀 Perform checks (Wormhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    needs: [docker, detect-changes]
+    if: >-
+      ${{
+        inputs.run_all_tests == true ||
+        needs.detect-changes.outputs.wormhole == 'true' ||
+        needs.detect-changes.outputs.tests == 'true' ||
+        needs.detect-changes.outputs.github == 'true'
+      }}
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  setup-and-test-blackhole:
+    name: "🕳️ Perform checks (Blackhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    needs: [docker, detect-changes]
+    if: >-
+      ${{
+        inputs.run_all_tests == true ||
+        needs.detect-changes.outputs.blackhole == 'true' ||
+        needs.detect-changes.outputs.tests == 'true' ||
+        needs.detect-changes.outputs.github == 'true'
+      }}
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  build-quasar:
+    name: "🌟 Build Quasar tests"
+    uses: ./.github/workflows/llk-build-quasar.yaml
+    needs: [docker, detect-changes]
+    if: >-
+      ${{
+        inputs.run_all_tests == true ||
+        needs.detect-changes.outputs.quasar == 'true'
+      }}
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
+      pytest_markers: "quasar"
+
+  perf-tests:
+    name: "⚡ Performance tests (${{ matrix.target }})"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    needs: [docker, detect-changes]
+    if: >-
+      ${{
+        inputs.run_all_tests == true ||
+        needs.detect-changes.outputs.performance == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Wormhole
+            runs_on: tt-ubuntu-2204-n150-stable
+          - target: Blackhole
+            runs_on: tt-ubuntu-2204-p150b-stable
+    with:
+      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      runs_on: ${{ matrix.runs_on }}
+      test_splits: 5
+      pytest_markers: "perf"
+      timeout_minutes: 240
+      use_durations: false
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: always()
+    needs:
+      - docker
+      - setup-and-test-wormhole
+      - setup-and-test-blackhole
+      - build-quasar
+      - perf-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the required jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, build-quasar, perf-tests
