@@ -13,7 +13,7 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
         ptr[i] = val;
     }
 
-    uint32_t pad_val_addr = get_write_ptr(cb_id);
+    uint32_t pad_val_addr = get_read_ptr(cb_id);
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
     uint32_t l1_write_addr = pad_val_addr;
 
@@ -27,7 +27,7 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
     const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t pad_val_addr = get_write_ptr(cb_id);
+    uint32_t pad_val_addr = get_read_ptr(cb_id);
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
