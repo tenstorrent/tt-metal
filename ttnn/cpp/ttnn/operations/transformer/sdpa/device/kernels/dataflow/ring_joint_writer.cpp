@@ -134,7 +134,8 @@ void complete_restore(
 
 // Three transaction IDs for fine-grained write barrier tracking.
 // Q[0] → TRID_FIRST, Q[1..N-2] → TRID_INNER, Q[N-1] → TRID_LAST.
-// Each barrier waits for a save that completed at least one full K-loop ago.
+// Only 3 barriers fire per ring iteration (one per TRID):
+//   Q[0]: wB(TRID_INNER), Q[N-2]: wB(TRID_LAST), Q[N-1]: wB(TRID_FIRST).
 // Start from 1 — TRID 0 is the default for all NOC writes and must not be used
 // for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row on last
 // ring iter) would inflate the outstanding count and stall the barrier.
@@ -511,11 +512,21 @@ void kernel_main() {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
 
                     // Intra-ring prefetch: issue reads for Q[q+1] during Q[q]'s K-loop.
-                    // Barrier on Q[q+1]'s trid — its save completed at least one K-loop ago.
+                    // Only barrier when next Q's TRID hasn't been cleared yet this ring iter:
+                    //   Q[0]: wB(TRID_INNER) — clears all prev-ring inner saves
+                    //   Q[N-2]: wB(TRID_LAST) — clears prev-ring Q[N-1] save
+                    //   Q[1..N-3]: skip — TRID_INNER already cleared at Q[0]
+                    // Without this, Q[j+1]'s wB(TRID_INNER) would stall on Q[j]'s
+                    // current-ring save (near-zero flight time) for q_per_core >= 5.
                     const uint32_t next_q = global_q_chunk + 1;
                     if (next_q < global_q_end) {
                         const uint32_t next_q_index = next_q - global_q_start;
-                        noc_async_write_barrier_with_trid(q_trid(next_q_index));
+                        const uint32_t next_trid = q_trid(next_q_index);
+                        // First inner Q (next_q_index==1) needs the barrier; subsequent
+                        // inner Qs (next_q_index>1 && next_trid==TRID_INNER) don't.
+                        if (next_trid != TRID_INNER || next_q_index == 1) {
+                            noc_async_write_barrier_with_trid(next_trid);
+                        }
                         const uint32_t nb_next = next_q / (NH * num_q_chunks);
                         const uint32_t nq_next = (next_q % (NH * num_q_chunks)) / num_q_chunks;
                         const uint32_t qc_next = next_q % num_q_chunks;
