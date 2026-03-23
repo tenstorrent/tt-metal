@@ -722,6 +722,65 @@ autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
 }
 ```
 
+### Parameter Initialization
+
+`ttml.init` provides two styles of initializers, mirroring PyTorch's `torch.nn.init`:
+
+| Style | Returns | Use case |
+|-------|---------|----------|
+| **Factory** (`ttml.init.uniform(...)`) | Callable `shape → Tensor` | Pass to layer constructors (`weight_init=`) |
+| **In-place** (`ttml.init.uniform_(tensor, ...)`) | Same tensor, values replaced | Re-initialize existing parameters |
+
+**Available initializers:**
+
+| Function | Factory | In-place | Description |
+|----------|---------|----------|-------------|
+| `uniform` | `uniform(a, b)` | `uniform_(t, a, b)` | Uniform distribution `[a, b)` |
+| `normal` | `normal(mean, std)` | `normal_(t, mean, std)` | Normal distribution |
+| `constant` | `constant(val)` | `constant_(t, val)` | Fill with constant value |
+| `zeros` | `zeros()` | `zeros_(t)` | Fill with zeros |
+| `ones` | `ones()` | `ones_(t)` | Fill with ones |
+| `xavier_uniform` | `xavier_uniform(gain)` | `xavier_uniform_(t, gain)` | Glorot uniform |
+| `xavier_normal` | `xavier_normal(gain)` | `xavier_normal_(t, gain)` | Glorot normal |
+| `kaiming_uniform` | `kaiming_uniform(a, mode, nonlinearity)` | `kaiming_uniform_(t, ...)` | He uniform |
+| `kaiming_normal` | `kaiming_normal(a, mode, nonlinearity)` | `kaiming_normal_(t, ...)` | He normal |
+
+`calculate_gain(nonlinearity, param)` returns the recommended gain for xavier/kaiming initializers.
+
+**Factory example** (pass to layer constructors):
+
+```python
+import ttml
+
+# LinearLayer accepts initializer callables
+layer = LinearLayer(
+    128, 64,
+    weight_init=ttml.init.xavier_uniform(gain=1.0),
+    bias_init=ttml.init.zeros(),
+)
+```
+
+**In-place example** (re-initialize an existing parameter):
+
+```python
+import ttml
+
+# After model creation, override a specific parameter
+ttml.init.kaiming_uniform_(model.fc1.weight.tensor, nonlinearity="relu")
+```
+
+**C++ equivalent:** The same initializers are available in C++ via `ttml::init` ([tensor_initializers.hpp](/tt-train/sources/ttml/init/tensor_initializers.hpp)):
+
+```cpp
+#include <ttml/init/tensor_initializers.hpp>
+
+// In-place initialization (takes TensorPtr&)
+ttml::init::uniform_init(tensor, shape, {.a = -0.1f, .b = 0.1f});
+ttml::init::normal_init(tensor, shape, {.mean = 0.0f, .stddev = 1.0f});
+ttml::init::xavier_uniform_init(tensor, shape, {.fan_in = 128, .fan_out = 64});
+ttml::init::kaiming_uniform_init(tensor, shape, /*fan_in=*/128);
+```
+
 ### Implementing a new operation
 
 #### Python operation
