@@ -350,6 +350,14 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             packer_l1_acc=True,
         )
 
+    if config.score_prg_config is None:
+        to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+
     # Phase D: resolve single target device.
     param_devices = [
         param.device
