@@ -33,7 +33,7 @@ struct MoEComputeMeshWorkloadFactory {
 
         // Combine kernel handles
         std::vector<tt::tt_metal::KernelHandle> combine_kernel_handles;
-        
+
         // CB handle for combine global sharded input tensor
         tt::tt_metal::CBHandle combine_data_cb_handle;
 
