@@ -134,6 +134,8 @@ void add_bias_and_addcmul_block(
 
     cb_wait_front(intermediate_cb, out_block_num_tiles);
 
+    uint32_t tile_id = 0;
+
     if (broadcast_ternary_b) {
         // === BROADCAST: single row, wait/pop once ===
         cb_wait_front(ternary_b_cb, N_block_tiles);
@@ -148,7 +150,7 @@ void add_bias_and_addcmul_block(
         reconfig_data_format(intermediate_cb, ternary_b_cb);
         pack_reconfig_data_format(intermediate_cb);
 
-        uint32_t tile_id = 0;
+        tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
             for (uint32_t n = 0; n < N_block_tiles; n++) {
                 tile_regs_acquire();
@@ -181,13 +183,13 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init_short(intermediate_cb, ternary_b_cb);
+        mul_tiles_init(intermediate_cb, ternary_b_cb);
 #endif
         binop_with_scalar_tile_init();
         reconfig_data_format(intermediate_cb, ternary_b_cb);
         pack_reconfig_data_format(intermediate_cb);
 
-        uint32_t tile_id = 0;
+        tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
             cb_wait_front(ternary_b_cb, N_block_tiles);
             for (uint32_t n = 0; n < N_block_tiles; n++) {
