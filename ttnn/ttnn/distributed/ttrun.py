@@ -14,7 +14,6 @@ import socket
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -30,6 +29,7 @@ DEFAULT_JIT_SCRATCH = Path("/tmp/tt-jit-build")
 DEFAULT_CACHE_FALLBACK = Path("/tmp/tt-metal-cache")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+GITHUB_ACTIONS_ANNOTATION_ENV_VAR = "TT_METAL_GITHUB_ACTIONS_ANNOTATIONS"
 
 # --- Exit code conventions (see ttnn/ttnn/distributed/ULFM.md) ---
 # These structured exit codes allow CI to distinguish "test bug" from
@@ -563,6 +563,9 @@ ENV_BLOCKLIST = frozenset(
 
 # Prefixes that should be stripped from inherited parent environment.
 # These are CI/runner metadata variables that are not required by rank processes.
+# When a rank-side runtime feature genuinely needs to know "this launch came
+# from GitHub Actions", tt-run should project that intent into an explicit
+# TT-managed env var instead of relaxing the GITHUB_* blocklist.
 ENV_BLOCKLIST_PREFIXES = frozenset(
     {
         "GITHUB_",
@@ -878,6 +881,13 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     explicit_rank_scoped_keys = {
         key for key in RANK_SCOPED_PATH_ENV_VARS if key in config.global_env or key in binding.env_overrides
     }
+
+    # GITHUB_* variables are intentionally blocked from rank inheritance, but
+    # the C++ ULFM failure handler needs a rank-local signal to decide whether
+    # to emit GitHub workflow annotations. Project that intent into an explicit
+    # TT-managed variable rather than leaking the full GitHub Actions env set.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        env.setdefault(GITHUB_ACTIONS_ANNOTATION_ENV_VAR, "1")
 
     # Ensure TT_METAL_CACHE has a value so the C++ side doesn't fall back to
     # the HOME-based default.  TT_METAL_CACHE is shared (not rank-scoped)

@@ -180,6 +180,7 @@ ttrun = _import_ttrun_module()
 
 ENV_BLOCKLIST = ttrun.ENV_BLOCKLIST
 FORCE_NAME_ONLY_MPI_EXPORT_VARS = ttrun.FORCE_NAME_ONLY_MPI_EXPORT_VARS
+GITHUB_ACTIONS_ANNOTATION_ENV_VAR = ttrun.GITHUB_ACTIONS_ANNOTATION_ENV_VAR
 RankBinding = ttrun.RankBinding
 TTRunConfig = ttrun.TTRunConfig
 apply_rank_scoped_paths = ttrun.apply_rank_scoped_paths
@@ -553,6 +554,31 @@ def test_rank_environment_does_not_auto_passthrough_non_prefixed_vars(monkeypatc
     assert env["ARCH_NAME"] == "wormhole_b0"
     assert "GITHUB_SHA" not in env
     assert "RUNNER_OS" not in env
+
+
+@pytest.mark.unit
+def test_rank_environment_sets_explicit_github_actions_annotation_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert "GITHUB_ACTIONS" not in env
+    assert env[GITHUB_ACTIONS_ANNOTATION_ENV_VAR] == "1"
+
+
+@pytest.mark.unit
+def test_rank_environment_respects_explicit_github_actions_annotation_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding, global_env={GITHUB_ACTIONS_ANNOTATION_ENV_VAR: "0"})
+
+    env = get_rank_environment(binding, config)
+
+    assert env[GITHUB_ACTIONS_ANNOTATION_ENV_VAR] == "0"
 
 
 @pytest.mark.unit

@@ -23,6 +23,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/gha_annotation.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.
@@ -239,6 +240,59 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
     return result;
 }
 
+[[nodiscard]] std::string format_world_rank_name(int world_rank) { return fmt::format("world-rank-{}", world_rank); }
+
+[[nodiscard]] std::string_view failure_policy_name(FailurePolicy policy) noexcept {
+    return (policy == FailurePolicy::FAST_FAIL) ? "fast_fail" : "fault_tolerant";
+}
+
+static constexpr char kGithubActionsAnnotationEnvVar[] = "TT_METAL_GITHUB_ACTIONS_ANNOTATIONS";
+static constexpr std::string_view kRankFailureAnnotationFile =
+    "tt_metal/distributed/multihost/mpi_distributed_context.cpp";
+
+void emit_github_rank_failure_annotations(
+    const std::vector<Rank>& failed_ranks,
+    std::string_view failed_ranks_text,
+    int detecting_rank,
+    std::string_view operation,
+    int error_code,
+    FailurePolicy policy) {
+    if (!ttsl::gha::should_emit_annotations(kGithubActionsAnnotationEnvVar)) {
+        return;
+    }
+
+    const std::string detecting_rank_name = format_world_rank_name(detecting_rank);
+    auto emit_annotation_for = [&](const std::string& failed_rank_name) {
+        // Emit stable key/value fields so workflow annotation consumers can
+        // query GitHub's annotations API for a specific failed rank name.
+        const auto title = fmt::format("MPI rank failure {}", failed_rank_name);
+        const auto message = fmt::format(
+            "ULFM detected a rank failure; failed_rank_name={}; failed_ranks={}; detecting_rank_name={}; "
+            "operation={}; error_code={}; policy={}",
+            failed_rank_name,
+            failed_ranks_text,
+            detecting_rank_name,
+            operation,
+            error_code,
+            failure_policy_name(policy));
+        ttsl::gha::annotation annotation{};
+        annotation.level = ttsl::gha::annotation_level::error;
+        annotation.file = kRankFailureAnnotationFile;
+        annotation.line = static_cast<std::uint_least32_t>(__LINE__);
+        annotation.title = title;
+        annotation.message = message;
+        ttsl::gha::emit_annotation(annotation);
+    };
+
+    if (failed_ranks.empty()) {
+        emit_annotation_for("unknown-world-rank");
+    } else {
+        for (const auto failed_rank : failed_ranks) {
+            emit_annotation_for(format_world_rank_name(*failed_rank));
+        }
+    }
+}
+
 static void handle_rank_failure(
     MPI_Comm comm,
     int cached_rank,
@@ -263,13 +317,13 @@ static void handle_rank_failure(
     // the caller queries.  This is the key fix: for ranks that see REVOKED,
     // MPIX_Comm_failure_ack() inside failed_ranks() will fail, but we may
     // have captured the information here before the revoke propagated.
+    const auto parsed_failed_ranks = parse_failed_ranks_string(failed);
     if (failed_ranks_cache) {
-        auto parsed = parse_failed_ranks_string(failed);
-        if (!parsed.empty()) {
+        if (!parsed_failed_ranks.empty()) {
             // Scoped so the mutex is never held across MPI revoke / throw / _exit below.
             {
                 std::lock_guard lock(*failed_ranks_cache_mutex);
-                *failed_ranks_cache = std::move(parsed);
+                *failed_ranks_cache = parsed_failed_ranks;
             }
         }
     }
@@ -282,6 +336,8 @@ static void handle_rank_failure(
 
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
     MPIX_Comm_revoke(comm);
+
+    emit_github_rank_failure_annotations(parsed_failed_ranks, failed, cached_rank, operation, error_code, policy);
 
     fmt::print(
         stderr,
