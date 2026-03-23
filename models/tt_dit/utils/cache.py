@@ -49,7 +49,6 @@ def load_model(
     is_fsdp: bool = False,
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
-    extra_key: str = "",
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -90,7 +89,6 @@ def load_model(
         dtype=dtype,
         is_fsdp=is_fsdp,
         required=get_torch_state_dict is None,
-        extra_key=extra_key,
     )
 
     if cache_dir is None:
@@ -131,7 +129,6 @@ def model_cache_dir(
     dtype: str = "bf16",
     is_fsdp: bool = False,
     required: bool = True,
-    extra_key: str = "",
 ) -> Path | None:
     cache_dir = _cache_root()
     if cache_dir is None:
@@ -146,8 +143,6 @@ def model_cache_dir(
     key = f"{parallel_key}mesh{mesh_key}_{dtype}"
     if is_fsdp:
         key += "_FSDP"
-    if extra_key:
-        key += f"_{extra_key}"
 
     return Path(cache_dir) / model_name / subfolder / key
 
