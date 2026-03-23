@@ -16,7 +16,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
+from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
@@ -24,6 +25,7 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
+    get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
@@ -85,9 +87,24 @@ def create_decoder_block_tensors(
     device_grid_size = submesh.compute_with_storage_grid_size()
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
+    # TODO: Shouldn't hardcode this here
+    class _RopeConfig:
+        qk_rope_head_dim = 64
+        rope_theta = 10000.0
+        rope_scaling = {
+            "factor": 40,
+            "original_max_position_embeddings": 4096,
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+        }
+
+    _RopeConfig.max_seq_len = max_seq_len
+
     # ── Constants for runtime tensors ──
     QNOPE_HEAD_DIM = 128
-    QROPE_HEAD_DIM = 64
+    QROPE_HEAD_DIM = _RopeConfig.qk_rope_head_dim
     QNOPE_OUT_DIM = 512
     KNOPE_DIM = 512
     KROPE_DIM = 64
@@ -96,7 +113,12 @@ def create_decoder_block_tensors(
     K = 7168
     output_size = 7168
     shape = (1, K)
-    scale = (QNOPE_HEAD_DIM + QROPE_HEAD_DIM) ** -0.5
+    q_head_dim = QNOPE_HEAD_DIM + QROPE_HEAD_DIM
+    mscale = yarn_get_mscale(
+        _RopeConfig.rope_scaling["factor"],
+        _RopeConfig.rope_scaling["mscale_all_dim"],
+    )
+    scale = q_head_dim**-0.5 * mscale * mscale
     kvpe_dim = KNOPE_DIM + KROPE_DIM
 
     QNOPE_GRID_COLS = 8
@@ -318,12 +340,10 @@ def create_decoder_block_tensors(
     # ── RoPE TTNN tensors ──
     qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     position_ids = torch.tensor([position_id])
-    base = 10000.0
-    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
-    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
+
+    cos_sin_4d, sin_sin_4d = get_cos_sin_matrix(_RopeConfig)
+    torch_cos = cos_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
+    torch_sin = sin_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
     torch_trans_mat = get_rot_transformation_mat()
 
     ttnn_qrope_cos = ttnn.from_torch(
@@ -626,31 +646,28 @@ def create_decoder_block_tensors(
         def _sd_key(suffix):
             return f"model.layers.{layer_idx}.{suffix}"
 
-        golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
-        golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
-        golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-        golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+        (
+            golden_torch_matmul_weights,
+            golden_torch_matmul2_weights,
+            golden_torch_dkv_matmul_weights,
+            golden_kv_b1,
+            golden_kv_b2,
+            golden_torch_o_proj_weights,
+            golden_torch_gamma,
+            golden_torch_rmsnorm2_gamma,
+            golden_torch_dkv_rmsnorm_gamma,
+            ffn_norm,
+        ) = get_layer_raw_tensors(state_dict, layer_idx)
 
-        V_HEAD_DIM = 128
-        KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
-        kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
-        kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
-        total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
-        kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
-        golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
-        golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+        total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
+        kv_lora_rank = golden_kv_b1.shape[1]
         golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
         golden_total_qnope_heads = total_kv_heads
         golden_total_qrope_heads = total_kv_heads
 
         # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
-        golden_moe_rmsnorm_gamma = (
-            state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
-        )
+        golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
         if is_moe:
             golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
             golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
@@ -1064,7 +1081,7 @@ def test_decoder(
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
@@ -1469,7 +1486,7 @@ def test_decoder_mlp(
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )

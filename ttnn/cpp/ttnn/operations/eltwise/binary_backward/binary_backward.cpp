@@ -764,7 +764,7 @@ std::vector<ComplexTensor> div_bw(
         std::nullopt,
         output_mem_config);
     ComplexTensor grad_a =
-        ttnn::operations::complex_binary::_div(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
+        ttnn::operations::complex_binary::divide(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
     Tensor grad_a_r = where(condition_nan, std::nanf(""), ttnn::real(grad_a, output_mem_config), output_mem_config);
     Tensor grad_a_i = where(condition_nan, std::nanf(""), ttnn::imag(grad_a, output_mem_config), output_mem_config);
     grad_a = ComplexTensor({grad_a_r, grad_a_i});
@@ -773,11 +773,11 @@ std::vector<ComplexTensor> div_bw(
     grad_tensor_res.emplace_back(grad_a);
     ComplexTensor neg_grad = ComplexTensor(
         {ttnn::neg(grad_tensor.real(), output_mem_config), ttnn::neg(grad_tensor.imag(), output_mem_config)});
-    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(
+    ComplexTensor grad_b = ttnn::operations::complex_binary::multiply(
         neg_grad,
         ttnn::conj(
-            ttnn::operations::complex_binary::_div(
-                ttnn::operations::complex_binary::_div(input_a, other, output_mem_config), other, output_mem_config),
+            ttnn::operations::complex_binary::divide(
+                ttnn::operations::complex_binary::divide(input_a, other, output_mem_config), other, output_mem_config),
             output_mem_config),
         output_mem_config);
     neg_grad.deallocate();
@@ -835,11 +835,11 @@ std::vector<ComplexTensor> mul_bw(
     const ComplexTensor& other,
     const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor_res;
-    ComplexTensor grad_a =
-        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
+    ComplexTensor grad_a = ttnn::operations::complex_binary::multiply(
+        grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
     grad_tensor_res.emplace_back(grad_a);
-    ComplexTensor grad_b =
-        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(input_a, output_mem_config), output_mem_config);
+    ComplexTensor grad_b = ttnn::operations::complex_binary::multiply(
+        grad_tensor, ttnn::conj(input_a, output_mem_config), output_mem_config);
     grad_tensor_res.emplace_back(grad_b);
     return grad_tensor_res;
 }
