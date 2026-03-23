@@ -98,9 +98,6 @@ class MLP:
         """
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
-            hidden_states,
-            topk_expert_indices=expert_indices,
-            topk_expert_weights=expert_weights,
-            is_decode=is_decode,
+            hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )
         return expert_output
