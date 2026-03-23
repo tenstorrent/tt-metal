@@ -94,6 +94,7 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     set_deterministic_env,
+    force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
@@ -115,7 +116,7 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate=force_recalculate_weight_config,
         test_name="test_moe_gate",
         real_weights=True,
         layer_id=module_path,
