@@ -11,6 +11,63 @@ tt-metal uses a multi-layer defence to turn "hang until timeout" into "detect, l
 5. **Process-level timeout** — last-resort `TT_RUN_TIMEOUT` watchdog
 6. **Python mpi4py wrapper** — ULFM support for Python-level collectives
 
+```mermaid
+flowchart TD
+    rankFail["Remote rank dies"]
+
+    subgraph layer1 [Layer 1: C++ ULFM Detection]
+        mpiCall["Surviving rank enters MPI collective"]
+        ulfmCheck{"ULFM error code?"}
+        handleFailure["handle_rank_failure()"]
+    end
+
+    subgraph layer2 [Layer 2: std::set_terminate]
+        uncaughtExc["Uncaught C++ exception / std::terminate"]
+        revokeWorld["MPIX_Comm_revoke MPI_COMM_WORLD"]
+    end
+
+    subgraph layer3 [Layer 3: MPI_Finalize Watchdog]
+        atexitFinalize["atexit calls MPI_Finalize"]
+        alarmFires{"Finalize returns within 30s?"}
+        sigalrm["SIGALRM fires"]
+    end
+
+    subgraph layer4 [Layer 4: ORTE/PRRTE Abort]
+        nonZeroExit["Rank exits non-zero before any collective"]
+        orteAbort["MPI runtime aborts all ranks"]
+    end
+
+    subgraph layer5 [Layer 5: TT_RUN_TIMEOUT]
+        wallClock["Wall-clock timeout expires"]
+        sigkill["SIGKILL process group"]
+    end
+
+    policyCheck{"FailurePolicy?"}
+    fastFail["_exit 70"]
+    throwExc["throw MPIRankFailureException"]
+    recovery["Caller: revoke_and_shrink -> continue"]
+
+    rankFail --> mpiCall
+    mpiCall --> ulfmCheck
+    ulfmCheck -->|Yes| handleFailure
+    ulfmCheck -->|No| normalError["Propagate MPI error"]
+    handleFailure --> policyCheck
+    policyCheck -->|FAST_FAIL| fastFail
+    policyCheck -->|FAULT_TOLERANT| throwExc
+    throwExc --> recovery
+
+    rankFail --> uncaughtExc
+    uncaughtExc --> revokeWorld --> fastFail
+
+    rankFail --> atexitFinalize
+    atexitFinalize --> alarmFires
+    alarmFires -->|No| sigalrm --> fastFail
+    alarmFires -->|Yes| cleanExit["Normal exit"]
+
+    rankFail --> nonZeroExit --> orteAbort
+
+    wallClock --> sigkill
+```
 
 ## How It Works
 
@@ -104,6 +161,29 @@ Code   Meaning                          Source
 ## Switching to Fault-Tolerant Mode
 
 The default `FAST_FAIL` policy is intentional — it gives CI clean, fast exits. `FAULT_TOLERANT` mode is for future resilient applications that want to survive rank losses and continue with a reduced communicator.
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Ctx as MPIContext
+    participant MPI as MPI Runtime
+
+    App->>Ctx: set_failure_policy(FAULT_TOLERANT)
+    App->>Ctx: barrier()
+    Ctx->>MPI: MPI_Barrier(comm)
+    MPI-->>Ctx: MPIX_ERR_PROC_FAILED
+    Ctx->>Ctx: identify_failed_ranks()
+    Ctx->>MPI: MPIX_Comm_revoke(comm)
+    Ctx-->>App: throw MPIRankFailureException
+    App->>Ctx: revoke_and_shrink()
+    Ctx->>MPI: MPIX_Comm_shrink(old_comm)
+    MPI-->>Ctx: new_comm (healthy)
+    Ctx->>Ctx: Replace state_ with new_comm
+    Ctx-->>App: return
+    App->>Ctx: barrier() on new comm
+    Ctx->>MPI: MPI_Barrier(new_comm)
+    MPI-->>Ctx: MPI_SUCCESS
+```
 
 ### C++
 

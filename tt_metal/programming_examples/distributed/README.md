@@ -10,6 +10,19 @@ Users familiar with the single-device TT-Metal programming model will find the d
 
 When running with **MPI** (multiple host processes), logs and debug tools must stay aligned with **which rank** owns which devices.
 
+```mermaid
+flowchart LR
+    ttrun["tt-run sets per-rank env"]
+    rtoptions["rtoptions.cpp<br/>rank-scoped logs root"]
+    inspector["Inspector writes<br/>per-rank logs"]
+    triage["parse_inspector_logs.py<br/>resolves rank directory"]
+
+    ttrun -->|"TT_METAL_LOGS_PATH<br/> + hostname_rank_N"| rtoptions
+    rtoptions -->|"log_path =<br/>.../host_rank_N/generated/inspector"| inspector
+    inspector -->|"YAML logs on disk"| triage
+    ttrun -->|"RPC port =<br/>base + rank"| inspector
+```
+
 ### Rank-scoped log paths
 
 If `TT_METAL_LOGS_PATH` is set to a shared directory (for example on NFS), the runtime may write under:

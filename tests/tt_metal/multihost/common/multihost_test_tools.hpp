@@ -162,7 +162,10 @@ inline void kill_rank_and_recover(
 inline int multihost_main(int argc, char** argv) {
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
-    // Parse argv/env into gtest flags before reading --output (GTEST_OUTPUT).
+    // InitGoogleTest must be called BEFORE GTEST_FLAG_GET(output) below:
+    // GTest flags (including --gtest_output / GTEST_OUTPUT) are only parsed
+    // from argv and environment during InitGoogleTest.  Reading them before
+    // this call returns uninitialized/empty values.
     ::testing::InitGoogleTest(&argc, argv);
 
     // If GTEST_OUTPUT is set to a directory, add the rank to the path to make it unique

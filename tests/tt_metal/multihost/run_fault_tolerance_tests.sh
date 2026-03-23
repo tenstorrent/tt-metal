@@ -64,6 +64,8 @@ _run_ulfm_test() {
     if ! grep -Fq "[       OK ] ${expected_test}" "$tmpout" && ! grep -Fq "[  PASSED  ]" "$tmpout"; then
         echo "ERROR: missing successful GTest completion markers for ${expected_test}; launcher exited ${cmd_status}" >&2
         fail=$((fail + 1))
+    elif [[ $cmd_status -ne 0 ]]; then
+        echo "INFO: ${expected_test} passed (GTest markers OK) despite mpirun exit ${cmd_status} (expected for rank-kill tests)" >&2
     fi
 
     rm -f "$tmpout"

@@ -121,10 +121,19 @@ struct MpiGroupGuard {
             MPI_Group_free(&g);
         }
     }
-    // Non-copyable, movable.
     MpiGroupGuard(const MpiGroupGuard&) = delete;
     MpiGroupGuard& operator=(const MpiGroupGuard&) = delete;
     MpiGroupGuard(MpiGroupGuard&& o) noexcept : g(o.g) { o.g = MPI_GROUP_NULL; }
+    MpiGroupGuard& operator=(MpiGroupGuard&& o) noexcept {
+        if (this != &o) {
+            if (g != MPI_GROUP_NULL) {
+                MPI_Group_free(&g);
+            }
+            g = o.g;
+            o.g = MPI_GROUP_NULL;
+        }
+        return *this;
+    }
 };
 
 static std::string identify_failed_ranks(MPI_Comm comm) {
@@ -948,9 +957,9 @@ void MPIContext::revoke_and_shrink() {
     // shrink_in_progress_ catches re-entrant or concurrent shrink calls; broader
     // "no MPI in flight" invariant is documented in the header and enforced by the
     // caller.
-    TT_ASSERT(
-        !shrink_in_progress_.test_and_set(std::memory_order_acquire),
-        "revoke_and_shrink() invoked concurrently — violates single-caller invariant");
+    if (shrink_in_progress_.test_and_set(std::memory_order_acquire)) {
+        TT_THROW("revoke_and_shrink() invoked concurrently — violates single-caller invariant");
+    }
     struct ShrinkGuard {
         std::atomic_flag& flag;
         ~ShrinkGuard() { flag.clear(std::memory_order_release); }
