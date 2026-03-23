@@ -53,10 +53,7 @@ void kernel_main() {
         UNTILIZE_TILES(cb_id, cb_intermed, 1);
     }
     // Print the tile from each RISC, one after another
-    // TODO: Until bug is fixed, mitigation is to create local variable for the TSLICE,
-    // and use that in the print statement instead of creating the TSLICE directly in the print statement
-    auto tile_slice = TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized);
-    DEVICE_PRINT_UNPACK("Print tile from Unpack:\n{}\n", tile_slice);
-    DEVICE_PRINT_MATH("Print tile from Math:\n{}\n", tile_slice);
-    DEVICE_PRINT_PACK("Print tile from Pack:\n{}\n", tile_slice);
+    DEVICE_PRINT_UNPACK("Print tile from Unpack:\n{}\n", TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized));
+    DEVICE_PRINT_MATH("Print tile from Math:\n{}\n", TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized));
+    DEVICE_PRINT_PACK("Print tile from Pack:\n{}\n", TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized));
 }

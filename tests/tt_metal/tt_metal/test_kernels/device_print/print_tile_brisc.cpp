@@ -21,8 +21,7 @@ void kernel_main() {
 
     cb_wait_front(cb_id, 1);
     // Print the tile from each RISC, one after another
-    // TODO: Until bug is fixed, mitigation is to create local variable for the TSLICE,
-    // and use that in the print statement instead of creating the TSLICE directly in the print statement
-    auto tile_slice = TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, is_tilized);
-    DEVICE_PRINT("Print tile from Data0:\n{}\n", tile_slice);
+    DEVICE_PRINT(
+        "Print tile from Data0:\n{}\n",
+        TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, is_tilized));
 }
