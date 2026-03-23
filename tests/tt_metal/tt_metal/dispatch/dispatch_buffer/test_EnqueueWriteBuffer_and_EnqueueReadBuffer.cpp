@@ -782,7 +782,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
         TestBufferConfig config = {
-            .num_pages = 256, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
+            .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
