@@ -85,6 +85,8 @@ static bool run_test_bandwidth(
 TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidth) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
+    SignalGuard g(SIGINT, handle_sigint);
+
     bool pass = true;
 
     for (const auto& sender_mesh_device : devices_) {
@@ -106,6 +108,11 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidth) {
 
                 log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
+                    if (g_stop_requested.load()) {
+                        GTEST_SKIP() << "Test interrupted by user after current test finished.";
+                        return;
+                    }
+
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
                     log_info(tt::LogTest, "    running on {}", processor);

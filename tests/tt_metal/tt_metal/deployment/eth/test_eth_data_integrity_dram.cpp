@@ -201,6 +201,8 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetDataIntegrityDram) {
 
     bool pass = true;
 
+    SignalGuard g(SIGINT, handle_sigint);
+
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
@@ -216,6 +218,11 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetDataIntegrityDram) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
+                }
+
+                if (g_stop_requested.load()) {
+                    GTEST_SKIP() << "Test interrupted by user after current test finished.";
+                    return;
                 }
 
                 log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
