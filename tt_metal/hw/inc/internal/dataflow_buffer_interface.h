@@ -23,6 +23,8 @@ constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
 
+constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
+
 using PackedTileCounter = uint8_t;  // bits 5-6: tensix_id (2 bits), bits 0-4: counter_id (5 bits)
 
 // PackedTileCounter bit layout constants
@@ -59,23 +61,31 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (24 + (44 * 12)) * 16 = 8320 bytes
+    (36 + (44 * 12)) * 16 = 8336 bytes
 */
-struct dfb_initializer_t {  // 24 bytes
+struct dfb_txn_id_descriptor_t {
+    uint8_t txn_ids[NUM_TXN_IDS];
+    uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
+    uint8_t num_txn_ids;
+    uint8_t num_entries_per_txn_id;
+    uint8_t num_entries_per_txn_id_per_tc;
+} __attribute__((packed));
+
+struct dfb_initializer_t {  // 36 bytes
     uint32_t logical_id;
     uint32_t entry_size;
-    uint32_t stride_size;
+    uint32_t stride_in_entries;
     uint16_t capacity;
     struct {
         uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
         uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
-        uint16_t reserved : 4;        // bits 12-15: reserved
+        uint16_t tensix_trisc_mask : 4;        // bits 12-15: indicates which triscs use the DFB (tensix producer uses trisc2 and tensix consumer can use trisc0 or trisc3)
     } risc_mask_bits;
+    // For DM-to-DM DFBs, producer and consumer would have different set of transaction ids
+    dfb_txn_id_descriptor_t producer_txn_descriptor;
+    dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t num_txn_ids;
-    uint8_t txn_ids[NUM_TXN_IDS];
-    uint8_t num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
+    uint8_t padding[3];
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 44 bytes
@@ -87,7 +97,8 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     struct {
         uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
         uint8_t tc_init_done : 1;
-        uint8_t reserved : 3;
+        uint8_t broadcast_tc : 1;    // DM-DM BLOCKED: producer posts to all TCs instead of round-robin
+        uint8_t reserved : 2;
     } __attribute__((packed)) num_tcs_and_init;
     struct {
         uint8_t remapper_pair_index : 6;  // bits 0-5: 0..63
@@ -111,46 +122,58 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-// on WH/BH arrays will be sized to 1
-struct LocalDFBInterface {
-    uint32_t rd_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t wr_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
 
-    uint32_t entry_size;   // shared across riscs so can be factored out and put into sep initialization struct
-    uint32_t stride_size;  // shared across riscs so can be factored out and put into sep initialization struct
+// TODO: Put LocalDFBInterface into device only header so fields can be ifdef for trisc vs dm
 
-    PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint8_t txn_ids[NUM_TXN_IDS];  // shared across riscs so can be factored out and put into sep initialization struct
-    uint8_t
-        num_entries_per_txn_id;  // shared across riscs so can be factored out and put into sep initialization struct
-    uint8_t num_entries_per_txn_id_per_tc;  // shared across riscs so can be factored out and put into sep
-                                            // initialization struct
-    uint8_t remapper_pair_index;
-    uint8_t num_tcs_to_rr;
-    uint8_t num_txn_ids;  // shared across riscs so can be factored out and put into sep initialization struct
-
-    uint8_t padding[3];
-
-    // #ifndef ARCH_QUASAR
-    //     // used by packer for in-order packing ... is this still needed on Quasar?
-    //     uint32_t wr_tile_ptr;
-
-    //     // Save a cycle during init by writing 0 to the uint32 below
-    //     union {
-    //         uint32_t tiles_acked_received_init;
-    //         struct {
-    //             uint16_t tiles_acked;
-    //             uint16_t tiles_received;
-    //         };
-    //     };
-    // #endif
+// Per–tile-counter slot
+struct DFBTCSlot {
+    uint32_t rd_ptr;
+    uint32_t wr_ptr;
+    uint32_t base_addr;
+    uint32_t limit;
+    PackedTileCounter packed_tile_counter;
 } __attribute__((packed));
 
-static_assert(sizeof(dfb_initializer_t) == 24, "dfb_initializer_t size is incorrect");
+// on WH/BH arrays will be sized to 1
+struct LocalDFBInterface {
+    DFBTCSlot tc_slots[MAX_NUM_TILE_COUNTERS_TO_RR];
+
+    uint32_t entry_size;
+    uint32_t stride_size;
+
+    // Entry indices tracking how many entries from DFB base the rd/wr pointers are
+    uint32_t stride_size_tiles; // used by triscs to calculate tile offset from base L1 address
+    uint32_t rd_entry_idx;
+    uint32_t wr_entry_idx;
+    uint32_t wr_entry_ptr;
+
+    uint8_t txn_ids[NUM_TXN_IDS];
+    uint8_t
+        num_entries_per_txn_id;
+    uint8_t num_entries_per_txn_id_per_tc;
+    uint8_t num_tcs_to_rr;
+    uint8_t num_txn_ids;
+    uint8_t tc_idx;
+    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
+    uint8_t broadcast_tc;       // DM-DM BLOCKED producer: post to all TCs instead of round-robin
+
+} __attribute__((packed));
+
+// Holds metadata for transaction ID based ISR handling
+// It is used by the ISR to understand which tile counters need to update which credits (post/ack)
+struct TxnDFBDescriptor {
+    uint8_t num_counters;
+    PackedTileCounter tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
+    union {
+        uint8_t tiles_to_post;
+        uint8_t tiles_to_ack;
+    } __attribute__((packed));
+};
+
+static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 103, "LocalDFBInterface size is incorrect");
 
 }  // namespace experimental

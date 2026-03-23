@@ -65,4 +65,17 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
     uint32_t total_size = 0,
     const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
 
+/**
+ * @brief Get the L1 byte address of a CB descriptor.
+ *
+ * Returns buffer->address() + address_offset when a buffer is present,
+ * or just address_offset when no buffer is set (manually placed CB).
+ */
+inline uint32_t get_cb_address(const CBDescriptor& desc) {
+    if (desc.buffer == nullptr) {
+        return desc.address_offset;
+    }
+    return desc.buffer->address() + desc.address_offset;
+}
+
 }  // namespace tt::tt_metal

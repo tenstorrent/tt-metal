@@ -3,16 +3,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/noc.h"
+#endif
 
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
+    uint32_t ublock_size_tiles = 1;
+
+#ifdef ARCH_QUASAR
+    uint32_t consumer_idx = get_my_thread_id();
+
+    experimental::DataflowBuffer dfb(cb_id);
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    experimental::AllocatorBank<bank_type> dst_dram;
+    experimental::Noc noc;
+
+    uint32_t ublock_size_bytes = dfb.get_entry_size();
+
+    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_bytes);
+
+    for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
+        dfb.write_out(noc, dst_dram, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
+        tlocal_dst_addr += dfb.get_stride_size();
+    }
+
+    // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
+    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
+    for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
+    }
+#else
     // single-tile ublocks
     uint32_t ublock_size_bytes = get_tile_size(cb_id);
-    uint32_t ublock_size_tiles = 1;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
          uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);
@@ -26,4 +55,5 @@ void kernel_main() {
         cb_pop_front(cb_id, ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
+#endif
 }

@@ -10,10 +10,11 @@ Summarize the changes made and its impact.
 
 ### Checklist
 
-- [ ] [![All post-commit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml?query=branch:{{branch_name}})
+- [ ] [![Sanity tests](https://github.com/tenstorrent/tt-metal/actions/workflows/sanity-tests.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/sanity-tests.yaml?query=branch:{{branch_name}})
 - [ ] [![Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml?query=branch:{{branch_name}})
 - [ ] [![cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml?query=branch:{{branch_name}})
 - [ ] New/Existing tests provide coverage for changes
+- [ ] (Optional) Ran [clang-tidy code analysis](https://github.com/tenstorrent/tt-metal/actions/workflows/code-analysis.yaml) on the PR branch to catch linting errors early
 
 
 #### Model tests

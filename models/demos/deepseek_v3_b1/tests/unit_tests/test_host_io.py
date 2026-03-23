@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 
@@ -118,9 +118,6 @@ def test_host_io_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -230,9 +227,8 @@ def test_host_io_loopback_with_embedding(
     indirect=True,
 )
 def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -291,7 +287,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_1,
         upstream_socket=host_io.get_downstream_socket(),
         downstream_core_coord=fwd_core_2,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_2 = SocketInterface(
         tensor_size_bytes,
@@ -301,7 +298,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_3,
         upstream_socket=socket_interface_1.get_downstream_socket(),
         downstream_core_coord=fwd_core_4,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_3 = SocketInterface(
         tensor_size_bytes,
@@ -311,7 +309,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_5,
         upstream_socket=socket_interface_2.get_downstream_socket(),
         downstream_core_coord=fwd_core_6,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_4 = SocketInterface(
         tensor_size_bytes,
@@ -321,7 +320,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_7,
         upstream_socket=socket_interface_3.get_downstream_socket(),
         downstream_core_coord=fwd_core_8,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_5 = SocketInterface(
         tensor_size_bytes,
@@ -331,7 +331,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_9,
         upstream_socket=socket_interface_4.get_downstream_socket(),
         downstream_core_coord=fwd_core_10,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_6 = SocketInterface(
         tensor_size_bytes,
@@ -341,7 +342,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_11,
         upstream_socket=socket_interface_5.get_downstream_socket(),
         downstream_core_coord=fwd_core_12,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_7 = SocketInterface(
         tensor_size_bytes,
@@ -351,6 +353,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_13,
         upstream_socket=socket_interface_6.get_downstream_socket(),
         downstream_socket=host_io.get_upstream_socket(),
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     host_io.run()
     socket_interface_1.run()
@@ -431,6 +435,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -505,7 +511,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_1,
         upstream_socket=host_io.get_downstream_socket(),
         downstream_core_coord=fwd_core_2,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_2 = SocketInterface(
         embedding_size_bytes,
@@ -515,7 +522,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_3,
         upstream_socket=socket_interface_1.get_downstream_socket(),
         downstream_core_coord=fwd_core_4,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_3 = SocketInterface(
         embedding_size_bytes,
@@ -525,7 +533,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_5,
         upstream_socket=socket_interface_2.get_downstream_socket(),
         downstream_core_coord=fwd_core_6,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_4 = SocketInterface(
         embedding_size_bytes,
@@ -535,7 +544,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_7,
         upstream_socket=socket_interface_3.get_downstream_socket(),
         downstream_core_coord=fwd_core_8,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_5 = SocketInterface(
         embedding_size_bytes,
@@ -545,7 +555,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_9,
         upstream_socket=socket_interface_4.get_downstream_socket(),
         downstream_core_coord=fwd_core_10,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_6 = SocketInterface(
         embedding_size_bytes,
@@ -555,7 +566,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_11,
         upstream_socket=socket_interface_5.get_downstream_socket(),
         downstream_core_coord=fwd_core_12,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_7 = SocketInterface(
         embedding_size_bytes,
@@ -565,6 +577,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_13,
         upstream_socket=socket_interface_6.get_downstream_socket(),
         downstream_socket=host_io.get_upstream_socket(),
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
 
     host_io.run()

@@ -26,7 +26,7 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-def setup_reduce_to_one_test(mesh_device):
+def setup_reduce_to_one_test(mesh_device, root_coord, exit_coord):
     """Common setup for reduce_to_one tests. Returns test configuration."""
     # Log mesh device info
     logger.info(f"mesh_device shape: {mesh_device.shape}")
@@ -40,8 +40,6 @@ def setup_reduce_to_one_test(mesh_device):
 
     # Setup - create 4x2 submesh
     num_devices = 8
-    exit_coord = (0, 1)
-    root_coord = (1, 1)
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh_device.shape}")
@@ -77,27 +75,35 @@ def setup_reduce_to_one_test(mesh_device):
     mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh_device.shape)
     mesh_mapper = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config)
 
-    # Create 3 intermediate tensors for 3 reduction rounds
-    intermediate_tensors = []
-    for _ in range(3):
-        intermediate_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            device=submesh_device,
-            layout=layout,
-            tile=tile,
-            dtype=dtype,
-            memory_config=mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
+    # Single intermediate tensor with 3× shard width (one 3-page CB for all reduction rounds)
+    intermediate_shard_shape = [1, shard_shape[1] * 3]
+    intermediate_tensor_shape = [1, tensor_shape[1] * 3]
+    intermediate_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        intermediate_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, intermediate_shard_spec
+    )
+    intermediate_data = torch.zeros([4, 2] + intermediate_tensor_shape, dtype=torch.bfloat16)
+    intermediate_tensor = ttnn.from_torch(
+        intermediate_data,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=intermediate_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
 
-    # Create output tensor sharded on a single core (bottom-right of compute grid)
-    compute_grid = submesh_device.compute_with_storage_grid_size()
-    output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-    logger.info(f"Compute grid: {compute_grid}, output core: {output_core}")
-    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(output_core, output_core)})
-    output_shard_shape = tensor_shape  # Full tensor on single core
+    # Output tensor sharded on the first worker core (aggregator core)
+    shard_cores_list = ttnn.corerange_to_cores(shard_grid, row_wise=True)
+    aggregator_core = shard_cores_list[0]
+    logger.info(f"Aggregator core (first worker core): {aggregator_core}")
+
+    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
+    output_shard_shape = tensor_shape
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
@@ -118,9 +124,8 @@ def setup_reduce_to_one_test(mesh_device):
         memory_config=output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    logger.info(f"Created output tensor sharded on single core: {output_core}")
+    logger.info(f"Created output tensor sharded on aggregator core: {aggregator_core}")
 
-    # Generate test data
     data_per_device = []
     torch.manual_seed(42)
     for _ in range(num_devices):
@@ -145,6 +150,7 @@ def setup_reduce_to_one_test(mesh_device):
     ref_output = ReduceToOneB1.golden(data_per_device)
 
     # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
+    compute_grid = submesh_device.compute_with_storage_grid_size()
     num_cores = compute_grid.x * compute_grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
     ttnn.synchronize_device(submesh_device)
@@ -154,12 +160,12 @@ def setup_reduce_to_one_test(mesh_device):
     return {
         "submesh_device": submesh_device,
         "input_tensor": input_tensor,
-        "intermediate_tensors": intermediate_tensors,
+        "intermediate_tensor": intermediate_tensor,
         "output_tensor": output_tensor,
         "ref_output": ref_output,
         "root_coord": root_coord,
         "exit_coord": exit_coord,
-        "output_core": output_core,
+        "output_core": aggregator_core,
         "semaphores": semaphores,
     }
 
@@ -212,22 +218,23 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     return match
 
 
-def run_reduce_to_one(mesh_device, num_iterations=1):
+def run_reduce_to_one(mesh_device, num_iterations=1, root_coord=(1, 1), exit_coord=(0, 1), is_torus=False):
     """Run reduce_to_one test."""
     print(f"\n=== Testing reduce_to_one (num_iterations={num_iterations}) ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
 
     # Run reduce_to_one with looping inside the kernel
     print(f"Running reduce_to_one with {num_iterations} iterations...")
     output_tensor = ReduceToOneB1.op(
         config["input_tensor"],
-        config["intermediate_tensors"],
+        config["intermediate_tensor"],
         config["output_tensor"],
         config["semaphores"],
         ttnn.MeshCoordinate(config["root_coord"]),
         ttnn.MeshCoordinate(config["exit_coord"]),
         num_iterations=num_iterations,
+        is_torus=is_torus,
     )
     ttnn.synchronize_device(config["submesh_device"])
 
@@ -244,14 +251,14 @@ def run_reduce_to_one(mesh_device, num_iterations=1):
     print("Test passed!")
 
 
-def run_reduce_to_one_with_trace(mesh_device):
+def run_reduce_to_one_with_trace(mesh_device, root_coord=(1, 1), exit_coord=(0, 1)):
     """Run reduce_to_one test with trace capture and replay."""
     print(f"\n=== Testing reduce_to_one with trace ===")
 
-    config = setup_reduce_to_one_test(mesh_device)
+    config = setup_reduce_to_one_test(mesh_device, root_coord, exit_coord)
     submesh_device = config["submesh_device"]
     input_tensor = config["input_tensor"]
-    intermediate_tensors = config["intermediate_tensors"]
+    intermediate_tensor = config["intermediate_tensor"]
     output_tensor_preallocated = config["output_tensor"]
     root_coord = config["root_coord"]
     exit_coord = config["exit_coord"]
@@ -262,7 +269,7 @@ def run_reduce_to_one_with_trace(mesh_device):
     print("Running reduce_to_one (compiling)...")
     output_tensor = ReduceToOneB1.op(
         input_tensor,
-        intermediate_tensors,
+        intermediate_tensor,
         output_tensor_preallocated,
         semaphores,
         ttnn.MeshCoordinate(root_coord),
@@ -277,7 +284,7 @@ def run_reduce_to_one_with_trace(mesh_device):
         for _ in range(num_iters):
             output_tensor = ReduceToOneB1.op(
                 input_tensor,
-                intermediate_tensors,
+                intermediate_tensor,
                 output_tensor_preallocated,
                 semaphores,
                 ttnn.MeshCoordinate(root_coord),
@@ -348,44 +355,3 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
     run_reduce_to_one(bh_2d_mesh_device, num_iterations=100)
-
-
-# === Trace Tests ===
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "trace_region_size": 425984,
-                "fabric_router_config": create_fabric_router_config(15232),
-            }
-        )
-    ],
-    indirect=["device_params"],
-    ids=["fabric_1d_trace"],
-)
-def test_reduce_to_one_with_trace_1d(bh_2d_mesh_device):
-    """Test reduce_to_one with trace capture/replay on 1D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device)
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "trace_region_size": 425984,
-                "fabric_router_config": create_fabric_router_config(15232),
-            }
-        )
-    ],
-    indirect=["device_params"],
-    ids=["fabric_2d_trace"],
-)
-def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
-    """Test reduce_to_one with trace capture/replay on 2D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device)

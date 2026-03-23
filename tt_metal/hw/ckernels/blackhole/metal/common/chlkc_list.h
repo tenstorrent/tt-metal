@@ -29,17 +29,13 @@ using namespace ckernel;
 uint run_kernel() {
 #ifdef UCK_CHLKC_MATH
     zeroacc();
-    chlkc_math::math_main();
-#endif
-
-#ifdef UCK_CHLKC_PACK
-    chlkc_pack::pack_main();
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     zerosrc();
-    chlkc_unpack::unpack_main();
 #endif
+
+    kernel_main();
 
     return 0;
 }

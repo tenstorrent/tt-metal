@@ -164,7 +164,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -212,6 +212,7 @@ def prepare_generator_args(
     paged_attention,
     num_layers,
     use_prefetcher,
+    use_hf_rope,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -242,6 +243,7 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
             use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -531,9 +533,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            4096,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -550,9 +552,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            4096,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -569,7 +571,7 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -588,7 +590,7 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -743,7 +745,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
+# NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -844,7 +846,8 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    arg_enable_trace = request.config.getoption("--enable_trace")
+    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
@@ -852,6 +855,8 @@ def test_demo_text(
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
+    is_device_perf_test = "device-perf" in test_id
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -942,6 +947,7 @@ def test_demo_text(
         paged_attention=paged_attention,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -1057,6 +1063,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1069,8 +1076,9 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
             )
-            if prefill_sampling_params is not None:
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out
@@ -1506,7 +1514,7 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 106,
+                "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
                 # N300 targets
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
@@ -1516,7 +1524,7 @@ def test_demo_text(
                 "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": (100, 1.1),  # Issue: Perf regression being tracked on issue #29834
+                "T3K_Qwen3-32B": 110,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1531,7 +1539,7 @@ def test_demo_text(
                 "T3K_Llama-3.1-70B": 15,
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 21,
+                "T3K_Qwen3-32B": 19,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

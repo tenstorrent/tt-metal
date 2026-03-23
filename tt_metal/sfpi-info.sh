@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/usr/bin/env bash
 
 # Compute SFPI release version information.
 # Emit as evaluable shell assignments or CMAKE script
@@ -26,8 +26,10 @@ set -e
 if [[ ${#1} = 0 ]]; then
     cat >&2 <<EOF
 Usage:
-$0 CREATE [\$DIRS] - generate release information
-$0 VERSION \$VER - generate release names
+$0 MERGE \$FILES - Merge sfpi-version files
+$0 DIST          - Emit system info
+$0 HASH [\$PACKAGE] - name or hash a package
+$0 BASE          - generate base package name
 $0 SHELL [\$PKG] - shell use for PKG
 $0 CMAKE [\$PKG] - CMAKE use for PKG
 $0 BUILD [\$DIR] - clone and build a toolchain
@@ -36,52 +38,48 @@ EOF
 fi
 
 version_file="sfpi-version"
-hashtype=sha256
-if [[ ${1-} = CREATE ]]; then
-    # create sfpi-version file
-    version=
+
+if [[ $1 = MERGE ]]; then
+    vars=()
     exit_code=0
-    echo '# sfpi version information' >$version_file
-    echo 'sfpi_repo=https://github.com/tenstorrent/sfpi' >>$version_file
-    echo "sfpi_hashtype=$hashtype" >>$version_file
     shift
-    if [[ ${#1} = 0 ]]; then
-	set .
-    fi
-    files=()
-    for dir in "$@"
-    do
-	for file in "$dir"/*.$hashtype
-	do
-	    if ! [[ -r "$file" ]]; then
-		echo "$dir contains no $hashtype files" >&2
-		exit 1
-	    fi
-	    files+=("$file")
-	    ver="${file##*/sfpi_}"
-	    ver="${ver%%_*}"
-	    if [[ $ver != $version ]]; then
-		if [[ -n $version ]]; then
-		    echo "ERROR: Multiple versions" >&2
+    for file in "$@"; do
+	while read line; do
+	    var=${line%%=*}
+	    eval val=${line#*=}
+	    found=false
+	    for seen in ${vars[@]}; do
+		if [[ $seen = $var ]]; then
+		    found=true
+		    break
+		fi
+	    done
+	    if $found; then
+		eval seen=\$$var
+		if [[ $seen != $val ]]; then
+		    echo "ERROR: Multiple values of $var" >&2
 		    exit_code=1
 		fi
-		version=$ver
-		echo sfpi_version=$version >>$version_file
+	    else
+		vars+=($var)
+		eval $var="$val"
 	    fi
-	done
+	done <$file
     done
-    sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_hash=\1/' "${files[@]}" >>$version_file
-    echo "$version_file for $version created"
+    echo '# sfpi version information'
+    for var in ${vars[@]}; do
+	eval val="\$$var"
+	echo "$var='$val'"
+    done
     exit $exit_code
 fi
 
-if [[ ${1-} = VERSION ]]; then
-    # releaser of sfpi
-    sfpi_version=$2
-    sfpi_hashtype=$hashtype
-else
-    source $(dirname $0)/$version_file
-fi
+case $1 in
+    HASH) source /dev/stdin ;;
+    BASE) source /dev/stdin ;;
+    DIST) source /dev/stdin ;;
+    *) source $(dirname $0)/$version_file ;;
+esac
 
 # define host system
 sfpi_dist=unknown
@@ -105,43 +103,63 @@ if [[ -r /etc/os-release ]]; then
 fi
 sfpi_arch=$(uname -m)
 
-# define download location & name
-sfpi_url=$sfpi_repo/releases/download/$sfpi_version
-sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 
-if [[ ${1-} != VERSION ]]; then
+if [[ $1 != DIST ]]; then
+    # define download location & name
+    sfpi_url=$sfpi_repo/releases/download/
+    sfpi_filename=sfpi_
+    if [[ $1 == BASE ]]; then
+	sfpi_filename+=$sfpi_base
+	sfpi_url+=$sfpi_base
+    else
+	sfpi_filename+=$sfpi_version
+	sfpi_url+=$sfpi_version
+    fi
+    sfpi_filename+=_${sfpi_arch}_${sfpi_dist}
+fi
+
+if [[ $1 == HASH ]]; then
+    if [[ -n $2 ]]; then
+	hash=$(${sfpi_hashtype}sum -b < $2)
+	suffix=${2##*.}
+	echo "sfpi_${sfpi_arch}_${sfpi_dist}_${suffix}_hash='${hash%% *}'"
+	exit 0
+    fi
+elif [[ $1 != BASE ]] && [[ $1 != DIST ]]; then
     # querier of sfpi-version
-    if [[ ${1-} = BUILD ]]; then
+    if [[ $1 = BUILD ]]; then
 	sfpi_pkg=txz
     elif [[ -n $2 ]]; then
 	sfpi_pkg=$2
     fi
-    sfpi_filename+=".$sfpi_pkg"
+    if [[ -n $sfpi_pkg ]]; then
+       sfpi_filename+=".$sfpi_pkg"
+    fi
     sfpi_hash=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${sfpi_pkg}_hash-}")
-    unset sfpi_builton
 fi
-if [[ ${1-} = CMAKE ]]; then
+
+if [[ $1 = CMAKE ]]; then
     # CMake LIKES THINGS SHOUTED AT IT
     sfpi_HASHTYPE="${sfpi_hashtype^^}"
 fi
 
-if [[ ${1-} != BUILD ]]; then
+if [[ $1 != BUILD ]]; then
     # now emit definitions
     for var in $(set -o posix ; set | sed -e '/^sfpi_/{s/=.*//;p}' -e d)
     do
 	eval val="\$$var"
 	# relies on no inserted quoting for meta-characters
-	if [[ ${1-} = CMAKE ]]; then
+	if [[ $1 = CMAKE ]]; then
 	    echo "set(SFPI${var#sfpi} \"$val\")"
 	else
-	    echo "${var}='$val'"
+	    echo "$var='$val'"
 	fi
     done
     exit 0
 fi
 
 # Now clone and build into $2
-src=${2-}
+src=$2
 if [[ -z $src ]]; then
     src=$(pwd)/sfpi-src
 fi

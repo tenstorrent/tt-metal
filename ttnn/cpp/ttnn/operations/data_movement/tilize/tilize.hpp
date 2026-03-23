@@ -7,20 +7,13 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct ExecuteTilize {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = true,
-        bool use_low_perf = false,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto tilize = ttnn::register_operation<"ttnn::tilize", ttnn::operations::data_movement::ExecuteTilize>();
+ttnn::Tensor tilize(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> output_dtype = std::nullopt,
+    bool use_multicore = true,
+    bool use_low_perf = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn
