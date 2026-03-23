@@ -34,10 +34,8 @@ namespace ttnn::prim {
 
 ttml::metal::ops::polynorm_fw::device::PolyNormForwardDeviceOperation::tensor_return_value_t ttml_polynorm_fw(
     const ttnn::Tensor& input_tensor,
-    float w0,
-    float w1,
-    float w2,
-    float bias,
+    const ttnn::Tensor& weight,
+    const ttnn::Tensor& bias,
     float epsilon = 1e-5F,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 

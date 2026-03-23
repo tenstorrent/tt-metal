@@ -57,13 +57,11 @@ void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const PolyNormForwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
+    const tt::tt_metal::Buffer* weight_buffer,
+    const tt::tt_metal::Buffer* bias_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t scaler_fp32_bits,
     uint32_t eps_fp32_bits,
-    uint32_t packed_w0,
-    uint32_t packed_w1,
-    uint32_t packed_w2,
-    uint32_t packed_bias,
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_rows_per_core_group_1,
@@ -88,14 +86,12 @@ void assign_per_core_runtime_args(
             core,
             {
                 input_buffer->address(),
+                weight_buffer->address(),
+                bias_buffer->address(),
                 num_rows_per_core,
                 num_rows_written,
                 scaler_fp32_bits,
                 eps_fp32_bits,
-                packed_w0,
-                packed_w1,
-                packed_w2,
-                packed_bias,
             });
 
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
@@ -111,6 +107,8 @@ namespace ttml::metal::ops::polynorm_fw::device {
 PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
+    const auto& weight = tensor_args.weight;
+    const auto& bias = tensor_args.bias;
     auto* device = input.device();
 
     tt::tt_metal::Program program{};
@@ -166,10 +164,20 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
     auto* input_buffer = input.buffer();
+    auto* weight_buffer = weight.buffer();
+    auto* bias_buffer = bias.buffer();
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
         enchantum::to_string(input_buffer->buffer_type()));
+    TT_FATAL(
+        weight_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "weight buffer must be in DRAM. weight buffer of type {}",
+        enchantum::to_string(weight_buffer->buffer_type()));
+    TT_FATAL(
+        bias_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "bias buffer must be in DRAM. bias buffer of type {}",
+        enchantum::to_string(bias_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
@@ -180,6 +188,8 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     PolyNormForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(reader_compile_time_args);
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
@@ -201,22 +211,16 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
 
     const uint32_t scaler_fp32_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));
     const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(args.epsilon);
-    const uint32_t packed_w0 = pack_two_bfloat16_to_uint32(args.w0);
-    const uint32_t packed_w1 = pack_two_bfloat16_to_uint32(args.w1);
-    const uint32_t packed_w2 = pack_two_bfloat16_to_uint32(args.w2);
-    const uint32_t packed_bias = pack_two_bfloat16_to_uint32(args.bias);
 
     assign_per_core_runtime_args(
         program,
         kernels,
         input_buffer,
+        weight_buffer,
+        bias_buffer,
         output_buffer,
         scaler_fp32_bits,
         eps_fp32_bits,
-        packed_w0,
-        packed_w1,
-        packed_w2,
-        packed_bias,
         num_cores,
         num_cores_y,
         num_rows_per_core_group_1,
@@ -248,15 +252,13 @@ void PolyNormForwardProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     auto* input_buffer = tensor_args.input.buffer();
+    auto* weight_buffer = tensor_args.weight.buffer();
+    auto* bias_buffer = tensor_args.bias.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
     const uint32_t scaler_fp32_bits =
         std::bit_cast<uint32_t>(1.0F / static_cast<float>(tensor_args.input.logical_shape()[-1]));
     const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
-    const uint32_t packed_w0 = pack_two_bfloat16_to_uint32(operation_attributes.w0);
-    const uint32_t packed_w1 = pack_two_bfloat16_to_uint32(operation_attributes.w1);
-    const uint32_t packed_w2 = pack_two_bfloat16_to_uint32(operation_attributes.w2);
-    const uint32_t packed_bias = pack_two_bfloat16_to_uint32(operation_attributes.bias);
 
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
@@ -266,12 +268,10 @@ void PolyNormForwardProgramFactory::override_runtime_arguments(
 
         auto& rr = reader_runtime_args[core.x][core.y];
         rr[0] = input_buffer->address();
-        rr[3] = scaler_fp32_bits;
-        rr[4] = eps_fp32_bits;
-        rr[5] = packed_w0;
-        rr[6] = packed_w1;
-        rr[7] = packed_w2;
-        rr[8] = packed_bias;
+        rr[1] = weight_buffer->address();
+        rr[2] = bias_buffer->address();
+        rr[5] = scaler_fp32_bits;
+        rr[6] = eps_fp32_bits;
 
         auto& wr = writer_runtime_args[core.x][core.y];
         wr[kWriterOutputBufferIdx] = output_buffer->address();

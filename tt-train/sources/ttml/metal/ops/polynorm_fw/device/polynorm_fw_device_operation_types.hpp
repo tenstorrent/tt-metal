@@ -10,14 +10,12 @@ namespace ttml::metal::ops::polynorm_fw::device {
 
 struct operation_attributes_t {
     float epsilon{1e-5F};
-    float w0{0.0F};
-    float w1{0.0F};
-    float w2{0.0F};
-    float bias{0.0F};
 };
 
 struct tensor_args_t {
     const ttnn::Tensor& input;
+    const ttnn::Tensor& weight;
+    const ttnn::Tensor& bias;
     std::optional<ttnn::Tensor> preallocated_output = std::nullopt;
 };
 

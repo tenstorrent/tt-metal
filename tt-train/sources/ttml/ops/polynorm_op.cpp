@@ -7,13 +7,13 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
-#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -23,8 +23,6 @@
 namespace ttml::ops {
 
 namespace {
-
-using PolynomWeights = std::array<float, 3>;
 
 constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
@@ -54,20 +52,18 @@ void validate_input_shapes(
     }
 }
 
-PolynomWeights extract_weights(const autograd::TensorPtr& weight) {
-    const auto weight_values = core::to_vector(weight->get_value());
-    if (weight_values.size() != 3U) {
-        throw std::runtime_error("polynorm weight tensor must have 3 elements.");
-    }
-    return {weight_values[0], weight_values[1], weight_values[2]};
+ttnn::Tensor extract_scalar_from_last_dim(const ttnn::Tensor& tensor, uint32_t index) {
+    const ttsl::SmallVector<uint32_t> start = {0U, 0U, 0U, index};
+    const ttsl::SmallVector<uint32_t> end = {1U, 1U, 1U, index + 1U};
+    const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
+    return ttnn::slice(tensor, start, end, step);
 }
 
-float extract_bias(const autograd::TensorPtr& bias) {
-    const auto bias_values = core::to_vector(bias->get_value());
-    if (bias_values.size() != 1U) {
-        throw std::runtime_error("polynorm bias tensor must have 1 element.");
-    }
-    return bias_values[0];
+std::array<ttnn::Tensor, 3> split_weight_scalars(const ttnn::Tensor& weight_tensor) {
+    return {
+        extract_scalar_from_last_dim(weight_tensor, 0U),
+        extract_scalar_from_last_dim(weight_tensor, 1U),
+        extract_scalar_from_last_dim(weight_tensor, 2U)};
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> rms_normalize_last_dim(const ttnn::Tensor& x, float epsilon) {
@@ -129,15 +125,14 @@ autograd::TensorPtr polynorm(
     float epsilon) {
     validate_input_shapes(tensor, weight, bias);
 
-    const auto w = extract_weights(weight);
-    const auto b = extract_bias(bias);
-
     const auto x = tensor->get_value();
+    const auto weight_tensor = weight->get_value();
+    const auto bias_tensor = bias->get_value();
     if (x.logical_shape()[-1] % 32U != 0U) {
         throw std::runtime_error(
             "polynorm fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
     }
-    const auto out_value = metal::polynorm_fw(x, w[0], w[1], w[2], b, epsilon);
+    const auto out_value = metal::polynorm_fw(x, weight_tensor, bias_tensor, epsilon);
 
     auto out = autograd::create_tensor(out_value);
 
@@ -151,14 +146,14 @@ autograd::TensorPtr polynorm(
         const auto [x3_norm, x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
 
         const auto dL_dout = out->get_grad();
-        const auto [w0, w1, w2_value] = extract_weights(weight);
+        const auto [w0, w1, w2] = split_weight_scalars(weight->get_value());
 
         auto dL_dx = ttnn::multiply(x, 0.0F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
         const float inv_channels = 1.0F / static_cast<float>(x.logical_shape()[-1]);
 
         const auto dL_dx_term1 = grad_wrt_rmsnorm_input(
             x,
-            ttnn::multiply(dL_dout, w2_value, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(dL_dout, w2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             x_inv_rms,
             inv_channels);
         dL_dx = ttnn::add(dL_dx, dL_dx_term1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
@@ -205,9 +200,7 @@ autograd::TensorPtr polynorm(
         const auto dL_dw2 = scalar_sum(
             ttnn::multiply(dL_dout, x_norm, std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
 
-        auto dL_dw_values = std::vector<float>{
-            core::to_vector(dL_dw0).front(), core::to_vector(dL_dw1).front(), core::to_vector(dL_dw2).front()};
-        auto dL_dw = core::from_vector(dL_dw_values, ttnn::Shape({1, 1, 1, 3}), &autograd::ctx().get_device());
+        auto dL_dw = ttnn::concat(std::vector<ttnn::Tensor>{dL_dw0, dL_dw1, dL_dw2}, /*dim=*/3);
         weight->add_grad(dL_dw);
 
         bias->add_grad(scalar_sum(dL_dout));

@@ -8,8 +8,9 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor polynorm_fw(const ttnn::Tensor& input_tensor, float w0, float w1, float w2, float bias, float epsilon) {
-    return ttnn::prim::ttml_polynorm_fw(input_tensor, w0, w1, w2, bias, epsilon);
+ttnn::Tensor polynorm_fw(
+    const ttnn::Tensor& input_tensor, const ttnn::Tensor& weight, const ttnn::Tensor& bias, float epsilon) {
+    return ttnn::prim::ttml_polynorm_fw(input_tensor, weight, bias, epsilon);
 }
 
 }  // namespace ttml::metal

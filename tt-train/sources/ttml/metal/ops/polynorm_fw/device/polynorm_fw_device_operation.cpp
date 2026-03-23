@@ -40,6 +40,8 @@ void PolyNormForwardDeviceOperation::validate_on_program_cache_miss(
     };
 
     check_tensor(tensor_args.input, "Input");
+    check_tensor(tensor_args.weight, "weight");
+    check_tensor(tensor_args.bias, "bias");
     if (tensor_args.preallocated_output.has_value()) {
         check_tensor(tensor_args.preallocated_output.value(), "Preallocated output");
     }
@@ -78,23 +80,19 @@ namespace ttnn::prim {
 
 ttml::metal::ops::polynorm_fw::device::PolyNormForwardDeviceOperation::tensor_return_value_t ttml_polynorm_fw(
     const ttnn::Tensor& input_tensor,
-    float w0,
-    float w1,
-    float w2,
-    float bias,
+    const ttnn::Tensor& weight,
+    const ttnn::Tensor& bias,
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::polynorm_fw::device::PolyNormForwardDeviceOperation;
 
     const auto operation_attributes = OperationType::operation_attributes_t{
         .epsilon = epsilon,
-        .w0 = w0,
-        .w1 = w1,
-        .w2 = w2,
-        .bias = bias,
     };
     const auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
+        .weight = weight,
+        .bias = bias,
         .preallocated_output = preallocated_output,
     };
 
