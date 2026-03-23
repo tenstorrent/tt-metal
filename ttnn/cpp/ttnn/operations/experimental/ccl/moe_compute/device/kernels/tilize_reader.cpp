@@ -433,7 +433,7 @@ void kernel_main() {
 
         // Get local CB addresses (same relative address as drain core)
         uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_write_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
 
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
