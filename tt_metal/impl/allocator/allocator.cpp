@@ -152,9 +152,29 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         case BufferType::DRAM:
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
-        case BufferType::L1:
-            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+        case BufferType::L1: {
+            // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            if (!hybrid_device_allocators_.empty()) {
+                using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+                uint32_t num_banks = l1_manager_->num_banks();
+                for (auto* dev_alloc : hybrid_device_allocators_) {
+                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                        auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+                        additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                    }
+                }
+            }
+            address = l1_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                num_cores,
+                BankManager::AllocatorDependencies::AllocatorID{0},
+                additional_ranges);
             break;
+        }
         case BufferType::L1_SMALL: {
             TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
             address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
@@ -207,6 +227,35 @@ void AllocatorImpl::deallocate_buffers() {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+}
+
+void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_ = device_allocators;
+}
+
+void AllocatorImpl::clear_hybrid_device_allocators() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_device_allocators_.clear();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto state = l1_manager_->extract_state(allocator_id);
+    return state.allocated_regions;
+}
+
+void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+}
+
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_deallocated(AllocatorID{0}, address);
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
