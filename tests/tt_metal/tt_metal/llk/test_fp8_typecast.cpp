@@ -144,25 +144,23 @@ static double compute_pcc(const vector<float>& a, const vector<float>& b) {
     if (a.size() != b.size() || a.empty()) {
         return 0.0;
     }
-    double mean_a = 0.0, mean_b = 0.0;
-    for (size_t i = 0; i < a.size(); i++) {
-        mean_a += a[i];
-        mean_b += b[i];
+    const size_t n = a.size();
+    double sum_a = 0.0, sum_b = 0.0;
+    double sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        double ai = a[i], bi = b[i];
+        sum_a += ai;
+        sum_b += bi;
+        sum_a2 += ai * ai;
+        sum_b2 += bi * bi;
+        sum_ab += ai * bi;
     }
-    mean_a /= static_cast<double>(a.size());
-    mean_b /= static_cast<double>(b.size());
-    double num = 0.0, denom_a = 0.0, denom_b = 0.0;
-    for (size_t i = 0; i < a.size(); i++) {
-        double da = a[i] - mean_a;
-        double db = b[i] - mean_b;
-        num += da * db;
-        denom_a += da * da;
-        denom_b += db * db;
-    }
+    double denom_a = n * sum_a2 - sum_a * sum_a;
+    double denom_b = n * sum_b2 - sum_b * sum_b;
     if (denom_a == 0.0 || denom_b == 0.0) {
         return 1.0;
     }
-    return num / std::sqrt(denom_a * denom_b);
+    return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
 }
 
 static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {

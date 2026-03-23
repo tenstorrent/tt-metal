@@ -7,6 +7,7 @@ set(UNIT_TESTS_LLK_SRC
     test_copy_block_matmul_partials.cpp
     test_cumsum.cpp
     test_dropout_sfpu_compute.cpp
+    test_fp8_typecast.cpp
     test_golden_impls.cpp
     test_mul_reduce_scalar.cpp
     test_pack_rows.cpp
@@ -20,5 +21,4 @@ set(UNIT_TESTS_LLK_SRC
     test_transpose.cpp
     test_unary_broadcast.cpp
     test_untilize_tilize.cpp
-    test_fp8_typecast.cpp
 )

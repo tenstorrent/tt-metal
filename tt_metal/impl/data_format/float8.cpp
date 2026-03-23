@@ -89,16 +89,15 @@ float8_e4m3::operator float() const {
         return std::numeric_limits<float>::quiet_NaN();
     }
 
-    float result;
     if (exp == 0) {
         // HW flushes subnormals (exp=0, mantissa!=0) to zero.
-        result = 0.0f;
-    } else {
-        // Normal: (-1)^sign * 2^(exp-bias) * (1 + man/8)
-        result = std::ldexp(1.0f + static_cast<float>(man) / 8.0f, exp - FP8_BIAS);
+        return sign ? -0.0f : 0.0f;
     }
 
-    return sign ? -result : result;
+    // Reconstruct float32 bit pattern: (-1)^sign * 2^(exp-bias) * (1 + man/8)
+    uint32_t fp32_exp = static_cast<uint32_t>(exp - FP8_BIAS + 127);
+    uint32_t fp32_bits = (static_cast<uint32_t>(sign) << 31) | (fp32_exp << 23) | (static_cast<uint32_t>(man) << 20);
+    return std::bit_cast<float>(fp32_bits);
 }
 
 uint8_t float8_e4m3::from_float(float v) { return fp32_to_fp8_e4m3_bits(v); }
@@ -122,15 +121,16 @@ std::vector<float8_e4m3> unpack_uint32_vec_into_float8_e4m3_vec(const std::vecto
 
 std::vector<uint32_t> create_random_vector_of_float8_e4m3(
     size_t num_bytes, int rand_max_float, int seed, float offset) {
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0, rand_max_float);
 
     // num_bytes fp8 elements, packed 4 per uint32
     std::vector<uint32_t> result(num_bytes / sizeof(uint32_t), 0);
     for (uint32_t& word : result) {
-        float8_e4m3 a(rand_float() + offset);
-        float8_e4m3 b(rand_float() + offset);
-        float8_e4m3 c(rand_float() + offset);
-        float8_e4m3 d(rand_float() + offset);
+        float8_e4m3 a(dist(rng) + offset);
+        float8_e4m3 b(dist(rng) + offset);
+        float8_e4m3 c(dist(rng) + offset);
+        float8_e4m3 d(dist(rng) + offset);
         word = pack_four_float8_e4m3_into_uint32(a, b, c, d);
     }
     return result;
