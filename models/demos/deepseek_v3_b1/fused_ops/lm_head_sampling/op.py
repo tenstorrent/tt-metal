@@ -551,11 +551,12 @@ class LMHeadSampling:
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
         # [MTP] Semaphore IDs for second mcast (EH projection matmul)
+        # Separate receiver semaphore from first mcast to avoid linked-VC posted write race
         mtp_ready_semaphore_id = 4
-        mcast_eh_data_sender_semaphore_id = 5
-        mcast_eh_data_receiver_semaphore_id = 6
-        mtp_done_semaphore_id = 7
-        eh_matmul_done_semaphore_id = 8
+        mcast_eh_data_sender_semaphore_id = mcast_data_sender_semaphore_id
+        mcast_eh_data_receiver_semaphore_id = 5
+        mtp_done_semaphore_id = 6
+        eh_matmul_done_semaphore_id = 7
 
         # Create mesh program descriptor
         print("[lm_head_sampling] before MeshProgramDescriptor", flush=True)
@@ -844,6 +845,7 @@ class LMHeadSampling:
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
+                print(f"[lm_head_sampling] is_part_of_receiver_grid={is_part_of_receiver_grid}", flush=True)
                 persistent_target_mesh_coord = ttnn.MeshCoordinate(sender_row, sender_col)
                 persistent_target_device_idx = sender_row * mesh_cols + sender_col
                 persistent_target_device = input_tensors_per_device[persistent_target_device_idx].device()
@@ -1670,11 +1672,6 @@ class LMHeadSampling:
                                 initial_value=0,
                             ),
                             ttnn.SemaphoreDescriptor(
-                                id=mcast_eh_data_sender_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
                                 id=mcast_eh_data_receiver_semaphore_id,
                                 core_ranges=all_cores,
                                 initial_value=0,
@@ -1692,8 +1689,8 @@ class LMHeadSampling:
                         ]
                     )
 
-                # Append mcast receiver data addresses as BRISC runtime args [13] and [14]
-                # (0 = kernel uses get_write_ptr fallback)
+                # Append mcast receiver data addresses as BRISC runtime args
+                # [17]/[18] when MTP enabled, [13]/[14] otherwise (0 = kernel uses get_write_ptr fallback)
                 brisc_bcast_common_args.append(mcast_receiver_data_addr)
                 brisc_bcast_common_args.append(mcast_eh_receiver_data_addr if enable_mtp_on_device else 0)
 

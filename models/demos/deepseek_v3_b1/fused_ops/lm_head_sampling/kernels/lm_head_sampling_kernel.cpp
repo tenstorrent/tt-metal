@@ -325,8 +325,9 @@ void kernel_main() {
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
+    constexpr uint32_t mcast_dst_override_idx = Core::enable_mtp ? 17 : 13;
+    const uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(mcast_dst_override_idx);
 
-    const uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(13);
     deepseek_b1_ops::Mcast::SenderArgs mcast_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
@@ -383,7 +384,7 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(14);
+    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(18);
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
@@ -486,24 +487,19 @@ void kernel_main() {
     compute_kernel_hw_startup(0, 0, 0);
 #endif
 
-    deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_matmul_core, true>
-            mcast;
-    deepseek_b1_ops::Mcast::Op<
-        McastEhCTArgs,
-        Core::enable_mtp && Core::is_input_core,
-        Core::enable_mtp && Core::is_mcast_grid_core,
-        Core::enable_mtp && Core::is_eh_matmul_core,
-        true>
-        mcast_eh;
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
     deepseek_b1_ops::Sampling::
         Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
             sampling_op;
 
+    deepseek_b1_ops::Mcast::
+        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
+            mcast;
+
     uint32_t iteration_count = 0;
+
     mcast.init(mcast_args);
-    mcast_eh.init(mcast_eh_args);
+
     while (true) {
         iteration_count++;
 
@@ -516,7 +512,7 @@ void kernel_main() {
             if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
                 auto next_iteration_semaphore =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-                DPRINT << "BRISC argmax final core wait for next iteration semaphore" << ENDL();
+                // DPRINT << "BRISC argmax final core wait for next iteration semaphore" << ENDL();
                 noc_semaphore_wait(next_iteration_semaphore, 1);
                 noc_semaphore_set(next_iteration_semaphore, 0);
             }
@@ -524,7 +520,7 @@ void kernel_main() {
 
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
-                DPRINT << "BRISC ccl broadcast" << ENDL();
+                // DPRINT << "BRISC ccl broadcast" << ENDL();
                 DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
             }
@@ -535,10 +531,12 @@ void kernel_main() {
         // (reserve_back + socket read into write_ptr + push_back). Do not push again
         // or we leave a stale tile that rmsnorm reads on the next iteration (wrong tokens).
         if constexpr (Core::is_input_core && (!Core::skip_ccl || !Core::bcast_use_socket_input)) {
-            DPRINT << "NCRISC setup sharded buffer" << ENDL();
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+            invalidate_l1_cache();
+            uint32_t w0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(rmsnorm_input_cb));
+            DPRINT << "iD=" << w0 << ENDL();
         }
 #endif
 
@@ -555,18 +553,18 @@ void kernel_main() {
         // ====================================================================
         // Phase 1: Mcast — multicast input from sender core to all device cores
         // ====================================================================
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_input_core) {
+            cb_wait_front(mcast_src_cb, get_named_compile_time_arg_val("mcast_src_num_pages"));
+            invalidate_l1_cache();
+            uint32_t m0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(mcast_src_cb));
+            DPRINT << "mS=" << m0 << ENDL();
+        }
+#endif
         {
             DeviceZoneScopedN("MCAST");
             mcast(mcast_args);
         }
-
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::enable_mtp && Core::is_input_core) {
-            DPRINT << "DBG[0] POST_MCAST hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
-                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
-                   << ENDL();
-        }
-#endif
 
         // ====================================================================
         // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
@@ -576,14 +574,6 @@ void kernel_main() {
             matmul(matmul_args);
         }
 
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::enable_mtp && Core::is_input_core) {
-            DPRINT << "DBG[1] POST_MATMUL hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
-                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
-                   << ENDL();
-        }
-#endif
-
         // ====================================================================
         // Phase 3: Argmax Sampling
         // ====================================================================
@@ -592,39 +582,25 @@ void kernel_main() {
             sampling_op(sampling_args);
         }
 
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::enable_mtp && Core::is_input_core) {
-            DPRINT << "DBG[2] POST_ARGMAX hw=" << NOC_STATUS_READ_REG(noc_index, NIU_MST_POSTED_WR_REQ_SENT)
-                   << " sw=" << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc_index)
-                   << ENDL();
-        }
-#endif
-
         if constexpr (Core::enable_mtp) {
             // ====================================================================
             // [MTP] Token transfer + Embedding lookup + e_rmsnorm + EH matmul
             // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_argmax_final_core) {
-                // When socket output is deferred, BRISC skipped cb_wait_front inside argmax.
-                // Wait here (without pop) to ensure NCRISC has written the token to output_addr
-                // before we read mtp_argmax_output_addr.  The deferred socket send will pop later.
-                DPRINT << "BRISC argmax final core wait for token" << ENDL();
                 uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
                 noc_async_write(mtp_argmax_output_addr, dst, 4);
                 noc_async_write_barrier();
-                DPRINT << "NCRISC write token to mtp input core" << ENDL();
                 uint64_t sem_addr = get_noc_addr(
                     mtp_input_core_noc_x,
                     mtp_input_core_noc_y,
                     get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
                 noc_semaphore_inc(sem_addr, 1);
-                DPRINT << "BRISC signal mcast done done" << ENDL();
             }
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
-            DPRINT << "NCRISC token transfer" << ENDL();
+            // DPRINT << "NCRISC token transfer" << ENDL();
             // ================================================================
             // [MTP] Token transfer: argmax_final_core writes token to input_core
             //
@@ -634,10 +610,9 @@ void kernel_main() {
             if constexpr (Core::is_input_core) {
                 volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
-                DPRINT << "NCRISC wait for mtp ready semaphore" << ENDL();
                 noc_semaphore_wait(mtp_ready_sem, 1);
-                DPRINT << "NCRISC wait for mtp ready semaphore done" << ENDL();
                 noc_semaphore_set(mtp_ready_sem, 0);
+                DPRINT << "tW" << ENDL();
             }
 #endif
 
@@ -648,32 +623,21 @@ void kernel_main() {
             if constexpr (Core::is_input_core) {
                 // Wait until BRISC has finished mcast (popped mcast_src CB which shares L1
                 // with embedding_cb).  BRISC signals via mcast_done_cb after mcast completes.
-                // DPRINT << "NCRISC wait for mcast done b4" << ENDL();
-
                 constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
                 constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
                 constexpr uint32_t e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
-                DPRINT << "NCRISC embedding lookup token id" << ENDL();
                 const InterleavedAddrGen<true> embedding_addr_gen = {
                     .bank_base_address = mtp_embedding_base,
                     .page_size = embedding_size_bytes,
                 };
+                invalidate_l1_cache();
                 uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
-                DPRINT << "NCRISC embedding reserve token id=" << token_id << ENDL();
+                DPRINT << "tI=" << token_id << ENDL();
                 cb_reserve_back(emb_cb, e_num_tiles);
                 uint64_t dram_addr = embedding_addr_gen.get_noc_addr(token_id);
                 noc_async_read(dram_addr, get_write_ptr(emb_cb), embedding_size_bytes);
                 noc_async_read_barrier();
                 cb_push_back(emb_cb, e_num_tiles);
-                DPRINT << "NCRISC embedding push done" << ENDL();
-                // Signal TRISC that embedding data is ready in the CB.
-                // Required because emb_cb shares the same CB index as the rmsnorm output:
-                // without this gate, TRISC e_rmsnorm can race ahead and consume the stale
-                // rmsnorm tiles before BRISC mcast pops them and NCRISC pushes embedding data.
-                constexpr uint32_t emb_done_cb = get_named_compile_time_arg_val("embedding_done_cb");
-                cb_reserve_back(emb_done_cb, 1);
-                cb_push_back(emb_done_cb, 1);
-                DPRINT << "NCRISC embedding done push done" << ENDL();
             }
 #endif
 
@@ -686,10 +650,10 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_rmsnorm_core) {
                 {
-                    DPRINT << "TRISC starting h_rmsnorm" << ENDL();
                     deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                     DeviceZoneScopedN("MTP_H_RMSNORM");
                     h_rmsnorm(rmsnorm_args);
+                    DPRINT << "hD" << ENDL();
                 }
             }
 #endif
@@ -700,14 +664,11 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_rmsnorm_core) {
-                // Wait for NCRISC embedding push before reading CB — the embedding CB is
-                // reused from the rmsnorm output CB, so without this gate TRISC can race
-                // ahead and consume the stale rmsnorm tiles instead of the embedding tiles.
-                DPRINT << "TRISC starting e_rmsnorm" << ENDL();
                 {
                     DeviceZoneScopedN("MTP_E_RMSNORM");
                     deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                     e_rmsnorm(rmsnorm_args);
+                    DPRINT << "eR" << ENDL();
                 }
             }
 #endif
@@ -716,7 +677,13 @@ void kernel_main() {
         // [MTP] Second mcast — multicast [h_norm|e_norm] from sender to all cores
         // ====================================================================
         {
-            DPRINT << "BRISC starting mcast_eh" << ENDL();
+            deepseek_b1_ops::Mcast::Op<
+                McastEhCTArgs,
+                Core::enable_mtp && Core::is_input_core,
+                Core::enable_mtp && Core::is_mcast_receiver_core,
+                Core::enable_mtp && Core::is_eh_matmul_core,
+                true>
+                mcast_eh;
             DeviceZoneScopedN("MTP_EH_MCAST");
             mcast_eh(mcast_eh_args);
         }
@@ -742,9 +709,9 @@ void kernel_main() {
         uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
         // DPRINT << "NCRISC eh_out_w=" << eh_out_w << ENDL();
         if constexpr (Core::is_eh_matmul_core) {
-            DPRINT << "NCRISC eh_matmul_core wait" << ENDL();
+            // DPRINT << "NCRISC eh_matmul_core wait" << ENDL();
             cb_wait_front(eh_out_cb, eh_out_w);
-            DPRINT << "NCRISC eh_matmul_core wait done" << ENDL();
+            // DPRINT << "NCRISC eh_matmul_core wait done" << ENDL();
             constexpr uint32_t argmax_core_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_core_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
             // Use L1 address from get_semaphore (sem_l1_base + id*L1_ALIGNMENT); raw id would target wrong offset.
@@ -752,6 +719,7 @@ void kernel_main() {
             uint64_t sem_addr = get_noc_addr(argmax_core_noc_x, argmax_core_noc_y, eh_sem_l1_addr);
             noc_semaphore_inc(sem_addr, 1);
             cb_pop_front(eh_out_cb, eh_out_w);
+            DPRINT << "eM" << ENDL();
         }
 #endif
 
@@ -766,14 +734,19 @@ void kernel_main() {
             // DPRINT << "BRISC argmax final core wait for EH matmul done sem" << ENDL();
             // DPRINT << "BRISC argmax final core num_mm_cores=" << num_mm_cores << ENDL();
             noc_semaphore_wait(eh_matmul_done_sem, num_cores);
-            // DPRINT << "BRISC argmax final core wait for EH matmul done sem done" << ENDL();
             noc_semaphore_set(eh_matmul_done_sem, 0);
+            {
+                constexpr uint32_t scb = get_named_compile_time_arg_val("argmax_socket_cb");
+                cb_wait_front(scb, 1);
+                invalidate_l1_cache();
+                uint32_t sv = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(scb));
+                DPRINT << "sV=" << sv << ENDL();
+            }
             sampling_op.send_deferred_socket_output_brisc(sampling_args);
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
         }
 #endif
-
         }  // end if constexpr (Core::enable_mtp)
 
         // ====================================================================
@@ -784,5 +757,4 @@ void kernel_main() {
         }
     }
     mcast.teardown();
-    mcast_eh.teardown();
 }
