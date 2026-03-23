@@ -35,10 +35,6 @@ def reference_model(hf_config):
     return DeepseekV3MoE(moe_config).eval()
 
 
-def _clone_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {name: tensor.detach().clone() for name, tensor in state_dict.items()}
-
-
 def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
     if mode == "prefill":
         torch_input, _ = load_reference_io_tensors_for_module(mode, module_path, num_tokens, 1)

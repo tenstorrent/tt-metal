@@ -375,8 +375,7 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_repeat_permute_expert_weights(
         cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
     ) -> ttnn.Tensor:
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
+        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights, **cfg["topk_weights_repeat"])
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
         topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
