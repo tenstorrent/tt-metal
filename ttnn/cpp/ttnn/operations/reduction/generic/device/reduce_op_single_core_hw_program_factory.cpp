@@ -39,13 +39,6 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
     uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
 
-    // Calculate padding dimensions from logical shape
-    const auto& logical_shape = a.logical_shape();
-    uint32_t logical_W = logical_shape[3];
-    uint32_t logical_H = logical_shape[2];
-    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
-    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
-
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
 
     tt_metal::Program program = tt_metal::CreateProgram();

@@ -127,10 +127,9 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
-        // For non-H/W dimension reductions, we need to use transpose operations.
-        // The transpose kernels require properly padded input, so we fill the
-        // implicit tile padding here. For direct H/W/HW reductions (single_reduce_op),
-        // the reduction kernels handle padding natively.
+        // For non-H/W dimension reductions, we transpose the target dimension
+        // into the H position. The transpose requires properly padded input so
+        // that neutral values are preserved during physical tile rearrangement.
         bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
         Tensor padded_input = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
 
@@ -149,11 +148,6 @@ static Tensor reduce_impl(
                     int reduce_dim = i_dim;
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
-                        // The transpose creates a new tensor whose padding regions need to be filled
-                        // with the neutral value for the reduction operation.
-                        if (output_tensor.layout() == TILE_LAYOUT) {
-                            output_tensor = ttnn::fill_implicit_tile_padding(output_tensor, pad_value);
-                        }
                         reduce_dim = rank - 2;
                     }
                     if (use_reduce_type) {
@@ -179,11 +173,6 @@ static Tensor reduce_impl(
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
-                        // For multi-dim reductions, the transposed tensor may be used in subsequent
-                        // reduction iterations, so we need to fill its padding as well.
-                        if (output_tensor.layout() == TILE_LAYOUT) {
-                            output_tensor = ttnn::fill_implicit_tile_padding(output_tensor, pad_value);
-                        }
                     }
                 }
             }
@@ -386,8 +375,7 @@ Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+    auto input_tensor = input_tensor_arg;
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
     if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
