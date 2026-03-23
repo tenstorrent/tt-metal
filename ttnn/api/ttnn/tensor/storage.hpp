@@ -63,8 +63,6 @@ private:
 //
 // DeviceStorage owns the lifetime of the underlying device memory.
 // Copying the DeviceStorage will share the ownership of the underlying device memory.
-// DeviceStorage currently allow "leaking" of the underlying device memory ownership via get_mesh_buffer(),
-// this will be addressed in #39064.
 //
 // DeviceStorage has two possible states:
 // - Allocated: the underlying device memory is allocated.
@@ -73,7 +71,7 @@ private:
 //   - Can be switched to the deallocated state by calling deallocate.
 // - Deallocated: the underlying device memory is released.
 //   - Query of device memory state/ coordinates/ device will throw.
-//   - is_uniform_storage will return true.
+//   - is_uniform_storage will be undefined (currently returns true for backward compatibility).
 //   - Calls to deallocate will have no effect.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
@@ -136,7 +134,7 @@ struct DeviceStorage {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 
-    // Returns true if the tensor spans across all devices in a mesh or if the DeviceStorage is not allocated.
+    // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
