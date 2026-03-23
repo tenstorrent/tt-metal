@@ -581,6 +581,13 @@ def test_text_decode(mesh_device, reset_seeds, ensure_gc):
     logger.info(f"DIAG RoPE 1D cos first5: {tt_cos_at_pos[:5].tolist()}")
     logger.info(f"DIAG RoPE M-RoPE cos first5: {mrope_cos_at_pos[:5].tolist()}")
 
+    # Enable per-op attention debug for layer 0
+    from models.tt_transformers.tt.attention import Attention as _AttnCls
+
+    _AttnCls._debug_decode = True
+    _AttnCls._debug_layer = 0
+    _AttnCls._debug_captures = {}
+
     decode_logits, _ = generator.decode_forward(
         out_tok,
         current_pos,
@@ -589,6 +596,7 @@ def test_text_decode(mesh_device, reset_seeds, ensure_gc):
         kv_cache=tt_kv_cache,
     )
     ttnn.transformer.paged_scaled_dot_product_attention_decode = _orig_paged_sdpa
+    _AttnCls._debug_decode = False
 
     # Restore hooks
     tt_model._supports_on_device_sampling = was_sampling
@@ -909,6 +917,171 @@ def test_text_decode(mesh_device, reset_seeds, ensure_gc):
             logger.info(
                 f"DIAG layer0_attn_out (user0 full) #inf={n_inf}, #nan={n_nan}, max={tt_attn_full.abs().max():.4e}"
             )
+
+    # ── Per-op attention debug summary (from Attention._debug_captures) ──
+    dbg = _AttnCls._debug_captures
+    if dbg:
+        logger.info("=" * 80)
+        logger.info("PER-OP ATTENTION DEBUG – Layer 0, device 0 (row0, col0)")
+        logger.info("=" * 80)
+        stage_order = [
+            "input",
+            "qkv_matmul",
+            "qkv_after_bias",
+            "qkv_allreduce",
+            "qkv_after_slice",
+            "q_pre_norm",
+            "k_pre_norm",
+            "v_heads",
+            "q_post_norm",
+            "k_post_norm",
+            "q_after_rope",
+            "k_after_rope",
+            "sdpa_out",
+            "concat_heads",
+            "after_allgather",
+            "after_user_select",
+            "wo_out",
+            "wo_allreduce",
+        ]
+        for stage in stage_order:
+            key = f"L0_{stage}"
+            if key in dbg:
+                t = dbg[key]
+                if t.dim() >= 3 and t.shape[-2] > 1:
+                    u0 = t[..., 0, :].flatten()
+                else:
+                    u0 = t.flatten()
+                logger.info(
+                    f"  {stage:25s}: shape={str(list(t.shape)):30s} "
+                    f"u0_norm={u0.norm():.4e}  u0_max={u0.abs().max():.4e}  "
+                    f"all_max={t.abs().max():.4e}  #inf={torch.isinf(t).sum().item()}  "
+                    f"#nan={torch.isnan(t).sum().item()}"
+                )
+
+        # ── Compute PCC of each stage against HF reference where possible ──
+        # Build HF reference tensors for layer 0 stages
+        hf_refs = {}
+        hf_layer0 = ref_model.model.language_model.layers[0]
+        hf_sa = hf_layer0.self_attn
+        hf_embed_1d = hf_hs[0][0, -1, :].float()
+
+        # input = output of attention norm
+        hf_norm_w = hf_layer0.input_layernorm.weight.float()
+        hf_refs["input_full"] = torch.nn.functional.rms_norm(hf_embed_1d, (hf_embed_1d.shape[-1],), hf_norm_w)
+
+        # QKV projections (full, raw HF ordering)
+        hf_q_full = hf_sa.q_proj.weight.float() @ hf_refs["input_full"] + hf_sa.q_proj.bias.float()
+        hf_k_full = hf_sa.k_proj.weight.float() @ hf_refs["input_full"] + hf_sa.k_proj.bias.float()
+        hf_v_full = hf_sa.v_proj.weight.float() @ hf_refs["input_full"] + hf_sa.v_proj.bias.float()
+
+        logger.info("-" * 80)
+        logger.info("PER-OP PCC vs HF reference (layer 0, user 0, device 0):")
+        logger.info("-" * 80)
+
+        # input: compare TT device-0 user-0 slice with HF norm output slice
+        if "L0_input" in dbg:
+            tt_inp = dbg["L0_input"]
+            if tt_inp.dim() >= 3:
+                tt_inp_u0 = tt_inp[..., 0, :].flatten()
+            else:
+                tt_inp_u0 = tt_inp.flatten()
+            hf_inp_slice = hf_refs["input_full"][: tt_inp_u0.shape[0]]
+            if tt_inp_u0.shape[0] >= 2 and hf_inp_slice.shape[0] >= 2:
+                ndim = min(tt_inp_u0.shape[0], hf_inp_slice.shape[0])
+                _, p = comp_pcc(hf_inp_slice[:ndim].unsqueeze(0), tt_inp_u0[:ndim].unsqueeze(0), 0.0)
+                logger.info(f"  {'input':25s}: PCC={p}")
+
+        # qkv_after_slice: full QKV for user-0 on device-0, after slice_mat
+        # This is the 768-element QKV vector (4Q*128 + 1K*128 + 1V*128 for device-0's group)
+        if "L0_qkv_after_slice" in dbg:
+            tt_qkv_slice = dbg["L0_qkv_after_slice"]
+            if tt_qkv_slice.dim() >= 3:
+                tt_qkv_u0 = tt_qkv_slice[..., 0, :].flatten()
+            else:
+                tt_qkv_u0 = tt_qkv_slice.flatten()
+            # Build the expected QKV for device-0's head group (row 0, col 0)
+            from models.tt_transformers.tt.load_checkpoints import reverse_permute
+
+            attn0 = tt_model.layers[0].attention
+            hd = attn0.head_dim
+            n_q_real = hf_q_full.shape[0] // hd
+            n_kv_real = hf_k_full.shape[0] // hd
+            hf_q_meta = reverse_permute(hf_q_full.unsqueeze(-1), n_q_real, hf_q_full.shape[0], 1).squeeze(-1)
+            hf_k_meta = reverse_permute(hf_k_full.unsqueeze(-1), n_kv_real, hf_k_full.shape[0], 1).squeeze(-1)
+            q_order = attn0._build_q_head_order()
+            kv_order = attn0._build_kv_head_order()
+            hf_q_rearr = torch.cat(
+                [hf_q_meta[idx * hd : (idx + 1) * hd] if idx is not None else torch.zeros(hd) for idx in q_order]
+            )
+            hf_k_rearr = torch.cat([hf_k_meta[idx * hd : (idx + 1) * hd] for idx in kv_order])
+            hf_v_rearr = torch.cat([hf_v_full[idx * hd : (idx + 1) * hd] for idx in kv_order])
+            # Row 0 QKV: first n_local_heads Q heads, first n_local_kv_heads K/V heads
+            n_lq = attn0.n_local_heads
+            n_lkv = attn0.n_local_kv_heads
+            hf_qkv_row0 = torch.cat([hf_q_rearr[: n_lq * hd], hf_k_rearr[: n_lkv * hd], hf_v_rearr[: n_lkv * hd]])
+            ndim = min(tt_qkv_u0.shape[0], hf_qkv_row0.shape[0])
+            if ndim >= 2:
+                _, p = comp_pcc(hf_qkv_row0[:ndim].unsqueeze(0), tt_qkv_u0[:ndim].unsqueeze(0), 0.0)
+                logger.info(f"  {'qkv_after_slice':25s}: PCC={p}")
+
+        # q_pre_norm / k_pre_norm: Q/K heads before norm
+        for prefix, hf_proj_full, label in [
+            ("q_pre_norm", hf_q_full, "q_pre_norm"),
+            ("k_pre_norm", hf_k_full, "k_pre_norm"),
+        ]:
+            key = f"L0_{prefix}"
+            if key in dbg:
+                tt_t = dbg[key]
+                if tt_t.dim() >= 3:
+                    tt_u0 = tt_t[..., 0, :].flatten()
+                else:
+                    tt_u0 = tt_t.flatten()
+                logger.info(f"  {label:25s}: u0_norm={tt_u0.norm():.4e} shape={list(tt_t.shape)} (no HF ref PCC)")
+
+        # sdpa_out
+        if "L0_sdpa_out" in dbg:
+            tt_sdpa = dbg["L0_sdpa_out"]
+            logger.info(
+                f"  {'sdpa_out':25s}: shape={list(tt_sdpa.shape)} " f"u0_norm={tt_sdpa[..., 0, :].flatten().norm():.4e}"
+            )
+
+        # after_user_select (= Wo input on TG)
+        if "L0_after_user_select" in dbg and "layer0_before_oproj" in hf_intermediates:
+            tt_wo_in = dbg["L0_after_user_select"]
+            if tt_wo_in.dim() >= 3:
+                tt_wo_u0 = tt_wo_in[..., 0, :].flatten()
+            else:
+                tt_wo_u0 = tt_wo_in.flatten()
+            hf_before_oproj = hf_intermediates["layer0_before_oproj"].squeeze().float()
+            from models.tt_transformers.tt.load_checkpoints import reverse_permute
+
+            attn0 = tt_model.layers[0].attention
+            hd = attn0.head_dim
+            n_local = attn0.n_local_heads
+            q_order = attn0._build_q_head_order()
+            row0_heads = q_order[:n_local]
+            hf_row0 = torch.cat([hf_before_oproj[h * hd : (h + 1) * hd] for h in row0_heads if h is not None])
+            ndim = min(tt_wo_u0.shape[0], hf_row0.shape[0])
+            if ndim >= 2:
+                _, p = comp_pcc(hf_row0[:ndim].unsqueeze(0), tt_wo_u0[:ndim].unsqueeze(0), 0.0)
+                logger.info(f"  {'after_user_select':25s}: PCC={p} (= Wo input)")
+
+        # wo_allreduce (= attention output)
+        if "L0_wo_allreduce" in dbg and "layer0_attn_out" in hf_intermediates:
+            tt_wo_ar = dbg["L0_wo_allreduce"]
+            if tt_wo_ar.dim() >= 3:
+                tt_wo_u0 = tt_wo_ar[..., 0, :].flatten()
+            else:
+                tt_wo_u0 = tt_wo_ar.flatten()
+            hf_attn_out = hf_intermediates["layer0_attn_out"].squeeze().float()
+            hf_slice = hf_attn_out[: tt_wo_u0.shape[0]]
+            ndim = min(tt_wo_u0.shape[0], hf_slice.shape[0])
+            if ndim >= 2:
+                _, p = comp_pcc(hf_slice[:ndim].unsqueeze(0), tt_wo_u0[:ndim].unsqueeze(0), 0.0)
+                logger.info(f"  {'wo_allreduce':25s}: PCC={p} (= attn output, dev0 slice)")
+
+        logger.info("=" * 80)
 
     # Compare SDPA output (before o_proj/Wo) between TT and HF
     if "layer0_wo_input_row0" in captured and "layer0_before_oproj" in hf_intermediates:

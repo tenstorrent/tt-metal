@@ -16,6 +16,14 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_
 
 
 class Attention(LightweightModule):
+    # ---- per-op decode debugging ----
+    # Set _debug_decode = True (and optionally _debug_layer) before a forward
+    # pass.  After the pass, _debug_captures will contain per-stage torch
+    # tensors (from device-0) keyed as "L<layer>_<stage>".
+    _debug_decode = False
+    _debug_layer = 0  # layer index to instrument (-1 = all layers)
+    _debug_captures = {}
+
     def __init__(
         self,
         mesh_device,
@@ -32,6 +40,7 @@ class Attention(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        self._layer_idx = layer_num
         self.args = args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -585,6 +594,38 @@ class Attention(LightweightModule):
         k_tensor = ttnn.to_memory_config(k_tensor, k_mem_config)
         return q_tensor, k_tensor
 
+    # ------------------------------------------------------------------
+    # Debug helpers
+    # ------------------------------------------------------------------
+    def _dbg(self, stage: str, tensor):
+        """Capture a per-device-0 torch snapshot when decode debug is active."""
+        if not Attention._debug_decode:
+            return
+        if Attention._debug_layer >= 0 and self._layer_idx != Attention._debug_layer:
+            return
+        from loguru import logger
+
+        key = f"L{self._layer_idx}_{stage}"
+        try:
+            devs = ttnn.get_device_tensors(tensor)
+            t0 = ttnn.to_torch(devs[0]).detach().float()
+            Attention._debug_captures[key] = t0
+
+            # Compact stats – user-0 row and overall
+            flat = t0.flatten()
+            if t0.dim() >= 3 and t0.shape[-2] > 1:
+                u0 = t0[..., 0, :].flatten()
+            else:
+                u0 = flat
+            logger.info(
+                f"ATTN_DBG {key}: shape={list(t0.shape)} dtype={tensor.dtype} "
+                f"u0_norm={u0.norm():.4e} u0_max={u0.abs().max():.4e} "
+                f"all_max={flat.abs().max():.4e} #inf={torch.isinf(flat).sum().item()} "
+                f"#nan={torch.isnan(flat).sum().item()}"
+            )
+        except Exception as exc:
+            logger.warning(f"ATTN_DBG {key}: capture failed – {exc}")
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -595,6 +636,8 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        self._dbg("input", x)
+
         qkv_output_dtype = (
             getattr(self, "qkv_output_dtype", self.ccl_dtype) if self.TG else self.activation_dtype or ttnn.bfloat16
         )
@@ -608,12 +651,15 @@ class Attention(LightweightModule):
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
+        self._dbg("qkv_matmul", xqkv_fused_sharded)
+
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
             # WARNING: must not change the batch size between compiling and executing a trace
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
+            self._dbg("qkv_after_bias", xqkv_fused_sharded)
 
         ttnn.deallocate(x)
         qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
@@ -633,14 +679,20 @@ class Attention(LightweightModule):
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
+        self._dbg("qkv_allreduce", xqkv_fused)
+
         if self.TG:
-            # TODO: Slice the fused_query_key_value tensor get batch=8
+            # Clamp to prevent ghost-user inf values from producing NaN via
+            # IEEE 754 "0 × inf = NaN" in the selection matmul below.
+            if getattr(self, "ccl_dtype", None) == ttnn.bfloat16:
+                xqkv_fused = ttnn.clip(xqkv_fused, -1e30, 1e30)
             xqkv_fused = ttnn.matmul(
                 self.slice_mat,
                 xqkv_fused,
                 dtype=ttnn.bfloat16,
                 memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
             )
+            self._dbg("qkv_after_slice", xqkv_fused)
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
             if self.prefetcher is None:
@@ -667,9 +719,15 @@ class Attention(LightweightModule):
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
         )
+        self._dbg("q_pre_norm", q_heads_pre_rot_1BQD)
+        self._dbg("k_pre_norm", k_heads_pre_rot_1BKD)
+        self._dbg("v_heads", v_heads_1BKD)
+
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE, norm_config=norm_config)
+        self._dbg("q_post_norm", q_heads_pre_rot_1BQD)
+        self._dbg("k_post_norm", k_heads_pre_rot_1BKD)
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
@@ -681,15 +739,14 @@ class Attention(LightweightModule):
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )
         else:
-            # Q Rotary Embeddings
             q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
             )
-
-            # K Rotary Embeddings
             k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
                 k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
             )
+        self._dbg("q_after_rope", q_heads_1BQD)
+        self._dbg("k_after_rope", k_heads_1BKD)
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
@@ -750,6 +807,8 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
+        self._dbg("sdpa_out", attn_output_1G4D)
+
         ttnn.deallocate(q_heads_1BQD)
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
@@ -763,6 +822,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
+        self._dbg("concat_heads", attn_output_cat)
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
@@ -838,10 +898,13 @@ class Attention(LightweightModule):
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
+            self._dbg("after_allgather", attn_output)
+
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-                # user_selection_matrix = [1, 1, 32, 128]
-                # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
+                # Same ghost-user inf guard as the slice_mat path above.
+                if getattr(self, "ccl_dtype", None) == ttnn.bfloat16:
+                    attn_output = ttnn.clip(attn_output, -1e30, 1e30)
                 attn_output = ttnn.matmul(
                     self.user_selection_matrix,
                     attn_output,
@@ -849,8 +912,8 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
+                self._dbg("after_user_select", attn_output)
 
-            # TODO: Fix this once self.TG supports dram-sharded matmuls
             wo_output_dtype = getattr(self, "wo_output_dtype", ttnn.bfloat8_b if self.TG else None)
             dense_out_sharded = ttnn.linear(
                 attn_output,
@@ -863,10 +926,10 @@ class Attention(LightweightModule):
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
+            self._dbg("wo_out", dense_out_sharded)
 
             ttnn.deallocate(attn_output_cat)
 
-            # All reduce
             wo_ccl_dtype = getattr(self, "wo_ccl_dtype", self.ccl_dtype)
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
@@ -883,6 +946,7 @@ class Attention(LightweightModule):
                 use_composite=True if self.hidden_size == 8192 else False,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
+            self._dbg("wo_allreduce", dense_out_reduced)
 
             if not self.TG:
                 dense_out_reduced = ttnn.to_memory_config(
