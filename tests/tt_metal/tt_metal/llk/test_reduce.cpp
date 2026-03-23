@@ -627,7 +627,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -664,7 +663,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -704,7 +702,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -745,7 +742,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -782,7 +778,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -823,7 +818,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
