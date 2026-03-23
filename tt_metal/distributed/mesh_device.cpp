@@ -31,6 +31,7 @@
 #include "impl/allocator/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "host_api.hpp"
@@ -1594,6 +1595,11 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
     auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
     const std::string realtime_profiler_kernel_path = "tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp";
+    const std::string realtime_profiler_push_kernel_path =
+        "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
+
+    // Ring buffer size: header (64B) + 128 entries * 64B = 8256B
+    constexpr uint32_t kRingBufferSize = 64 + 128 * 64;
 
     // Set up real-time profiler for each local device in the mesh
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {
@@ -1705,7 +1711,39 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 dispatch_s_core.y);
         }
 
-        // Compile and launch real-time profiler kernel via slow dispatch
+        // Allocate L1 ring buffer for BRISC→NCRISC handoff on the profiler core
+        {
+            const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            uint32_t ring_buffer_size_aligned = tt::align(kRingBufferSize, l1_alignment);
+
+            auto ring_shard_params = ShardSpecBuffer(
+                CoreRangeSet(CoreRange(realtime_profiler_core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            DeviceLocalBufferConfig ring_specs = {
+                .page_size = ring_buffer_size_aligned,
+                .buffer_type = BufferType::L1,
+                .sharding_args = BufferShardingArgs(ring_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+                .bottom_up = std::nullopt,
+                .sub_device_id = std::nullopt,
+            };
+            MeshBufferConfig ring_mesh_specs = ReplicatedBufferConfig{.size = ring_buffer_size_aligned};
+            dev_state.ring_buffer = MeshBuffer::create(ring_mesh_specs, ring_specs, mesh_device.get());
+        }
+        uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
+
+        // Get PCIe core NOC-0 coordinates (NCRISC kernel auto-translates to NOC 1)
+        uint32_t pcie_noc_x = 0;
+        uint32_t pcie_noc_y = 0;
+        {
+            const auto& cluster = MetalContext::instance().get_cluster();
+            ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
+            const auto& soc = cluster.get_soc_desc(mmio_device_id);
+            const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+            TT_ASSERT(!pcie_cores.empty());
+            pcie_noc_x = pcie_cores.front().x;
+            pcie_noc_y = pcie_cores.front().y;
+        }
+
+        // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher)
         {
             Program realtime_profiler_program;
 
@@ -1728,16 +1766,27 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 dispatch_data_addr_b = realtime_profiler_base_addr + kernel_start_b_offset;
             }
 
-            DataMovementConfig realtime_profiler_config;
-            realtime_profiler_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
-            realtime_profiler_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
-            realtime_profiler_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
-            realtime_profiler_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
+            // BRISC kernel: reads from dispatch_s, writes to ring buffer
+            DataMovementConfig brisc_config;
+            brisc_config.processor = DataMovementProcessor::RISCV_0;
+            brisc_config.noc = NOC::RISCV_0_default;
+            brisc_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
+            brisc_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
+            brisc_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
+            brisc_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
+            brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             CreateKernel(
-                realtime_profiler_program,
-                realtime_profiler_kernel_path,
-                realtime_profiler_core,
-                realtime_profiler_config);
+                realtime_profiler_program, realtime_profiler_kernel_path, realtime_profiler_core, brisc_config);
+
+            // NCRISC kernel: drains ring buffer to host via PCIe
+            DataMovementConfig ncrisc_config;
+            ncrisc_config.processor = DataMovementProcessor::RISCV_1;
+            ncrisc_config.noc = NOC::RISCV_1_default;
+            ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
+            ncrisc_config.defines["PCIE_NOC_X"] = std::to_string(pcie_noc_x);
+            ncrisc_config.defines["PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
+            CreateKernel(
+                realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
             tt::tt_metal::detail::CompileProgram(device, realtime_profiler_program, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
@@ -1747,10 +1796,14 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
             log_info(
                 tt::LogMetal,
-                "Device {}: launched real-time profiler kernel on core ({}, {})",
+                "Device {}: launched real-time profiler BRISC+NCRISC kernels on core ({}, {}), "
+                "ring_buffer_addr=0x{:x}, pcie_noc=({}, {})",
                 device_id,
                 realtime_profiler_core.x,
-                realtime_profiler_core.y);
+                realtime_profiler_core.y,
+                ring_buffer_addr,
+                pcie_noc_x,
+                pcie_noc_y);
         }
 
         realtime_profiler_devices_.push_back(std::move(dev_state));

@@ -42,6 +42,7 @@
 namespace tt::tt_metal {
 class Allocator;
 class HWCommandQueue;
+class MeshBuffer;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -149,6 +150,7 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);  // Position in the mesh
         CoreCoord realtime_profiler_core;               // Core running real-time profiler kernel
         std::unique_ptr<D2HSocket> socket;              // D2H socket for this device
+        std::shared_ptr<MeshBuffer> ring_buffer;        // L1 ring buffer (BRISC→NCRISC handoff)
         uint64_t first_timestamp = 0;                   // First device timestamp (for normalization)
         int64_t sync_host_start = 0;                    // Host time when sync started
         double sync_frequency = 0.0;                    // Device clock frequency in GHz
@@ -164,6 +166,7 @@ private:
             mesh_coord(o.mesh_coord),
             realtime_profiler_core(o.realtime_profiler_core),
             socket(std::move(o.socket)),
+            ring_buffer(std::move(o.ring_buffer)),
             first_timestamp(o.first_timestamp),
             sync_host_start(o.sync_host_start),
             sync_frequency(o.sync_frequency),
