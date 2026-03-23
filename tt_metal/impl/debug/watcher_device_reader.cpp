@@ -272,6 +272,7 @@ private:
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
     void DumpStackUsage() const;
+    void DumpCBUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
@@ -616,10 +617,13 @@ void WatcherDeviceReader::Core::Dump() const {
         }
     }
 
-    // Ring buffer at the end because it can print a bunch of data, same for stack usage
+    // Ring buffer at the end because it can print a bunch of data, same for stack usage and CB usage
     if (enabled) {
         if (!rtoptions.watcher_stack_usage_disabled()) {
             DumpStackUsage();
+        }
+        if (!rtoptions.watcher_cb_usage_disabled()) {
+            DumpCBUsage();
         }
         if (!rtoptions.watcher_ring_buffer_disabled()) {
             DumpRingBuffer();
@@ -1092,6 +1096,124 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
             }
         }
     }
+}
+
+void WatcherDeviceReader::Core::DumpCBUsage() const {
+    auto cb_usage = mbox_data_.watcher().cb_usage();
+    const auto& hal = reader_.env.get_hal();
+
+    // Check if any CB was used at all
+    bool any_cb_used = false;
+    for (int i = 0; i < dev_msgs::DEBUG_CB_USAGE_NUM_CBS; i++) {
+        if (cb_usage.reserve_count()[i] > 0 || cb_usage.push_count()[i] > 0 || cb_usage.wait_count()[i] > 0 ||
+            cb_usage.pop_count()[i] > 0) {
+            any_cb_used = true;
+            break;
+        }
+    }
+
+    if (!any_cb_used && cb_usage.kernel_count() == 0) {
+        return;  // Nothing to report
+    }
+
+    // Helper to convert a processor bitmask to a string of processor names
+    auto mask_to_names = [&](uint32_t mask) -> string {
+        string names;
+        auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+        for (uint32_t p = 0; p < num_processors; p++) {
+            if (mask & (1u << p)) {
+                if (!names.empty()) {
+                    names += "+";
+                }
+                names += get_riscv_name(hal, programmable_core_type_, p);
+            }
+        }
+        return names.empty() ? "none" : names;
+    };
+
+    string out;
+    out += fmt::format("\n\tcb_usage: kernels_launched={}", cb_usage.kernel_count());
+
+    bool race_detected = false;
+    bool warn_detected = false;
+    for (int i = 0; i < dev_msgs::DEBUG_CB_USAGE_NUM_CBS; i++) {
+        uint16_t reserves = cb_usage.reserve_count()[i];
+        uint16_t pushes = cb_usage.push_count()[i];
+        uint16_t waits = cb_usage.wait_count()[i];
+        uint16_t pops = cb_usage.pop_count()[i];
+        if (reserves == 0 && pushes == 0 && waits == 0 && pops == 0) {
+            continue;
+        }
+
+        uint32_t pages_pushed = cb_usage.pages_pushed()[i];
+        uint32_t pages_popped = cb_usage.pages_popped()[i];
+        uint32_t reserve_mask = cb_usage.reserve_risc_mask()[i];
+        uint32_t push_mask = cb_usage.push_risc_mask()[i];
+        uint32_t wait_mask = cb_usage.wait_risc_mask()[i];
+        uint32_t pop_mask = cb_usage.pop_risc_mask()[i];
+
+        out += fmt::format(
+            "\n\t  cb[{:2}] reserve:{:5} push:{:5} wait:{:5} pop:{:5} pages_pushed:{} pages_popped:{}",
+            i,
+            reserves,
+            pushes,
+            waits,
+            pops,
+            pages_pushed,
+            pages_popped);
+        out +=
+            fmt::format("\n\t         producers({}) consumers({})", mask_to_names(push_mask), mask_to_names(pop_mask));
+
+        // Race condition detection: multiple processors pushing or popping same CB
+        int push_risc_count = __builtin_popcount(push_mask);
+        int pop_risc_count = __builtin_popcount(pop_mask);
+
+        if (push_risc_count > 1) {
+            out += " **RACE:multi-push**";
+            race_detected = true;
+        }
+        if (pop_risc_count > 1) {
+            out += " **RACE:multi-pop**";
+            race_detected = true;
+        }
+
+        // Protocol correctness: reserve/push processor mismatch
+        if (reserve_mask != push_mask && (reserve_mask != 0 || push_mask != 0)) {
+            out += " WARN:reserve/push processor mismatch";
+            warn_detected = true;
+        }
+        // Protocol correctness: wait/pop processor mismatch
+        if (wait_mask != pop_mask && (wait_mask != 0 || pop_mask != 0)) {
+            out += " WARN:wait/pop processor mismatch";
+            warn_detected = true;
+        }
+        // Protocol correctness: reserve/push count mismatch
+        if (reserves != pushes) {
+            out += fmt::format(" WARN:reserve/push count mismatch(delta={})", (int)reserves - (int)pushes);
+            warn_detected = true;
+        }
+        // Protocol correctness: wait/pop count mismatch
+        if (waits != pops) {
+            out += fmt::format(" WARN:wait/pop count mismatch(delta={})", (int)waits - (int)pops);
+            warn_detected = true;
+        }
+        // Data flow balance: pages pushed vs popped
+        if (pages_pushed != pages_popped) {
+            out += fmt::format(" WARN:page imbalance(delta={})", (int64_t)pages_pushed - (int64_t)pages_popped);
+            warn_detected = true;
+        }
+    }
+
+    if (race_detected || warn_detected) {
+        out += "\n\t  WARNING: CB race condition or protocol violation detected!";
+        log_warning(
+            tt::LogMetal,
+            "Watcher detected potential CB race condition or protocol violation on {}: "
+            "check watcher log for details",
+            core_str_);
+    }
+
+    fprintf(reader_.f, "%s", out.c_str());
 }
 
 void WatcherDeviceReader::Core::ValidateKernelIDs() const {

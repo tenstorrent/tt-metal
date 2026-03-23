@@ -6,6 +6,7 @@
 
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
+#include "api/debug/cb_usage.h"
 
 #if defined(WATCHER_ENABLED)
 
@@ -33,6 +34,9 @@ inline void clear_previous_launch_message_entry_for_watcher() {
         launch_msg->kernel_config.watcher_kernel_ids[idx] = 0;
     }
     launch_msg->kernel_config.brisc_noc_id = 0;
+
+    // Track kernel launch count for CB usage analysis
+    WATCHER_KERNEL_COUNT_INC();
 }
 #define CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER() clear_previous_launch_message_entry_for_watcher()
 #else  // !WATCHER_ENABLED

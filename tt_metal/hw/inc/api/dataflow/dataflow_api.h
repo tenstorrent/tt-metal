@@ -28,6 +28,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
+#include "api/debug/cb_usage.h"
 
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
@@ -198,6 +199,8 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 // clang-format on
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
+    WATCHER_CB_PUSH(operand, num_pages);
+
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
@@ -240,6 +243,8 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
+    WATCHER_CB_POP(operand, num_pages);
+
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -387,6 +392,8 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
+    WATCHER_CB_RESERVE(operand);
+
     uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -466,6 +473,8 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
+    WATCHER_CB_WAIT(operand);
+
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 

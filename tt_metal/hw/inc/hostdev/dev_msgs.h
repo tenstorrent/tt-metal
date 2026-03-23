@@ -281,6 +281,26 @@ struct debug_pause_msg_t {
     uint8_t pad[3];  // CODEGEN:skip
 };
 
+constexpr static int DEBUG_CB_USAGE_NUM_CBS = 32;
+struct debug_cb_usage_msg_t {
+    // Per-CB call counts for all 4 CB operations
+    volatile uint16_t reserve_count[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint16_t push_count[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint16_t wait_count[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint16_t pop_count[DEBUG_CB_USAGE_NUM_CBS];
+    // Per-CB page totals for push and pop (data flow balance check)
+    volatile uint32_t pages_pushed[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint32_t pages_popped[DEBUG_CB_USAGE_NUM_CBS];
+    // Per-CB bitmask of which processors called each operation (for race condition detection)
+    volatile uint32_t reserve_risc_mask[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint32_t push_risc_mask[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint32_t wait_risc_mask[DEBUG_CB_USAGE_NUM_CBS];
+    volatile uint32_t pop_risc_mask[DEBUG_CB_USAGE_NUM_CBS];
+    // Number of kernel launches observed on this core
+    volatile uint16_t kernel_count;
+    uint16_t pad;  // CODEGEN:skip
+};
+
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
 constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
 struct debug_ring_buf_msg_t {
@@ -324,6 +344,7 @@ struct watcher_msg_t {
     struct debug_stack_usage_t stack_usage;
     struct debug_insert_delays_msg_t debug_insert_delays;
     struct debug_ring_buf_msg_t debug_ring_buf;
+    struct debug_cb_usage_msg_t cb_usage;
 };
 
 #ifndef CODEGEN

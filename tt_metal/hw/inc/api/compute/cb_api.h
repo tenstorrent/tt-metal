@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#include "api/debug/cb_usage.h"
 #ifdef ARCH_QUASAR
 #include "api/debug/assert.h"
 #endif
@@ -41,7 +42,12 @@ namespace ckernel {
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
 // clang-format on
-ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
+ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    UNPACK(({
+        WATCHER_CB_WAIT(cbid);
+        llk_wait_tiles(cbid, ntiles);
+    }));
+}
 
 // clang-format off
 /**
@@ -73,7 +79,12 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
-ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(cbid, ntiles))); }
+ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
+    UNPACK(({
+        llk_pop_tiles(cbid, ntiles);
+        WATCHER_CB_POP(cbid, ntiles);
+    }));
+}
 
 // clang-format off
 /**
@@ -92,9 +103,15 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
 // clang-format on
 ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
-    PACK((llk_wait_for_free_tiles<false, false, false>(cbid, ntiles)));
+    PACK(({
+        WATCHER_CB_RESERVE(cbid);
+        llk_wait_for_free_tiles<false, false, false>(cbid, ntiles);
+    }));
 #else
-    PACK((llk_wait_for_free_tiles(cbid, ntiles)));
+    PACK(({
+        WATCHER_CB_RESERVE(cbid);
+        llk_wait_for_free_tiles(cbid, ntiles);
+    }));
 #endif
 }
 
@@ -130,9 +147,15 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
 // clang-format on
 ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
-    PACK((llk_push_tiles<false, false>(cbid, ntiles)));
+    PACK(({
+        llk_push_tiles<false, false>(cbid, ntiles);
+        WATCHER_CB_PUSH(cbid, ntiles);
+    }));
 #else
-    PACK((llk_push_tiles(cbid, ntiles)));
+    PACK(({
+        llk_push_tiles(cbid, ntiles);
+        WATCHER_CB_PUSH(cbid, ntiles);
+    }));
 #endif
 }
 

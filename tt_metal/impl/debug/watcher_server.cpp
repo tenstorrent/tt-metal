@@ -393,6 +393,22 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         // data has been written.
         data.debug_ring_buf().current_ptr() = DEBUG_RING_BUFFER_STARTING_INDEX;
         data.debug_ring_buf().wrapped() = 0;
+
+        // Initialize CB usage tracking to zero
+        data.cb_usage().kernel_count() = 0;
+        data.cb_usage().pad() = 0;
+        for (int cb = 0; cb < dev_msgs::DEBUG_CB_USAGE_NUM_CBS; cb++) {
+            data.cb_usage().reserve_count()[cb] = 0;
+            data.cb_usage().push_count()[cb] = 0;
+            data.cb_usage().wait_count()[cb] = 0;
+            data.cb_usage().pop_count()[cb] = 0;
+            data.cb_usage().pages_pushed()[cb] = 0;
+            data.cb_usage().pages_popped()[cb] = 0;
+            data.cb_usage().reserve_risc_mask()[cb] = 0;
+            data.cb_usage().push_risc_mask()[cb] = 0;
+            data.cb_usage().wait_risc_mask()[cb] = 0;
+            data.cb_usage().pop_risc_mask()[cb] = 0;
+        }
     }
 
     // Initialize Debug Delay feature
