@@ -138,8 +138,8 @@ class ImageProjector(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences
-        if seq_len > 1024:
+        # Reshape for long sequences (only when divisible)
+        if seq_len > 1024 and seq_len % 1024 == 0:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
         # w1 (gate projection) with SiLU activation
@@ -174,7 +174,7 @@ class ImageProjector(LightweightModule):
         ttnn.deallocate(hidden)
 
         # Reshape back if needed
-        if seq_len > 1024:
+        if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output
