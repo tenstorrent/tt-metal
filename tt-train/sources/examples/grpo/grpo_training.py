@@ -110,7 +110,6 @@ def train_grpo():
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
         ctx, prompts, answers, batch_size=4
     ):
-        print(f"completions compute for step={step}, starting")
         step += 1
         warmup_factor = min(1.0, step / warmup_steps)
         ctx.optimizer.set_lr(base_lr * warmup_factor)
