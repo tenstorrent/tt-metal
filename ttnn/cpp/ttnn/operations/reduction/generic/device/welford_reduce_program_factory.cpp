@@ -40,9 +40,9 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
-    tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
+    // Scalar datatype is hardcoded bfloat16 due to tile creation in reader
+    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
@@ -88,14 +88,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             .set_page_size(input_cb_index, input_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
-    // TODO: Add support for scaler.
+    // TODO: Add support for scalar.
 
-    CBIndex scaler_cb_index = CBIndex::c_2;
+    CBIndex scalar_cb_index = CBIndex::c_2;
 
-    tt_metal::CircularBufferConfig scaler_cb_config =
-        tt_metal::CircularBufferConfig(scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
-            .set_page_size(scaler_cb_index, scaler_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, scaler_cb_config);
+    tt_metal::CircularBufferConfig scalar_cb_config =
+        tt_metal::CircularBufferConfig(scalar_single_tile_size, {{scalar_cb_index, scalar_cb_data_format}})
+            .set_page_size(scalar_cb_index, scalar_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, scalar_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t output_tiles_per_cb = 2;
@@ -115,10 +115,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             .set_page_size(scratch_cb_index, scratch_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
+    uint32_t packed_scalar_value = pack_two_bfloat16_into_uint32({bfloat_scalar_value, bfloat_scalar_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {packed_scalar_value};
     tt_metal::Buffer* input_buffer = tensor_arg.buffer();
     TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
 
