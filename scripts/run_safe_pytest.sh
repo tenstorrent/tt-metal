@@ -4,15 +4,17 @@
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
-# Automatically resets the device after hangs, ensuring the next runner
+# Automatically resets the device after every run, ensuring the next runner
 # always gets a clean device.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
 #               on hang with full triage + watcher log dump.
+#   --run-all   Run all tests instead of stopping on first failure (-x).
+#               Useful for eval scoring where you need full pass/fail counts.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -36,10 +38,15 @@ TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 
 # --- Parse flags ---
 DEV_MODE=false
+FAIL_FAST=true
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
             DEV_MODE=true
+            shift
+            ;;
+        --run-all)
+            FAIL_FAST=false
             shift
             ;;
         *)
@@ -61,13 +68,21 @@ shift
 # --- Acquire flock ---
 exec 9>"$LOCK_FILE"
 
+LOCK_TIMEOUT=300
 echo "SAFE_PYTEST: Waiting for device lock..." >&2
-flock 9
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+    echo "SAFE_PYTEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
+    exit 3
+fi
 echo "SAFE_PYTEST: Device lock acquired" >&2
+
+# Signal to child processes (e.g. conftest device lock plugin) that the lock
+# is already held — they must not re-acquire it or they will deadlock.
+export TT_DEVICE_LOCK_HELD=1
 
 # --- Check if device needs reset from previous hang ---
 if [[ -f "$DIRTY_FLAG" ]]; then
-    echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..." >&2
+    echo "SAFE_PYTEST: Device marked dirty from previous run, resetting..." >&2
     if ! tt-smi -r; then
         echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed" >&2
         exit 3
@@ -139,42 +154,54 @@ touch "$DIRTY_FLAG"
 
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
-pytest "${TEST_PATH}" -x "$@"
+# --run-all: skip -x to get full pass/fail counts (for eval scoring)
+if [[ "$FAIL_FAST" == true ]]; then
+    pytest "${TEST_PATH}" -x "$@"
+else
+    pytest "${TEST_PATH}" "$@"
+fi
 EXIT_CODE=$?
 
 echo "========================================" >&2
 
-# --- Handle result ---
-if [[ $EXIT_CODE -eq 0 ]]; then
+# --- Cleanup: always kill orphans and reset device ---
+
+# Kill any remaining child processes and their descendants.
+if [[ $EXIT_CODE -ne 0 ]]; then
+    for child_pid in $(pgrep -P $$ 2>/dev/null); do
+        pkill -9 -P "$child_pid" 2>/dev/null || true
+        kill -9 "$child_pid" 2>/dev/null || true
+    done
+fi
+
+# Always reset device after every run to guarantee a clean slate.
+echo "TT_TEST: Resetting device..." >&2
+if tt-smi -r; then
+    sleep 2
     rm -f "$DIRTY_FLAG"
+    echo "TT_TEST: Device reset complete" >&2
+else
+    echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+fi
+
+# --- Handle result ---
+
+if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$TRIAGE_LOG"
     echo "SAFE_PYTEST_RESULT: PASS" >&2
     exit 0
 fi
 
-# Determine if this was a hang:
-#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
-IS_HANG=false
-if [[ -s "$TRIAGE_LOG" ]]; then
-    IS_HANG=true
+# Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
+if [[ $EXIT_CODE -eq 5 ]]; then
+    rm -f "$TRIAGE_LOG"
+    echo "TT_TEST_ERROR: No tests collected" >&2
+    exit 3
 fi
 
-# Kill any remaining child processes (pytest may have left orphans)
-pkill -9 -P $$ 2>/dev/null || true
-
-# Only reset device when the failure might have left it dirty.
-# Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
-# assertion errors) and collection errors don't touch the device.
-if [[ "$IS_HANG" == true ]]; then
-    echo "SAFE_PYTEST: Resetting device..." >&2
-    if tt-smi -r; then
-        sleep 2
-        rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete" >&2
-    else
-        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty" >&2
-    fi
-
+# Determine if this was a hang:
+#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
+if [[ -s "$TRIAGE_LOG" ]]; then
     echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
@@ -196,7 +223,6 @@ if [[ "$IS_HANG" == true ]]; then
     exit 2
 fi
 
-rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
 echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
 exit 1

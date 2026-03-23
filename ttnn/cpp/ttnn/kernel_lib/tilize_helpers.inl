@@ -44,7 +44,9 @@ constexpr bool has_32x32_tiles() {
 
 template <uint32_t input_cb>
 constexpr bool has_supported_fast_tilize_format() {
-    // Fast tilize only supports Float32 (0) and Float16_b (5)
+    // Fast tilize supports Float32 (0) and Float16_b (5).
+    // Note: for Float32, fast_tilize truncates to tf32 precision (lossy).
+    // Use Fp32Mode::Lossless at the call site to force the standard path for exact fp32.
     // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
     // unpack_src_format (UNPACK/MATH) and pack_dst_format (PACK) are both the L1 format
     // for the CB, equalized by JIT (genfiles.cpp:equalize_data_format_vectors).
@@ -72,6 +74,21 @@ constexpr bool can_use_fast_tilize() {
            has_32x32_tiles<output_cb>() &&
            !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_cb>();
+}
+
+// =============================================================================
+// CB Validation Helpers (must be called from PACK/UNPACK guards)
+// =============================================================================
+
+template <uint32_t input_cb, uint32_t output_cb>
+ALWI void assert_tilize_cb_page_sizes(bool asymmetric_cb_pages) {
+    const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
+    const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
+    if (asymmetric_cb_pages) {
+        ASSERT(in_page_size != out_page_size);
+    } else {
+        ASSERT(in_page_size == out_page_size);
+    }
 }
 
 // =============================================================================
@@ -105,7 +122,7 @@ ALWI void tilize(
 
     // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format).
     // Fp32Mode::Lossless disables fast tilize only for fp32 inputs to preserve exact values
-    // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
+    // (fast tilize truncates fp32 -> tf32). Has no effect on non-fp32 formats.
     constexpr bool lossless_fp32_override = (fp32_mode == tilize_config::Fp32Mode::Lossless) &&
                                             is_fp32_input_format<input_cb>();
     constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>() &&
@@ -129,6 +146,15 @@ ALWI void tilize(
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
     UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_cb])));
+
+    // Sanity checks: verify CB page sizes match the usage pattern.
+    // Guarded because get_local_cb_interface() references cb_interface, which is
+    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
+    PACK((assert_tilize_cb_page_sizes<input_cb, output_cb>(asymmetric_cb_pages)));
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
+    UNPACK(if (!asymmetric_cb_pages) {
+        ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb]));
+    })
 
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {

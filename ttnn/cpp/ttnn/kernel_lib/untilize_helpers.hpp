@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tt-metalium/circular_buffer_constants.h"
+#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
@@ -65,6 +66,9 @@ ALWI void untilize_uninit();
  * Reads from input CB (tiled), writes to output CB (row-major).
  * Automatically selects single-pass or block-based pack_untilize at compile time
  * based on block_width_tiles vs DEST capacity.
+ *
+ * NOTE: Unlike tilize, block_width_tiles is a compile-time template parameter
+ * and there is no asymmetric (total_input_pages) mode.
  *
  * PREREQUISITE: Call compute_kernel_hw_startup(input_cb, output_cb) at the
  * start of your kernel before using this function, unless another init or

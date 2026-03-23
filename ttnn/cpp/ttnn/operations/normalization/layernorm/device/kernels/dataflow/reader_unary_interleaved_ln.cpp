@@ -20,7 +20,8 @@
 //   ...       = TensorAccessorArgs for b / residual  (may be null)
 //   ...       = TensorAccessorArgs for gamma          (may be null)
 //   ...       = TensorAccessorArgs for beta           (may be null)
-//   CTA[last] = elem_size_bytes  (TILIZE_IN only; unused for TILE path)
+//   CTA[N]    = W                (logical width in elements)
+//   CTA[N+1]  = elem_size_bytes  (TILIZE_IN only; unused for TILE path)
 //
 // Runtime args:
 //   arg[0] = src_addr
@@ -39,34 +40,31 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t NCHt = get_arg_val<uint32_t>(1);
-    const uint32_t Wt = get_arg_val<uint32_t>(2);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t W = get_arg_val<uint32_t>(9);
-    const uint32_t tile_width = get_arg_val<uint32_t>(10);
-    const uint32_t tile_height = get_arg_val<uint32_t>(11);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);        // factory [0]
+    const uint32_t NCHt = get_arg_val<uint32_t>(1);            // factory [1]
+    const uint32_t Wt = get_arg_val<uint32_t>(2);              // factory [2]
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);  // factory [3]
+    // [4] = eps, read below after scaler generation
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(5);  // factory [5]
+    const uint32_t beta_addr = get_arg_val<uint32_t>(6);   // factory [6]
+    const uint32_t b_addr = get_arg_val<uint32_t>(7);      // factory [7]
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(12);
+    const uint32_t H_logical = get_arg_val<uint32_t>(8);  // factory [8]
 #endif
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);
@@ -86,6 +84,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t W = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
@@ -93,10 +92,10 @@ void kernel_main() {
 #ifdef TILIZE_IN
     // ROW_MAJOR path: input a is a row-major tensor.
     // The compute kernel tilizes cb_in_rm (c_27) → cb_in (c_0) before processing.
-    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
+    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1);
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
+    constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
@@ -120,22 +119,23 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t cb_eps = get_named_compile_time_arg_val("cb_eps");
-
     if constexpr (!use_welford) {
-        // Scaler(s) for reduce
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_scaler, scaler);
-        const auto partial_last_tile_cols = W % tile_width;
-        if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
-                cb_scaler, scaler, partial_last_tile_cols, tile_height, tile_width);
+        // Scaler(s) for reduce: full tile, then optional partial tile for last tile
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        constexpr uint32_t partial_tile_columns = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_tile_columns > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial_tile_columns>();
         }
     }
-
-    const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(cb_eps, eps);
+    constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
+    const uint32_t eps = get_arg_val<uint32_t>(4);  // factory [4]
+    generate_bcast_col_scalar(eps_cb_id, eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;

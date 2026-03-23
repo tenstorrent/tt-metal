@@ -16,9 +16,9 @@ void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    uint32_t b_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");

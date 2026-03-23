@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 #include "cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -20,10 +21,10 @@ void kernel_main() {
     uint32_t mask_addr = get_arg_val<uint32_t>(7);
     uint32_t start_ht = get_arg_val<uint32_t>(8);
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
-    const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
-    uint32_t cb_length_t = get_arg_val<uint32_t>(11);
+    uint32_t cb_length_t = get_arg_val<uint32_t>(10);  // factory [10] = in0_t
 #if CAUSAL_MASK
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);  // factory [11] = mask_curr_ht
+    uint32_t mask_offset = get_arg_val<uint32_t>(12);    // factory [12] = mask_offset
 #endif
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
@@ -59,7 +60,8 @@ void kernel_main() {
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        generate_reduce_scaler(cb_in_2, reduce_scaler);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     experimental::Noc noc;

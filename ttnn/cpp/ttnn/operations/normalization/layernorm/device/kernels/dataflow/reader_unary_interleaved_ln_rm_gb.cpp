@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "experimental/noc.h"
@@ -20,9 +20,9 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
 
-    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    uint32_t beta_addr = get_arg_val<uint32_t>(7);
-    uint32_t b_addr = get_arg_val<uint32_t>(8);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
+    uint32_t beta_addr = get_arg_val<uint32_t>(6);
+    uint32_t b_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in"),
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");

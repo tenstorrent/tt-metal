@@ -5,6 +5,7 @@
 // Do not include directly - include cb_helpers.hpp instead
 
 #include "api/compute/cb_api.h"
+#include "tt-metalium/circular_buffer_constants.h"
 
 namespace compute_kernel_lib {
 
@@ -73,6 +74,21 @@ ALWI constexpr bool is_block_float_format(uint32_t format) {
     // Bfp8=2, Bfp4=3, Bfp2=11, Bfp8_b=6, Bfp4_b=7, Bfp2_b=15
     return format == 2 || format == 3 || format == 11 ||
            format == 6 || format == 7 || format == 15;
+}
+
+template <DataFormat format>
+ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id) {
+    uint32_t tile_size = get_full_tile_size<format>();
+    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
+                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+    return page_size_bytes == tile_size;
+}
+
+ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format) {
+    uint32_t tile_size = get_full_tile_size(format);
+    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
+                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+    return page_size_bytes == tile_size;
 }
 
 }  // namespace compute_kernel_lib

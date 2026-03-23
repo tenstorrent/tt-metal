@@ -92,6 +92,10 @@ ALWI void untilize(uint32_t num_blocks) {
     // Block floats have shared exponents that break tile-to-row-major reinterpretation.
     PACK(ASSERT(!is_block_float_format(pack_dst_format[output_cb])));
 
+    // Validate CB page sizes match expected tile sizes
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
+
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
 
     // Determine if we're doing data type reconfiguration

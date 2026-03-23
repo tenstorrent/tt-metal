@@ -29,24 +29,6 @@ namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
 bool CB_can_fit_in_L1(
@@ -178,12 +160,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
-
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = Wp / tile_width;
-    uint32_t Ht = Hp / tile_height;
+    uint32_t Wt = Wp / TILE_WIDTH;
+    uint32_t Ht = Hp / TILE_HEIGHT;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
@@ -204,6 +183,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    tt::DataFormat scaler_cb_data_format =
+        (in_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
+    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
@@ -318,7 +302,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im5_t * single_tile_size,
         im4_t * single_tile_size,
         im1_t * single_tile_size,
-        in2_t * bfloat16_tile_size,
+        in2_t * scaler_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
@@ -400,7 +384,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
-        // For rm_input readers: element size of input tensor for address stride calculations
+        // Merged readers need W (for page size) and element_size (for stride calculations).
+        reader_compile_time_args.push_back(W);
         reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
@@ -409,7 +394,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         reader_compile_time_args.push_back(beta_stick_size);
     } else {
-        reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
+        reader_compile_time_args.push_back(W);
     }
 
     // Build compile time args for writer kernel
@@ -459,28 +444,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
     }
 
-    // Named compile-time args for CB indices - enables kernel chaining/fusion
-    KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
-        {"cb_in", tt::CBIndex::c_0},
-        {"cb_inb", tt::CBIndex::c_1},
-        {"cb_scaler", tt::CBIndex::c_2},
-        {"cb_eps", tt::CBIndex::c_3},
-        {"cb_gamma", tt::CBIndex::c_5},
-        {"cb_beta", tt::CBIndex::c_6},
-        {"cb_out", tt::CBIndex::c_16},
-        {"cb_ex", tt::CBIndex::c_18},
-        {"cb_ex2", tt::CBIndex::c_19},
-        {"cb_xmm2", tt::CBIndex::c_20},
-        {"cb_ex2pe", tt::CBIndex::c_21},
-        {"cb_fusion", tt::CBIndex::c_22},
-        {"cb_x", tt::CBIndex::c_23},
-        {"cb_xmm", tt::CBIndex::c_24},
-        {"cb_reciprocals", tt::CBIndex::c_25},
-        {"cb_accumulate", tt::CBIndex::c_26},
-        {"cb_in_rm", tt::CBIndex::c_27},
-        {"cb_out_rm", tt::CBIndex::c_28},
-    };
-
     // Select reader kernel path
     const char* reader_kernel_path = nullptr;
     if (large_tensor_needed) {
@@ -509,7 +472,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
         compute_args.push_back(W);
-        compute_args.push_back(tile_width);
     }
 
     // The large-tensor non-Welford reduce kernel needs
@@ -535,8 +497,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build per-core runtime args
     uint32_t curr_row = 0;
-    auto bfloat_one_value = bfloat16(1);
-    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
@@ -573,18 +533,12 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             num_tile_rows_per_core,
             Wt,
             reader_start,
-            packed_one_value,
             std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
             beta_dram_addr,
             b_dram_addr};
-        if (!(use_welford && large_tensor_needed)) {
-            reader_args.push_back(W);
-            reader_args.push_back(tile_width);
-            reader_args.push_back(tile_height);
-        }
         if (input_is_row_major) {
-            reader_args.push_back(H_logical);  // arg[10]
+            reader_args.push_back(H_logical);  // arg[8]
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
@@ -612,7 +566,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = cb_named_args;
     reader_kernel_desc.defines = reader_defines;
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
@@ -628,7 +581,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
-    writer_kernel_desc.named_compile_time_args = cb_named_args;
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
@@ -639,7 +591,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = compute_args;
-    compute_kernel_desc.named_compile_time_args = cb_named_args;
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
@@ -684,8 +635,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // CB 2: Scaler for reduce (if not use_welford)
     if (!use_welford) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in2_t * bfloat16_tile_size, tt::CBIndex::c_2, tt::DataFormat::Float16_b, bfloat16_tile_size));
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(in2_t * scaler_tile_size, tt::CBIndex::c_2, scaler_cb_data_format, scaler_tile_size));
     }
 
     // CB 3: Epsilon
@@ -805,13 +756,13 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
             runtime_args[0] = src_a_dram_buffer->address();
             if (src_b_dram_buffer != nullptr) {
-                runtime_args[8] = src_b_dram_buffer->address();
+                runtime_args[7] = src_b_dram_buffer->address();
             }
             if (gamma_dram_buffer != nullptr) {
-                runtime_args[6] = gamma_dram_buffer->address();
+                runtime_args[5] = gamma_dram_buffer->address();
             }
             if (beta_dram_buffer != nullptr) {
-                runtime_args[7] = beta_dram_buffer->address();
+                runtime_args[6] = beta_dram_buffer->address();
             }
         }
 

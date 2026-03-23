@@ -125,7 +125,13 @@ target_sources(
             cpp/ttnn/kernel/kernel_utils.hpp
             cpp/ttnn/kernel_lib/cb_helpers.hpp
             cpp/ttnn/kernel_lib/cb_helpers.inl
+            cpp/ttnn/kernel_lib/common_types.hpp
             cpp/ttnn/kernel_lib/dest_helpers.hpp
+            cpp/ttnn/kernel_lib/l1_helpers.hpp
+            cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp
+            cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+            cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp
+            cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl
             cpp/ttnn/kernel_lib/tilize_helpers.hpp
             cpp/ttnn/kernel_lib/tilize_helpers.inl
             cpp/ttnn/kernel_lib/untilize_helpers.hpp

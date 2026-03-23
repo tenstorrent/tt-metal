@@ -154,4 +154,8 @@ models/experimental/petr/resources/*.pth
 *.out
 *.err
 
+# Worktree setup markers
+.worktree_building
+.worktree_ready
+.worktree_setup.log
 .claude

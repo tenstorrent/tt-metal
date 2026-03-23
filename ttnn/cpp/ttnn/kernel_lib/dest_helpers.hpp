@@ -8,7 +8,7 @@
  * @brief DEST register capacity and accumulation mode detection utilities
  *
  * Provides automatic detection of DEST-related configurations based on JIT-generated headers.
- * This is shared by untilize_helpers.hpp, tilize_helpers.hpp, and other kernel libraries
+ * This is shared by reduce_helpers.hpp, untilize_helpers.hpp, tilize_helpers.hpp, and other kernel libraries
  * that need to know DEST register limits and accumulation modes.
  *
  * Features:

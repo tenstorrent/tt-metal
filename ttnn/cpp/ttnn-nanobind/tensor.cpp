@@ -37,6 +37,8 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -592,6 +594,42 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
+
+    m_tensor.def(
+        "tile_size",
+        [](DataType dtype) -> uint32_t { return tt::tile_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get tile size in bytes for the given data type (standard 32x32 tile).
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Tile size in bytes (e.g., 2048 for bfloat16, 4096 for float32).
+
+            Example:
+            >>> ttnn.tile_size(ttnn.bfloat16)  # Returns 2048
+            >>> ttnn.tile_size(ttnn.float32)   # Returns 4096
+        )doc");
+
+    m_tensor.def(
+        "element_size",
+        [](DataType dtype) -> uint32_t { return tt::datum_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get element size in bytes for the given data type.
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+
+            Example:
+            >>> ttnn.element_size(ttnn.bfloat16)  # Returns 2
+            >>> ttnn.element_size(ttnn.float32)   # Returns 4
+        )doc");
 
     m_tensor
         .def(

@@ -8,6 +8,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 

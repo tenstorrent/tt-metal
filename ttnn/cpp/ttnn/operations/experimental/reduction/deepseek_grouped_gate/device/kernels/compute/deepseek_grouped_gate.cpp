@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM  // wtf why do we need to define this here?
-#define REDUCE_DIM ReduceDim::REDUCE_COL
-
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
@@ -18,6 +15,8 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
@@ -270,27 +269,16 @@ void normalize_scores(
     const uint32_t cb_reciprocal_sums,
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
-    reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
-    pack_reconfig_data_format(cb_normalized_scores);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate);
-
-    cb_wait_front(cb_gathered_sigmoid, 1);
-    cb_wait_front(cb_reduce_ones_scalar, 1);
-
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_gathered_sigmoid, cb_reduce_ones_scalar, 0, 0, 0);
-    tile_regs_commit();
-    reduce_uninit();
+    // PERSISTENT mode: waits for tile internally, no pop (tile persists for broadcast multiply)
+    compute_kernel_lib::
+        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            cb_gathered_sigmoid,
+            cb_reduce_ones_scalar,
+            cb_reduce_intermediate,
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
-    // 2. Pack sums to intermediate to add epsilon
-    tile_regs_wait();
-    cb_reserve_back(cb_reduce_intermediate, 1);
-    pack_tile(0, cb_reduce_intermediate);
-    tile_regs_release();
-    cb_push_back(cb_reduce_intermediate, 1);
-    // 3. Add epsilon
+    // 2. Add epsilon to intermediate results
     tile_regs_acquire();
     cb_wait_front(cb_epsilon_scalar, 1);
     cb_wait_front(cb_reduce_intermediate, 1);
