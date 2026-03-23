@@ -18,12 +18,18 @@ void kernel_main() {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb0(0);
+    experimental::DataflowBuffer dfb1(1);
+    experimental::DataflowBuffer dfb_out(2);
+#endif
+
 #if (TEST_INIT_SHORT == 1)
+#if (WITH_DT == 1)
+    // Intentionally wrong init with different data formats
 #ifdef ARCH_QUASAR
     // NOT IMPLEMENTED FOR QUASAR YET
 #else
-#if (WITH_DT == 1)
-    // Intentionally wrong init with different data formats
     mm_block_init(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
@@ -35,8 +41,20 @@ void kernel_main() {
     // Corrected init short with dt
     mm_block_init_short_with_dt(
         tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+#endif
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
+#ifdef ARCH_QUASAR
+    mm_block_init(
+        dfb1.get_id(),
+        dfb0.get_id(),
+        dfb_out.get_id(),
+        false,
+        dst_tile_cols - 1,
+        dst_tile_rows - 1,
+        block_tile_dim - 1);
+    mm_block_init_short(dfb0.get_id(), dfb1.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+#else
     mm_block_init(
         tt::CBIndex::c_1,
         tt::CBIndex::c_0,
@@ -51,10 +69,6 @@ void kernel_main() {
 #endif
 #elif (TEST_INIT_SHORT == 0)
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
-    experimental::DataflowBuffer dfb_out(2);
-
     mm_block_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id(), false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #else
     mm_block_init(

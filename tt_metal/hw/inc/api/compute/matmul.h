@@ -185,6 +185,7 @@ ALWI void mm_init_short(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+
 #endif  // TODO: AM; add Quasar implementation
 }
 
@@ -349,7 +350,11 @@ ALWI void mm_block_init_short(
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
-#endif  // TODO: AM; add Quasar implementation
+#else
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(
+        in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));  // transpose not yet implemented
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+#endif
 }
 
 // clang-format off
