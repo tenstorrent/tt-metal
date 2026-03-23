@@ -831,7 +831,7 @@ def run_olmo_demo(
         ),
         # ── ISL sweep: batch=1, 10 decode tokens, 64 layers ──────────────────────────────
         # paged_cache_max_seq_len = 8 × max_num_blocks  (batch_size_per_device_group=8 on TG)
-        (  # isl-128-b1: ~128-token prefill + 10 decode
+        (  # isl-128-b1: ~128-token prefill + 50 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
@@ -839,10 +839,10 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            138,  # ~128 prefill + 10 decode
+            178,  # ~128 prefill + 50 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -857,7 +857,7 @@ def run_olmo_demo(
             1034,  # ~1024 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -872,7 +872,7 @@ def run_olmo_demo(
             2058,  # ~2048 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -887,7 +887,7 @@ def run_olmo_demo(
             4106,  # ~4096 prefill + 10 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -902,7 +902,7 @@ def run_olmo_demo(
             8201,  # 8191 prefill tokens + 10 decode (pads to 8192)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
@@ -917,13 +917,12 @@ def run_olmo_demo(
             16393,  # 16383 prefill tokens + 10 decode (pads to 16384)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # capacity: 32768 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
         (  # isl-32k-b1: ~32k-token prefill + 10 decode (eager mode, no trace)
-            # capacity: 4128 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 32,976 tokens ≥ 32,778
-            # KV cache memory: 4128 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 4.3 GB/device ✓
+            # capacity: 4128 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 33,024 tokens/user ≥ 32,777
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
@@ -933,14 +932,13 @@ def run_olmo_demo(
             1,  # batch_size
             32777,  # 32767 prefill tokens + 10 decode (pads to 32768)
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4128},  # capacity: 32,976 tokens/user
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"page_block_size": 64, "page_max_num_blocks": 4128},  # capacity: 33,024 tokens/user
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
         (  # isl-64k-b1: ~64k-token prefill + 10 decode (eager mode, no trace, model max context)
-            # capacity: 8208 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 65,664 tokens ≥ 65,545
-            # KV cache memory: 8208 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 8.6 GB/device ✓
+            # capacity: 8208 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 65,664 tokens/user ≥ 65,545
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
@@ -951,7 +949,7 @@ def run_olmo_demo(
             65545,  # 65535 prefill tokens + 10 decode (pads to 65536)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 8208},  # capacity: 65,664 tokens/user
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 40, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
