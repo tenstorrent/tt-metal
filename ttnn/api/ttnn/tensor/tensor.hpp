@@ -20,7 +20,6 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/device.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -238,7 +237,7 @@ public:
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.

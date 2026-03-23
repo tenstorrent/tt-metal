@@ -43,6 +43,30 @@ namespace tt::tt_metal {
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 
+template <typename T>
+Tensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+
+    size_t volume = spec.logical_shape().volume();
+
+    TT_FATAL(
+        !logical_matches_physical(spec),
+        "Logical matches physical, don't support that case, use Tensor::from_span instead!");
+
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+
+    auto res = Tensor(std::move(host_buffer), buffer_spec);
+    return to_dtype(res, spec.data_type());
+}
+
 }  // namespace
 
 Tensor::Tensor(
@@ -88,8 +112,8 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
-        mesh_device_ = buffer->device();
+    if (device_storage().is_allocated()) {
+        mesh_device_ = device_storage().get_device();
     }
 }
 
@@ -128,20 +152,25 @@ void Tensor::deallocate_impl(bool force) {
                (shared_resource.use_count() > 1 && force);
     };
 
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+    bool tracking = GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
             ttsl::overloaded{
                 [](HostStorage&) {},
-                [this, force, &can_deallocate](DeviceStorage& storage) {
+                [this, force, tracking, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
+                        if (tracking) {
+                            GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+                        }
                         storage.deallocate_root_mesh_buffer();
+                        if (tracking) {
+                            GraphTracker::instance().track_function_end();
+                        }
                     }
                     storage.reset_root_mesh_buffer();
                 }},
             this->tensor_attributes->get_storage());
     }
-    // GraphTracker::instance().track_function_end();
 }
 
 std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
@@ -157,6 +186,17 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
+    if (!logical_matches_physical(spec)) {
+        // If the logical shape doesn't match the physical shape, we need to encode the data
+        // and write the result to a new buffer. This branch avoids the extra copy that
+        // would otherwise occur in the from_vector function call.
+        auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
+        res = to_dtype(res, spec.data_type());
+        if (device) {
+            res = res.to_device(device, spec.memory_config(), cq_id);
+        }
+        return res;
+    }
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
 
@@ -485,7 +525,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, src.device_storage().get_mesh_buffer_leak_ownership(), blocking);
 }
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
@@ -504,7 +544,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<void*>(src))
             .region(region)};
-    queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(dst.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
 }
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
@@ -591,7 +631,7 @@ distributed::MeshDevice* Tensor::device() const {
     return nullptr;
 }
 
-std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
+const distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
 const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
 

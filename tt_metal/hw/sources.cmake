@@ -95,6 +95,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/where.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/semaphore.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
     inc/api/compute/layernorm.h

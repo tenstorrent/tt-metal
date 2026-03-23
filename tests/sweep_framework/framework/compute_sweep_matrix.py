@@ -71,18 +71,12 @@ def get_lead_models_mesh_runner_config():
             "suite_name": "model_traced",
         },
         {
-            # Multi-chip operations - runs on Galaxy (32-chip topology)
-            # Handles all mesh shapes larger than 1x1
+            # Multi-chip operations - pinned to g04glx03 Galaxy runner
             "mesh_shapes": ["1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"],
             "test_group_name": "lead-models-galaxy",
             "arch": "wormhole_b0",
-            "runs_on": [
-                "topology-6u",  # 32-chip galaxy topology
-                "arch-wormhole_b0",  # Wormhole B0 architecture
-                "in-service",  # Available for use
-                "pipeline-functional",  # Functional pipeline
-            ],
-            "runner_label": "topology-6u",
+            "runs_on": "g04glx03",
+            "runner_label": "g04glx03",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },

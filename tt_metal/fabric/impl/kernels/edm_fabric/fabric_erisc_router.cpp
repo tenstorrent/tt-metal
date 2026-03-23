@@ -314,7 +314,7 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id,
     sender_channel_7_free_slots_stream_id,
-    0};
+    sender_channel_8_free_slots_stream_id};
 static_assert(sender_channel_free_slots_stream_ids[0] == 22);
 static_assert(sender_channel_free_slots_stream_ids[1] == 23);
 static_assert(sender_channel_free_slots_stream_ids[2] == 24);
@@ -688,6 +688,28 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     uint32_t hop_cmd,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
+#if defined(ARCH_WORMHOLE) && defined(FABRIC_2D_VC1_ACTIVE)
+    bool ret_val = true;
+    if (hop_cmd & MeshRoutingFields::FORWARD_EAST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_WEST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_SOUTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_NORTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    return ret_val;
+#else
     bool ret_val = false;
 
     using eth_chan_directions::EAST;
@@ -804,6 +826,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         default: __builtin_unreachable();
     }
     return ret_val;
+#endif
 }
 
 #else
@@ -3081,7 +3104,8 @@ void kernel_main() {
                 local_sender_channel_5_connection_info_addr,
                 local_sender_channel_6_connection_info_addr,
                 local_sender_channel_7_connection_info_addr,
-                local_sender_channel_8_connection_info_addr});
+                local_sender_channel_8_connection_info_addr,
+                local_sender_channel_9_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(

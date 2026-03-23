@@ -49,7 +49,8 @@ def run_slice_rm_sharded(device, n, c, h, w):
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+    with device.cache_entries_counter.measure():
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
     # output shard config
     num_cores_x = 8
@@ -63,13 +64,15 @@ def run_slice_rm_sharded(device, n, c, h, w):
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
 
-    tt_output_tensor = ttnn.slice(
-        tt_input_tensor,
-        (0, 0, 0, 0),
-        (n_unpadded, c_unpadded, h_unpadded, w),
-        memory_config=output_mem_config,
-    )
-    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.slice(
+            tt_input_tensor,
+            (0, 0, 0, 0),
+            (n_unpadded, c_unpadded, h_unpadded, w),
+            memory_config=output_mem_config,
+        )
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
@@ -157,7 +160,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
+    assert device.cache_entries_counter.total == 3
 
 
 @pytest.mark.parametrize("n", [16])
@@ -206,13 +209,14 @@ def slice_test(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
 
-    tt_output_tensor = ttnn.slice(
-        tt_input_tensor,
-        slice_start=output_tensor_start,
-        slice_end=output_tensor_end,
-        slice_step=slice_step,
-        memory_config=out_mem_config,
-    )
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.slice(
+            tt_input_tensor,
+            slice_start=output_tensor_start,
+            slice_end=output_tensor_end,
+            slice_step=slice_step,
+            memory_config=out_mem_config,
+        )
 
     a_pt = ttnn.to_torch(tt_output_tensor)
 
@@ -224,7 +228,7 @@ def slice_test(
         output_tensor_start[3] : output_tensor_end[3] : slice_step[3],
     ]
 
-    return a_pt, a_ref, device.num_program_cache_entries()
+    return a_pt, a_ref, device.cache_entries_counter.total
 
 
 # from https://github.com/tenstorrent/tt-metal/issues/23237
@@ -1248,3 +1252,161 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, begins, ends, layout, use_sharding, description",
+    [
+        # Test 1: Slicing within a tile (should use RM path)
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 16, 16], ttnn.TILE_LAYOUT, False, "within_tile_small"],
+        [[1, 1, 64, 64], [0, 0, 8, 8], [1, 1, 24, 24], ttnn.TILE_LAYOUT, False, "within_tile_offset"],
+        # Test 2: Slicing across tiles (should use tile path)
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 64], ttnn.TILE_LAYOUT, False, "across_tiles_aligned"],
+        [[1, 1, 128, 128], [0, 0, 32, 32], [1, 1, 96, 96], ttnn.TILE_LAYOUT, False, "across_tiles_multiple"],
+        # Test 3: Non-TILE layout (should always use RM path)
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 32], ttnn.ROW_MAJOR_LAYOUT, False, "row_major_input"],
+        [[1, 1, 128, 128], [0, 0, 16, 16], [1, 1, 48, 48], ttnn.ROW_MAJOR_LAYOUT, False, "row_major_unaligned"],
+        # Test 4: Sharded TILE slicing to tile boundary (MUST use tile path)
+        [[1, 1, 256, 32], [0, 0, 0, 0], [1, 1, 128, 32], ttnn.TILE_LAYOUT, True, "sharded_tile_boundary"],
+        [[1, 1, 128, 128], [0, 0, 32, 0], [1, 1, 96, 128], ttnn.TILE_LAYOUT, True, "sharded_aligned_slice"],
+    ],
+)
+def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, use_sharding, description, device):
+    """Test slicing within tiles uses RM path and across tiles uses tile path.
+
+    Sharded test cases verify correct path selection: sharded TILE tensors sliced to tile
+    boundaries must use tile path. If RM path is incorrectly taken, fails with shard
+    dimension errors. Serves as regression test for issue #38841."""
+
+    torch.manual_seed(2005)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if use_sharding:
+        n, c, h, w = input_shape
+        num_cores_x = 2
+        num_cores_y = 2
+
+        shard_h = max(32, (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y))
+        shard_h = ((shard_h + 31) // 32) * 32
+
+        grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+
+        tt_input = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    tt_output = ttnn.slice(tt_input, begins, ends, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    slices = [slice(begins[i], ends[i]) for i in range(len(begins))]
+    torch_expected = torch_input[slices[0], slices[1], slices[2], slices[3]]
+
+    if use_sharding:
+        tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, begins, ends, use_sharding",
+    [
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 16, 16], False],
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 64], True],
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 32, 64], False],
+        [[1, 1, 128, 128], [0, 0, 32, 32], [1, 1, 96, 96], True],
+        [[1, 1, 128, 128], [0, 0, 32, 32], [1, 1, 96, 96], False],
+    ],
+)
+def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, device):
+    """Test that sharding doesn't affect slice logic (based on tile boundaries only)"""
+
+    torch.manual_seed(2005)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if use_sharding:
+        num_cores_x = 2
+        num_cores_y = 2
+        n, c, h, w = input_shape
+
+        shard_h = max(32, (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y))
+        shard_h = ((shard_h + 31) // 32) * 32
+
+        grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        tt_input = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+        output_h = ends[2] - begins[2]
+        output_w = ends[3] - begins[3]
+        output_shard_h = max(32, (output_h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y))
+        output_shard_h = ((output_shard_h + 31) // 32) * 32
+
+        output_shard_spec = ttnn.ShardSpec(shard_grid, (output_shard_h, output_w), ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, output_shard_spec
+        )
+
+    tt_output = ttnn.slice(tt_input, begins, ends, memory_config=output_mem_config)
+
+    slices = [slice(begins[i], ends[i]) for i in range(len(begins))]
+    torch_expected = torch_input[slices[0], slices[1], slices[2], slices[3]]
+
+    if use_sharding:
+        tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+
+
+def test_issue_38841_regression(device):
+    """Regression test for issue #38841: sharded TILE tensor sliced to tile
+    boundary. Would fail with RM path due to shard dimension mismatch. Must use tile path."""
+
+    torch.manual_seed(2005)
+
+    shape = [1, 1, 256, 32]
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_h = 64
+    shard_w = 32
+
+    grid_size = ttnn.CoreGrid(y=2, x=2)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    tt_input_sharded = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    tt_output = ttnn.slice(tt_input_sharded, [0, 0, 0, 0], [1, 1, 128, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    torch_expected = torch_input[0:1, 0:1, 0:128, 0:32]
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)

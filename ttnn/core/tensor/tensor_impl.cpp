@@ -471,12 +471,12 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const auto& storage = tensor.device_storage();
     auto cpu_tensor = tensor.cpu();
-    if (storage.mesh_buffer == nullptr) {
+    if (!storage.is_allocated()) {
         // Use owned buffer path above.
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto* mesh_device = storage.mesh_buffer->device();
+    auto* mesh_device = storage.get_device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -538,7 +538,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
-    const auto& mesh_buffer = storage.mesh_buffer;
+    const auto& mesh_buffer = storage.get_mesh_buffer_leak_ownership();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -671,7 +671,7 @@ void copy_to_host(
         "Host tensor has different page config");
 
     const auto& device_storage = device_tensor.device_storage();
-    const auto& mesh_buffer = device_storage.mesh_buffer;
+    const auto& mesh_buffer = device_storage.get_mesh_buffer_leak_ownership();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -726,7 +726,8 @@ void copy_to_host(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
+    queue.enqueue_read_shards(
+        shard_data_transfers, device_tensor.device_storage().get_mesh_buffer_leak_ownership(), blocking);
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
@@ -740,7 +741,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
+    auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
 
     auto [mesh_storage, topology] = to_device_mesh_buffer(
         host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
@@ -759,7 +760,8 @@ void copy_to_device(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(
+        device_tensor.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
 }
 
 // ======================================================================================
@@ -1435,7 +1437,6 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     if (src_type == dtype) {
         return input_tensor;
     }
-
     TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
 
     auto input_storage = detail::preprocess_storage(input_tensor.host_storage(), src_type);
