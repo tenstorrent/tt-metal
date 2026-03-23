@@ -358,115 +358,22 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         sampling_params=None,
     ):
-        """Row-parallel batched prefill - thin wrapper, model has domain logic."""
-        model = self.model[0]
-        mesh_device = model.mesh_device
-        num_rows = mesh_device.shape[0]
-        batch_size = len(prompt_lens)
-        actual_batch_size = batch_size
-        # Pad to multiple of num_rows
-        if batch_size % num_rows != 0:
-            users_per_row = (batch_size + num_rows - 1) // num_rows
-            pad_count = users_per_row * num_rows - batch_size
-            tokens = torch.cat([tokens, torch.zeros(pad_count, tokens.shape[1], dtype=tokens.dtype)], dim=0)
-            prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
-            prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
-            if page_table is not None:
-                page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
-            batch_size = users_per_row * num_rows
-        users_per_row = batch_size // num_rows
-
-        max_padded_len = max(prefill_seq_lens)
-        block_size = get_block_size(kv_cache[0])
-        max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
-        all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
-        fixed_glt = (min(all_last_idxs) // 32) * 32
-        if (max(all_last_idxs) // 32) * 32 != fixed_glt:
-            fixed_glt = -1
-        skip_lm = sampling_params is not None
-
-        output_tensor = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
-        trace_key = "rsbp_" + str(max_padded_len)
-        enable_trace_current = enable_trace and self.model_args[0].can_enable_trace(max_padded_len, 0)
-
-        if enable_trace_current:
-            if self.trace_id_prefill[trace_key] is None:
-                # Compile
-                t0, p0, l0, u0 = model.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, 0, max_padded_len, max_num_blocks
-                )
-                host_out = model.prepare_inputs_prefill(t0, page_table=p0, trace_enabled=True, batched_prefill=True)
-                rot_g, rot_l = host_out[1], host_out[2]
-                hi = (host_out[0], host_out[3], host_out[4])
-                di = copy_host_to_device(hi, mesh_device=mesh_device)
-                tr = model.transform_and_embed_prefill_inputs_device(*di)
-                tt_out = model.ttnn_prefill_forward(
-                    tr[0],
-                    rot_mats_global=rot_g,
-                    rot_mats_local=rot_l,
-                    user_id=0,
-                    page_table=tr[1],
-                    get_last_token=fixed_glt,
-                    kv_cache=kv_cache[0],
-                    batch_size=1,
-                    skip_lm_head=skip_lm,
-                )
-                if not skip_lm:
-                    model.extract_prefill_logits_to_host(tt_out, l0, u0, fixed_glt, output_tensor)
-                ttnn.synchronize_device(mesh_device)
-                model.clear_kv_caches()
-                # Capture trace
-                host_out = model.prepare_inputs_prefill(t0, page_table=p0, trace_enabled=True, batched_prefill=True)
-                hi = (host_out[0], host_out[3], host_out[4])
-                di = copy_host_to_device(hi, mesh_device=mesh_device)
-                tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                tr = model.transform_and_embed_prefill_inputs_device(*di)
-                tt_out = model.ttnn_prefill_forward(
-                    tr[0],
-                    rot_mats_global=rot_g,
-                    rot_mats_local=rot_l,
-                    user_id=0,
-                    page_table=tr[1],
-                    get_last_token=fixed_glt,
-                    kv_cache=kv_cache[0],
-                    batch_size=1,
-                    skip_lm_head=skip_lm,
-                )
-                ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
-                self.trace_id_prefill[trace_key] = tid
-                self.trace_inputs_prefill[trace_key] = di
-                self.trace_output_prefill[trace_key] = tt_out
-                model.clear_kv_caches()
-
-            for iter_idx in range(users_per_row):
-                ti, pi, li, ui = model.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
-                )
-                host_out = model.prepare_inputs_prefill(ti, page_table=pi, trace_enabled=True, batched_prefill=True)
-                hi = (host_out[0], host_out[3], host_out[4])
-                copy_host_to_device(hi, device_tensors=self.trace_inputs_prefill[trace_key], mesh_device=mesh_device)
-                ttnn.execute_trace(mesh_device, self.trace_id_prefill[trace_key], cq_id=0, blocking=False)
-                if not skip_lm:
-                    model.extract_prefill_logits_to_host(
-                        self.trace_output_prefill[trace_key], li, ui, fixed_glt, output_tensor
-                    )
-        else:
-            for iter_idx in range(users_per_row):
-                ti, pi, li, ui = model.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
-                )
-                tt_out = model.run_row_sharded_prefill_forward(ti, pi, kv_cache[0], fixed_glt, skip_lm_head=skip_lm)
-                if not skip_lm:
-                    model.extract_prefill_logits_to_host(tt_out, li, ui, fixed_glt, output_tensor)
-
-        ttnn.synchronize_device(mesh_device)
-        if sampling_params is not None:
-            CHANNEL_TOKEN_ID = 200005
-            return torch.full((actual_batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
-                actual_batch_size, 1, dtype=torch.float32
-            )
-        return output_tensor[:actual_batch_size]
+        """Dispatch to model's row-sharded batched prefill."""
+        return self.model[0].row_sharded_batched_prefill(
+            tokens,
+            page_table,
+            kv_cache[0],
+            prompt_lens,
+            prefill_seq_lens,
+            enable_trace=enable_trace,
+            sampling_params=sampling_params,
+            model_args=self.model_args[0],
+            trace_cache={
+                "ids": self.trace_id_prefill,
+                "inputs": self.trace_inputs_prefill,
+                "outputs": self.trace_output_prefill,
+            },
+        )
 
     def _easy_trace_prefill(
         self,
