@@ -4,7 +4,7 @@
 import ttnn
 from typing import Optional
 
-from ..core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 # Tile size used by TTNN matmul (wormhole)
 _TILE_H = 32

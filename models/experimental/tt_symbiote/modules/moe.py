@@ -2,25 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixture of Experts implementations for TTNN."""
 
+import math
 
 import torch
 from torch import nn
-import ttnn
-from transformers.configuration_utils import PretrainedConfig
 from torch.nn import functional as F
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+import ttnn
 from ttnn.model_preprocessing import preprocess_linear_weight
+from transformers.configuration_utils import PretrainedConfig
+
+from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearSilu,
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace
-import math
 
 
 # Helper to robustly convert various tensor types to a torch.Tensor
