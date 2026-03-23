@@ -65,16 +65,27 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
         Dict with "last_loss" and "average_iteration_time_ms".
     """
     # Step information is only useful if more than 2 steps are recorded.
-    if len(summary) < 3:
+    num_steps = len(summary)
+    if num_steps < 3:
         raise Exception(f"Number of steps recorded is less than 3.")
-    last_loss = summary[-1]["loss"]
+
+    # Get the last 5% if number of steps > 100
+    last_loss_msg = f""
+    if num_steps > 100:
+        count = int(num_steps * 0.05)
+        last_losses = [x["loss"] for x in summary[-count:]]
+        last_loss = np.mean(last_losses)
+        last_loss_msg = f"Average loss for last {count} steps"
+    else:
+        last_loss = summary[-1]["loss"]
+        last_loss_msg = "Last loss"
 
     # Exclude first two steps to avoid warmup/cold-start bias in timing.
     average_step_time = np.mean([step_info["step_time"] for step_info in summary[2:]])
 
     print("\n--- Step Information ---")
-    print(f"  Total steps:   {len(summary)}")
-    print(f"  Last loss:   {last_loss:,.2f}")
+    print(f"  Total steps:   {num_steps}")
+    print(f"  {last_loss_msg}:   {last_loss:,.2f}")
     print(f"  Average iteration time excluding first two steps:   {average_step_time:,.2f} ms")
 
     breakdown = {"last_loss": last_loss, "average_iteration_time_ms": average_step_time}
