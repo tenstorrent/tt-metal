@@ -26,9 +26,10 @@ def compute_cos_sin_cache(
     dtype: torch.dtype = torch.float32,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute cos/sin cache for RoPE.
+    Compute cos/sin cache for RoPE in HuggingFace format.
 
-    Uses the standard RoPE formula from the Llama family.
+    Uses HF-style RoPE format for ttnn.experimental.rotary_embedding:
+    [c0, c1, ..., c_{d/2-1}, c0, c1, ..., c_{d/2-1}]
 
     Args:
         head_dim: Dimension per head
@@ -44,20 +45,12 @@ def compute_cos_sin_cache(
 
     # Compute position embeddings
     t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
-    freqs = torch.outer(t, inv_freq)
+    freqs = torch.outer(t, inv_freq)  # [max_seq_len, head_dim // 2]
 
-    # Create [cos, cos] and [sin, sin] format for efficient computation
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
-
-    # Permute to meta format: interleave the values
-    # Original: [pos, dim/2] -> [pos, dim] with interleaved
-    cos_half = cos[:, : head_dim // 2]
-    cos = torch.stack((cos_half, cos_half), dim=-1).flatten(-2)
-
-    sin_half = sin[:, : head_dim // 2]
-    sin = torch.stack((sin_half, sin_half), dim=-1).flatten(-2)
+    # HF format: concat freqs with itself
+    # [c0, c1, ..., c_{d/2-1}, c0, c1, ..., c_{d/2-1}]
+    cos = torch.cat([freqs.cos(), freqs.cos()], dim=-1)  # [max_seq_len, head_dim]
+    sin = torch.cat([freqs.sin(), freqs.sin()], dim=-1)  # [max_seq_len, head_dim]
 
     # Reshape to [1, 1, max_seq_len, head_dim]
     cos = cos.unsqueeze(0).unsqueeze(0).to(dtype)
@@ -113,21 +106,23 @@ class TextRotarySetup(LightweightModule):
             theta=rope_theta,
         )
 
-        # Create cos/sin matrices for decode mode (ROW_MAJOR for embedding lookup)
+        # Create cos/sin matrices for decode mode (TILE_LAYOUT for ttnn.experimental.rotary_embedding)
+        # ttnn.experimental.rotary_embedding expects the FULL cache in shape [1, 1, max_seq_len, head_dim]
+        # and performs position slicing internally using the token_index parameter
         self.cos_matrix = ttnn.from_torch(
-            cos_cache.squeeze(0),  # [1, max_seq_len, head_dim]
+            cos_cache,  # [1, 1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
 
         self.sin_matrix = ttnn.from_torch(
-            sin_cache.squeeze(0),  # [1, max_seq_len, head_dim]
+            sin_cache,  # [1, 1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
@@ -311,103 +306,40 @@ class TextRotarySetup(LightweightModule):
         """
         Get rotation matrices for decode mode.
 
+        Returns the FULL cos/sin cache matrices for use with ttnn.experimental.rotary_embedding,
+        which performs position slicing internally using the token_index parameter.
+
         Args:
-            position_idxs: Position indices tensor of shape [batch]
+            position_idxs: Position indices tensor (not used, kept for API compatibility)
 
         Returns:
-            List of [cos, sin] tensors for decode
+            List of [cos, sin] tensors (full cache) for ttnn.experimental.rotary_embedding
         """
-        batch = position_idxs.shape[0]
-        position_idxs = position_idxs.reshape(1, batch)
-
-        # Pad to multiple of 32
-        pad_size = ((batch + 31) // 32) * 32 - batch
-        if pad_size > 0:
-            position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
-
-        rot_idxs = ttnn.from_torch(
-            position_idxs,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
-
-        # Embedding lookup for cos/sin
-        cos = ttnn.embedding(
-            rot_idxs,
-            self.cos_matrix,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, batch, head_dim]
-
-        sin = ttnn.embedding(
-            rot_idxs,
-            self.sin_matrix,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, batch, head_dim]
-
-        ttnn.deallocate(rot_idxs)
-
-        # Reshape for decode: [1, batch, 1, head_dim]
-        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
-        sin = ttnn.unsqueeze_to_4D(sin)
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
-        sin = ttnn.transpose(sin, 1, 2)
-
-        # Return interleaved (no sharding) for ttnn.experimental.rotary_embedding half-span op
-        if self.batch_size % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size, :, :]
-            sin = sin[:, : self.batch_size, :, :]
-
-        return [cos, sin]
+        # Return the full cos/sin cache matrices directly
+        # ttnn.experimental.rotary_embedding expects the full cache and uses token_index
+        # to slice internally
+        return [self.cos_matrix, self.sin_matrix]
 
     def get_rot_mats_decode_traced(
         self,
         rot_idxs: ttnn.Tensor,
     ) -> List[ttnn.Tensor]:
         """
-        Get rotation matrices for decode mode using pre-allocated index tensor.
+        Get rotation matrices for decode mode.
 
-        Trace-compatible version that doesn't allocate new tensors.
+        Returns the FULL cos/sin cache matrices for use with ttnn.experimental.rotary_embedding,
+        which performs position slicing internally using the token_index parameter.
 
         Args:
-            rot_idxs: Pre-allocated position index tensor on device [1, padded_batch]
+            rot_idxs: Pre-allocated position index tensor (not used, kept for API compatibility)
 
         Returns:
-            List of [cos, sin] tensors for decode (interleaved, for half-span RoPE)
+            List of [cos, sin] tensors (full cache) for ttnn.experimental.rotary_embedding
         """
-        # Embedding lookup for cos/sin
-        cos = ttnn.embedding(
-            rot_idxs,
-            self.cos_matrix,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, batch, head_dim]
-
-        sin = ttnn.embedding(
-            rot_idxs,
-            self.sin_matrix,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, batch, head_dim]
-
-        # Reshape for decode: [1, batch, 1, head_dim]
-        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
-        sin = ttnn.unsqueeze_to_4D(sin)
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
-        sin = ttnn.transpose(sin, 1, 2)
-
-        # Return interleaved for ttnn.experimental.rotary_embedding half-span op
-        if self.batch_size % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size, :, :]
-            sin = sin[:, : self.batch_size, :, :]
-
-        return [cos, sin]
+        # Return the full cos/sin cache matrices directly
+        # ttnn.experimental.rotary_embedding expects the full cache and uses token_index
+        # to slice internally
+        return [self.cos_matrix, self.sin_matrix]
 
     def allocate_decode_rot_idxs(self, initial_pos: int = 0) -> ttnn.Tensor:
         """

@@ -452,16 +452,17 @@ class TextAttention(LightweightModule):
 
         # Use nlp_create_qkv_heads_decode for efficient reshape
         # Output: q [1, B, num_heads, d], k [1, B, num_kv_heads, d], v [1, B, num_kv_heads, d]
+        # Use HEIGHT_SHARDED output for efficient paged_update_cache later
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.num_heads_per_device,
             num_kv_heads=self.num_kv_heads_per_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv)
 
         # Apply QK-norm (RMSNorm on Q and K)
-        # nlp_create_qkv_heads_decode outputs HEIGHT_SHARDED, rms_norm needs interleaved
+        # RMSNorm doesn't support HEIGHT_SHARDED, convert to interleaved first
         q = ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
@@ -473,61 +474,65 @@ class TextAttention(LightweightModule):
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # nlp_create_qkv_heads_decode already outputs [S, B, H, d] format
-        # No transpose needed!
+        # Get current position as integer for rotary_embedding
+        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
 
-        # Convert Q and K to HEIGHT_SHARDED for decode RoPE
-        core_grid = ttnn.CoreCoord(8, 8)
-        q_shard_grid = ttnn.num_cores_to_corerangeset(self.num_heads_per_device, core_grid, row_wise=True)
-        k_shard_grid = ttnn.num_cores_to_corerangeset(self.num_kv_heads_per_device, core_grid, row_wise=True)
-
-        q_shard_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=q_shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        k_shard_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=k_shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        q = ttnn.to_memory_config(q, q_shard_config)
-        k = ttnn.to_memory_config(k, k_shard_config)
-
-        # Apply RoPE using TTNN half-span op (decode mode; rot_mats are interleaved [1,1,1,head_dim])
+        # Apply RoPE using TTNN rotary embedding
         q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
+            int_current_pos,
         )
 
         k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
+            int_current_pos,
         )
 
-        # V also needs to be sharded for paged_update_cache
-        v_shard_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=k_shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        # Reshape to handle padding from rotary_embedding (pads to 32 heads)
+        # Output shape after RoPE: [1, B, 32, head_dim], need [1, B, num_heads_per_device, head_dim]
+        q = ttnn.reshape(
+            q,
+            (1, batch_size, self.num_heads_per_device, self.head_dim),
+            (1, batch_size, 32, self.head_dim),
         )
-        v = ttnn.to_memory_config(v, v_shard_config)
+        k = ttnn.reshape(
+            k,
+            (1, batch_size, self.num_kv_heads_per_device, self.head_dim),
+            (1, batch_size, 32, self.head_dim),
+        )
+
+        # Slice to actual number of heads
+        # Note: nlp_create_qkv_heads_decode output shape is [1, H_padded, B, d]
+        # After RoPE/reshape, tensors are [1, B, H_padded, d] for Q,K but V stays [1, H_padded, B, d]
+        q = q[:, :, : self.num_heads_per_device]
+        k = k[:, :, : self.num_kv_heads_per_device]
+        # V hasn't been through reshape, so heads are in dim 1
+        v = v[:, : self.num_kv_heads_per_device, :, :]
 
         # Get KV cache references
         k_cache, v_cache = kv_cache
 
+        # Get update position as integer
+        update_idx = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+
+        # Convert K, V to match cache shape [batch, kv_heads, seq_len, head_dim]
+        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Reshape K, V for cache
+        # K is [1, B, H, d] -> [B, H, 1, d]
+        # V is [1, H, B, d] -> [B, H, 1, d]
+        k = ttnn.permute(k, (1, 2, 0, 3))  # [1, B, H, d] -> [B, H, 1, d]
+        v = ttnn.permute(v, (2, 1, 0, 3))  # [1, H, B, d] -> [B, H, 1, d]
+
         # Update KV cache at current position
-        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=None)
-        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=None)
+        # update_cache updates the cache at a specific index
+        ttnn.update_cache(k_cache, k, update_idx)
+        ttnn.update_cache(v_cache, v, update_idx)
 
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -558,9 +563,26 @@ class TextAttention(LightweightModule):
 
         ttnn.deallocate(q)
 
-        # Reshape: [1, B, H, d] -> [1, 1, B, H*d]
-        # SDPA decode output is [1, B, H, d] = [1, 1, num_heads_per_device, head_dim]
-        attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, self.num_heads_per_device * self.head_dim])
+        # Convert SDPA output to sharded for nlp_concat_heads_decode
+        # SDPA output: [1, B, H, d] needs HEIGHT sharded memory config
+        sdpa_output_shard_config = ttnn.create_sharded_memory_config(
+            shape=(
+                (self.num_heads_per_device + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE,
+                self.head_dim,
+            ),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, sdpa_output_shard_config)
+
+        # Concat heads: [1, B, H, d] -> [1, 1, B, H*d]
+        # Use nlp_concat_heads_decode for proper head concatenation
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
+            attn_output,
+            num_heads=self.num_heads_per_device,
+        )
 
         # Output projection (row parallel) - use L1 for decode
         output = ttnn.linear(
