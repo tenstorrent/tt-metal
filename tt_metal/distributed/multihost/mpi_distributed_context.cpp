@@ -380,17 +380,18 @@ MPIContext::CommunicatorState::~CommunicatorState() {
 }
 
 std::shared_ptr<MPIContext::CommunicatorState> MPIContext::build_state(MPI_Comm comm, MPI_Group group) {
-    mpi_check(MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN), "MPI_Comm_set_errhandler");
-
     auto state = std::make_shared<CommunicatorState>();
     state->comm = comm;
+    // Publish the communicator to the RAII state before the first checked MPI
+    // call so failures unwind through CommunicatorState cleanup.
+    mpi_check(MPI_Comm_set_errhandler(state->comm, MPI_ERRORS_RETURN), "MPI_Comm_set_errhandler");
     if (group == MPI_GROUP_NULL) {
-        mpi_check(MPI_Comm_group(comm, &state->group), "MPI_Comm_group");
+        mpi_check(MPI_Comm_group(state->comm, &state->group), "MPI_Comm_group");
     } else {
         state->group = group;
     }
-    mpi_check(MPI_Comm_rank(comm, &state->rank), "MPI_Comm_rank");
-    mpi_check(MPI_Comm_size(comm, &state->size), "MPI_Comm_size");
+    mpi_check(MPI_Comm_rank(state->comm, &state->rank), "MPI_Comm_rank");
+    mpi_check(MPI_Comm_size(state->comm, &state->size), "MPI_Comm_size");
     return state;
 }
 
@@ -1019,10 +1020,12 @@ void MPIContext::revoke_and_shrink() {
     revoked_.test_and_set(std::memory_order_release);
 
     MPI_Comm new_comm = MPI_COMM_NULL;
-    MPI_Group new_group = MPI_GROUP_NULL;
     MPI_CHECK_STATE(old_state, MPIX_Comm_shrink(old_state->comm, &new_comm));
-    MPI_Comm_group(new_comm, &new_group);
-    auto new_state = build_state(new_comm, new_group);
+    // Route replacement-communicator setup through build_state(new_comm)
+    // rather than MPI_CHECK_STATE(old_state, ...) so any setup failure is
+    // attributed to the new communicator and unwinds through the same RAII
+    // cleanup path as other communicator factories.
+    auto new_state = build_state(new_comm);
 
     // Swap the current communicator snapshot atomically. Old readers keep the
     // pre-shrink communicator alive through their shared_ptr snapshots.

@@ -305,18 +305,17 @@ class TestUlfmGuardFaultTolerant:
 
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
-            # Data-flow tools often treat code after a nested ``with ulfm_guard`` as
-            # unreachable (they conflate it with the fast-fail ``NoReturn`` path via
-            # ``os._exit``).  Here policy is FAULT_TOLERANT — runtime raises
-            # MPIRankFailureError, no ``os._exit``.  Bind ``pytest.raises`` in two steps so
-            # inspection uses ``raises_ctx.excinfo.value`` (pytest 8.4+ :class:`RaisesExc`
-            # API) after the inner ``with``, rather than a long ``with`` chain that looks
-            # like dead code.
-            raises_ctx = pytest.raises(mf.MPIRankFailureError)
-            with raises_ctx:
+            # Keep the nested ``ulfm_guard`` in the test body: the contract
+            # under test is that FAULT_TOLERANT mode converts a ULFM
+            # ``MPI.Exception`` into ``MPIRankFailureError``.
+            #
+            # Use pytest's standard ``as excinfo`` form rather than the two-step
+            # ``RaisesExc`` API so static analyzers can see the captured
+            # exception is populated after the context exits.
+            with pytest.raises(mf.MPIRankFailureError) as excinfo:
                 with mf.ulfm_guard(comm, "Scatter", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
-            err = raises_ctx.excinfo.value
+            err = excinfo.value
             assert err.rank == 0
             assert err.error_code == 54
             assert err.operation == "Scatter"
@@ -339,15 +338,14 @@ class TestUlfmGuardFaultTolerant:
 
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
-            # Same static-analysis pattern as ``test_raises_mpi_rank_failure_error`` above:
-            # two-step ``pytest.raises`` and ``excinfo.value`` avoid a dead-code diagnostic
-            # on the ``failed_ranks`` assertion.
-            raises_ctx = pytest.raises(mf.MPIRankFailureError)
-            with raises_ctx:
+            # Exercise the same ``ulfm_guard`` conversion path as above while
+            # asserting that failed-rank discovery is threaded into the raised
+            # exception.
+            with pytest.raises(mf.MPIRankFailureError) as excinfo:
                 with mf.ulfm_guard(comm, "Allreduce", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
-            assert raises_ctx.excinfo.value.failed_ranks == [0, 1]
+            assert excinfo.value.failed_ranks == [0, 1]
 
     def test_success_path_in_fault_tolerant(self):
         """No exception means no error — guard passes through."""
