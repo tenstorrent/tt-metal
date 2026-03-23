@@ -70,15 +70,6 @@ void kernel_main() {
     uint32_t out_cb_addr = get_write_ptr(cb_id_out0);
     volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_cb_addr);
 
-    // The three tensors are allocated independently and could in principle have
-    // different aligned page sizes (even though in practice they'll likely be the
-    // same, since they all share W and dtype). This doesn't cause correctness
-    // issues because:
-    //  - The inner loop always operates on exactly W elements and ignores any
-    //    padding bytes beyond the W-th element.
-    //  - NOC writes use the destination tensor's own page size (offsets_page_size
-    //    or totals_page_size)
-
     for (uint32_t i = 0; i < W; i++) {
         running_sum[i] = 0;
     }
@@ -87,6 +78,15 @@ void kernel_main() {
     noc_async_write_barrier();
 
     uint32_t in_cb_addr = get_write_ptr(cb_id_in0);
+
+    // The three tensors are allocated independently and could in principle have
+    // different aligned page sizes (even though in practice they'll likely be the
+    // same, since they all share W and dtype). This doesn't cause correctness
+    // issues because:
+    //  - The inner loop always operates on exactly W elements and ignores any
+    //    padding bytes beyond the W-th element.
+    //  - NOC writes use the destination tensor's own page size (offsets_page_size
+    //    or totals_page_size)
 
     for (uint32_t h = 0; h < H; h++) {
         noc_async_read_page(h, src_accessor, in_cb_addr);
