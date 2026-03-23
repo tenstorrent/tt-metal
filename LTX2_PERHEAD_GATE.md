@@ -23,9 +23,16 @@ Achieve exact match (PCC > 0.999 per layer) between TTNN LTX-2 transformer and t
 - The reference applies gate BEFORE `to_out` (not after): `sdpa → concat_heads → view(B,T,H,D) * gates → view(B,T,H*D) → to_out`
 
 ## Open Questions
-- [ ] Full 48-layer end-to-end video generation matching official pipeline output
+- [ ] Step 1 denoised differs by ~25% in range (TT [-1.16, 1.46] vs CPU [-1.63, 1.55]). Root cause?
+- [ ] Does the TTNN model handle `caption_projection` the same as the reference?
 - [ ] Performance impact of host-side gate computation (device→host readback per attention layer)
 - [ ] Is there a way to batch the host gate computation to hide latency (async readback)?
+
+## Major Bugs Found & Fixed
+1. **Reference PCC test used ungated model** — `apply_gated_attention=False` default meant we compared gated TT vs ungated ref. Fix: pass `apply_gated_attention=True`. PCC improved from 0.989 to 0.9999.
+2. **RoPE was in wrong format** — Used SPLIT layout where each head has independent frequencies. LTX-2 needs INTERLEAVED where heads share frequency structure across flat 4096-dim space. Fix: use reference `precompute_freqs_cis(rope_type=INTERLEAVED)` and reshape to per-head. RoPE PCC improved from 0.09 to 1.0.
+3. **CPU reference used wrong positions** — Simple latent indices instead of official pixel-space coordinates with causal fix. Fix: use `get_pixel_coords` from official patchifier.
+4. **Denoised dtype mismatch** — TTNN kept denoised in float32 while reference returns bf16. Fix: cast to bf16 to match reference `to_denoised` behavior.
 
 ## State
 - [x] Identified gate weights in LTX-2.3 checkpoint (`to_gate_logits.weight/bias` per attention layer)
