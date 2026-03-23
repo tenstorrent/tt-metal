@@ -348,6 +348,213 @@ class Generator(WarmupForwardMixin):
 
         return trace_id, (tt_tokens, tt_log_probs), trace_input
 
+    def _row_sharded_batched_prefill(
+        self,
+        tokens,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_lens,
+        enable_trace=True,
+        sampling_params=None,
+    ):
+        """Row-parallel batched prefill for users_row_sharded models.
+
+        Iterates through users_per_row iterations, processing 1 user per mesh row
+        per iteration (num_rows users in parallel). Supports traced and non-traced paths.
+
+        Returns:
+            output_tensor: torch.Tensor of shape [batch_size, 1, vocab_size] with logits
+        """
+        model = self.model[0]
+        model_id = 0
+        model_kv_cache = kv_cache[model_id]
+        mesh_device = model.mesh_device
+        num_rows = mesh_device.shape[0]
+        batch_size = len(prompt_lens)
+        users_per_row = batch_size // num_rows
+        # Pad to next multiple of num_rows if needed
+        actual_batch_size = batch_size
+        if batch_size % num_rows != 0:
+            pad_to = ((batch_size + num_rows - 1) // num_rows) * num_rows
+            pad_count = pad_to - batch_size
+            tokens = torch.cat([tokens, torch.zeros(pad_count, tokens.shape[1], dtype=tokens.dtype)], dim=0)
+            prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
+            prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
+            if page_table is not None:
+                page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
+            batch_size = pad_to
+
+        max_padded_len = max(prefill_seq_lens)
+        block_size = get_block_size(model_kv_cache)
+        max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
+
+        # get_last_token optimization: only apply norm+lm_head to last 32 tokens
+        all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
+        fixed_glt = (min(all_last_idxs) // 32) * 32
+        if (max(all_last_idxs) // 32) * 32 != fixed_glt:
+            fixed_glt = -1
+
+        output_tensor = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
+
+        def _prepare_iter(iter_idx):
+            """Prepare host-side tokens + page_table for one iteration."""
+            user_indices = [row * users_per_row + iter_idx for row in range(num_rows)]
+            tokens_list, pt_list, last_idxs = [], [], []
+            for uid in user_indices:
+                plen = int(prompt_lens[uid])
+                toks = torch.cat(
+                    [
+                        tokens[uid : uid + 1, :plen],
+                        torch.zeros(1, max_padded_len - plen, dtype=torch.long),
+                    ],
+                    dim=-1,
+                )
+                tokens_list.append(toks)
+                pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
+                last_idxs.append(plen - 1)
+            return (
+                torch.cat(tokens_list, dim=0),  # [num_rows, max_padded_len]
+                torch.cat(pt_list, dim=0),  # [num_rows, max_num_blocks]
+                last_idxs,
+                user_indices,
+            )
+
+        def _extract_logits(tt_logits, last_idxs, user_indices):
+            """Extract per-row logits with TP gather and store in output_tensor."""
+            device_tensors = ttnn.get_device_tensors(tt_logits)
+            nc = mesh_device.shape[1]
+            for row_idx, uid in enumerate(user_indices):
+                device_base = row_idx * nc
+                row_logits = [ttnn.to_torch(device_tensors[device_base + col]) for col in range(nc)]
+                torch_output = torch.cat(row_logits, dim=-1)
+                last_idx = last_idxs[row_idx]
+                if fixed_glt != -1:
+                    last_idx = last_idx % 32
+                result = torch_output[..., last_idx, : model.vocab_size]
+                output_tensor[uid, 0] = result.view(-1)
+
+        trace_key = f"rsbp_{max_padded_len}"
+        enable_trace_current = enable_trace and self.model_args[0].can_enable_trace(max_padded_len, 0)
+
+        if enable_trace_current:
+            if self.trace_id_prefill[trace_key] is None:
+                # === Compilation (warmup) ===
+                # Use trace_enabled=True for compilation too (matches text_demo.py)
+                tokens_0, pt_0, last_0, uids_0 = _prepare_iter(0)
+                host_out = model.prepare_inputs_prefill(
+                    tokens_0, page_table=pt_0, trace_enabled=True, batched_prefill=True
+                )
+                rot_global = host_out[1]
+                rot_local = host_out[2]
+                host_inputs = (host_out[0], host_out[3], host_out[4])
+
+                dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+                transformed = model.transform_and_embed_prefill_inputs_device(*dev_inputs)
+                tt_logits = model.ttnn_prefill_forward(
+                    transformed[0],
+                    rot_mats_global=rot_global,
+                    rot_mats_local=rot_local,
+                    user_id=0,
+                    page_table=transformed[1],
+                    get_last_token=fixed_glt,
+                    kv_cache=model_kv_cache,
+                    batch_size=1,
+                )
+                if sampling_params is None:
+                    _extract_logits(tt_logits, last_0, uids_0)
+                ttnn.synchronize_device(mesh_device)
+                logger.info("Row-sharded batched prefill compilation done")
+
+                # Clear KV caches (compilation wrote to them)
+                for layer_obj in model.layers:
+                    lp = getattr(layer_obj.self_attn, "layer_past", None)
+                    if lp is not None:
+                        k_cache, v_cache = lp
+                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+                # === Trace capture ===
+                host_out = model.prepare_inputs_prefill(
+                    tokens_0, page_table=pt_0, trace_enabled=True, batched_prefill=True
+                )
+                host_inputs = (host_out[0], host_out[3], host_out[4])
+
+                dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                transformed = model.transform_and_embed_prefill_inputs_device(*dev_inputs)
+                tt_out_trace = model.ttnn_prefill_forward(
+                    transformed[0],
+                    rot_mats_global=rot_global,
+                    rot_mats_local=rot_local,
+                    user_id=0,
+                    page_table=transformed[1],
+                    get_last_token=fixed_glt,
+                    kv_cache=model_kv_cache,
+                    batch_size=1,
+                )
+                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                ttnn.synchronize_device(mesh_device)
+                logger.info("Row-sharded batched prefill trace captured")
+
+                self.trace_id_prefill[trace_key] = trace_id
+                self.trace_inputs_prefill[trace_key] = dev_inputs
+                self.trace_output_prefill[trace_key] = tt_out_trace
+
+                # Clear KV caches (trace capture wrote to them)
+                for layer_obj in model.layers:
+                    lp = getattr(layer_obj.self_attn, "layer_past", None)
+                    if lp is not None:
+                        k_cache, v_cache = lp
+                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+            # === Execute trace for all iterations ===
+            for iter_idx in range(users_per_row):
+                tokens_i, pt_i, last_i, uids_i = _prepare_iter(iter_idx)
+                host_out = model.prepare_inputs_prefill(
+                    tokens_i, page_table=pt_i, trace_enabled=True, batched_prefill=True
+                )
+                host_inputs = (host_out[0], host_out[3], host_out[4])
+                copy_host_to_device(
+                    host_inputs,
+                    device_tensors=self.trace_inputs_prefill[trace_key],
+                    mesh_device=mesh_device,
+                )
+                ttnn.execute_trace(mesh_device, self.trace_id_prefill[trace_key], cq_id=0, blocking=False)
+                if sampling_params is None:
+                    _extract_logits(self.trace_output_prefill[trace_key], last_i, uids_i)
+        else:
+            # === Non-traced path ===
+            for iter_idx in range(users_per_row):
+                tokens_i, pt_i, last_i, uids_i = _prepare_iter(iter_idx)
+                host_out = model.prepare_inputs_prefill(tokens_i, page_table=pt_i, batched_prefill=True)
+                tt_logits = model.ttnn_prefill_forward(
+                    host_out[0],
+                    rot_mats_global=host_out[1],
+                    rot_mats_local=host_out[2],
+                    user_id=0,
+                    page_table=host_out[3],
+                    get_last_token=fixed_glt,
+                    kv_cache=model_kv_cache,
+                    batch_size=1,
+                )
+                if sampling_params is None:
+                    _extract_logits(tt_logits, last_i, uids_i)
+
+        # Ensure all prefill trace replays have completed (KV cache fully filled)
+        ttnn.synchronize_device(mesh_device)
+
+        if sampling_params is not None:
+            # GPT-OSS always generates <|channel|> (token 200005) as the first token.
+            # Skip lm_head + sampling entirely — just return the known token.
+            CHANNEL_TOKEN_ID = 200005
+            output_tokens = torch.full((batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64)
+            output_log_probs = torch.zeros(batch_size, 1, dtype=torch.float32)
+            return output_tokens[:actual_batch_size], output_log_probs[:actual_batch_size]
+
+        return output_tensor[:actual_batch_size]
+
     def _easy_trace_prefill(
         self,
         prefill_ids,
@@ -483,6 +690,20 @@ class Generator(WarmupForwardMixin):
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Row-sharded batched prefill: process 1 user per row per iteration
+        model_0 = self.model[0]
+        num_mesh_rows = model_0.mesh_device.shape[0] if hasattr(model_0, "mesh_device") else 1
+        if getattr(model_0, "users_row_sharded", False) and batch_size > 1:
+            return self._row_sharded_batched_prefill(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                prefill_seq_lens=prefill_seq_lens,
+                enable_trace=enable_trace,
+                sampling_params=sampling_params,
+            )
+
         # Batched prefill: all prompts share the same padded length so they can
         # be processed in a single forward pass. padded_batch is rounded up to
         # the nearest SUPPORTED_PREFILL_BATCH_SIZES entry (not max_batch_size)
@@ -546,6 +767,10 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_len = prefill_seq_lens[idx]
                 logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+            # Skip lm_head for row-sharded models when sampling_params provided
+            # (prefill token is deterministic <|channel|>)
+            if getattr(self.model[model_id], "users_row_sharded", False) and sampling_on_device_requested:
+                local_kwargs["skip_lm_head"] = True
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
@@ -843,6 +1068,7 @@ class Generator(WarmupForwardMixin):
                     )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+
         if sampling_executed:
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
