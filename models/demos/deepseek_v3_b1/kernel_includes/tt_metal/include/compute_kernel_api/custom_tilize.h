@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
-#include "api/compute/tilize.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_reduce_api.h"
@@ -38,17 +37,16 @@ ALWI void tilize_init_unpack(uint32_t icb, uint32_t block, uint32_t call_line = 
 
 // clang-format off
 /**
- * Performs the tilize operation on a block.
+ * Performs the tilize operation on a block. num_chunks * chunk must be equal to the block size.
  *
  * Return value: None
  *
  * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
  * |----------- |------------------|------------------------------------------|----------|-------------|----------|
  * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
- * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | num_chunks       | Number of chunks to work on              | uint32_t | > 0         | True     |
+ * | Function   | chunk            | Size of each chunk to work on            | uint32_t | > 0         | True     |
  * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
- * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
- * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
 ALWI void tilize_block_custom(uint32_t icb, uint32_t num_chunks, uint32_t chunk, uint32_t ocb) {
