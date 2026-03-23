@@ -860,8 +860,7 @@ all_gather_minimal_matmul_async_factory_helper(
         if (use_fused_ternary) {
             in0_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in0_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in0_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
@@ -881,8 +880,7 @@ all_gather_minimal_matmul_async_factory_helper(
         if (use_fused_ternary) {
             in1_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in1_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in1_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
@@ -894,7 +892,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     // compute common args: [scalar, broadcast_ternary_b] (only if fused ternary)
     if (use_fused_ternary) {
-        uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+        uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         std::vector<uint32_t> compute_common_args = {
             *reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()),
             ternary_b_M_tiles == 1 ? 1u : 0u,  // broadcast_ternary_b
@@ -1131,7 +1129,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         in0_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
         in0_common.push_back(tensor_args.fused_ternary_input_b.value().buffer()->address());
         uint32_t ternary_b_M_tiles =
-            tensor_args.fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in0_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
     for (size_t i = 1; i < output_tensor.size(); ++i) {
@@ -1147,7 +1145,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         in1_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
         in1_common.push_back(tensor_args.fused_ternary_input_b.value().buffer()->address());
         uint32_t ternary_b_M_tiles =
-            tensor_args.fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in1_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
     for (size_t i = 1; i < output_tensor.size(); ++i) {
@@ -1162,7 +1160,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         float scalar = attributes.fused_ternary_scalar.value();
         scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
         uint32_t ternary_b_M_tiles =
-            tensor_args.fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         broadcast_ternary_b_uint = ternary_b_M_tiles == 1 ? 1u : 0u;
     }
 

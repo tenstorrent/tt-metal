@@ -705,8 +705,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in0_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         // Add output addresses at the end (unified layout for both regular and split)
@@ -742,8 +741,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in1_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         // Add output addresses at the end (unified layout for both regular and split)
@@ -769,8 +767,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         };
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
         }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
