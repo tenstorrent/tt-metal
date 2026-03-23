@@ -88,23 +88,88 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
-        self.layers = [
-            TransformerBlock(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                dtype=dtype,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                transformation_mats=self.trans_mats_dict,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-                attention_class=attention_class,
-                prefetcher=prefetcher,
+        # Qwen3.5 partial RoPE: only rotate first rotary_dim dims
+        partial = getattr(args, "partial_rotary_factor", 1.0)
+        if partial < 1.0:
+            rotary_dim = int(args.head_dim * partial)
+            is_mesh = args.num_devices > 1
+            if is_mesh:
+                # Get from first device (all replicas identical)
+                cos_h = ttnn.to_torch(ttnn.get_device_tensors(self.rope_setup.cos_matrix)[0])
+                sin_h = ttnn.to_torch(ttnn.get_device_tensors(self.rope_setup.sin_matrix)[0])
+            else:
+                cos_h = ttnn.to_torch(self.rope_setup.cos_matrix)
+                sin_h = ttnn.to_torch(self.rope_setup.sin_matrix)
+            cos_h[:, :, :, rotary_dim:] = 1.0
+            sin_h[:, :, :, rotary_dim:] = 0.0
+            ttnn.deallocate(self.rope_setup.cos_matrix)
+            ttnn.deallocate(self.rope_setup.sin_matrix)
+            mesh_kwargs = {"mesh_mapper": ttnn.ReplicateTensorToMesh(mesh_device)} if is_mesh else {}
+            # Preserve original layout (ROW_MAJOR for Meta RotarySetup embedding lookup,
+            # TILE for HfRotarySetup). Use ROW_MAJOR as default for compatibility.
+            rope_layout = ttnn.ROW_MAJOR_LAYOUT if not args.use_hf_rope else ttnn.TILE_LAYOUT
+            self.rope_setup.cos_matrix = ttnn.from_torch(
+                cos_h, dtype=ttnn.bfloat16, layout=rope_layout, device=mesh_device, **mesh_kwargs
             )
-            for i in tqdm(range(self.n_layers))
-        ]
+            self.rope_setup.sin_matrix = ttnn.from_torch(
+                sin_h, dtype=ttnn.bfloat16, layout=rope_layout, device=mesh_device, **mesh_kwargs
+            )
+
+        if getattr(args, "is_qwen35", False):
+            from models.tt_transformers.tt.gated_attention import GatedAttention
+            from models.tt_transformers.tt.qwen35_decoder import DeltaNetDecoderBlock
+
+            layers = []
+            for i in tqdm(range(self.n_layers), desc="Building layers"):
+                if args.layer_types[i] == "linear_attention":
+                    layers.append(
+                        DeltaNetDecoderBlock(
+                            args=args,
+                            mesh_device=mesh_device,
+                            tt_ccl=self.tt_ccl,
+                            dtype=dtype,
+                            state_dict=state_dict,
+                            layer_num=i,
+                            weight_cache_path=weight_cache_path,
+                            prefetcher=prefetcher,
+                        )
+                    )
+                else:
+                    layers.append(
+                        TransformerBlock(
+                            args=args,
+                            mesh_device=mesh_device,
+                            tt_ccl=self.tt_ccl,
+                            dtype=dtype,
+                            state_dict=state_dict,
+                            weight_cache_path=weight_cache_path,
+                            layer_num=i,
+                            transformation_mats=self.trans_mats_dict,
+                            paged_attention_config=paged_attention_config,
+                            use_paged_kv_cache=use_paged_kv_cache,
+                            attention_class=GatedAttention,
+                            prefetcher=prefetcher,
+                        )
+                    )
+            self.layers = layers
+        else:
+            self.layers = [
+                TransformerBlock(
+                    args=args,
+                    mesh_device=mesh_device,
+                    tt_ccl=self.tt_ccl,
+                    dtype=dtype,
+                    state_dict=state_dict,
+                    weight_cache_path=weight_cache_path,
+                    layer_num=i,
+                    transformation_mats=self.trans_mats_dict,
+                    paged_attention_config=paged_attention_config,
+                    use_paged_kv_cache=use_paged_kv_cache,
+                    attention_class=attention_class,
+                    prefetcher=prefetcher,
+                )
+                for i in tqdm(range(self.n_layers))
+            ]
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,

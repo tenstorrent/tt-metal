@@ -58,6 +58,9 @@ class GatedAttention(Attention):
             prefetcher=prefetcher,
         )
 
+        # Detect multi-device mesh
+        self._is_mesh = self.num_devices > 1
+
         # Load gate weight: (hidden_size, n_heads * head_dim)
         layer_prefix = configuration.get_state_dict_prefix("GatedAttention", layer_num)
         gate_key = f"{layer_prefix}.q_proj_gate.weight"
@@ -75,6 +78,7 @@ class GatedAttention(Attention):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=cache_name,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1) if self._is_mesh else None,
             )
         else:
             self.gate_weight = None
@@ -86,9 +90,12 @@ class GatedAttention(Attention):
         if self.gate_weight is not None:
             self.pre_wo_hook = self._apply_gate
 
-        # Install custom RoPE for partial rotation (rotary_dim < head_dim)
+        # Partial RoPE: when the Transformer class patches cos/sin matrices at init
+        # (cos=1, sin=0 for dims >= rotary_dim), the standard device-side RoPE handles
+        # partial rotation correctly. Only fall back to host-based custom_rope_fn on
+        # single-device where the patching may not be applied (e.g. standalone tests).
         partial_factor = getattr(configuration, "partial_rotary_factor", 1.0)
-        if partial_factor < 1.0:
+        if partial_factor < 1.0 and not self._is_mesh:
             self._setup_partial_rope(configuration)
 
     def _setup_partial_rope(self, args):
@@ -107,15 +114,25 @@ class GatedAttention(Attention):
         inv_freq = 1.0 / (rope_theta ** (torch.arange(0, rotary_dim, 2).float() / rotary_dim))
         device = self.mesh_device
 
+        is_mesh = self._is_mesh
+
         def partial_rope_fn(q_tt, k_tt, current_pos):
             """Apply partial RoPE on host. ~14 KB roundtrip, negligible latency."""
-            pos = ttnn.to_torch(current_pos).int().item()
+            if is_mesh:
+                pos = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0]).int().item()
+            else:
+                pos = ttnn.to_torch(current_pos).int().item()
             freqs = pos * inv_freq
             cos_val = freqs.cos()
             sin_val = freqs.sin()
 
-            q = ttnn.to_torch(q_tt).float()
-            k = ttnn.to_torch(k_tt).float()
+            if is_mesh:
+                mesh_composer = ttnn.ConcatMeshToTensor(device, dim=1)
+                q = ttnn.to_torch(q_tt, mesh_composer=mesh_composer).float()
+                k = ttnn.to_torch(k_tt, mesh_composer=mesh_composer).float()
+            else:
+                q = ttnn.to_torch(q_tt).float()
+                k = ttnn.to_torch(k_tt).float()
 
             def apply_rot(x):
                 x1 = x[..., :half_dim]
@@ -132,8 +149,17 @@ class GatedAttention(Attention):
             q = apply_rot(q)
             k = apply_rot(k)
 
-            q_out = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            k_out = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            if is_mesh:
+                mesh_mapper = ttnn.ShardTensorToMesh(device, dim=1)
+                q_out = ttnn.from_torch(
+                    q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+                )
+                k_out = ttnn.from_torch(
+                    k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+                )
+            else:
+                q_out = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                k_out = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             return q_out, k_out
 
         self.custom_rope_fn = partial_rope_fn

@@ -126,16 +126,16 @@ def ref_deltanet_forward(weights, hidden_states):
     """
     p = "model.language_model.layers.0."  # Will be replaced by caller with correct prefix
 
-    # Projections
-    in_proj_qkv_w = weights[f"{p}linear_attn.in_proj_qkv.weight"]
-    in_proj_z_w = weights[f"{p}linear_attn.in_proj_z.weight"]
-    in_proj_b_w = weights[f"{p}linear_attn.in_proj_b.weight"]
-    in_proj_a_w = weights[f"{p}linear_attn.in_proj_a.weight"]
-    out_proj_w = weights[f"{p}linear_attn.out_proj.weight"]
-    conv1d_w = weights[f"{p}linear_attn.conv1d.weight"]  # (conv_dim, 1, kernel)
-    dt_bias = weights[f"{p}linear_attn.dt_bias"]
-    A_log = weights[f"{p}linear_attn.A_log"]
-    norm_w = weights[f"{p}linear_attn.norm.weight"]
+    # Projections (cast to float32 -- safetensors stores as bfloat16)
+    in_proj_qkv_w = weights[f"{p}linear_attn.in_proj_qkv.weight"].float()
+    in_proj_z_w = weights[f"{p}linear_attn.in_proj_z.weight"].float()
+    in_proj_b_w = weights[f"{p}linear_attn.in_proj_b.weight"].float()
+    in_proj_a_w = weights[f"{p}linear_attn.in_proj_a.weight"].float()
+    out_proj_w = weights[f"{p}linear_attn.out_proj.weight"].float()
+    conv1d_w = weights[f"{p}linear_attn.conv1d.weight"].float()  # (conv_dim, 1, kernel)
+    dt_bias = weights[f"{p}linear_attn.dt_bias"].float()
+    A_log = weights[f"{p}linear_attn.A_log"].float()
+    norm_w = weights[f"{p}linear_attn.norm.weight"].float()
 
     batch_size, seq_len, _ = hidden_states.shape
 
@@ -231,14 +231,14 @@ def ref_gated_attention_forward(weights, hidden_states, position=0, layer_idx=3)
     """
     p = f"model.language_model.layers.{layer_idx}."
 
-    # Load weights
+    # Load weights (cast to float32 -- safetensors stores as bfloat16)
     # q_proj is 2x size: first half query, second half gate (interleaved per head)
-    q_proj_w = weights[f"{p}self_attn.q_proj.weight"]  # (n_heads * head_dim * 2, hidden)
-    k_proj_w = weights[f"{p}self_attn.k_proj.weight"]
-    v_proj_w = weights[f"{p}self_attn.v_proj.weight"]
-    o_proj_w = weights[f"{p}self_attn.o_proj.weight"]
-    q_norm_w = weights[f"{p}self_attn.q_norm.weight"]
-    k_norm_w = weights[f"{p}self_attn.k_norm.weight"]
+    q_proj_w = weights[f"{p}self_attn.q_proj.weight"].float()
+    k_proj_w = weights[f"{p}self_attn.k_proj.weight"].float()
+    v_proj_w = weights[f"{p}self_attn.v_proj.weight"].float()
+    o_proj_w = weights[f"{p}self_attn.o_proj.weight"].float()
+    q_norm_w = weights[f"{p}self_attn.q_norm.weight"].float()
+    k_norm_w = weights[f"{p}self_attn.k_norm.weight"].float()
 
     batch_size, seq_len, _ = hidden_states.shape
 
@@ -328,11 +328,14 @@ class TestDeltaNetPCC:
 
         # --- TTNN ---
         # Prepare weights using the same key mapping as ModelArgs.load_state_dict
-        from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta_qwen35
+        from models.tt_transformers.tt.qwen35_utils import convert_hf_to_meta_qwen35
 
         # Build a minimal state_dict with just this layer's weights
-        # Strip "model." prefix to match what convert_hf_to_meta_qwen35 expects
-        sd = {k.replace("model.", ""): v for k, v in layer_weights.items()}
+        # Strip "model.language_model." prefix to get "layers.N...." format
+        sd = {}
+        for k, v in layer_weights.items():
+            k = k.replace("model.language_model.", "").replace("model.", "")
+            sd[k] = v
         sd = convert_hf_to_meta_qwen35(sd, HEAD_DIM, N_HEADS, N_KV_HEADS)
 
         # Create a minimal args-like object for GatedDeltaNet
@@ -407,44 +410,34 @@ class TestGatedAttentionPCC:
         ref_out = ref_gated_attention_forward(layer_weights, x_host, position=position, layer_idx=ATTENTION_LAYER)
 
         # --- TTNN ---
-        from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta_qwen35
+        from models.tt_transformers.tt.qwen35_utils import convert_hf_to_meta_qwen35
 
-        sd = {k.replace("model.", ""): v for k, v in layer_weights.items()}
+        sd = {}
+        for k, v in layer_weights.items():
+            k = k.replace("model.language_model.", "").replace("model.", "")
+            sd[k] = v
         sd = convert_hf_to_meta_qwen35(sd, HEAD_DIM, N_HEADS, N_KV_HEADS)
 
-        # Create a minimal args-like object for GatedAttention
-        class MinimalArgs:
-            dim = HIDDEN_SIZE
-            n_heads = N_HEADS
-            n_kv_heads = N_KV_HEADS
-            head_dim = HEAD_DIM
-            partial_rotary_factor = PARTIAL_ROTARY_FACTOR
-            rope_theta = ROPE_THETA
-            max_seq_len = 256
-            norm_eps = NORM_EPS
-            tile_padded_batch_rows = 32
-            dummy_weights = False
+        # GatedAttention requires the full ModelArgs (Attention base class needs many attrs)
+        from models.tt_transformers.tt.model_config import ModelArgs
 
-            @staticmethod
-            def get_state_dict_prefix(module_name, layer_num):
-                module_map = {
-                    "GatedDeltaNet": "linear_attn",
-                    "GatedAttention": "attention",
-                }
-                return f"layers.{layer_num}.{module_map[module_name]}"
+        args = ModelArgs(device, max_seq_len=256)
+        # Merge converted weights into the full state dict
+        full_sd = args.load_state_dict()
+        full_sd.update(sd)
 
         from models.tt_transformers.tt.gated_attention import GatedAttention
 
         gated_attn = GatedAttention(
             mesh_device=device,
             tt_ccl=None,
-            args=MinimalArgs(),
-            state_dict=sd,
+            args=args,
+            state_dict=full_sd,
             weight_cache_path=None,
             layer_num=ATTENTION_LAYER,
             dtype=ttnn.bfloat16,
             transformation_mats=None,
-            configuration=MinimalArgs(),
+            configuration=args,
         )
 
         # Prepare input: (1, 1, 32, hidden_size) with padding

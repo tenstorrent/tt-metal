@@ -64,13 +64,14 @@ class DeltaNetDecoderBlock(LightweightModule):
         else:
             self.attention = GatedDeltaNet(
                 mesh_device=mesh_device,
+                tt_ccl=tt_ccl,
                 args=args,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=layer_num,
                 dtype=dtype,
             )
-            self.attention.initialize_states()
+            self.attention.initialize_states(batch_size=getattr(args, "max_batch_size", 1))
 
         # Standard MLP (same as TransformerBlock)
         self.feed_forward = MLP(

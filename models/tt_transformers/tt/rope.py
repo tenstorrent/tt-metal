@@ -561,7 +561,10 @@ class RotarySetup(LightweightModule):
         # This function is only used when sub core grids is enabled via prefetcher
         orig_mem_cfg = x.memory_config()
         x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        x_reshaped = ttnn.reshape(x_dram, [1, 64 if use_qk_fused else 32, 1, 128], sub_core_grids=sub_core_grids)
+        volume = x_dram.shape[-2] * x_dram.shape[-1]
+        n_rows = 64 if use_qk_fused else 32
+        last_dim = volume // n_rows
+        x_reshaped = ttnn.reshape(x_dram, [1, n_rows, 1, last_dim], sub_core_grids=sub_core_grids)
         x_restored = ttnn.to_memory_config(x_reshaped, orig_mem_cfg)
         return x_restored
 

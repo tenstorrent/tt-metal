@@ -261,6 +261,23 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
+        # Pad wqkv for prefetcher ring matmul: N must be divisible by 1280,
+        # and DRAM shard width must be divisible by 5 (num_receiver_cores).
+        qkv_n_per_device = configuration.qkv_size // configuration.num_devices
+        if prefetcher is not None and qkv_n_per_device % 1280 != 0:
+            import math as _math
+
+            padded_qkv_n = _math.ceil(qkv_n_per_device / 1280) * 1280  # 2048→2560
+            pad_per_device = padded_qkv_n - qkv_n_per_device
+            total_pad = pad_per_device * self.num_devices_per_group
+            qkv_cat = torch.nn.functional.pad(qkv_cat, (0, total_pad))
+            wqkv_mem_config = configuration.create_dram_sharded_mem_config(configuration.dim, padded_qkv_n)
+            self._padded_qkv_n = padded_qkv_n
+            cache_suffix = "wqkv_sharded_2d_pf"
+        else:
+            self._padded_qkv_n = qkv_n_per_device
+            cache_suffix = "wqkv_sharded_2d"
+
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.wqkv_dtype,
@@ -270,7 +287,7 @@ class Attention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
+            cache_file_name=cache_name(cache_suffix),
         )
 
         def norm_reshard(x, norm, mode, norm_config):
@@ -347,6 +364,9 @@ class Attention(LightweightModule):
         def get_wo_memory_config():
             if self.use_fused_all_gather_matmul or self.TG:
                 return ttnn.DRAM_MEMORY_CONFIG
+            elif getattr(configuration, "is_qwen35", False) and prefetcher is None:
+                # Qwen3.5 without prefetcher: WO uses auto-select which requires INTERLEAVED
+                return ttnn.DRAM_MEMORY_CONFIG
             else:
                 return wo_mem_config
 
@@ -376,10 +396,39 @@ class Attention(LightweightModule):
 
         # Insert the tensors into the prefetcher only in decode mode, we do not use prefetcher in prefill mode
         if self.prefetcher is not None:
+            # Qwen3.5 uses num_tensors=6 (DeltaNet layers register 3 in_proj weights).
+            # Attention layers must also register 3 weights to match, so pad with 1 dummy.
+            is_qwen35 = getattr(configuration, "is_qwen35", False)
+            if is_qwen35:
+                # Dummy width=1280: padded=1280, shard=1280/8=160, 160%5=0 ✓
+                dummy_mem = configuration.create_dram_sharded_mem_config(32, 1280)
+                rep_kw = (
+                    {"mesh_mapper": ttnn.ReplicateTensorToMesh(self.mesh_device)}
+                    if configuration.num_devices > 1
+                    else {}
+                )
+                self._prefetch_dummy1 = ttnn.as_tensor(
+                    torch.zeros(1, 1, 32, 1280),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=dummy_mem,
+                    **rep_kw,
+                )
 
-            def register_weights():
-                self.prefetcher.insert_tensor(self.wqkv)
-                self.prefetcher.insert_tensor(self.wo_sharded_ring)
+            if is_qwen35:
+                # Qwen3.5: wqkv padded to 2560 (divisible by 1280), wo_sharded_ring=1280 OK.
+                # Register wqkv + wo + 1 dummy to match num_tensors=6 (3 attn + 3 MLP).
+                def register_weights():
+                    self.prefetcher.insert_tensor(self.wqkv)
+                    self.prefetcher.insert_tensor(self.wo_sharded_ring)
+                    self.prefetcher.insert_tensor(self._prefetch_dummy1)
+
+            else:
+
+                def register_weights():
+                    self.prefetcher.insert_tensor(self.wqkv)
+                    self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
 
@@ -523,7 +572,8 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+        pos_torch = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0]).flatten()
+        int_current_pos = int(pos_torch[0])
 
         q_heads_1BQD = ttnn.experimental.rotary_embedding(
             q_heads_pre_rot_1BQD,
@@ -608,11 +658,37 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        # Use padded QKV N for ring matmul config when wqkv was padded
+        _padded_n = getattr(self, "_padded_qkv_n", None)
+        if (
+            self.prefetcher is not None
+            and _padded_n is not None
+            and _padded_n != self.args.qkv_size // self.args.num_devices
+        ):
+            _qkv_prog = self.args.matmul_1d_ring_config(
+                B=1,
+                M=self.args.tile_padded_batch_rows,
+                K=self.args.dim // self.args.cluster_shape[0],
+                N=_padded_n,
+                num_cores=self.prefetcher.ring_size,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+                untilize_out=True,
+            )
+            _qkv_mem = ttnn.create_sharded_memory_config(
+                shape=(self.args.tile_padded_batch_rows, _padded_n // self.prefetcher.ring_size),
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            )
+        else:
+            _qkv_prog = self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
+            _qkv_mem = self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher)
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+            memory_config=_qkv_mem,
+            program_config=_qkv_prog,
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
@@ -634,9 +710,9 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            memory_config=qkv_all_reduce_mem_cfg
-            if qkv_all_reduce_mem_cfg is not None
-            else xqkv_fused_sharded.memory_config(),
+            memory_config=(
+                qkv_all_reduce_mem_cfg if qkv_all_reduce_mem_cfg is not None else xqkv_fused_sharded.memory_config()
+            ),
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
@@ -712,23 +788,34 @@ class Attention(LightweightModule):
 
         if getattr(self, "_custom_rope_kv_update", False):
             # Host-based KV cache update for custom RoPE path
-            pos = ttnn.to_torch(current_pos).int().item()
+            is_mesh = self.num_devices > 1
+            if is_mesh:
+                pos = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0]).int().item()
+                mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)
+                k_host = ttnn.to_torch(k_heads_1BKD, mesh_composer=mesh_composer).float()
+                v_host = ttnn.to_torch(v_heads_1BKD, mesh_composer=mesh_composer).float()
+                keys_host = ttnn.to_torch(keys, mesh_composer=mesh_composer).float()
+                values_host = ttnn.to_torch(values, mesh_composer=mesh_composer).float()
+            else:
+                pos = ttnn.to_torch(current_pos).int().item()
+                k_host = ttnn.to_torch(k_heads_1BKD).float()
+                v_host = ttnn.to_torch(v_heads_1BKD).float()
+                keys_host = ttnn.to_torch(keys).float()
+                values_host = ttnn.to_torch(values).float()
             # k/v from nlp_create_qkv_heads_decode: (1, batch, kv_heads, head_dim)
             # KV cache: (batch, kv_heads, max_seq_len, head_dim)
-            k_host = ttnn.to_torch(k_heads_1BKD).float()
-            v_host = ttnn.to_torch(v_heads_1BKD).float()
-            keys_host = ttnn.to_torch(keys).float()
-            values_host = ttnn.to_torch(values).float()
             keys_host[0, :, pos, :] = k_host[0, 0, :, :]
             values_host[0, :, pos, :] = v_host[0, 0, :, :]
             ttnn.deallocate(keys)
             ttnn.deallocate(values)
+            mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=1) if is_mesh else None
             keys_new = ttnn.from_torch(
                 keys_host.bfloat16(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             values_new = ttnn.from_torch(
                 values_host.bfloat16(),
@@ -736,6 +823,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             if kv_cache:
                 kv_cache[0] = keys_new

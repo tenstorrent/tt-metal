@@ -614,6 +614,8 @@ class ModelArgs:
         self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
         if self.prefetcher is not None:
             self.use_qk_fused = False
+        if getattr(self, "is_qwen35", False):
+            self.use_qk_fused = False  # Qwen3.5 head_dim=256 needs transformation_mat validation
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
@@ -1101,6 +1103,18 @@ class ModelArgs:
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
     @lru_cache(maxsize=None)
+    @staticmethod
+    def _safe_sharded_mem_config(shape, core_grid, **kwargs):
+        """Create sharded mem config, falling back to DRAM if shard dims not tile-aligned."""
+        for s in shape if isinstance(shape, (list, tuple)) else [shape]:
+            if isinstance(s, int) and s % 32 != 0:
+                return ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=core_grid,
+            **kwargs,
+        )
+
     def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for decode residual tensors."""
         if mode == Mode.DECODE:
@@ -1172,7 +1186,7 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         # Qwen3.5: weights converted to DRAM interleaved, let ttnn auto-select matmul
-        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+        if getattr(self, "is_qwen35", False) and not self.is_multichip and mode == Mode.DECODE:
             return None
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
@@ -1216,16 +1230,18 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                )
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(
+                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
+                    )
+                    if not self.is_galaxy
+                    else None
+                ),
             )
 
     @lru_cache(maxsize=None)
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
-        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+        if getattr(self, "is_qwen35", False) and not self.is_multichip and mode == Mode.DECODE:
             return None
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
@@ -1269,9 +1285,9 @@ class ModelArgs:
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=self.mlp2_grid(seq_len),
-                per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if not self.is_galaxy else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1431,21 +1447,29 @@ class ModelArgs:
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -1534,7 +1558,7 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for the QKV matmul in attention."""
-        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+        if getattr(self, "is_qwen35", False) and not self.is_multichip and mode == Mode.DECODE:
             return None
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1561,12 +1585,16 @@ class ModelArgs:
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
+                per_core_M=(
+                    7
+                    if self.device_name == "P100"
+                    else (
+                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                            1,
+                            (
+                                8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8)
+                            ),  # 8 rows
+                        )
                     )
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
@@ -1841,7 +1869,9 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for WO (dense output) matmul in attention."""
-        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE and prefetcher is None:
+            # Qwen3.5 without prefetcher: use auto-select (None) for non-standard WO dims
+            # With prefetcher: fall through to ring matmul config below
             return None
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1887,9 +1917,9 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if dram_sharded_wo
-                else None,
+                per_core_N=(
+                    math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1909,6 +1939,10 @@ class ModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
+            elif getattr(self, "is_qwen35", False) and self.is_multichip and prefetcher is None:
+                # Qwen3.5 on multi-device without prefetcher: use DRAM output to avoid
+                # shard_spec mismatch with per_core_N from unusual WO dims (head_dim=256)
+                return ttnn.DRAM_MEMORY_CONFIG
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
@@ -2254,8 +2288,10 @@ class ModelArgs:
     # NOTE: These attention helpers are placed here for historical reasons
     def get_sharded_wo_ring_mem_config(self):
         """Get the memory config for WO weights in ring mode."""
+        # WO input dim = n_heads * head_dim (may differ from dim for Qwen3.5)
+        wo_in_dim = self.n_heads * self.head_dim
         wo_shape_ring = (
-            self.dim // self.cluster_shape[0],
+            wo_in_dim // self.cluster_shape[0],
             self.dim // self.cluster_shape[1],
         )
         return self.create_dram_sharded_mem_config(
@@ -2266,6 +2302,49 @@ class ModelArgs:
     def get_attn_weights_layout(self):
         """Get the layout for attention weights."""
         return ttnn.TILE_LAYOUT
+
+    # =========================================================================
+    # DeltaNet projection configs (for prefetcher ring matmul)
+    # =========================================================================
+    def get_deltanet_proj_program_config(self, n_dim, prefetcher):
+        """Matmul config for DeltaNet projection weights.
+
+        Without prefetcher: DRAM-sharded matmul with attn_input_grid cores.
+        With prefetcher: ring matmul with global_cb for DRAM latency hiding.
+        Weights must be padded to N % 1280 == 0 for ring matmul compatibility.
+        """
+        if prefetcher is None:
+            return self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=n_dim,
+                num_cores=self.attn_input_grid.num_cores,
+            )
+        return self.matmul_1d_ring_config(
+            B=1,
+            M=self.tile_padded_batch_rows,
+            K=self.dim,
+            N=n_dim,
+            num_cores=prefetcher.ring_size,
+            num_global_cb_receivers=prefetcher.num_receiver_cores,
+        )
+
+    def get_deltanet_proj_mem_config(self, n_dim, prefetcher):
+        """Output memory config for DeltaNet projection matmul."""
+        if prefetcher is None:
+            return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        # Ring matmul requires sharded output. Convert to DRAM after in forward.
+        return ttnn.create_sharded_memory_config(
+            shape=(self.tile_padded_batch_rows, n_dim // prefetcher.ring_size),
+            core_grid=prefetcher.to_core_range_set(prefetcher.receiver_cores(sender_active=True, receiver_active=True)),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    # NOTE: DeltaNet out_proj cannot use ring matmul — K=6144 (value_dim)
+    # is not divisible by ring_size=40. It uses standard DRAM matmul instead.
+    # The 3 in_proj weights (qk, v, zba) DO use ring matmul via prefetcher.
 
     # =========================================================================
     # UTILITY METHODS
@@ -2297,7 +2376,17 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen3.5-27B": {"N150": None, "N300": None, "T3K": 32, "TG": 32, "P100": 1, "P150": 1, "P150x4": 32},
+                "Qwen3.5-27B": {
+                    "N150": None,
+                    "N300": None,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 1,
+                    "P150": 1,
+                    "P300": 16,
+                    "P300x2": 32,
+                    "P150x4": 32,
+                },
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -2336,6 +2425,7 @@ class ModelArgs:
             "TG": [128, 1024],
             "P150": [128, 1024],
             "P300": [128, 1024],
+            "P300x2": [128, 1024],
             "P150x4": [128, 1024],
             "P150x8": [128, 1024],
         }
@@ -2617,6 +2707,7 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                "Qwen3.5-27B": 32,  # Pad 17408→20480 for prefetcher compatibility
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -2645,9 +2736,26 @@ class ModelArgs:
         self.attn_output_gate = text_config.get("attn_output_gate", False)
         self.is_qwen35 = self.linear_num_key_heads is not None
         if self.is_qwen35:
-            # Qwen3.5 uses HF-style RoPE (no reverse_permute needed for Q/K weights)
-            # and partial rotary (only head_dim * partial_rotary_factor dims get RoPE)
-            self.use_hf_rope = True
+            # Multi-device uses Meta-style RoPE (enables trace capture + fused QK)
+            # Single-device keeps HF-style for backward compatibility
+            self.use_hf_rope = self.num_devices <= 1
+            # Qwen3.5 has vision_config in HF config but we only use text — force non-multimodal
+            self.is_multimodal = False
+            self.use_qk_fused = not self.use_hf_rope  # Fused QK enabled on multi-device
+
+            # Patch create_sharded_memory_config to fall back to DRAM for non-tile-aligned shards
+            # Qwen3.5 dim=5120 with TP=4 gives 1280/device which doesn't tile-align at many core counts
+            _orig_create_sharded = ttnn.create_sharded_memory_config
+
+            def _safe_create_sharded(*args, **kwargs):
+                shape = kwargs.get("shape", args[0] if args else None)
+                if shape is not None:
+                    for s in shape if isinstance(shape, (list, tuple)) else []:
+                        if isinstance(s, int) and s > 0 and s % 32 != 0:
+                            return ttnn.DRAM_MEMORY_CONFIG
+                return _orig_create_sharded(*args, **kwargs)
+
+            ttnn.create_sharded_memory_config = _safe_create_sharded
 
         # For Qwen3.5, RMSNorm uses zero-centered weights: output * (1 + weight)
         if self.is_qwen35:
@@ -2820,6 +2928,11 @@ class ModelArgs:
                 self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
                 self.is_90b = True
 
+        # Qwen3.5 override: force text-only mode (has vision_config but text-only weights)
+        if getattr(self, "is_qwen35", False):
+            self.is_multimodal = False
+            self.use_qk_fused = False  # Qwen3.5 head_dim=256 needs transformation_mat validation
+
     def __repr__(self):
         return f"""ModelArgs(
     dim={self.dim},
@@ -2990,7 +3103,7 @@ class ModelArgs:
                     self.CKPT_DIR,
                     torch_dtype="auto",
                     trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=os.getenv("CI") == "true"
+                    local_files_only=os.getenv("CI") == "true",
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -3001,7 +3114,8 @@ class ModelArgs:
                 self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if getattr(self, "is_qwen35", False):
-            # Qwen3.5 has vision_config in its config but we only handle text weights.
+            # Qwen3.5 has vision_config in its HF config but we only handle text weights.
+            # Qwen3.5 text-only: is_multimodal and use_qk_fused already set in _set_hf_params
             # Strip model.language_model. and model. prefixes (can't use standardize_hf_keys_multimodal
             # because its qkv/proj/attn replacements would corrupt DeltaNet keys).
             state_dict = {
@@ -3014,6 +3128,19 @@ class ModelArgs:
             state_dict = convert_hf_to_meta_qwen35(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             # Note: convert_hf_to_meta_qwen35 calls map_hf_to_meta_keys internally (step 3),
             # so standardize_hf_keys is NOT needed separately.
+            if not self.use_hf_rope:
+                # Apply reverse_permute for Meta-style RoPE (multi-device)
+                from models.tt_transformers.tt.load_checkpoints import reverse_permute
+
+                for key in list(state_dict.keys()):
+                    if "wq.weight" in key:
+                        state_dict[key] = reverse_permute(
+                            state_dict[key], self.n_heads, state_dict[key].shape[0], state_dict[key].shape[1]
+                        )
+                    elif "wk.weight" in key:
+                        state_dict[key] = reverse_permute(
+                            state_dict[key], self.n_kv_heads, state_dict[key].shape[0], state_dict[key].shape[1]
+                        )
         elif self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
             if self.is_llama_vision():
@@ -3056,11 +3183,9 @@ class ModelArgs:
     # =========================================================================
     def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        # Qwen3.5: use DRAM interleaved to avoid peak allocation OOM.
-        # DRAM-sharded has bank-alignment padding that inflates peak DRAM
-        # during layer construction. With DRAM interleaved, weights load
-        # without overhead. program_config=None auto-selects compatible matmul.
-        if getattr(self, "is_qwen35", False):
+        # Qwen3.5 single-device: use DRAM interleaved to avoid peak allocation OOM.
+        # On multi-device (P300x2), use standard DRAM-sharded with computed program configs.
+        if getattr(self, "is_qwen35", False) and not self.is_multichip:
             return ttnn.DRAM_MEMORY_CONFIG
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
@@ -4396,10 +4521,16 @@ def determine_device_name(mesh_device):
         return "CPU"
 
     if is_blackhole():
+        # Distinguish P300x2 (2 P300 cards) from P150x4 (4 P150 chips) via cluster type
+        is_p300x2 = False
+        try:
+            is_p300x2 = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P300_X2
+        except Exception:
+            pass
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
-            4: "P150x4",
+            4: "P300x2" if is_p300x2 else "P150x4",
             8: "P150x8",
             32: "BHGLX",
         }

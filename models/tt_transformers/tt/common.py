@@ -813,11 +813,19 @@ def create_tt_model(
     use_prefetcher=False,
     use_hf_rope=False,
 ):
+    # Qwen3.5 DeltaNet layers register 3 in_proj weights (qk + v + zba)
+    # vs standard attention's 2 (wqkv + wo). With MLP's 3, that's 6 vs 5.
+    # Attention layers pad to 3 with 1 dummy to match DeltaNet's 3.
+    # out_proj is NOT registered: K=6144 not divisible by ring_size=40.
+    import os
+
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.prefetcher import Prefetcher
 
-    num_tensors = 5 if use_prefetcher else 0
+    _hf_model = os.environ.get("HF_MODEL", "")
+    _is_qwen35 = "Qwen3.5" in _hf_model or "qwen3.5" in _hf_model.lower()
+    num_tensors = (6 if _is_qwen35 else 5) if use_prefetcher else 0
     prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
 
     tt_model_args = ModelArgs(

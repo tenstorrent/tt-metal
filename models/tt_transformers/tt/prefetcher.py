@@ -29,6 +29,12 @@ VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
     "Llama-3.1-8B": {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.3-70B": {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
+    "Qwen3.5-27B": {
+        "dim": 5120,
+        "hidden_dim": 20480,
+        "n_heads": 24,
+        "n_kv_heads": 4,
+    },  # hidden_dim padded from 17408 via PAD_MLP_CORES=32
     "Qwen3-32B": {"dim": 5120, "hidden_dim": 22016, "n_heads": 40, "n_kv_heads": 8},
     "Qwen3-VL-7B": {"dim": 4096, "hidden_dim": 11008, "n_heads": 32, "n_kv_heads": 8},
     "Qwen3-VL-14B": {"dim": 5120, "hidden_dim": 13824, "n_heads": 40, "n_kv_heads": 8},
@@ -78,7 +84,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
+    MAX_L1_PER_BANK = {4: 1100000, 8: 1100000}.get(num_devices, 850000)
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
         VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
@@ -92,14 +98,19 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     w_tiles = n_padded // TILE_SIZE
     h_tiles_padded = ((h_tiles + ring_size - 1) // ring_size) * ring_size
     tiles_per_core = (h_tiles_padded * w_tiles) // ring_size
+    # Check shard width is tile-aligned (avoid runtime assertion failures)
+    shard_width_ok = (n_per_device % ring_size == 0) and ((n_per_device // ring_size) % TILE_SIZE == 0)
+    if not shard_width_ok:
+        # Allow if padding is acceptable (padded width is close to original)
+        shard_width_ok = n_per_core_padded == n_per_core  # no padding needed
     # Check memory constraints and kv heads divisible by num_devices
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK
     logger.info(
-        f"DRAM Prefetcher support check: tiles_per_core: {tiles_per_core} <= {MAX_CB_PAGES} is {pages_ok}, bytes_per_core: {bytes_per_core} <= {MAX_L1_PER_BANK} is {l1_ok}, kv_heads_divisible: {kv_heads_divisible}"
+        f"DRAM Prefetcher support check: tiles_per_core: {tiles_per_core} <= {MAX_CB_PAGES} is {pages_ok}, bytes_per_core: {bytes_per_core} <= {MAX_L1_PER_BANK} is {l1_ok}, kv_heads_divisible: {kv_heads_divisible}, shard_width_ok: {shard_width_ok}"
     )
-    return pages_ok and l1_ok and kv_heads_divisible
+    return pages_ok and l1_ok and kv_heads_divisible and shard_width_ok
 
 
 @dataclass
