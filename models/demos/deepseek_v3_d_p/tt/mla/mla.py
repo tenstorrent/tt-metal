@@ -86,6 +86,8 @@ class ttMLA:
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.tp_factor = mesh_device.shape[tp_axis]
 
+        self.ccl_num_links = 2 if is_blackhole() else 1
+
         # ring attention setup
         persistent_v_shard_dims = [None, None]
         persistent_v_shard_dims[tp_axis] = 1  # TP heads
@@ -352,7 +354,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=2,
+            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -362,7 +364,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=2,
+            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -434,7 +436,7 @@ class ttMLA:
             dim=1,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=2,
+            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -501,7 +503,7 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=2,
+            num_links=self.ccl_num_links,
             cluster_axis=0,
             mesh_device=self.mesh_device,
             topology=ttnn.Topology.Linear,
@@ -524,7 +526,7 @@ class ttMLA:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-            num_links=2,
+            num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
