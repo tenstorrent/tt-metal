@@ -1,0 +1,75 @@
+---
+description: Revalidate one CI maintenance ticket against recent main-branch evidence and close, update, or keep it.
+alwaysApply: false
+---
+
+# Update Ticket
+
+Use this rule when asked to review and update exactly one CI ticket in `tenstorrent/tt-metal`.
+
+## Required Input
+
+- Exactly one GitHub issue URL in `tenstorrent/tt-metal`.
+
+## Goal
+
+Keep the ticket accurate and useful by using current evidence from logs. For the ticket's job, either:
+
+- close the issue when it is no longer a deterministic, actionable failure,
+- update the issue so it reflects current deterministic failures, or
+- leave the issue unchanged if it is already accurate and high quality.
+
+## Required Workflow
+
+1. Use only direct `gh` / `gh api` commands.
+2. Resolve and inspect the issue (`gh issue view`), including current body, labels, comments, and any linked job/run URLs.
+3. Identify the target CI job from the ticket (prefer the "Most recent failing job URL" or equivalent job link in the issue body/comments).
+4. Query the target job's **latest 3 completed runs on `main`** (same repo/workflow/job identity).
+5. Download and read logs for those 3 runs. Use log content as ground truth; do not rely on annotations alone.
+6. Determine the terminal failure signature for each run (the failure nearest the failed step/job exit, not an earlier incidental assertion).
+7. Decide action:
+   - **Close** if the job is now passing, or if the latest 3 failed runs show materially different root causes (non-deterministic/flaky).
+   - **Update** if the same deterministic failure still repeats and the ticket is outdated or low quality.
+   - **Leave unchanged** if same deterministic failure still repeats and the ticket already reflects current evidence clearly.
+8. If closing, add a clear close comment with evidence (recent run/job URLs and reason), then close via `gh issue close`.
+9. If updating, edit the ticket body (and labels if needed) so it is accurate and easier to act on.
+
+## Close vs Update vs Leave Rules
+
+### Close the issue when any condition is true
+
+- The target test/job now passes in current `main` evidence.
+- Across the latest 3 failing runs for that same job, root causes differ materially.
+- You cannot confirm a deterministic repeated failure from logs.
+
+### Update the issue when all conditions are true
+
+- The latest 3 runs for that job fail with the same terminal failure signature.
+- The current issue body is stale, vague, missing key details, or hard to read.
+
+### Leave unchanged when all conditions are true
+
+- The latest 3 runs still show the same deterministic terminal failure.
+- The issue already has clear, specific, current details and readable formatting.
+
+## Quality Upgrade Requirements (when updating)
+
+If you update the issue, improve quality even if core failure remains unchanged:
+
+- Replace vague statements with concrete error excerpt(s) from logs.
+- Prefer terminal/root failure text over earlier TT_FATAL/assert lines.
+- Refresh "most recent failing job URL" and "last 3 failing instance URLs".
+- Clarify failing test path(s) and concrete reproduction hints (local steps on required hardware).
+- Improve readability with clean sections and concise bullets.
+- Keep existing context that is still relevant; do not remove useful history.
+
+## Label Handling
+
+- If the ticket is being kept open (updated or unchanged) and it is a CI maintenance ticket, ensure label `glean CI maintenance` is present.
+- Do not create a new issue in this workflow; this rule operates on the provided ticket only.
+
+## Evidence Standards
+
+- Logs are required evidence. Do not make close/update decisions from annotations alone.
+- Ignore cosmetic differences (timestamps, IDs, runner noise, ANSI formatting).
+- Treat infra/transient noise as non-root-cause unless logs clearly show it is the terminal cause.
