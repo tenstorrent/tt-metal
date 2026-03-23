@@ -12,7 +12,7 @@ namespace tt::tt_metal {
 using namespace std;
 using namespace tt;
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_SingleCoreSingleController) {
+TEST_F(UnitMeshCQProgramFixture, TensixDeploymentDramSingleCoreSingleController) {
     bool all_pass = true;
 
     const uint32_t repeats = 1u;
@@ -124,7 +124,7 @@ static std::vector<CoreCoord> get_worker_cores_for_deployment(IDevice* device) {
     return cores;
 }
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_AllCoresSingleController) {
+TEST_F(UnitMeshCQProgramFixture, TensixDeploymentDramAllCoresSingleController) {
     bool all_pass = true;
 
     const uint32_t controller_bank_id = 0u;
@@ -232,7 +232,7 @@ TEST_F(UnitMeshCQProgramFixture, DramDeployment_AllCoresSingleController) {
     ASSERT_TRUE(all_pass);
 }
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_AllCoresAllControllers) {
+TEST_F(UnitMeshCQProgramFixture, TensixDeploymentDramAllCoresAllControllers) {
     bool all_pass = true;
 
     const uint32_t total_bytes_per_controller = 256u * 1024u * 1024u;  // 256 MiB per controller
