@@ -51,9 +51,9 @@ using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
  * @brief Configuration options for topology mapping
  */
 struct TopologyMappingConfig {
-    // When true, validates that physical connections have at least as many
-    // channels as required by logical connections. When false, only checks
-    // that connections exist (relaxed mode).
+    // Deprecated: ignored by topology mapping. Use mesh_validation_modes and inter_mesh_validation_mode
+    // with ConnectionValidationMode::STRICT / RELAXED instead. Kept for backward compatibility with callers
+    // that still set the field.
     bool strict_mode = false;
 
     // Optional pinning constraints that restrict which physical ASICs
@@ -65,7 +65,7 @@ struct TopologyMappingConfig {
     AsicPositionMap asic_positions;
 
     // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).
-    // If empty, falls back to strict_mode for backward compatibility.
+    // If a logical mesh ID is missing, intra-mesh mapping uses RELAXED for that mesh.
     std::map<MeshId, ConnectionValidationMode> mesh_validation_modes;
 
     // Validation mode for inter-mesh mapping (mesh to mesh).
@@ -115,7 +115,7 @@ struct TopologyMappingResult {
  * @param physical_adjacency   Map from AsicID to list of neighbor AsicIDs
  * @param node_to_host_rank    Map from FabricNodeId to the host rank that owns it
  * @param asic_to_host_rank    Map from AsicID to the host rank that owns it
- * @param config               Optional configuration (strict mode, pinning constraints)
+ * @param config               Optional configuration (validation modes, pinning constraints)
  *
  * @return TopologyMappingResult containing success status and bidirectional mappings
  *
@@ -132,7 +132,7 @@ struct TopologyMappingResult {
  * // Populate adjacency maps from your topology data...
  *
  * TopologyMappingConfig config;
- * config.strict_mode = true;  // Validate channel counts
+ * config.mesh_validation_modes[MeshId{0}] = ConnectionValidationMode::STRICT;  // validate channel counts
  *
  * auto result = map_mesh_to_physical(
  *     MeshId{0}, logical_adj, physical_adj, node_to_rank, asic_to_rank, config);
@@ -439,9 +439,8 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
  * @param adjacency_map_logical Logical multi-mesh adjacency graph
  * @param adjacency_map_physical Physical multi-mesh adjacency graph
  * @param config Configuration options including pinning constraints, ASIC positions, and validation modes.
- *               config.mesh_validation_modes and config.inter_mesh_validation_mode should be set for proper
- *               validation. If not set, defaults to RELAXED mode. If config.strict_mode is true, it will be
- *               used as a fallback for backward compatibility.
+ *               config.mesh_validation_modes and config.inter_mesh_validation_mode select STRICT vs RELAXED.
+ *               If unset, mapping defaults to RELAXED for that scope.
  *               If config.disable_rank_bindings is true, rank mappings are ignored and can be omitted.
  * @param asic_id_to_mesh_rank Optional mapping of mesh IDs to ASIC IDs to mesh host ranks.
  *                             Required if config.disable_rank_bindings is false.

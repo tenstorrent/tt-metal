@@ -10,7 +10,9 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <map>
 #include <string>
+#include <utility>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -174,9 +176,11 @@ TopologyMappingResult map_mesh_to_physical(
         }
     }
 
-    // Determine connection validation mode
-    ConnectionValidationMode validation_mode =
-        config.strict_mode ? ConnectionValidationMode::STRICT : ConnectionValidationMode::RELAXED;
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
+    auto mode_it = config.mesh_validation_modes.find(mesh_id);
+    if (mode_it != config.mesh_validation_modes.end()) {
+        validation_mode = mode_it->second;
+    }
 
     // Solve using topology solver
     // Catch exceptions from constraint validation and convert to failure result
@@ -714,10 +718,6 @@ namespace {
     if (config.inter_mesh_validation_mode.has_value()) {
         return config.inter_mesh_validation_mode.value();
     }
-    if (config.strict_mode) {
-        // Fallback for backward compatibility
-        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    }
     return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
 }
 
@@ -727,10 +727,6 @@ namespace {
     auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
     if (config_mode_it != config.mesh_validation_modes.end()) {
         return config_mode_it->second;
-    }
-    if (config.strict_mode) {
-        // Fallback for backward compatibility
-        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
     }
     return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
 }
@@ -1001,55 +997,79 @@ bool add_exit_node_constraints(
         }
     }
 
-    // Add cardinal constraints for each mesh
     for (const auto& src_exit_node : logical_exit_node_graph.get_nodes()) {
-        // Get the valid logical exit nodes for this source exit node
         const auto& dst_exit_nodes = logical_exit_node_graph.get_neighbors(src_exit_node);
 
-        // Loop through all destination exit nodes (can be multiple) and add a constraint for each
+        if (src_exit_node.fabric_node_id.has_value()) {
+            // Fabric node-level: parallel edges to the same destination mesh share one required constraint.
+            // num_logical_exit_nodes_assigned counts duplicate exit edges per (fabric node, logical dst mesh); it
+            // cannot exceed the number of physical exit ASICs toward that destination mesh.
+            std::map<std::pair<FabricNodeId, MeshId>, uint32_t> num_logical_exit_nodes_assigned_per_fabric_dst;
+            for (const auto& dst_exit_node : dst_exit_nodes) {
+                num_logical_exit_nodes_assigned_per_fabric_dst[{
+                    src_exit_node.fabric_node_id.value(), dst_exit_node.mesh_id}]++;
+            }
+            for (const auto& [fabric_dst_key, num_logical_exit_nodes_assigned] :
+                 num_logical_exit_nodes_assigned_per_fabric_dst) {
+                const auto& [fabric_node_id, dst_logical_mesh] = fabric_dst_key;
+                auto mesh_mapping_it = mesh_mappings.find(dst_logical_mesh);
+                TT_ASSERT(
+                    mesh_mapping_it != mesh_mappings.end(),
+                    "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
+                    dst_logical_mesh.get());
+
+                const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
+                auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
+                if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                    return false;
+                }
+                const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
+                if (num_logical_exit_nodes_assigned > valid_physical_exit_nodes.size()) {
+                    return false;
+                }
+                if (!intra_mesh_constraints.add_required_constraint(fabric_node_id, valid_physical_exit_nodes)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+
+        // Mesh-level: one cardinality constraint per destination logical mesh, with min_count equal to
+        // num_logical_exit_nodes_assigned (duplicate neighbors toward that mesh). The solver must realize that many
+        // (fabric_node, physical_exit_asic) pairs from the cross product in the final mapping.
+        std::map<MeshId, uint32_t> num_logical_exit_nodes_assigned_per_dst_mesh;
         for (const auto& dst_exit_node : dst_exit_nodes) {
-            // Error if the mesh mapping doesn't include the destination exit node mesh ID
-            auto mesh_mapping_it = mesh_mappings.find(dst_exit_node.mesh_id);
+            num_logical_exit_nodes_assigned_per_dst_mesh[dst_exit_node.mesh_id]++;
+        }
+
+        for (const auto& [dst_logical_mesh, num_logical_exit_nodes_assigned] :
+             num_logical_exit_nodes_assigned_per_dst_mesh) {
+            auto mesh_mapping_it = mesh_mappings.find(dst_logical_mesh);
             TT_ASSERT(
                 mesh_mapping_it != mesh_mappings.end(),
                 "Mesh mapping missing for logical mesh ID {} (destination exit node mesh ID)",
-                dst_exit_node.mesh_id.get());
+                dst_logical_mesh.get());
 
-            // Get the valid physical exit nodes for this destination exit node
-            const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_exit_node.mesh_id);
-
-            // Check if there are valid physical exit nodes for this destination mesh
+            const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                // No physical exit nodes found for this destination mesh - constraints cannot be satisfied
-                // Return false to indicate failure, allowing caller to try next combination
+                return false;
+            }
+            const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
+
+            const size_t max_mappable_exit_pairs =
+                std::min(valid_logical_exit_nodes.size(), valid_physical_exit_nodes.size());
+            if (num_logical_exit_nodes_assigned > max_mappable_exit_pairs) {
                 return false;
             }
 
-            const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
-
-            // Add cardinal constraints for this source exit node and destination exit node pair
-            // The API guarantees that if constraint addition fails, no partial state is added
-            bool constraint_success = false;
-            // If source exit node is fabric node-level, add cardinal constraint for the logical exit node
-            if (src_exit_node.fabric_node_id.has_value()) {
-                constraint_success = intra_mesh_constraints.add_required_constraint(
-                    src_exit_node.fabric_node_id.value(), valid_physical_exit_nodes);
-                // If source exit node is mesh-level, add cardinal constraint for all logical exit nodes
-            } else {
-                constraint_success = intra_mesh_constraints.add_cardinality_constraint(
-                    valid_logical_exit_nodes, valid_physical_exit_nodes, 1);
-            }
-
-            if (!constraint_success) {
-                // Constraint addition failed (e.g., over-constrained) - return false to try next combination
-                // The API guarantees no partial state was added, so intra_mesh_constraints remains unchanged
+            if (!intra_mesh_constraints.add_cardinality_constraint(
+                    valid_logical_exit_nodes, valid_physical_exit_nodes, num_logical_exit_nodes_assigned)) {
                 return false;
             }
         }
     }
 
-    // All constraints successfully added
     return true;
 }
 
