@@ -89,7 +89,7 @@ def main():
     parser.add_argument("--gemma_path", type=str, default="google/gemma-3-12b-it")
     parser.add_argument("--num_layers", type=int, default=48)
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--audio_tokens", type=int, default=256, help="Number of audio latent tokens")
+    parser.add_argument("--audio_tokens", type=int, default=0, help="Audio tokens (0=auto from video shape)")
     args = parser.parse_args()
 
     checkpoint = args.checkpoint or os.path.join(CHECKPOINT_DIR, "ltx-2.3-22b-dev.safetensors")
@@ -157,10 +157,29 @@ def main():
     latent_h = args.height // 32
     latent_w = args.width // 32
     video_N = latent_frames * latent_h * latent_w
-    audio_N = args.audio_tokens
+
+    # Compute audio token count from video shape (matching official pipeline)
+    if args.audio_tokens > 0:
+        audio_N = args.audio_tokens
+    else:
+        from ltx_core.types import AudioLatentShape, VideoPixelShape
+
+        vps = VideoPixelShape(batch=1, frames=args.num_frames, height=args.height, width=args.width, fps=args.fps)
+        als = AudioLatentShape.from_video_pixel_shape(vps)
+        audio_N = als.frames  # Patchifier folds mel_bins into channels
+        logger.info(
+            f"Audio latent: {als.frames} frames x {als.mel_bins} mel x {als.channels} ch -> {audio_N} tokens x 128"
+        )
+
+    # Pad audio_N to be tile-aligned after SP sharding
+    sp_factor = tuple(mesh.shape)[sp_axis]
+    audio_N_local = audio_N // sp_factor if audio_N % sp_factor == 0 else audio_N
+    if audio_N_local % 32 != 0:
+        audio_N_padded = ((audio_N_local + 31) // 32 * 32) * sp_factor
+        logger.info(f"Padding audio_N from {audio_N} to {audio_N_padded} for tile alignment")
+        audio_N = audio_N_padded
 
     # Check tile alignment
-    sp_factor = tuple(mesh.shape)[sp_axis]
     for name, N in [("video", video_N), ("audio", audio_N)]:
         n_local = N // sp_factor
         if n_local % 32 != 0:
@@ -297,14 +316,10 @@ def main():
         audio_decoder = ledger.audio_decoder()
         vocoder = ledger.vocoder()
 
-        # Reshape audio latent: (1, N, 128) -> (1, C, F, mel_bins)
-        # Audio latent channels=128 for the patchified form, but AudioVAE expects (1, 8, F, 16)
-        # This is a simplification — proper unpatchify needed
-        # For now, reshape to closest valid shape
+        # Unpatchify audio: (1, audio_N, 128) -> (1, 8, audio_N, 16) via AudioPatchifier
         audio_C = 8
         audio_mel = 16
-        audio_F = audio_N  # Each token maps to one time step in audio space
-        audio_spatial = audio_latent.reshape(1, audio_F, audio_C, audio_mel).permute(0, 2, 1, 3)  # (1, 8, F, 16)
+        audio_spatial = audio_latent.reshape(1, audio_N, audio_C, audio_mel).permute(0, 2, 1, 3)  # (1, 8, F, 16)
 
         with torch.no_grad():
             audio_decoded = audio_decoder(audio_spatial.bfloat16())
