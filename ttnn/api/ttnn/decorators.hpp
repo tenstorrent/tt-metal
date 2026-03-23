@@ -13,14 +13,3 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-
-namespace ttnn {
-namespace decorators {
-
-using Tensors = tt::tt_metal::operation::Tensors;
-using OptionalTensors = tt::tt_metal::operation::OptionalTensors;
-using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
-
-}  // namespace decorators
-
-}  // namespace ttnn
