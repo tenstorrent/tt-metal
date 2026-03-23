@@ -19,6 +19,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal {
 

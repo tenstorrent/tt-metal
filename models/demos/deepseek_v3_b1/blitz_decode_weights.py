@@ -42,8 +42,13 @@ def shuffle_weights_for_interleaved_qnope_qrope(
     by row groups:
     ``[QNOPE_0:8 | QROPE_0:8 | QNOPE_8:16 | QROPE_8:16 | ...]``
 
+    IMPORTANT: Input must be in ``[ALL_NOPE | ALL_ROPE]`` column layout, NOT
+    HF interleaved ``[h0_nope|h0_rope|h1_nope|h1_rope|...]``. Use
+    ``prepare_weights.deinterleave_q_b_proj`` to convert HF weights first.
+
     Args:
-        weights: Input weight matrix ``[K, N]`` where
+        weights: Input weight matrix ``[K, N]`` in ``[ALL_NOPE | ALL_ROPE]``
+            layout where
             ``N = num_qnope_heads*qnope_head_dim + num_qrope_heads*qrope_head_dim``.
         num_qnope_heads: Number of Qnope heads (default 64).
         num_qrope_heads: Number of Qrope heads (default 64).
@@ -1372,6 +1377,14 @@ class BlitzDecodeWeights:
             — three lists of device-resident ttnn.Tensors, one per expert.
             The first tensor in each list can be used as the base address for
             the op; all tensors must be kept alive to prevent deallocation.
+
+        **IMPORTANT (DRAM layout):** For each projection list, experts must be allocated
+        contiguously in DRAM. The fused MoE ``DRAMStreamingMatmul`` kernel indexes an
+        expert as ``base_addr + expert_idx * expert_size_bytes`` using the first tensor's
+        ``buffer_address()`` as ``base_addr``. The inner ``upload()`` loop allocates all
+        experts of one projection before the next, which guarantees contiguity. Any code
+        that loads these weights from cache (e.g. ``load_moe_routed_experts``) must use the
+        same per-projection allocation order (all gates, then all ups, then all downs).
         """
         device = self._device
         tile_w = 32

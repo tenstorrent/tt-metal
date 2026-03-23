@@ -67,12 +67,18 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
           filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          count=$(echo "$filtered" | jq 'length')
+          if [[ "$count" -eq 0 ]]; then
+            echo "::warning::No demo tests match model '${{ inputs.model }}' for enabled SKU(s) '${{ inputs.enabled-skus }}'; demo matrix is empty and demo jobs will be skipped."
+          fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
   blackhole-demo-tests:
     needs: load-test-matrix
+    # Skip entire job when test matrix is empty (to prevent GHA from erroring out the workflow on an empty strategy.matrix).
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +141,23 @@ jobs:
           mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
+      - name: Download Mochi model weights to local cache
+        if: ${{ inputs.regenerate-ttnn-cache && inputs.weights-cache-mode == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
+        timeout-minutes: 120
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/genmo
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="genmo/mochi-1-preview",
+              cache_dir="/localdev/blackhole_demos/huggingface_data/genmo",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
