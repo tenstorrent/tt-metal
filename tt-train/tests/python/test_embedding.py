@@ -45,9 +45,7 @@ class TestEmbedding:
         embedding = Embedding(num_embeddings, embedding_dim)
 
         # Create input token indices
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        indices = np.random.randint(0, num_embeddings, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -75,9 +73,7 @@ class TestEmbedding:
         embedding = Embedding(num_embeddings, embedding_dim)
 
         # Create input
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        indices = np.random.randint(0, num_embeddings, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -88,9 +84,7 @@ class TestEmbedding:
         loss.backward(False)
 
         # Check gradient exists on weight
-        assert (
-            embedding.weight.tensor.is_grad_initialized()
-        ), "Embedding weight should have gradient"
+        assert embedding.weight.tensor.is_grad_initialized(), "Embedding weight should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 

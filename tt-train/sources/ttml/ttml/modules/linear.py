@@ -55,9 +55,7 @@ class LinearLayer(AbstractModuleBase):
     def __getstate__(self):
         return {
             "weight": self.weight.tensor.to_numpy(ttnn.DataType.FLOAT32),
-            "bias": self.bias.tensor.to_numpy(ttnn.DataType.FLOAT32)
-            if self.bias is not None
-            else None,
+            "bias": self.bias.tensor.to_numpy(ttnn.DataType.FLOAT32) if self.bias is not None else None,
         }
 
     def __setstate__(self, state):
@@ -68,9 +66,7 @@ class LinearLayer(AbstractModuleBase):
         )
         if state["bias"] is not None:
             if self.bias is None:
-                raise ValueError(
-                    "LinearLayer bias was improperly initialized when deserializing from Pickle"
-                )
+                raise ValueError("LinearLayer bias was improperly initialized when deserializing from Pickle")
             self.bias.tensor.set_value(
                 ttml.autograd.Tensor.from_numpy(
                     state["bias"].astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE

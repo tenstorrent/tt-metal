@@ -15,9 +15,7 @@ from .parameter import Parameter
 class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
-    def __init__(
-        self, num_embeddings: int, embedding_dim: int, weight_init=None
-    ) -> None:
+    def __init__(self, num_embeddings: int, embedding_dim: int, weight_init=None) -> None:
         """Initialize embedding layer.
 
         Args:

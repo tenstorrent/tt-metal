@@ -16,9 +16,7 @@ STAT_SHAPE = (1024, 1024)
 FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
 
-def check_normal_distribution(
-    data, expected_mean=0.0, expected_std=1.0, sigma_threshold=15.0
-):
+def check_normal_distribution(data, expected_mean=0.0, expected_std=1.0, sigma_threshold=15.0):
     """
     Checks that sample mean and std are close to expected values.
     Mean and std are each checked via z-test (within sigma_threshold standard errors).
@@ -127,9 +125,7 @@ class TestRandn:
             seed=0,
         )
         torch_tensor = ttnn.to_torch(tensor.get_value(precision=FULL_PRECISION)).float()
-        assert torch.allclose(
-            torch_tensor, torch.full(torch_tensor.shape, mean), atol=1e-2
-        )
+        assert torch.allclose(torch_tensor, torch.full(torch_tensor.shape, mean), atol=1e-2)
 
     def test_randn_no_nan(self):
         tensor = ttml.ops.randn(STAT_SHAPE, dtype=ttnn.DataType.FLOAT32, seed=1)
