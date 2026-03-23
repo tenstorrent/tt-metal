@@ -577,7 +577,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     bool fuse_mm_op = mm_fused_op_signaler.has_value();
     if (fuse_mm_op) {
         mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
-        reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
+        reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "0";
     }
 
     // Kernel Runtime Args

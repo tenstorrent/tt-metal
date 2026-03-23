@@ -406,7 +406,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
-        defines["SRS_FUSE_OP_SIGNALER"] = "1";
+        defines["SRS_FUSE_OP_SIGNALER"] = "0";
         srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
     }
 

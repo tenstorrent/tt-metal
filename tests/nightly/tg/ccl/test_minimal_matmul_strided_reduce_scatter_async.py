@@ -163,6 +163,8 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 mm_block_m=256,
                 mm_block_k=128,
                 mm_block_n=256,
+                subblock_h=2,
+                subblock_w=1,
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=5,
@@ -184,7 +186,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 2),
     ],
     ids=["check"],
 )
@@ -192,6 +194,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "rs_mode",
     [
         "fused",
+        "comparison",
     ],
 )
 @pytest.mark.parametrize(
@@ -335,7 +338,7 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
         mem_config_rs=mem_config_rs,
         topology=topology,
         enable_trace=False,
-        num_iters=1,
+        num_iters=2,
         num_workers_per_link=5,
         num_buffers_per_channel=None,
         mm_block_m=256,

@@ -223,14 +223,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             return tt_mm_out, tt_rs_out
         else:
             # Non-fused: run matmul to completion, then reduce-scatter sequentially.
+            # "comparison" uses the same limited core grid as the fused case so that any
+            # performance difference is due to overlap, not grid size.
+            mm_cfg = matmul_config if rs_mode == "comparison" else matmul_config_separate
             tt_mm_out = ttnn.experimental.minimal_matmul(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
                 compute_kernel_config=compute_config,
-                config=matmul_config_separate,
+                config=mm_cfg,
             )
 
-            if rs_mode == "separate_strided":
+            if rs_mode in ("separate_strided", "comparison"):
                 # Strided reduce-scatter on the materialized matmul output.
                 # Tests the strided access pattern independently from fusion.
                 tt_rs_out_tensor = ttnn.experimental.strided_reduce_scatter_async(
@@ -251,7 +254,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     mm_N_full_block_wt=N // TILE_SIZE // mm_core_grid.x,
                     chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
                 )
-            elif rs_mode == "separate":
+            elif rs_mode == "original":
                 # Standard (non-strided) reduce-scatter on the materialized matmul output.
                 # Baseline reference that doesn't depend on strided access at all.
                 tt_rs_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -268,7 +271,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     num_buffers_per_channel=num_buffers_per_channel,
                 )
             else:
-                raise ValueError(f"Unknown rs_mode: {rs_mode!r}. Expected 'fused', 'separate_strided', or 'separate'.")
+                raise ValueError(
+                    f"Unknown rs_mode: {rs_mode!r}. Expected 'fused', 'separate_strided', 'comparison', or 'original'."
+                )
 
             return tt_mm_out, tt_rs_out_tensor
 
@@ -541,9 +546,10 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_mode",
     [
-        # "separate",
+        # "original",
         # "separate_strided",
         "fused",
+        "comparison",
     ],
 )
 @pytest.mark.parametrize(
