@@ -104,7 +104,11 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
         }
         case MathFidelity::HiFi2:
         case MathFidelity::LoFi: {
-            math_fid_mask = 0xFFFE;
+            // Quasar's multiplier precision is higher,
+            // so math fidelity masking of the golden is not needed.
+            if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+                math_fid_mask = 0xFFFE;
+            }
             break;
         }
         default: {
@@ -121,6 +125,8 @@ void matmul_tile(
     vector<uint32_t> activations,
     vector<uint32_t> weights,
     vector<bfloat16> tensor_vals) {
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -161,7 +167,7 @@ void matmul_tile(
     uint32_t src0_dfb = 0;
     uint32_t src1_dfb = 0;
     uint32_t dst_dfb = 0;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+    if (is_quasar) {
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
             .entry_size = single_tile_size_bfp16b,
             .num_entries = num_input_tiles,
@@ -205,8 +211,8 @@ void matmul_tile(
     std::shared_ptr<distributed::MeshBuffer> src2_dram_buffer;
     std::shared_ptr<distributed::MeshBuffer> dst1_dram_buffer;
     if (cfg.with_bias) {  // with_bias only when M, N, or K > 1
-        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-            // NOT IMPLEMENTED FOR QUASAR YET
+        if (is_quasar) {
+            // TensixMatmulMultiTile (the with_bias path) not implemented for Quasar yet
         } else {
             distributed::DeviceLocalBufferConfig bias_buffer_config = {
                 .page_size = single_tile_size_bfp16b * N,
@@ -224,8 +230,8 @@ void matmul_tile(
             tt_metal::CreateCircularBuffer(program_, core, cb_src2_config);
         }
     } else if (cfg.test_init_short) {  // This will be dummy input in uint16_t
-        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-            // NOT IMPLEMENTED FOR QUASAR YET
+        if (is_quasar) {
+            // TensixMatmulBlockInitShortWithDt (the init_short/with_dt path) not implemented for Quasar yet
         } else {
             uint32_t in2_id = 2;
             uint32_t out1_id = 17;
@@ -257,11 +263,10 @@ void matmul_tile(
         }
     }
 
-    uint32_t ouput_cb_index = 16;
+    uint32_t output_cb_index = 16;
     vector<uint32_t> reader_l1_args;
     if (cfg.M > 1 || cfg.N > 1 || cfg.K > 1) {
-        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-            // TODO: intermediate ?
+        if (is_quasar) {
             tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
                 .entry_size = single_tile_size_out0,
                 .num_entries = num_tiles,
@@ -278,13 +283,13 @@ void matmul_tile(
         } else {
             uint32_t intermediate_cb_index = 24;
             std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
-                {ouput_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
+                {output_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)},
                 {intermediate_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}};
 
             CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
             tt_metal::CircularBufferConfig cb_output_config =
                 tt_metal::CircularBufferConfig(dram_buffer_size_out0, partials_and_out_data_format_spec)
-                    .set_page_size(ouput_cb_index, single_tile_size_out0)
+                    .set_page_size(output_cb_index, single_tile_size_out0)
                     .set_page_size(intermediate_cb_index, single_tile_size_out0);
             tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
         }
@@ -301,7 +306,7 @@ void matmul_tile(
             (std::uint32_t)(N * single_tile_size_bfp16b),
             cfg.with_bias};
     } else {
-        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        if (is_quasar) {
             tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
                 .entry_size = single_tile_size_out0,
                 .num_entries = num_tiles,
@@ -320,8 +325,8 @@ void matmul_tile(
             tt_metal::CircularBufferConfig cb_output_config =
                 tt_metal::CircularBufferConfig(
                     num_output_tiles * single_tile_size_out0,
-                    {{ouput_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
-                    .set_page_size(ouput_cb_index, single_tile_size_out0);
+                    {{output_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
+                    .set_page_size(output_cb_index, single_tile_size_out0);
             tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
         }
 
@@ -348,7 +353,7 @@ void matmul_tile(
     KernelHandle mm_reader_kernel;
     KernelHandle unary_writer_kernel;
     KernelHandle compute_kernel;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+    if (is_quasar) {
         mm_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             cfg.reader_kernel,
@@ -409,7 +414,8 @@ void matmul_tile(
     fixture->WriteBuffer(mesh_device, src0_dram_buffer, activations);
     fixture->WriteBuffer(mesh_device, src1_dram_buffer, weights);
 
-    if ((cfg.with_bias || cfg.test_init_short) && MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+    // Skip bias/dummy buffer writes on Quasar — src2_dram_buffer is not created
+    if ((cfg.with_bias || cfg.test_init_short) && !is_quasar) {
         vector<uint32_t> bias(N * 512, 0);
         fixture->WriteBuffer(mesh_device, src2_dram_buffer, bias);
 
@@ -442,9 +448,7 @@ void matmul_tile(
 
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
-    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-        set_math_fid_masks(math_fid_mask, cfg.math_fidelity);
-    }
+    set_math_fid_masks(math_fid_mask, cfg.math_fidelity);
     for (auto i = 0; i < golden_tilized.size(); i++) {
         golden_tilized_single[i] = std::bit_cast<bfloat16>(
             static_cast<uint16_t>(std::bit_cast<uint16_t>(golden_tilized_single[i]) & math_fid_mask));
@@ -461,7 +465,8 @@ void matmul_tile(
 
     src0_dram_buffer->deallocate();
     src1_dram_buffer->deallocate();
-    if ((cfg.with_bias || cfg.test_init_short) && MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+    // Skip deallocation on Quasar — these buffers were never created (see above)
+    if ((cfg.with_bias || cfg.test_init_short) && !is_quasar) {
         if (cfg.test_init_short) {
             dst1_dram_buffer->deallocate();
         }
@@ -625,7 +630,6 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
                 for (const auto& device : devices_) {
                     matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
-                return;
             }
         }
     }

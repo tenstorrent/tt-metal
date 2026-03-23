@@ -90,7 +90,7 @@ void kernel_main() {
 
     if (with_bias) {
 #ifdef ARCH_QUASAR
-        // NOT IMPLEMENTED FOR QUASAR YET
+        // The with_bias path is not implemented for Quasar yet
 #else
         uint64_t src2_noc_addr = get_noc_addr_from_bank_id<true>(src2_dram_bank_id, src2_addr);
         l1_write_addr_in2 = get_write_ptr(cb_id_in2);

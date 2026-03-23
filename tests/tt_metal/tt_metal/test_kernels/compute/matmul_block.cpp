@@ -28,7 +28,7 @@ void kernel_main() {
 #if (WITH_DT == 1)
     // Intentionally wrong init with different data formats
 #ifdef ARCH_QUASAR
-    // NOT IMPLEMENTED FOR QUASAR YET
+    // The TEST_INIT_SHORT WITH_DT path is not implemented for Quasar yet
 #else
     mm_block_init(
         tt::CBIndex::c_0,
