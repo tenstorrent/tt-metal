@@ -39,13 +39,29 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
-        self.kv_linear = LinearLayer(embedding_size, concat_kv_dim, bias_linears)
-        self.out_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
+        self.q_linear = LinearLayer(
+            embedding_size,
+            embedding_size,
+            bias_linears,
+            weight_init=ttml.init.normal(0.0, 0.02),
+            bias_init=ttml.init.zeros(),
+        )
+        self.kv_linear = LinearLayer(
+            embedding_size,
+            concat_kv_dim,
+            bias_linears,
+            weight_init=ttml.init.normal(0.0, 0.02),
+            bias_init=ttml.init.zeros(),
+        )
+        self.out_linear = LinearLayer(
+            embedding_size,
+            embedding_size,
+            bias_linears,
+            weight_init=ttml.init.normal(0.0, 0.02),
+            bias_init=ttml.init.zeros(),
+        )
 
-    def forward_no_kv(
-        self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor
-    ) -> ttml.autograd.Tensor:
+    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
 
@@ -56,9 +72,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_heads, v_heads, mask
-        )
+        attention = ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -132,7 +146,5 @@ class GroupedQueryAttention(AbstractModuleBase):
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
         if layer_idx is None or new_tokens is None:
-            raise ValueError(
-                "forward with kv_cache requires layer_idx and new_tokens to be set"
-            )
+            raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
