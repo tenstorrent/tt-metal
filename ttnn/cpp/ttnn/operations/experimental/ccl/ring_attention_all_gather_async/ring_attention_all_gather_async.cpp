@@ -8,9 +8,9 @@
 #include "ttnn/global_semaphore.hpp"
 #include "device/ring_attention_all_gather_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
+std::vector<ttnn::Tensor> ring_attention_all_gather_async(
     const std::vector<ttnn::Tensor>& input_tensors,
     std::vector<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -35,4 +35,4 @@ std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

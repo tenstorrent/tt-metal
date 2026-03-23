@@ -9,6 +9,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "compute_common.hpp"
+#include "compute_streaming.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -44,6 +45,9 @@ void kernel_main() {
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
     constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
+    constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -65,6 +69,7 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
@@ -104,66 +109,115 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t phase = 0; phase < num_phases; ++phase) {
-        if (phase == 0) {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
-        } else {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
-        }
+    if constexpr (use_streaming_compute) {
+        // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
+        // No row buffers needed. c_4 used only as 1-tile recip scratch for normalization.
+        constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_4;
 
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                sdpa_standard<
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    cb_attention_sink,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    DHt,
-                    vDHt,
-                    use_attention_sink,
-                    is_causal,
-                    use_provided_mask,
-                    use_padded_mask,
-                    is_chunked,
-                    scale_fp32,
-                    sliding_window_size>(
-                    Skt,
-                    qk_in0_block_w,
-                    qk_subblock_w,
-                    qk_subblock_h,
-                    qk_in0_num_subblocks,
-                    qk_in1_num_subblocks,
-                    qk_num_blocks,
-                    out_in0_block_w,
-                    out_subblock_w,
-                    out_subblock_h,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_num_blocks,
-                    0,                  // iter_q_start
-                    q_chunks_per_core,  // iter_q_end
-                    q_num_chunks,
-                    local_q_start,
-                    chunked_q_chunk_offset,
-                    k_num_chunks,
-                    q_chunk_tiles,
-                    k_chunk_tiles,
-                    qk_chunk_tiles,
-                    out_chunk_tiles,
-                    cb_q_in,
-                    cb_k_in,
-                    cb_v_in,
-                    cb_mask_in,
-                    cb_col_identity,
-                    cb_out_im_A,
-                    cb_out_im_B,
-                    cb_max_A,
-                    cb_max_B,
-                    cb_sum_A,
-                    cb_sum_B,
-                    cb_exp_max_diff,
-                    cb_out);
+        // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
+        cb_wait_front(cb_identity_scale_in, 1);
+
+        for (uint32_t phase = 0; phase < num_phases; ++phase) {
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    sdpa_standard_v2<
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        valid_Skt,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        qk_subblock_h,
+                        qk_subblock_w,
+                        out_subblock_h,
+                        out_subblock_w,
+                        use_padded_mask,
+                        cb_q_in,
+                        cb_k_in,
+                        cb_v_in,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_out,  // normalized output goes directly to output CB
+                        cb_mask_in,
+                        uniform_dataformat>(
+                        q_chunks_per_core,
+                        k_num_chunks,
+                        cb_out_im_A,
+                        cb_out_im_B,
+                        cb_max_A,
+                        cb_max_B,
+                        cb_sum_A,
+                        cb_sum_B);
+                }
+            }
+        }
+    } else {
+        // Standard SDPA path (causal, masked, chunked, etc.)
+        for (uint32_t phase = 0; phase < num_phases; ++phase) {
+            if (phase == 0) {
+                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+            } else {
+                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+            }
+
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    sdpa_standard<
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_attention_sink,
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        DHt,
+                        vDHt,
+                        use_attention_sink,
+                        is_causal,
+                        use_provided_mask,
+                        use_padded_mask,
+                        is_chunked,
+                        scale_fp32,
+                        sliding_window_size>(
+                        Skt,
+                        qk_in0_block_w,
+                        qk_subblock_w,
+                        qk_subblock_h,
+                        qk_in0_num_subblocks,
+                        qk_in1_num_subblocks,
+                        qk_num_blocks,
+                        out_in0_block_w,
+                        out_subblock_w,
+                        out_subblock_h,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_num_blocks,
+                        0,                  // iter_q_start
+                        q_chunks_per_core,  // iter_q_end
+                        q_num_chunks,
+                        local_q_start,
+                        chunked_q_chunk_offset,
+                        k_num_chunks,
+                        q_chunk_tiles,
+                        k_chunk_tiles,
+                        v_chunk_tiles,
+                        qk_chunk_tiles,
+                        out_chunk_tiles,
+                        cb_q_in,
+                        cb_k_in,
+                        cb_v_in,
+                        cb_mask_in,
+                        cb_col_identity,
+                        cb_out_im_A,
+                        cb_out_im_B,
+                        cb_max_A,
+                        cb_max_B,
+                        cb_sum_A,
+                        cb_sum_B,
+                        cb_exp_max_diff,
+                        cb_out);
+                }
             }
         }
     }

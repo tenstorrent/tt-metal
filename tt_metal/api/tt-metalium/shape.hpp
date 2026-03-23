@@ -8,7 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
+#include <string>
 #include <tuple>
+
+#include <fmt/core.h>
 
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -55,7 +58,7 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
-tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
+ttsl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
 /**
  * @brief Computes a flat (linear) index from multi-dimensional indices and strides.
@@ -71,9 +74,23 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
  *
  * @note The `indices` and `strides` spans must have the same length.
  */
-std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides);
+std::size_t compute_flat_indices(ttsl::Span<const uint32_t> indices, ttsl::Span<const size_t> strides);
 
 }  // namespace tt::tt_metal
+
+// Out-of-line string conversion (defined in shape.cpp).
+// Placed outside tt::tt_metal to avoid hiding std::to_string via ADL.
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::Shape& shape);
+}  // namespace ttsl::fmt_detail
+
+// Lightweight fmt::formatter – delegates to out-of-line to_string().
+template <>
+struct fmt::formatter<tt::tt_metal::Shape> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::Shape& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
 
 // Forward declarations of json trait templates (avoids pulling in reflection.hpp)
 namespace ttsl::json {

@@ -22,9 +22,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/device_types.hpp>
+// UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class Buffer;
@@ -205,7 +205,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | Argument            | Description                                                            | Type | Valid Range
  * | Required |
  * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
+ * | device              | The device to which runtime args will be written                       | IDevice* | | Yes |
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */

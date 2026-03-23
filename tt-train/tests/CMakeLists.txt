@@ -32,9 +32,11 @@ set(SOURCES
     datasets/utils_test.cpp
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
+    optimizers/adamw_composite_test.cpp
+    optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
-    optimizers/sgd_fused_test.cpp
-    optimizers/adamw_fused_test.cpp
+    optimizers/muon_composite_test.cpp
+    ops/newton_schulz_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -47,6 +49,7 @@ set(SOURCES
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
+    ops/distributed/ring_sdpa_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
@@ -82,7 +85,7 @@ set_target_properties(
             TRUE
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
-target_precompile_headers(ttml_tests REUSE_FROM ttml)
+target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
@@ -104,7 +107,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
-add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tt-train/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
@@ -135,6 +138,7 @@ if(TARGET benchmark::benchmark)
     set(BENCHMARK_SOURCES
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
+        benchmark/adamw_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

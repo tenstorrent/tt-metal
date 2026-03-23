@@ -7,6 +7,7 @@ import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     BlockShardedStrategyConfiguration,
@@ -145,6 +146,7 @@ def test_num_cores_to_core_grid(num_cores, rows, cols):
     ],
 )
 def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_strategy, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
     kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
@@ -183,12 +185,14 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes
 @pytest.mark.parametrize("channels", [16, 8])
 @pytest.mark.parametrize("batch_size", BATCH_SIZES)  # Use first 2 batch sizes
 @pytest.mark.parametrize("pool_config", POOL_CONFIGS)
 def test_pool2d(input_size, channels, batch_size, pool_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     kernel_size, padding, ceil_mode = pool_config["kernel_size"], pool_config["padding"], pool_config["ceil_mode"]
 
@@ -228,10 +232,12 @@ def test_pool2d(input_size, channels, batch_size, pool_config, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", [(224, 224), (32, 32)])
 @pytest.mark.parametrize("batch_size", [1, 4])
 def test_downblock(input_size, batch_size, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     sharding_strategy = HeightShardedStrategyConfiguration(act_block_h_override=64, reshard_if_not_optimal=False)
 
@@ -298,6 +304,7 @@ def test_downblock(input_size, batch_size, device):
 @pytest.mark.parametrize("batch_size", BATCH_SIZES)
 @pytest.mark.parametrize("upsample_config", UPSAMPLE_CONFIGS)
 def test_upsample(input_size, channels, batch_size, upsample_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     scale_factor, mode = upsample_config["scale_factor"], upsample_config["mode"]
 
@@ -350,6 +357,7 @@ def test_upsample(input_size, channels, batch_size, upsample_config, device):
     ],
 )
 def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch_size, torch_layer_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
 
@@ -391,6 +399,7 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16, 8])
@@ -403,6 +412,7 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
     ],
 )
 def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size, torch_layer_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
 
     torch_layer = torch.nn.MaxPool2d(**torch_layer_config)
@@ -439,6 +449,7 @@ def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size,
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16])
@@ -452,6 +463,7 @@ def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size,
     ],
 )
 def test_upsample_configuration_from_torch_layer(input_size, channels, batch_size, torch_layer_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
 
     torch_layer = torch.nn.Upsample(**torch_layer_config)
@@ -503,6 +515,7 @@ def test_upsample_configuration_from_torch_layer(input_size, channels, batch_siz
     ],
 )
 def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_size, torch_layer_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
 
@@ -552,6 +565,7 @@ def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_
 @pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)
 @pytest.mark.parametrize("kernel_config", KERNEL_CONFIGS)
 def test_conv2d_return_output_dim(input_size, channel_config, kernel_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
     kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
@@ -583,6 +597,7 @@ def test_conv2d_return_output_dim(input_size, channel_config, kernel_config, dev
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)
 @pytest.mark.parametrize("kernel_config", KERNEL_CONFIGS)
 def test_conv2d_return_output_dim_with_channel_slicing(input_size, channels, kernel_config, device):
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels, out_channels = channels["in_channels"], channels["out_channels"]
     kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
@@ -623,6 +638,7 @@ def test_conv2d_slicing_validation_errors(device):
         ChannelSliceStrategyConfiguration(num_slices=1)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_pool2d_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for MaxPool2d slicing"""
@@ -660,6 +676,7 @@ def test_pool2d_slicing_validation_errors(device):
         )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_upsample_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for Upsample configuration"""
@@ -718,6 +735,7 @@ def test_upsample_slicing_validation_errors(device):
 )
 def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_config, device):
     """Test Conv2D with different slicing strategies"""
+    torch.manual_seed(0)
     input_height, input_width = input_size
     in_channels = channels["in_channels"]
     out_channels = channels["out_channels"]
@@ -789,6 +807,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
@@ -800,6 +819,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
 )
 def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_config, slice_config, device):
     """Test MaxPool2d with different slicing strategies"""
+    torch.manual_seed(0)
     input_height, input_width = input_size
     # For MaxPool2d, we use the out_channels from the channel config
     num_channels = channels["out_channels"]
@@ -859,6 +879,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
@@ -870,6 +891,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
 )
 def test_upsample_slicing_strategies(input_size, channels, batch_size, upsample_config, slice_config, device):
     """Test Upsample with different slicing strategies"""
+    torch.manual_seed(0)
     input_height, input_width = input_size
     # For Upsample, we use the out_channels from the channel config
     num_channels = channels["out_channels"]

@@ -6,12 +6,9 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cmath>
-
-using namespace tt::constants;
 using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
@@ -24,12 +21,15 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Wt = W / tile_width;
+    uint32_t Ht = H / tile_height;
     float scaler = std::sqrt(operation_attributes.scaler);
 
     // Calculate padding dimensions from logical shape
@@ -39,7 +39,14 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
     uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
 
-    uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
+    // Calculate padding dimensions from logical shape
+    const auto& logical_shape = a.logical_shape();
+    uint32_t logical_W = logical_shape[3];
+    uint32_t logical_H = logical_shape[2];
+    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
+
+    uint32_t num_tensor_tiles = NC * H * W / tile_hw;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -156,6 +163,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
 
+    TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
     uint32_t out_dim_divider = Ht * Wt;
 
     tt_metal::SetRuntimeArgs(

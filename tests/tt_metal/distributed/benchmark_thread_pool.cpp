@@ -6,6 +6,7 @@
 #include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/context_types.hpp"
 
 template <typename ThreadPoolCreator>
 static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thread_pool) {
@@ -45,8 +46,9 @@ static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thre
 }
 
 static void BM_DeviceBoundThreadPool(benchmark::State& state) {
-    BM_ThreadPool(
-        state, [](uint32_t num_threads) { return tt::tt_metal::create_device_bound_thread_pool(num_threads); });
+    BM_ThreadPool(state, [](uint32_t num_threads) {
+        return tt::tt_metal::create_device_bound_thread_pool(tt::tt_metal::DEFAULT_CONTEXT_ID, num_threads);
+    });
 }
 
 BENCHMARK(BM_DeviceBoundThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();

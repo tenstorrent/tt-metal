@@ -92,7 +92,7 @@ def test_bw_unary_assign_opt_output(input_shapes, device):
         opt_tensor, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
-    ttnn.assign_bw(grad_tensor, input_tensor, input_a_grad=input_grad, queue_id=0)
+    ttnn.assign_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=0)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad]
@@ -119,7 +119,7 @@ def test_bw_unary_assign_opt_output_rm(input_shapes, device):
         opt_tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
-    ttnn.assign_bw(grad_tensor, input_tensor, input_a_grad=input_grad, queue_id=0)
+    ttnn.assign_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=0)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad]
@@ -166,8 +166,8 @@ def test_bw_binary_assign_opt_output(input_shapes, device, are_required_outputs)
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        input_a_grad=input_grad,
-        input_b_grad=other_grad,
+        input_grad=input_grad,
+        other_grad=other_grad,
         queue_id=cq_id,
     )
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))

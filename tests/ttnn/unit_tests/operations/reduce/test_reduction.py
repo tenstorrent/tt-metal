@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, torch_random, skip_with_llk_assert
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -68,7 +68,8 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     rank = len(input_shape)
-    if dim is not None and (dim < -rank or dim > rank - 1):
+    # rank = 0 is special case for scalar tensor and it usually supports dim=0 or dim=-1.
+    if dim is not None and ((dim < -rank) or (dim > rank - 1)) and not (rank == 0 and dim in [0, -1]):
         pytest.skip("Dimension not applicable for input shape")
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -573,6 +574,7 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39449")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4096}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
@@ -622,13 +624,13 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     # Run on both and flag exceptions
     torch_errored = False
     try:
-        torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim) if dim is not None else torch_op(torch_tensor)
+        torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim)
     except IndexError:
         torch_errored = True
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
     except RuntimeError:
         ttnn_errored = True
 

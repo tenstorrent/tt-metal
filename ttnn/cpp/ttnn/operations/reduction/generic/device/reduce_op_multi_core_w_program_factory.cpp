@@ -6,12 +6,9 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cmath>
-
-using namespace tt::constants;
 using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
@@ -24,9 +21,11 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Wt = W / tile_width;
+    uint32_t Ht = H / tile_height;
 
     // Calculate padding dimensions from logical shape
     const auto& logical_shape = a.logical_shape();
@@ -178,6 +177,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .defines = reduce_defines});
     }
 
+    TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
     uint32_t out_dim_divider = Wt;
     std::vector<CoreCoord> cores;
     if (operation_attributes.sub_core_grids.has_value()) {

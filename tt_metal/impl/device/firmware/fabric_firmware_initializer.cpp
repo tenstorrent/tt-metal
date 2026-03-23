@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "fabric_firmware_initializer.hpp"
 
 #include <chrono>
@@ -67,6 +67,11 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
+    if (descriptor_->is_mock_device()) {
+        log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
+        init_done.erase(key);
+        return;
+    }
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         devices_.clear();
         initialized_ = false;
@@ -134,7 +139,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
 
 void FabricFirmwareInitializer::post_teardown() {
     // Reset fabric config
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    descriptor_->metal_context().set_fabric_config(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_; }
