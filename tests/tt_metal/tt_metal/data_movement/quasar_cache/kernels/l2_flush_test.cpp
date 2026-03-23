@@ -51,6 +51,10 @@ void kernel_main() {
                 invalidate_l2_cache_line(base_addr + i * sizeof(uint32_t));
             }
             break;
+
+        default:
+            ASSERT(false);
+            while (1);
     }
 
     DPRINT << "DONE" << ENDL();

@@ -162,7 +162,7 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 #endif  // !ARCH_QUASAR
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
 // =============================================================================
 // Quasar DM Core Cache Management
 // =============================================================================
@@ -178,7 +178,7 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 // Key points:
 //   - Writes go through L1 D$ and L2 before reaching TL1
 //   - Flush is required for data to be visible to other agents
-//   - L1 D$ is inclusive of L2 (flushing L1 writes back to L2, not TL1)
+//   - L1 and L2 are coherent: L2 flush probes L1 D$ for dirty data before writing to TL1
 //
 // References:
 //   - SiFive X280 Core Manual, sections 3.4.2, 6.1.1, 6.1.2 (CFLUSH.D.L1, CDISCARD.D.L1)
@@ -234,7 +234,8 @@ inline __attribute__((always_inline)) void invalidate_l1_icache() {
 // See overlay_addresses.h for register definitions and geometry.
 
 // Flush a single 64B cache line from L2 to TL1 (node memory).
-inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
+// Probes L1 D$ for dirty data before flushing - no need to flush L1 first.
+inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
     __asm__ __volatile__("fence" ::: "memory");
     volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
     *flush_reg = (uint64_t)addr;
@@ -243,7 +244,7 @@ inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
 
 // Invalidate a single 64B cache line from L2 without writeback.
 // Discards dirty data - use only when data is known to be stale.
-inline __attribute__((always_inline)) void invalidate_l2_cache_line(uint32_t addr) {
+inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t addr) {
     __asm__ __volatile__("fence" ::: "memory");
     volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
     *inv_reg = (uint64_t)addr;
@@ -252,11 +253,11 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_line(uint32_t add
 
 // Flush a range of addresses from L2 to TL1.
 // Flushes all cache lines covering [start_addr, start_addr + size).
-inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_addr, uint32_t size) {
-    uint32_t aligned_start = start_addr & ~(uint32_t)63;  // align to 64B
-    uint32_t end_addr = start_addr + size;
+inline __attribute__((always_inline)) void flush_l2_cache_range(uintptr_t start_addr, size_t size) {
+    uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
+    uintptr_t end_addr = start_addr + size;
 
-    for (uint32_t addr = aligned_start; addr < end_addr; addr += 64) {
+    for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
         flush_l2_cache_line(addr);
     }
 }
@@ -289,8 +290,9 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 
 // Invalidate entire L1 cache (D$ + I$) on this core.
 // Provided for API compatibility with previous architectures.
+// Uses flush (not invalidate) for D$ since older architectures had write-through caches.
 inline void invalidate_l1_cache() {
-    invalidate_l1_dcache(0);
+    flush_l1_dcache(0);
     invalidate_l1_icache();
 }
 
@@ -305,7 +307,14 @@ inline void invalidate_cache_all(uint32_t hartid) {
     invalidate_l1_cache();
 }
 
-#endif  // ARCH_QUASAR
+#endif  // ARCH_QUASAR && COMPILE_FOR_DM
+
+// Fallback for Quasar non-DM cores (TRISC) - no cache management needed
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DM)
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
+    // No-op for non-DM cores on Quasar
+}
+#endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {

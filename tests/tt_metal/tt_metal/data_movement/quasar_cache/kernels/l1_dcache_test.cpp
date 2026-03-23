@@ -55,5 +55,9 @@ void kernel_main() {
             invalidate_l1_dcache(0);  // 0 = entire cache
             flush_l2_cache_range(base_addr, num_words * sizeof(uint32_t));
             break;
+
+        default:
+            ASSERT(false);
+            while (1);
     }
 }

@@ -20,7 +20,7 @@
 │                                   │                                         │
 │                                   ▼                                         │
 │                       ┌───────────────────┐                                 │
-│                       │   L2 (shared)     │  128 KB, 4-way associative      │
+│                       │   L2$ (shared)    │  128 KB, 4-way associative      │
 │                       │                   │  64B cache line                 │
 │                       └─────────┬─────────┘                                 │
 └─────────────────────────────────┼───────────────────────────────────────────┘
@@ -36,6 +36,7 @@
 - L1 D$: 4KB, 2-way, write-back, private per core
 - L1 I$: 4KB, 2-way, private per core
 - L2: 128KB, 4-way, write-back, shared between all 8 DM cores
+- **L1 and L2 are coherent** — L2 flush probes L1 D$ for dirty data before writing to TL1
 - TL1 is the backing memory visible to NoC/DMA
 - Address 0-4MB is cacheable, 4-8MB aliases to same range but uncached ("write around")
 
@@ -48,9 +49,9 @@
 | `flush_l1_dcache(addr)` | Single line or full | L1 D$ → L2 (writeback + invalidate) | Tested |
 | `invalidate_l1_dcache(addr)` | Single line or full | Discard L1 D$ line (no writeback) | Tested |
 | `invalidate_l1_icache()` | Full only | Discard L1 I$ (for code changes) | Not tested |
-| `flush_l2_cache_line(addr)` | Single 64B line | L2 → TL1 | Tested |
+| `flush_l2_cache_line(addr)` | Single 64B line | L2 → TL1 (probes L1 D$ first) | Tested |
 | `flush_l2_cache_range(addr, size)` | Address range | L2 → TL1 (loops over lines) | Tested |
-| `flush_l2_cache_full()` | Entire 128KB | L2 → TL1 | Tested |
+| `flush_l2_cache_full()` | Entire 128KB | L2 → TL1 (probes L1 D$ first) | Tested |
 | `invalidate_l2_cache_line(addr)` | Single 64B line | Discard L2 line (no writeback) | Tested |
 | `invalidate_l2_cache(hartid)` | Entire 128KB | Discard L2 (requires all DM cores?) | Not tested |
 
@@ -116,16 +117,16 @@ No flush exists — I$ is read-only from CPU perspective.
 
 ```cpp
 // Single line (64 bytes)
-void flush_l2_cache_line(uint32_t addr);
+void flush_l2_cache_line(uintptr_t addr);
 
 // Range (automatically aligns to 64B boundaries)
-void flush_l2_cache_range(uint32_t start_addr, uint32_t size);
+void flush_l2_cache_range(uintptr_t start_addr, size_t size);
 
 // Entire 128KB cache
 void flush_l2_cache_full();
 
 // Invalidate single line (no writeback)
-void invalidate_l2_cache_line(uint32_t addr);
+void invalidate_l2_cache_line(uintptr_t addr);
 
 // Invalidate entire L2 - requires coordination across all DM cores
 void invalidate_l2_cache(uint32_t hartid);
@@ -140,7 +141,7 @@ void invalidate_l2_cache(uint32_t hartid);
 
 ## Code Examples
 
-### Correct: Full path flush (L1 → L2 → TL1)
+### Correct: Flush to TL1 (L2 probes L1 automatically)
 
 ```cpp
 // Write data
@@ -149,21 +150,19 @@ for (int i = 0; i < 16; i++) {
     ptr[i] = data[i];
 }
 
-// Flush through entire hierarchy
-flush_l1_dcache(0);                                    // L1 D$ → L2 (entire cache)
-flush_l2_cache_range(0x20000, 16 * sizeof(uint32_t));  // L2 → TL1
+// Flush to TL1 - L2 flush automatically probes L1 D$ for dirty data
+flush_l2_cache_range(0x20000, 16 * sizeof(uint32_t));
 // Data now visible in TL1
 ```
 
-### Correct: Line-by-line flush
+### Correct: Single line flush
 
 ```cpp
-uint32_t addr = 0x20000;
+uintptr_t addr = 0x20000;
 volatile uint32_t* ptr = (volatile uint32_t*)addr;
 *ptr = 0xDEADBEEF;
 
-flush_l1_dcache(addr);       // Flush this specific L1 line to L2
-flush_l2_cache_line(addr);   // Flush this specific L2 line to TL1
+flush_l2_cache_line(addr);   // Probes L1 D$, then flushes L2 line to TL1
 ```
 
 ### Correct: Invalidate I$ after loading new code
@@ -177,18 +176,6 @@ invalidate_l1_icache();  // Clear stale instructions
 ---
 
 ## Bad Usage Examples
-
-### BAD: Forgetting L1 flush
-
-```cpp
-volatile uint32_t* ptr = (volatile uint32_t*)0x20000;
-*ptr = 0xDEADBEEF;
-
-flush_l2_cache_line(0x20000);  // WRONG: Data may still be in L1 D$!
-// TL1 may get stale data (whatever was in L2)
-```
-
-**Fix:** Flush L1 first, then L2.
 
 ### BAD: Invalidate when you meant flush
 
