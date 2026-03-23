@@ -5,7 +5,6 @@
 // Do not include directly - include cb_helpers.hpp instead
 
 #include "api/compute/cb_api.h"
-#include "tt-metalium/circular_buffer_constants.h"
 
 namespace compute_kernel_lib {
 
@@ -64,21 +63,6 @@ ALWI uint32_t get_full_tile_size(DataFormat format) {
 ALWI uint32_t get_cb_num_pages(uint32_t cb_id) {
     auto& cb = get_local_cb_interface(cb_id);
     return cb.fifo_size / cb.fifo_page_size;
-}
-
-template <DataFormat format>
-ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id) {
-    uint32_t tile_size = get_full_tile_size<format>();
-    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
-                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
-    return page_size_bytes == tile_size;
-}
-
-ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format) {
-    uint32_t tile_size = get_full_tile_size(format);
-    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
-                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
-    return page_size_bytes == tile_size;
 }
 
 // =============================================================================

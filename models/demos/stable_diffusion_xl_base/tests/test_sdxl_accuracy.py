@@ -118,6 +118,9 @@ def test_accuracy_sdxl(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_pipeline_location,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     num_inference_steps,
     vae_on_device,
@@ -135,10 +138,8 @@ def test_accuracy_sdxl(
     refiner_aesthetic_score,
     refiner_negative_aesthetic_score,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
-    if image_resolution == (512, 512) and (vae_on_device or use_refiner):
-        pytest.skip("Accuracy test on 512x512 image resolution is only supported for UNet on device.")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
@@ -154,6 +155,9 @@ def test_accuracy_sdxl(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_base_pipeline_location,
+        sdxl_refiner_pipeline_location,
         image_resolution,
         prompts,
         negative_prompt,
@@ -185,7 +189,11 @@ def test_accuracy_sdxl(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = ("sdxl-base-refiner" if use_refiner else "sdxl") + ("-tp" if use_cfg_parallel else "")
+    model_name = (
+        ("sdxl-base-refiner" if use_refiner else "sdxl")
+        + f"-{image_resolution[0]}"
+        + ("-tp" if use_cfg_parallel else "")
+    )
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),

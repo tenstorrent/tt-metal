@@ -88,6 +88,7 @@ class AttentionBlock:
             matmul_weights_tensor: q_a_proj weights [K, N]
             rmsnorm2_gamma_tensor: q_norm gamma [1, N]
             matmul2_weights_tensor: q_b_proj weights [N, num_qnope_heads*qnope_head_dim + num_qrope_heads*qrope_head_dim]
+                Must be in [ALL_NOPE | ALL_ROPE] column layout (use deinterleave_q_b_proj on HF weights).
             matmul3_weights_tensor: kv_b1_proj weights [num_qnope_heads, qnope_head_dim, nope_dim]
             sin_tensor: RoPE sin table [max_seq_len, qrope_head_dim]
             cos_tensor: RoPE cos table [max_seq_len, qrope_head_dim]
@@ -209,7 +210,7 @@ class AttentionBlock:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_ids_tensor,
-        scale,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -230,7 +231,6 @@ class AttentionBlock:
         bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -693,10 +693,7 @@ class AttentionBlock:
         sdpa_bwd_r1_sem_id = 10
         sdpa_bwd_r2_sem_id = 11
 
-        # Convert scale to FP32 bits
-        import struct
-
-        sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
+        sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale)
 
         # ========================================================================
         # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
@@ -1660,7 +1657,7 @@ class AttentionBlock:
             ("k_chunk_size", k_chunk_size),
             ("num_cores_per_head", num_cores_per_head),
             ("q_heads_parallel_factor", B),
-            ("scale_fp32", float_to_uint32(scale)),
+            ("scale_fp32", sdpa_scale_fp32_bits),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
@@ -3857,7 +3854,7 @@ class AttentionBlock:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_ids_tensor,
-        scale,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -3878,7 +3875,6 @@ class AttentionBlock:
         bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -3905,7 +3901,7 @@ class AttentionBlock:
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
             position_ids_tensor,
-            scale,
+            sdpa_scale,
             output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -3926,7 +3922,6 @@ class AttentionBlock:
             bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             sdpa_cluster_axis,
-            sdpa_scale_fp32,
             num_links,
             epsilon,
             fp32_dest_acc_en,
@@ -4092,8 +4087,6 @@ class AttentionBlock:
                 ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
 
                 sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                sender_ncrisc_kernel_idx = ccl_sender_group.ncrisc_kernel_index
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
 
                 ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
@@ -4123,11 +4116,6 @@ class AttentionBlock:
                     ccl_sender_core,
                 )
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
-
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 

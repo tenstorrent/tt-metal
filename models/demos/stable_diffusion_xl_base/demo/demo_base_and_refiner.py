@@ -54,6 +54,9 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
+
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range

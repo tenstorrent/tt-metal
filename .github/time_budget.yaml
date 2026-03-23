@@ -93,7 +93,7 @@ fabric:
 
 shield:
   e2e:
-    wh_llmbox: 15
+    wh_llmbox: 25
 
 scaleout:
   e2e:
@@ -142,3 +142,4 @@ models:
   sweep:
     wh_n150: 15
     wh_llmbox_perf: 30
+    wh_galaxy: 30
