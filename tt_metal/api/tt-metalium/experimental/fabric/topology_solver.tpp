@@ -850,7 +850,7 @@ namespace tt::tt_fabric::detail {
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
 // DFS call limit to prevent excessive search for complex topologies
-constexpr size_t DFS_CALL_LIMIT = 100000000;  // 1 million calls
+constexpr size_t DFS_CALL_LIMIT = 10000000;  // 10 million calls
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
