@@ -1234,13 +1234,10 @@ def gated_attention_forward_ttnn(
 
 
 class TTNNQwen3NextGatedAttention(TTNNModule):
-    """Qwen3-Next gated attention on TTNN.
+    """Qwen3-Next gated attention on TTNN (RoPE → HF ``past_key_values.update`` → SDPA).
 
-    Matches HuggingFace ``Qwen3NextAttention`` ordering: RoPE on Q/K, then ``past_key_values.update``.
-    New K/V are moved host-side for the cache API, then full K/V are loaded back to the device for SDPA.
-    When the current sequence is shorter than the cached KV length (decode / chunked prefill), queries are
-    left-padded for causal SDPA and the output sequence is sliced back (same idea as ``LlamaAttention``).
-    ``attention_mask`` is still ignored on this path.
+    K/V round-trip through Torch for the cache API on mesh; left-pad queries when ``q_len < kv_len``.
+    ``attention_mask`` is not applied on this path.
     """
 
     def __init__(self):
