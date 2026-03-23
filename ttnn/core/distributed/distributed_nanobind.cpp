@@ -665,10 +665,19 @@ void py_module(nb::module_& mod) {
                col_dim Optional[int]: The column dimension to shard / replicate over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
                )doc")
-        .def("__repr__", [](const MeshMapperConfig& config) {
-            std::ostringstream str;
-            str << config;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig& config) {
+                std::ostringstream str;
+                str << config;
+                return str.str();
+            })
+        .def_prop_ro("placements", [](const MeshMapperConfig& config) -> nb::list {
+            nb::list result;
+            for (const auto& p : config.placements) {
+                std::visit([&result](const auto& v) { result.append(nb::cast(v, nb::rv_policy::copy)); }, p);
+            }
+            return result;
         });
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
     py_mesh_composer_config
