@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for Qwen3-Coder-Next with TTNN backend (MoE + Gated Attention)."""
+"""Test for Qwen3-Coder-Next with TTNN backend (MoE + attention + DeltaNet + sharded linears).
+
+**Attention:** ``TTNNQwen3NextGatedAttention`` calls ``past_key_values.update`` after RoPE (host
+torch round-trip for K/V) and uses Llama-style query padding for SDPA when query length < KV length.
+"""
 
 import os
 from pathlib import Path
@@ -34,7 +38,7 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next"
 
 # Generation / stability (hybrid TTNN logits drift vs full torch — greedy + penalties + early stop).
-QWEN3_MAX_NEW_TOKENS = 128
+QWEN3_MAX_NEW_TOKENS = 256
 QWEN3_REPETITION_PENALTY = 1.28
 QWEN3_DO_SAMPLE = False
 QWEN3_SAMPLE_TEMPERATURE = 0.68
