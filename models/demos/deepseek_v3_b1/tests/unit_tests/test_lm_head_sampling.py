@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     PassthroughPayload,
     PassthroughStage,
 )
+from models.demos.deepseek_v3_b1.demo.weight_provider import StateDictWeightProvider
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -48,6 +49,7 @@ def create_fabric_router_config(max_payload_size):
 _VOCAB_SIZE = 129280
 _EMBED_HIDDEN = 7168
 _LM_HEAD_N_SYNTHETIC = 101 * 160  # 16160
+_REAL_WEIGHTS_PERSISTENT_INPUT_TOKEN_SEED = 42
 
 
 class _SyntheticWeightProvider:
@@ -124,6 +126,166 @@ def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor
         dim=0,
     )
     return torch_expected_indices
+
+
+def _hf_functional_lm_logits_flat(
+    embed_1h: torch.Tensor,
+    norm_w: torch.Tensor,
+    lm_w: torch.Tensor,
+    *,
+    epsilon: float = 1e-6,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor:
+    """HuggingFace-style last-step logits: RMSNorm(hidden) then ``logits = hidden @ lm_head.weight.T``.
+
+    Same as ``nn.Linear(hidden, vocab)`` with weight ``lm_w`` of shape ``(vocab, hidden)`` and no bias:
+    ``logits = x @ lm_w.mT`` with ``x`` shape ``(1, hidden)``. RMSNorm matches the usual HF pattern
+    ``x * rsqrt(mean(x**2) + eps) * weight`` with ``model.norm.weight`` shape ``(hidden,)``.
+    """
+    x = embed_1h.to(dtype)
+    nw = norm_w.to(dtype)
+    lw = lm_w.to(dtype)
+    var = x.pow(2).mean(-1, keepdim=True)
+    eps_t = torch.tensor(epsilon, device=x.device, dtype=dtype)
+    x = x * torch.rsqrt(var + eps_t)
+    x = x * nw.unsqueeze(0)
+    logits = x @ lw.mT
+    return logits.reshape(-1)
+
+
+def _topk_vocab_ids_from_scores(scores_flat: torch.Tensor, k: int = 10) -> torch.Tensor:
+    k_eff = min(k, int(scores_flat.numel()))
+    _, idx = torch.topk(scores_flat, k_eff, largest=True, sorted=True)
+    return idx.to(torch.uint32)
+
+
+def _compute_reference_topk_token_ids_real(state_dict, input_token_ids: torch.Tensor, topk: int = 10) -> torch.Tensor:
+    """Per row of ``input_token_ids`` (vocab ids into ``embed_tokens``), top-`topk` output vocab ids from HF logits.
+
+    ``input_token_ids`` shape ``(n,)`` with values in ``[0, vocab_size)``. Returns shape ``(n, topk)``.
+    """
+    embed_w = state_dict["model.embed_tokens.weight"]
+    norm_w = state_dict["model.norm.weight"]
+    lm_w = state_dict["lm_head.weight"]
+    K = 7168
+    assert embed_w.shape == (_VOCAB_SIZE, K), f"Unexpected embed shape {embed_w.shape}"
+    assert norm_w.shape == (K,), f"Unexpected norm shape {norm_w.shape}"
+    assert lm_w.shape == (_VOCAB_SIZE, K), f"Unexpected lm_head shape {lm_w.shape}"
+    rows = []
+    for in_tok in input_token_ids.tolist():
+        tid = int(in_tok)
+        assert 0 <= tid < _VOCAB_SIZE, f"input token id {tid} out of range"
+        scores_flat = _hf_functional_lm_logits_flat(
+            embed_w[tid : tid + 1],
+            norm_w,
+            lm_w,
+        )
+        rows.append(_topk_vocab_ids_from_scores(scores_flat, k=topk))
+    return torch.stack(rows, dim=0)
+
+
+def _real_weights_topk_table_row(
+    embed_w: torch.Tensor,
+    norm_w: torch.Tensor,
+    lm_w: torch.Tensor,
+    in_tok: int,
+    got_id: int,
+    top_ids: list[int],
+) -> tuple[int, float, str]:
+    """One table row: ref_rank (1-based), Δ@got vs ref top-1, space-separated top-k ids string."""
+    scores_flat = _hf_functional_lm_logits_flat(
+        embed_w[in_tok : in_tok + 1],
+        norm_w,
+        lm_w,
+    )
+    order = torch.argsort(scores_flat, descending=True)
+    rank = int((order == got_id).nonzero(as_tuple=True)[0][0].item()) + 1
+    top1 = int(top_ids[0])
+    logit_got = float(scores_flat[got_id].float().item())
+    logit_top1 = float(scores_flat[top1].float().item())
+    delta = logit_got - logit_top1
+    topk_str = " ".join(str(t) for t in top_ids)
+    return rank, delta, topk_str
+
+
+def _format_real_weights_topk_results_table(
+    state_dict,
+    input_token_ids: torch.Tensor,
+    got_flat: torch.Tensor,
+    ref_topk: torch.Tensor,
+    *,
+    topk: int,
+) -> str:
+    """Full per-iteration table: same columns as mismatch report, plus in_topk (Y/N). Always logged after the test run."""
+    embed_w = state_dict["model.embed_tokens.weight"]
+    norm_w = state_dict["model.norm.weight"]
+    lm_w = state_dict["lm_head.weight"]
+    iterations = int(got_flat.numel())
+    assert int(input_token_ids.numel()) == iterations
+    lines = [
+        "",
+        "=" * 88,
+        f"REAL WEIGHTS top-{topk} RESULTS (all {iterations} iterations)",
+        "=" * 88,
+        "",
+        "  iter = pipeline loop index; in_tok = random input vocab id written to H2D (embed lookup row).",
+        "  got = vocab id from device; ref_rank = 1-based rank of `got` in HF functional bf16 logits (descending).",
+        "  Δ@got = logit(got) − logit(ref_top1), float32 view of bf16 scores (negative ⇒ below best).",
+        "  in_topk = Y if `got` is in the reference top-k list, else N.",
+        "  Reference = RMSNorm(embed) then x @ lm_head.weight.T (HuggingFace-style).",
+        "",
+        f"{'iter':>5}  {'in_tok':>7}  {'got':>8}  {'ref_rank':>9}  {'Δ@got':>10}  {'in_topk':>7}  reference top-{topk} (best → …)",
+        "-" * 88,
+    ]
+    for i in range(iterations):
+        in_tok = int(input_token_ids[i].item())
+        got_id = int(got_flat[i].item())
+        top_ids = [int(x) for x in ref_topk[i].tolist()]
+        rank, delta, topk_str = _real_weights_topk_table_row(embed_w, norm_w, lm_w, in_tok, got_id, top_ids)
+        in_top = "Y" if got_id in top_ids else "N"
+        lines.append(f"{i:5d}  {in_tok:7d}  {got_id:8d}  {rank:9d}  {delta:10.4f}  {in_top:>7}  {topk_str}")
+    lines.extend(["-" * 88, ""])
+    return "\n".join(lines)
+
+
+def _format_real_weights_topk_mismatch_report(
+    state_dict,
+    mismatches: list[tuple[int, int, int, list[int]]],
+    *,
+    topk: int,
+    total_iters: int,
+) -> str:
+    """Human-readable report for top-k failures: ranks, logits, one row per bad iteration.
+
+    Each mismatch is ``(iter_idx, in_tok, got_id, top_ids)``.
+    """
+    embed_w = state_dict["model.embed_tokens.weight"]
+    norm_w = state_dict["model.norm.weight"]
+    lm_w = state_dict["lm_head.weight"]
+    lines = [
+        "",
+        "=" * 80,
+        f"REAL WEIGHTS top-{topk} CHECK: {len(mismatches)} failing iteration(s) out of {total_iters}",
+        "=" * 80,
+        "",
+        "  iter = pipeline loop index; in_tok = input vocab id written to H2D (embed lookup row).",
+        "  got = vocab id from device; ref_rank = 1-based rank of `got` in HF functional bf16 logits (descending).",
+        "  Δ@got = logit(got) − logit(ref_top1), float32 view of bf16 scores (negative ⇒ below best).",
+        "  Reference = RMSNorm(embed) then x @ lm_head.weight.T (HuggingFace-style).",
+        "",
+        f"{'iter':>5}  {'in_tok':>7}  {'got':>8}  {'ref_rank':>9}  {'Δ@got':>10}  reference top-{topk} (best → …)",
+        "-" * 80,
+    ]
+    for iter_idx, in_tok, got_id, top_ids in mismatches:
+        rank, delta, topk_str = _real_weights_topk_table_row(embed_w, norm_w, lm_w, in_tok, got_id, top_ids)
+        lines.append(f"{iter_idx:5d}  {in_tok:7d}  {got_id:8d}  {rank:9d}  {delta:10.4f}  {topk_str}")
+    lines.extend(
+        [
+            "-" * 80,
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -1244,6 +1406,8 @@ def test_d2d_to_d2h_pipeline(
     seed,
 ):
     """4x2 mesh fused LM-head + argmax with D2D output routed through D2D forwarding to D2H."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
     if not is_slow_dispatch():
@@ -1560,6 +1724,8 @@ def test_4stage_galaxy_1_iteration(
     seed,
 ):
     """4x2 mesh lm_head pipeline with H2D ingress + D2D ingress before compute, then D2D->D2H egress."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
 
@@ -2007,6 +2173,108 @@ def test_persistent_mode(mesh_device, use_fp32):
     logger.info(f"Barrier for P{pipeline.my_mesh_id}")
     pipeline.barrier()
     logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
+
+
+@pytest.mark.skipif(
+    not _is_persistent_mode_enabled(), reason="Set TT_RUN_PERSISTENT_MODE=1 to run persistent mode test"
+)
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
+        }
+    ],
+    indirect=True,
+)
+def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_state_dict):
+    """
+    Same as test_persistent_mode but uses real HF weights (DEEPSEEK_V3_HF_MODEL) via StateDictWeightProvider.
+    Each pipeline step writes a **random** input vocab id (fixed seed) for the embedding lookup; the device
+    output must lie in the reference top-k from HuggingFace-style functional logits (RMSNorm then
+    hidden @ lm_head.weight.T in bfloat16), since device numerics (e.g. bfloat8_b weights) can disagree
+    with the reference argmax.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    iterations = 300
+    topk = 5
+    rng = torch.Generator().manual_seed(_REAL_WEIGHTS_PERSISTENT_INPUT_TOKEN_SEED)
+    input_token_ids = torch.randint(0, _VOCAB_SIZE, (iterations,), generator=rng, dtype=torch.int64)
+    ref_topk = _compute_reference_topk_token_ids_real(hf_state_dict, input_token_ids, topk=topk)
+    config = create_single_galaxy_pipeline_configuration(
+        StateDictWeightProvider(hf_model_path),
+        lm_head_fp32_dest_acc_en=use_fp32,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+    pipeline.setup_and_run()
+
+    if pipeline.my_mesh_id == 0:
+        got_tokens = []
+        for iteration in range(iterations):
+            in_tok = int(input_token_ids[iteration].item())
+            logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 0] = in_tok
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            pipeline.read_output(output_tensor)
+            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+            got_tokens.append(got)
+        got_all = torch.stack(got_tokens, dim=0)
+        got_flat = got_all.squeeze(-1).squeeze(-1)
+        logger.info(f"Random input token ids (in_tok per iter): {input_token_ids.tolist()}")
+        logger.info(f"All output tokens (real weights): {got_flat.tolist()}")
+        logger.info(f"Reference top-{topk} per iteration (first row): {ref_topk[0].tolist()}")
+        mismatches = []
+        for i in range(iterations):
+            in_tok = int(input_token_ids[i].item())
+            g = int(got_flat[i].item())
+            top_ids = [int(x) for x in ref_topk[i].tolist()]
+            if g not in top_ids:
+                mismatches.append((i, in_tok, g, top_ids))
+        results_table = _format_real_weights_topk_results_table(
+            hf_state_dict,
+            input_token_ids,
+            got_flat,
+            ref_topk,
+            topk=topk,
+        )
+        logger.info(results_table)
+        if mismatches:
+            report = _format_real_weights_topk_mismatch_report(
+                hf_state_dict,
+                mismatches,
+                topk=topk,
+                total_iters=iterations,
+            )
+            logger.error(report)
+            pytest.fail(
+                f"PipelineBlock (real weights): {len(mismatches)} output(s) not in HF functional top-{topk}.\n{report}"
+            )
+
+    logger.info(f"Barrier for P{pipeline.my_mesh_id} (real weights)")
+    pipeline.barrier()
+    logger.info(f"Barrier completed for P{pipeline.my_mesh_id} (real weights)")
 
 
 @pytest.mark.skipif(

@@ -12,18 +12,20 @@ struct DevicePrintStringInfo {
     const char* format_string_ptr;
     const char* file;
     std::size_t line;
+    std::size_t padding;  // Padding to ensure the structure size is a power of two for easier division on device.
 };
 
-static_assert(sizeof(DevicePrintStringInfo) == 3 * sizeof(std::size_t), "DevicePrintStringInfo size must be correct");
+static_assert(sizeof(DevicePrintStringInfo) == 4 * sizeof(std::size_t), "DevicePrintStringInfo size must be correct");
 
 // Parsed format string info for 32-bit ELF.
 struct DevicePrintStringInfo32 {
     uint32_t format_string_ptr;
     uint32_t file;
     uint32_t line;
+    uint32_t padding;  // Padding to ensure the structure size is a power of two for easier division on device.
 };
 
-static_assert(sizeof(DevicePrintStringInfo32) == 3 * sizeof(uint32_t), "DevicePrintStringInfo32 size must be correct");
+static_assert(sizeof(DevicePrintStringInfo32) == 4 * sizeof(uint32_t), "DevicePrintStringInfo32 size must be correct");
 static_assert(
     sizeof(const char*) != sizeof(uint32_t) || sizeof(DevicePrintStringInfo) == sizeof(DevicePrintStringInfo32),
     "DevicePrintStringInfo size must match pointer size");
@@ -33,9 +35,10 @@ struct DevicePrintStringInfo64 {
     uint64_t format_string_ptr;
     uint64_t file;
     uint64_t line;
+    uint64_t padding;  // Padding to ensure the structure size is a power of two for easier division on device.
 };
 
-static_assert(sizeof(DevicePrintStringInfo64) == 3 * sizeof(uint64_t), "DevicePrintStringInfo64 size must be correct");
+static_assert(sizeof(DevicePrintStringInfo64) == 4 * sizeof(uint64_t), "DevicePrintStringInfo64 size must be correct");
 static_assert(
     sizeof(const char*) != sizeof(uint64_t) || sizeof(DevicePrintStringInfo) == sizeof(DevicePrintStringInfo64),
     "DevicePrintStringInfo size must match pointer size");

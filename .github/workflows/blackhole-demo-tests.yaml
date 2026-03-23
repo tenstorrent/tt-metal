@@ -22,6 +22,7 @@ on:
           - llama3.3-70b
           - qwen3-32b
           - flux.1-dev
+          - mochi
           - wan2.2-t2v-a14b
       system-type:
         description: 'Select system type to test'
