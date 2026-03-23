@@ -40,8 +40,9 @@ def _assert_within_margin(metric_name: str, measured: float, expected: float, ma
 @pytest.mark.parametrize(
     "expected_kernel_duration_us, expected_op_to_op_latency_us, expected_e2e_time_us, margin",
     [
-        # Galaxy CI baselines (refs #39959); 3% band covers recent main runs (~9.83–10.04 ms E2E).
-        pytest.param(9772.0, 167.0, 9939.0, 0.03, id="decode_e2e_perf"),
+        # Galaxy CI baselines (refs #39959). Centers are arithmetic means of four logged jobs (±3% must
+        # cover each): main runs 23085803049, 23108192002, 23138939045 and PR validation 23318003783.
+        pytest.param(9774.50, 168.37, 9942.87, 0.03, id="decode_e2e_perf"),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
