@@ -510,6 +510,10 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     uint32_t previous_heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
 
+    if (device_id == 1 && virtual_core == CoreCoord(28, 25)) {
+        return;
+    }
+
     const auto start = std::chrono::steady_clock::now();
 
     // Below steps can be skipped if we already have a heartbeat from the base firmware

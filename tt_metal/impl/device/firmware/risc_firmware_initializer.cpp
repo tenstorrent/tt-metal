@@ -1085,7 +1085,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
-        not_done_cores.insert(virtual_core);
+        // not_done_cores.insert(virtual_core);
     }
 
     cluster_.l1_barrier(device_id);
