@@ -419,8 +419,14 @@ class SamplingOp:
 
         winner_cb = 0
         gather_cb = 1
+        softmax_in_cb = 2
+        softmax_out_cb = 3
+        max_cb = 4
+        sum_cb = 5
+        scaler_cb = 6
         semaphore_id = 0
         l1_alignment = 16
+        bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
         topk_scores_stride = _round_up(k * 2, l1_alignment)
@@ -452,6 +458,16 @@ class SamplingOp:
             ("sampling_stage2_local_slot_offset", 0),
             ("sampling_mesh_send_slot_offset", 0),
             ("sampling_mesh_local_send_slot_offset", 0),
+            ("sampling_softmax_in_cb", softmax_in_cb),
+            ("sampling_softmax_out_cb", softmax_out_cb),
+            ("sampling_scaler_cb", scaler_cb),
+        ]
+        trisc_named_compile_time_args = [
+            ("sampling_softmax_in_cb", softmax_in_cb),
+            ("sampling_softmax_out_cb", softmax_out_cb),
+            ("sampling_max_cb", max_cb),
+            ("sampling_sum_cb", sum_cb),
+            ("sampling_scaler_cb", scaler_cb),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
@@ -463,6 +479,11 @@ class SamplingOp:
             core_ranges=all_cores,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=brisc_named_compile_time_args,
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=True,
+            ),
             ncrisc_common_runtime_args=[
                 int(scores_tensor.buffer_address()),
                 int(indices_tensor.buffer_address()),
@@ -528,6 +549,45 @@ class SamplingOp:
             format_descriptors=[gather_cb_format],
         )
 
+        final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
+        softmax_in_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=softmax_in_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+        softmax_out_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=softmax_out_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                )
+            ],
+        )
+        max_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=max_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+        sum_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=sum_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+        scaler_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=scaler_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
             core_ranges=all_cores,
@@ -536,7 +596,15 @@ class SamplingOp:
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[winner_cb_descriptor, gather_cb_descriptor],
+            cbs=[
+                winner_cb_descriptor,
+                gather_cb_descriptor,
+                softmax_in_cb_descriptor,
+                softmax_out_cb_descriptor,
+                max_cb_descriptor,
+                sum_cb_descriptor,
+                scaler_cb_descriptor,
+            ],
             semaphores=[receiver_semaphore_descriptor],
         )
 
