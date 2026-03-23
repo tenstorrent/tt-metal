@@ -968,9 +968,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
         if (all_eligible && !candidates.empty()) {
             mcast_chains = candidates.size();
-            // Track injector physical X columns for DRAM channel spreading
-            std::vector<uint32_t> injector_phys_x;
-            for (const auto& cand : candidates) {
+            for (uint32_t cand_idx = 0; cand_idx < candidates.size(); ++cand_idx) {
+                const auto& cand = candidates[cand_idx];
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
 
@@ -983,23 +982,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     }
                 }
 
-                // Reselect injector for DRAM channel spreading: pick the core
-                // whose physical X is furthest from all previously chosen injectors.
+                // Reselect injector for diagonal placement: the n-th chain
+                // picks the core at offset n within its chain, wrapping around.
+                // This places injectors on the diagonal (0,0), (1,1), (2,2)...
                 {
-                    uint32_t best_idx = injector_idx;
-                    uint32_t best_dist = 0;
-                    for (const auto& ci : cand.core_indices) {
-                        const uint32_t phys_x = core_work[ci].physical_core.x;
-                        uint32_t min_dist = UINT32_MAX;
-                        for (uint32_t ix : injector_phys_x) {
-                            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
-                            min_dist = std::min(min_dist, d);
-                        }
-                        if (min_dist > best_dist) {
-                            best_dist = min_dist;
-                            best_idx = ci;
-                        }
-                    }
+                    uint32_t target_offset = cand_idx % chain_size;
+                    uint32_t best_idx = cand.core_indices[target_offset];
                     if (best_idx != injector_idx) {
                         // Clear old injector, set new one
                         core_chain_info[injector_idx].is_injector = false;
@@ -1009,7 +997,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                         injector_idx = best_idx;
                     }
                 }
-                injector_phys_x.push_back(core_work[injector_idx].physical_core.x);
 
                 uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
                 uint32_t max_x = min_x;
