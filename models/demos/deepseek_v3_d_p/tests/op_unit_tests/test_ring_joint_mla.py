@@ -4,12 +4,12 @@
 
 import pathlib
 
-from models.common.utility_functions import is_blackhole
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
@@ -149,8 +149,8 @@ def run_ring_joint_sdpa(
 
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
-    print(f"full_compute_grid: {full_compute_grid}" )
-    print(f"sdpa_compute_grid: {sdpa_compute_grid}" )
+    print(f"full_compute_grid: {full_compute_grid}")
+    print(f"sdpa_compute_grid: {sdpa_compute_grid}")
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
@@ -641,6 +641,12 @@ def test_mla_sdpa(
         # best is 320, 160 but OOM (need memory fixing)
         (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64, ttnn.MathFidelity.LoFi),
     ],
+    ids=[
+        "128k_hifi2",
+        "100k_hifi2",
+        "128k_lofi",
+        "100k_lofi",
+    ],
 )
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
@@ -704,7 +710,7 @@ def test_mla_sdpa_bh_galaxy(
     skip_check,
     is_balanced,
     reset_seeds,
-    math_fidelity
+    math_fidelity,
 ):
     if is_blackhole() == False:
         pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
