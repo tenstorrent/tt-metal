@@ -160,7 +160,7 @@ class LTXAttention(Module):
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
         )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
