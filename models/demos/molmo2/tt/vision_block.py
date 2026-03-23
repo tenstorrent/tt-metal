@@ -112,7 +112,11 @@ class VisionBlock(LightweightModule):
             dtype=dtype,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
         """
         Forward pass through the vision block.
 
@@ -129,13 +133,13 @@ class VisionBlock(LightweightModule):
         # Pre-norm attention with residual
         # Note: We don't deallocate input x - caller manages lifetime
         attn_out = self.attention_norm(x)
-        attn_out = self.attention(attn_out)
+        attn_out = self.attention(attn_out, matmul_output_memory_config=matmul_output_memory_config)
         res = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
         # Pre-norm MLP with residual
         mlp_out = self.ffn_norm(res)
-        mlp_out = self.feed_forward(mlp_out)
+        mlp_out = self.feed_forward(mlp_out, matmul_output_memory_config=matmul_output_memory_config)
         out = ttnn.add(res, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(res)

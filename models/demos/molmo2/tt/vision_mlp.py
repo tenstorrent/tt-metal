@@ -121,7 +121,13 @@ class VisionMLP(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        self._matmul_core_grid = _matmul_core_grid(mesh_device)
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
         """
         Forward pass through MLP.
 
@@ -145,7 +151,8 @@ class VisionMLP(LightweightModule):
             bias=self.w1_bias,
             activation="gelu",  # TTNN's gelu is the fast approximation matching pytorch_tanh
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
+            core_grid=self._matmul_core_grid,
         )
 
         # w2
@@ -154,7 +161,8 @@ class VisionMLP(LightweightModule):
             self.w2_weight,
             bias=self.w2_bias,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
+            core_grid=self._matmul_core_grid,
         )
         ttnn.deallocate(hidden)
 
