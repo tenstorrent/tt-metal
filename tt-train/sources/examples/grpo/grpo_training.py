@@ -11,9 +11,10 @@ from ttml.autograd import Function
 import ttnn
 from typing import List, Sequence, Iterator, Tuple
 from eval_utils import setup, get_gsm8k, extract_hash_answer
-from batched_inference import completion_batched_multiple_prompts, compute_nlog_probs, InferenceCtx
+from batched_inference import completion_batched_multiple_prompts, compute_nlog_probs, InferenceCtx, deallocate_tensors
 from ttml_operators import Min, Clip, Exp
 import numpy as np
+import time
 
 system_prompt = "You are a helpful math tutor. Show your reasoning step by step and end with exactly one final line in this format: #### <number>"
 user_prompt_template_str = """Question: There are 48 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 64 trees. How many trees did the grove workers plant today?
@@ -44,7 +45,9 @@ def iter_batched_completions(
         prompt_batch = list(prompts[start:end])
         answers_batch = list(answers[start:end])
 
+        start_time = time.perf_counter()
         completions_batch = completion_batched_multiple_prompts(ctx, prompt_batch)
+        print(f"batch of completions done! {time.perf_counter() - start_time} s")
 
         answers_batch_yield = [item for item in answers_batch for _ in range(ctx.group_size)]
         prompt_batch_yield = [item for item in prompt_batch for _ in range(ctx.group_size)]
@@ -54,6 +57,7 @@ def iter_batched_completions(
 
 
 def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
+    print(f"iter_micro_batch, {len(completions)=}")
     for start in range(0, len(completions), micro_batch_size):
         end = min(start + micro_batch_size, len(completions))
 
@@ -90,15 +94,13 @@ def train_grpo():
         yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
         load_pretrained=True,
+        setup_optimizer=True,
     )
 
-    adamw_cfg = ttml.optimizers.AdamWConfig.make(1e-6, 0.9, 0.999, 1e-8, 0.01)
-    optimizer = ttml.optimizers.AdamW(ctx.tt_model.parameters(), adamw_cfg)
-
-    prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train")
+    prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=42)
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
 
-    prompts_to_train = 32
+    prompts_to_train = 256
     prompts, answers = prompts[:prompts_to_train], answers[:prompts_to_train]
 
     base_lr = 1e-6
@@ -106,14 +108,26 @@ def train_grpo():
     step = 0
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
-        ctx, prompts, answers, batch_size=32
+        ctx, prompts, answers, batch_size=4
     ):
-        optimizer.zero_grad()
+        print(f"completions compute for step={step}, starting")
+        step += 1
+        warmup_factor = min(1.0, step / warmup_steps)
+        ctx.optimizer.set_lr(base_lr * warmup_factor)
+        step_start = time.perf_counter()
+
+        all_rewards = []
+        ctx.optimizer.zero_grad()
         for p, ans, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch):
+            mb_start = time.perf_counter()
             B = len(c)
 
             r_np, adv_np = compute_rewards_advantages(ctx, ans, c)
-            print(f"{step=}, {r_np.mean()=}")
+            nonzero_adv = np.count_nonzero(adv_np)
+            print(
+                f"microbatch:  adv: nonzero={nonzero_adv}/{len(adv_np)}, min={adv_np.min():.4f}, max={adv_np.max():.4f}"
+            )
+            all_rewards.append(r_np)
 
             adv_tt = ttml.autograd.Tensor.from_numpy(
                 adv_np.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
@@ -125,7 +139,7 @@ def train_grpo():
                 nlog_probs_old, mask, Tp = compute_nlog_probs(ctx, p, c)
 
             ctx.tt_model.train()
-            nlog_probs_new, _, _ = compute_nlog_probs(ctx, p, c)
+            nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
 
             ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
             eps = 0.2
@@ -161,14 +175,35 @@ def train_grpo():
             loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp))
 
             loss.backward(retain_graph=False)
-            print(".backward")
+            mb_elapsed = time.perf_counter() - mb_start
+            print(f"microbatch done! elapsed={mb_elapsed:.2f}s")
 
-        optimizer.step()
-        print(f"step={step} done!")
+            deallocate_tensors(
+                [
+                    nlog_probs_old,
+                    nlog_probs_new,
+                    mask,
+                    mask_new,
+                    adv_tt,
+                    ratio,
+                    clipped_ratio,
+                    surr1,
+                    surr2,
+                    surr,
+                    weight_tt,
+                    weighted_surr,
+                    weighted_surr_4d,
+                    loss,
+                ]
+            )
 
-        step += 1
-        warmup_factor = min(1.0, step / warmup_steps)
-        optimizer.set_lr(base_lr * warmup_factor)
+        ctx.optimizer.step()
+        step_elapsed = time.perf_counter() - step_start
+        all_rewards_np = np.concatenate(all_rewards)
+        print(f"reward_mean={all_rewards_np.mean():.4f}, reward_std={all_rewards_np.std():.4f}")
+        print(f"step={step} done! elapsed={step_elapsed:.2f}s")
+
+    print("training process done!")
 
 
 if __name__ == "__main__":

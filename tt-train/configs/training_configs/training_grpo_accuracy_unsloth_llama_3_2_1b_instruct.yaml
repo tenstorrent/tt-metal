@@ -25,7 +25,7 @@ training_config:
 
 grpo_config:
   max_tokens_to_complete: 512
-  group_size: 1
+  group_size: 8
 
 scheduler_config:
   max_lr: 1e-4
@@ -35,7 +35,7 @@ scheduler_config:
 
 eval_config:
   repetition_penalty: 1.0
-  temperature: 0.0
+  temperature: 0.8
   top_k: 50
   top_p: 1.0
 

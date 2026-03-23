@@ -20,6 +20,7 @@ class InferenceCtx:
     tile_size: int = 32
     group_size: int = 1
     sample_seed: int = 42
+    optimizer: object | None = None
     _B: int = None
     _N: int = None
 
@@ -193,6 +194,9 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         completions_np[:, j] = column.to_numpy().reshape(
             B,
         )
+        deallocate_tensors([column])
+
+    deallocate_tensors([logits_mask_tensor])
 
     stop_ids = get_stop_ids(ctx)
 
@@ -214,7 +218,7 @@ def completion_batched_one_prompt(ctx: InferenceCtx, prompt_tokens: List[int]) -
     N = ctx._N = len(prompt_tokens)
     prompt_tokens_np = np.tile(prompt_tokens, (B, 1))
 
-    pad_lengths = [0]  # no padding
+    pad_lengths = [0] * ctx.group_size  # no padding
 
     ctx.tt_model.eval()
     with no_grad():
@@ -223,7 +227,7 @@ def completion_batched_one_prompt(ctx: InferenceCtx, prompt_tokens: List[int]) -
 
 def completion_batched_multiple_prompts(ctx: InferenceCtx, prompts: List[List[int]]) -> List[List[int]]:
     max_len = max(len(row) for row in prompts)
-    pad_lengths = [max_len - len(row) for row in prompts]
+    pad_lengths = [max_len - len(row) for row in prompts for _ in range(ctx.group_size)]
     prompts_cnt = len(prompts)
     B = ctx._B = ctx.group_size * prompts_cnt
     N = ctx._N = max_len
@@ -263,13 +267,12 @@ def compute_nlog_probs(
     prompts: List[List[int]],
     completions: List[List[int]],
 ) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int]:
-    assert len(completions) == len(prompts) * ctx.group_size
+    assert len(completions) == len(prompts)
 
     B = len(completions)
     ctx._B = B  # create_causal_mask() reads this
 
-    row_prompts = [prompts[i // ctx.group_size] for i in range(B)]
-    lengths = [len(p) + len(c) for p, c in zip(row_prompts, completions)]
+    lengths = [len(p) + len(c) for p, c in zip(prompts, completions)]
     T = max(lengths) - 1
     assert T >= 1
 
@@ -278,7 +281,7 @@ def compute_nlog_probs(
     loss_mask_np = np.zeros((B, T), dtype=np.float32)
     pad_lengths = []
 
-    for i, (p, c) in enumerate(zip(row_prompts, completions)):
+    for i, (p, c) in enumerate(zip(prompts, completions)):
         sequence = p + c
         L = len(sequence) - 1
         shift = T - L  # left-padding amount in full sequence

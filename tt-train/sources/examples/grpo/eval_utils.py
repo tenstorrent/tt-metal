@@ -6,6 +6,7 @@ from ttml.common.utils import (
     set_seed,
     get_tt_metal_home,
 )
+from ttml.optimizers import create_optimizer
 from ttml.common.config import load_config
 from datasets import load_dataset
 import time
@@ -23,7 +24,7 @@ from typing import Iterator, Sequence
 from string import Template
 
 
-def setup(yaml_config_path, hf_model_id, load_pretrained) -> InferenceCtx:
+def setup(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
     set_seed(42)
 
     yaml_config = load_config(yaml_config_path, f"{get_tt_metal_home()}/tt-train/configs/training_configs")
@@ -85,7 +86,15 @@ def setup(yaml_config_path, hf_model_id, load_pretrained) -> InferenceCtx:
         )
         load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
+    optimizer = None
+    if setup_optimizer:
+        optimizer = create_optimizer(
+            yaml_config["training_config"]["optimizer"],
+            tt_model.parameters(),
+        )
+
     ctx = InferenceCtx(
+        optimizer=optimizer,
         tt_model=tt_model,
         tokenizer=tokenizer,
         pad_token=pad_token,
@@ -119,9 +128,12 @@ def extract_hash_answer(text: str) -> float | None:
 
 
 def get_gsm8k(
-    ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train"
+    ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=None
 ) -> Tuple[List[str], List[float]]:
     data = load_dataset("openai/gsm8k", "main")[split]
+    if shuffle_seed is not None:
+        data = data.shuffle(seed=shuffle_seed)
+
     dataset = data.map(
         lambda x: {
             "prompt": [
