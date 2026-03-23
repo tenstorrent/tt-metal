@@ -129,37 +129,7 @@ class TextAttention(LightweightModule):
         wk_t = torch.transpose(wk, -2, -1).unsqueeze(0).unsqueeze(0)
         wv_t = torch.transpose(wv, -2, -1).unsqueeze(0).unsqueeze(0)
 
-        self.wq = ttnn.as_tensor(
-            wq_t,
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=col_mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wq.weight"),
-        )
-
-        self.wk = ttnn.as_tensor(
-            wk_t,
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=col_mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wk.weight"),
-        )
-
-        self.wv = ttnn.as_tensor(
-            wv_t,
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=col_mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("wv.weight"),
-        )
-
-        # Create fused QKV weight for optimized decode (nlp_create_qkv_heads_decode format)
+        # Fused QKV weights only (prefill + decode). Per-device Q/K/V slices are concatenated on dim=-1.
         # Format: per-device concatenation of [Q_heads, K_heads, V_heads]
         if is_mesh_device and self.num_devices > 1:
             # Multi-device: create fused QKV with per-device chunking
@@ -288,27 +258,27 @@ class TextAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Q, K, V projections (column parallel - output is sharded across devices)
-        q = ttnn.linear(
+        # Fused QKV: one matmul, then slice along output (column-parallel / mesh layout matches self.wqkv).
+        qkv = ttnn.linear(
             x,
-            self.wq,
+            self.wqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        q_dim = self.num_heads_per_device * self.head_dim
+        kv_dim = self.num_kv_heads_per_device * self.head_dim
+        # Tile layout may pad seq; slice using actual qkv time dimension.
+        sq = qkv.shape[2]
+        # Slice last dim: [Q | K | V]
+        q = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, sq, q_dim))
+        k = ttnn.slice(qkv, (0, 0, 0, q_dim), (1, 1, sq, q_dim + kv_dim))
+        v = ttnn.slice(qkv, (0, 0, 0, q_dim + kv_dim), (1, 1, sq, q_dim + 2 * kv_dim))
 
-        k = ttnn.linear(
-            x,
-            self.wk,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        v = ttnn.linear(
-            x,
-            self.wv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Drop tile padding on sequence if present (reshape expects logical seq_len)
+        if sq != seq_len:
+            q = ttnn.slice(q, (0, 0, 0, 0), (1, 1, seq_len, q_dim))
+            k = ttnn.slice(k, (0, 0, 0, 0), (1, 1, seq_len, kv_dim))
+            v = ttnn.slice(v, (0, 0, 0, 0), (1, 1, seq_len, kv_dim))
 
         # Reshape for multi-head attention (using per-device head counts)
         # Q: [1, 1, seq_len, num_heads_per_device * head_dim] -> [1, num_heads_per_device, seq_len, head_dim]
@@ -393,6 +363,7 @@ class TextAttention(LightweightModule):
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
+        ttnn.deallocate(qkv)
 
         # Reshape back: [1, num_heads_per_device, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim_per_device]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
