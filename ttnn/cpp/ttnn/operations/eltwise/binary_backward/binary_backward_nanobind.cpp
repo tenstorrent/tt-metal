@@ -789,7 +789,7 @@ void bind_binary_backward_assign(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()),
+            nb::arg("input_a_grad") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
