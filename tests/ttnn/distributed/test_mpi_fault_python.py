@@ -259,6 +259,9 @@ class TestUlfmGuardFastFail:
 
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
+            # os._exit() must be mocked: it terminates the process directly
+            # without raising SystemExit, so pytest.raises(SystemExit) won't
+            # catch it and the test process would be killed instead.
             with patch("os._exit"):
                 with mf.ulfm_guard(comm, "Barrier"):
                     raise mpi_exc
@@ -433,6 +436,8 @@ class TestUlfmFastFail:
             comm.Get_size.return_value = 4
             del comm.Get_failed
 
+            # os._exit() bypasses atexit/MPI_Finalize; mock it so the test
+            # process survives and we can assert the call happened.
             with patch("os._exit") as mock_os_exit:
                 mf._ulfm_fast_fail(comm, 0, 54, "test")
 
@@ -446,6 +451,8 @@ class TestUlfmFastFail:
             comm.Get_size.side_effect = RuntimeError("comm broken")
             del comm.Get_failed
 
+            # os._exit() bypasses atexit/MPI_Finalize; mock it so the test
+            # process survives and we can assert the call happened.
             with patch("os._exit") as mock_os_exit:
                 mf._ulfm_fast_fail(comm, 0, 54, "test")
 
