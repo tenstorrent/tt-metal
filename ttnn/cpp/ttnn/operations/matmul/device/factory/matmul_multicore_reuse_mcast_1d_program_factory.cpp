@@ -1537,11 +1537,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         out_num_blocks_x,  // out_num_blocks_x
         out_num_blocks_y,  // out_num_blocks_y
 
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        in1_B,                   // batch
-        out_block_tiles,         // out_block_num_tiles
+        out_subblock_h,               // out_subblock_h
+        out_subblock_w,               // out_subblock_w
+        out_subblock_num_tiles,       // out_subblock_num_tiles
+        bcast_batch ? in0_B : in1_B,  // batch (use in0_B when broadcasting in1, otherwise in1_B)
+        out_block_tiles,              // out_block_num_tiles
 
         untilize_out,  // untilize_out
         false,         // get_batch_from_reader
