@@ -105,33 +105,46 @@ inline void check_size_fits_int(std::size_t n) {
 
 // Identify which world-ranks have failed. Best-effort: returns "unknown" on
 // any secondary failure (comm may already be torn down).
+// RAII owner for an MPI_Group handle.  Frees the group on destruction if it
+// has been populated (i.e. is not MPI_GROUP_NULL).
+struct MpiGroupGuard {
+    MPI_Group g{MPI_GROUP_NULL};
+    MpiGroupGuard() = default;
+    explicit MpiGroupGuard(MPI_Group grp) : g(grp) {}
+    ~MpiGroupGuard() {
+        if (g != MPI_GROUP_NULL) {
+            MPI_Group_free(&g);
+        }
+    }
+    // Non-copyable, movable.
+    MpiGroupGuard(const MpiGroupGuard&) = delete;
+    MpiGroupGuard& operator=(const MpiGroupGuard&) = delete;
+    MpiGroupGuard(MpiGroupGuard&& o) noexcept : g(o.g) { o.g = MPI_GROUP_NULL; }
+};
+
 static std::string identify_failed_ranks(MPI_Comm comm) {
     // Try to ack pending failures. On a revoked communicator this may return
     // MPIX_ERR_REVOKED; in that case we still try get_acked below because
     // prior acks from earlier operations may have recorded failure information
     // that we can retrieve.
     MPIX_Comm_failure_ack(comm);  // best-effort; ignore return code
-    MPI_Group failed_group = MPI_GROUP_NULL;
-    if (MPIX_Comm_failure_get_acked(comm, &failed_group) != MPI_SUCCESS) {
+    MpiGroupGuard failed_guard;
+    if (MPIX_Comm_failure_get_acked(comm, &failed_guard.g) != MPI_SUCCESS) {
         return "unknown";
     }
     int failed_size = 0;
-    MPI_Group_size(failed_group, &failed_size);
+    MPI_Group_size(failed_guard.g, &failed_size);
     if (failed_size == 0) {
-        MPI_Group_free(&failed_group);
         return "unknown (no acked failures)";
     }
-    MPI_Group world_group = MPI_GROUP_NULL;
-    MPI_Comm_group(comm, &world_group);
+    MpiGroupGuard world_guard;
+    MPI_Comm_group(comm, &world_guard.g);
     std::vector<int> local_indices(failed_size);
     std::iota(local_indices.begin(), local_indices.end(), 0);
     std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);
-    if (world_group != MPI_GROUP_NULL) {
-        MPI_Group_translate_ranks(
-            failed_group, failed_size, local_indices.data(), world_group, world_ranks.data());
-        MPI_Group_free(&world_group);
+    if (world_guard.g != MPI_GROUP_NULL) {
+        MPI_Group_translate_ranks(failed_guard.g, failed_size, local_indices.data(), world_guard.g, world_ranks.data());
     }
-    MPI_Group_free(&failed_group);
 
     fmt::memory_buffer buf;
     for (int i = 0; i < failed_size; ++i) {
@@ -301,8 +314,15 @@ inline void mpi_check_ctx(
 // MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
 // MPI_CHECK_CTX -- ULFM-aware, for MPIContext member functions
 #define MPI_CHECK(call) mpi_check((call), #call)
-#define MPI_CHECK_CTX(call) \
-    mpi_check_ctx((call), #call, comm_, rank_, failure_policy_, &cached_failed_ranks_, &failed_ranks_cache_mutex_)
+#define MPI_CHECK_CTX(call)                              \
+    mpi_check_ctx(                                       \
+        (call),                                          \
+        #call,                                           \
+        comm_,                                           \
+        rank_,                                           \
+        failure_policy_.load(std::memory_order_acquire), \
+        &cached_failed_ranks_,                           \
+        &failed_ranks_cache_mutex_)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
@@ -462,7 +482,15 @@ inline void init_env(int& argc, char**& argv) {
         // Install the finalize watchdog handler once at init. The atexit path
         // only arms alarm(2) before MPI_Finalize; tests (e.g. FinalizeWatchdogPath)
         // expect sigaction(SIGALRM) to show a custom handler while the process runs.
-        signal(SIGALRM, mpi_finalize_alarm_handler);
+        // SA_RESETHAND: one-shot — kernel resets to SIG_DFL after first delivery,
+        // so a second SIGALRM (e.g. from a spurious alarm) takes the default action
+        // rather than re-invoking the handler.  sigaction() is preferred over
+        // signal() for portable, well-defined handler persistence semantics.
+        struct sigaction sa = {};
+        sa.sa_handler = mpi_finalize_alarm_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESETHAND;
+        sigaction(SIGALRM, &sa, nullptr);
 
         // Ensure MPI_Finalize is called when the program exits.
         // Guard with a watchdog: if MPI_Finalize does not return within
@@ -816,6 +844,19 @@ void MPIContext::revoke_and_shrink() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
 #else
+    // Detect concurrent invocations: revoke_and_shrink() must be called from a
+    // single designated thread with no concurrent MPI calls in flight.
+    // shrink_in_progress_ catches re-entrant or concurrent shrink calls; broader
+    // "no MPI in flight" invariant is documented in the header and enforced by the
+    // caller.
+    TT_ASSERT(
+        !shrink_in_progress_.test_and_set(std::memory_order_acquire),
+        "revoke_and_shrink() invoked concurrently — violates single-caller invariant");
+    struct ShrinkGuard {
+        std::atomic_flag& flag;
+        ~ShrinkGuard() { flag.clear(std::memory_order_release); }
+    } shrink_guard{shrink_in_progress_};
+
     int rc = MPIX_Comm_revoke(comm_);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
@@ -877,7 +918,7 @@ void MPIContext::set_failure_policy(FailurePolicy policy) {
         TT_THROW("FAULT_TOLERANT failure policy requires ULFM support which is not available in this build");
     }
 #endif
-    failure_policy_ = policy;
+    failure_policy_.store(policy, std::memory_order_release);
 }
 
 std::optional<bool> MPIContext::agree(bool local_value) const {
@@ -885,7 +926,7 @@ std::optional<bool> MPIContext::agree(bool local_value) const {
     int flag = local_value ? 1 : 0;
     int rc = MPIX_Comm_agree(comm_, &flag);
     if (rc != MPI_SUCCESS) {
-        mpi_check_ctx(rc, "MPIX_Comm_agree", comm_, rank_, failure_policy_);
+        mpi_check_ctx(rc, "MPIX_Comm_agree", comm_, rank_, failure_policy_.load(std::memory_order_acquire));
     }
     return flag != 0;
 #else

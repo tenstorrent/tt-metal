@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
 # Dedicated test suite for tooling and MPI infrastructure tests on dual T3K.
@@ -12,7 +12,7 @@
 #   6. Triage tool unit tests
 #   7. MPI multiprocess rank resolution test (mpirun -np 4)
 
-set -eo pipefail
+set -euo pipefail
 
 # Exit immediately if ARCH_NAME is not set or empty
 if [[ -z "${ARCH_NAME}" ]]; then
@@ -47,11 +47,11 @@ echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated
   --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/most_recent_tests_ttrun_env_passthrough_tooling.xml" \
   -m multihost \
-  "${repo_root}/tests/ttnn/distributed/test_ttrun_env_passthrough.py") ; fail=$((fail + $?))
+  "${repo_root}/tests/ttnn/distributed/test_ttrun_env_passthrough.py") || fail=$((fail + 1))
 
 # ── 2. ULFM fault tolerance tests ─────────────────────────────────────
 echo "LOG_METAL: Running ULFM fault tolerance tests"
-"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + $?))
+"${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + 1))
 
 # ── 3. Single-node ULFM gap tests (section 7.8) ───────────────────────
 #
@@ -59,7 +59,7 @@ echo "LOG_METAL: Running ULFM fault tolerance tests"
 # multi-host hardware: fast-fail exit code 70, MPI_Finalize watchdog,
 # std::set_terminate handler, and agree() consensus.
 echo "LOG_METAL: Running single-node ULFM gap tests"
-"${repo_root}/tests/tt_metal/multihost/run_single_node_ulfm_tests.sh" || fail=$((fail + $?))
+"${repo_root}/tests/tt_metal/multihost/run_single_node_ulfm_tests.sh" || fail=$((fail + 1))
 
 # ── 4. Python unit tests: ttrun exit code interpretation ──────────────
 #
@@ -70,7 +70,7 @@ echo "LOG_METAL: Running ttrun exit code interpretation tests"
   --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
   --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/test_ttrun_exit_codes.xml" \
-  "${repo_root}/tests/ttnn/distributed/test_ttrun_exit_codes.py") ; fail=$((fail + $?))
+  "${repo_root}/tests/ttnn/distributed/test_ttrun_exit_codes.py") || fail=$((fail + 1))
 
 # ── 5. Python unit tests: mpi_fault.py failure paths ─────────────────
 #
@@ -81,7 +81,7 @@ echo "LOG_METAL: Running mpi_fault.py Python tests"
   --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
   --confcutdir="${repo_root}/tests/ttnn" \
   --junitxml="${repo_root}/generated/test_reports/test_mpi_fault_python.xml" \
-  "${repo_root}/tests/ttnn/distributed/test_mpi_fault_python.py") ; fail=$((fail + $?))
+  "${repo_root}/tests/ttnn/distributed/test_mpi_fault_python.py") || fail=$((fail + 1))
 
 # ── 6. Triage tool unit tests ─────────────────────────────────────────
 #
@@ -94,14 +94,14 @@ echo "LOG_METAL: Running triage unit tests (parse_inspector_logs_paths)"
   --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
   --confcutdir="${repo_root}/tools/tests/triage" \
   --junitxml="${repo_root}/generated/test_reports/test_parse_inspector_logs_paths.xml" \
-  "${repo_root}/tools/tests/triage/test_parse_inspector_logs_paths.py") ; fail=$((fail + $?))
+  "${repo_root}/tools/tests/triage/test_parse_inspector_logs_paths.py") || fail=$((fail + 1))
 
 echo "LOG_METAL: Running triage end-to-end multihost rank resolution tests"
 (cd /tmp && env -u PYTHONPATH python3 -m pytest \
   --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
   --confcutdir="${repo_root}/tools/tests/triage" \
   --junitxml="${repo_root}/generated/test_reports/test_multihost_rank_resolution.xml" \
-  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution.py") ; fail=$((fail + $?))
+  "${repo_root}/tools/tests/triage/test_multihost_rank_resolution.py") || fail=$((fail + 1))
 
 echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexalens + inspector)"
 # test_triage.py is a full integration test: it starts a hang application,
@@ -113,7 +113,7 @@ echo "LOG_METAL: Running triage integration tests (test_triage, requires ttexale
 # These conditions are not met in every CI environment, so failures here are
 # treated as warnings and do NOT block the tooling suite.
 #
-# NOTE: 'set -eo pipefail' is active.  Use '|| true' so that a non-zero pytest
+# NOTE: 'set -euo pipefail' is active.  Use '|| true' so that a non-zero pytest
 # exit does not trigger 'set -e' and kill the script before we can warn.
 triage_exit=0
 # -p no:github-actions-annotate-failures suppresses the ##[error] GHA
@@ -150,7 +150,7 @@ if python3 -c "import mpi4py" 2>/dev/null; then
   ("$MPIRUN_WRAPPER" -np 4 --oversubscribe --allow-run-as-root \
     python3 -m pytest \
     --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
-    "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py") || fail=$((fail + $?))
+    "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py") || fail=$((fail + 1))
 else
   echo "LOG_METAL: WARNING: MPI rank resolution test skipped (mpi4py not available; non-blocking)"
 fi

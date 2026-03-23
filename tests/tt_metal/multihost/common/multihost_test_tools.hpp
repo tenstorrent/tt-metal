@@ -5,8 +5,11 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <memory>
+#include <thread>
 #include <type_traits>
 
 #include <tt-metalium/distributed_context.hpp>
@@ -91,6 +94,41 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
             fmt::print(__VA_ARGS__);  \
     }                                 \
     while (0)
+
+// ---------------------------------------------------------------------------
+//  Fault-tolerance test helpers
+//
+//  kill_rank_and_recover():
+//    Encapsulates the recurring pattern in fault-tolerance tests:
+//      1. The victim rank sleeps briefly then calls raise(SIGKILL).
+//      2. Surviving ranks execute a collective (barrier), catch any
+//         DistributedException (including MPIRankFailureException), and
+//         call revoke_and_shrink() to produce a healthy shrunken communicator.
+//      3. After recovery, `post_recovery(ctx)` is invoked on all survivors.
+//
+//    Use this for tests whose interesting assertions come AFTER the shrink.
+//    For tests that must inspect the caught exception itself (e.g.
+//    MPIRankFailureExceptionCarriesContext), keep a manual catch block.
+// ---------------------------------------------------------------------------
+
+template <typename Fn>
+inline void kill_rank_and_recover(
+    const ContextPtr& ctx,
+    int victim_rank,
+    Fn&& post_recovery,
+    std::chrono::milliseconds kill_delay = std::chrono::milliseconds(200)) {
+    const int rank = *ctx->rank();
+    if (rank == victim_rank) {
+        std::this_thread::sleep_for(kill_delay);
+        raise(SIGKILL);  // never returns; only this process exits
+    }
+    try {
+        ctx->barrier();
+    } catch (const tt::tt_metal::distributed::multihost::DistributedException&) {
+        ctx->revoke_and_shrink();
+    }
+    std::forward<Fn>(post_recovery)(ctx);
+}
 
 // ---------------------------------------------------------------------------
 //  Fault-tolerant test macros (Section 4.4 of ulfm-rank-reinit-architecture.md)

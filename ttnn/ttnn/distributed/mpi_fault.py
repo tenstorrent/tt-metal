@@ -42,6 +42,7 @@ Requirements
 
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
@@ -199,16 +200,29 @@ def _try_get_failed_ranks(comm) -> list[int]:
     mpi4py exposes ULFM functions as methods on the communicator in
     ULFM-enabled builds.  If unavailable, we return an empty list — the
     caller still knows *something* failed, just not *who*.
+
+    Returns world-rank integers (not indices within the failed group),
+    matching the C++ identify_failed_ranks() behavior.
     """
     if not hasattr(comm, "Get_failed"):
         return []
 
     try:
-        # comm.Get_failed() returns a Group containing the failed ranks.
-        # We translate that to a list of rank integers.
+        # comm.Get_failed() returns a Group containing the failed processes.
+        # Translate local indices within that group to world ranks using
+        # MPI.Group.Translate_ranks, mirroring MPI_Group_translate_ranks in C++.
+        from mpi4py import MPI  # local import — mpi4py may not be present
+
         failed_group = comm.Get_failed()
-        return list(range(failed_group.Get_size()))
-    except (RuntimeError, OSError, AttributeError):
+        failed_size = failed_group.Get_size()
+        if failed_size == 0:
+            return []
+        world_group = comm.Get_group()
+        local_indices = list(range(failed_size))
+        world_ranks = MPI.Group.Translate_ranks(failed_group, local_indices, world_group)
+        # Filter out MPI.UNDEFINED (-32766 or similar) for ranks that could not be translated
+        return [r for r in world_ranks if r != MPI.UNDEFINED]
+    except (RuntimeError, OSError, AttributeError, ImportError):
         # Any failure here is non-critical — we're already in error handling
         return []
 
@@ -267,5 +281,8 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
         flush=True,
     )
 
-    # Step 4: Exit with EX_SOFTWARE (70) — same as the C++ handler
-    sys.exit(70)
+    # Step 4: Exit with EX_SOFTWARE (70) — same as the C++ handler.
+    # Use os._exit() rather than sys.exit() to bypass Python atexit handlers
+    # (including any that call MPI_Finalize), which would deadlock on a revoked
+    # communicator — mirroring _exit(70) in the C++ handle_rank_failure().
+    os._exit(70)

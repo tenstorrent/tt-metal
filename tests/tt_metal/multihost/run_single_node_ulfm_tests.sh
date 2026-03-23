@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
 # Section 7.8 — Single-node ULFM gap tests
@@ -14,7 +14,7 @@
 #
 # Run with: mpirun-ulfm --with-ft ulfm -np 2 (single host, no hostfile)
 
-set -eo pipefail
+set -euo pipefail
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

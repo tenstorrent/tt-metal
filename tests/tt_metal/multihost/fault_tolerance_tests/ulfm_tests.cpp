@@ -422,35 +422,23 @@ TEST(FaultTolerance, DoubleRevokeGuard) {
     ASSERT_NE(mpi_ctx, nullptr);
     mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
 
-    // Kill rank 1
-    if (rank == 1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        raise(SIGKILL);
-    }
+    // Kill rank 1, catch failure on survivors, first revoke_and_shrink.
+    kill_rank_and_recover(ctx, /*victim_rank=*/1, [&](const ContextPtr& c) {
+        const int size_after_first = *c->size();
+        EXPECT_EQ(size_after_first, world - 1) << "Rank " << rank << ": first shrink should remove exactly 1 rank";
 
-    // Detect failure
-    try {
-        ctx->barrier();
-    } catch (const DistributedException&) {
-        // First revoke_and_shrink — normal recovery
-        ctx->revoke_and_shrink();
-    }
+        // Second revoke_and_shrink — should NOT crash or hang.
+        // The communicator is healthy, so revoke + shrink should succeed
+        // and produce a communicator with the same set of ranks.
+        c->revoke_and_shrink();
 
-    const int size_after_first = *ctx->size();
-    EXPECT_EQ(size_after_first, world - 1)
-        << "Rank " << rank << ": first shrink should remove exactly 1 rank";
+        const int size_after_second = *c->size();
+        EXPECT_EQ(size_after_second, size_after_first)
+            << "Rank " << rank << ": second shrink should not lose additional ranks";
 
-    // Second revoke_and_shrink — should NOT crash or hang.
-    // The communicator is healthy, so revoke + shrink should succeed
-    // and produce a communicator with the same set of ranks.
-    ctx->revoke_and_shrink();
-
-    const int size_after_second = *ctx->size();
-    EXPECT_EQ(size_after_second, size_after_first)
-        << "Rank " << rank << ": second shrink should not lose additional ranks";
-
-    EXPECT_EQ_SURVIVING_RANKS(size_after_second, ctx);
-    ctx->barrier();
+        EXPECT_EQ_SURVIVING_RANKS(size_after_second, c);
+        c->barrier();
+    });
 }
 
 TEST(FaultTolerance, AgreeAfterRevokeAndShrink) {
@@ -473,37 +461,24 @@ TEST(FaultTolerance, AgreeAfterRevokeAndShrink) {
     ASSERT_NE(mpi_ctx, nullptr);
     mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
 
-    // Kill rank 1
-    if (rank == 1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        raise(SIGKILL);
-    }
+    // Kill rank 1, recover on survivors, then test agree() on the shrunken communicator.
+    kill_rank_and_recover(ctx, /*victim_rank=*/1, [&](const ContextPtr& c) {
+        // All survivors vote true — should get true
+        {
+            auto result = c->agree(true);
+            ASSERT_TRUE(result.has_value()) << "Rank " << rank << ": agree() should work on shrunken comm";
+            EXPECT_TRUE(result.value()) << "Rank " << rank << ": unanimous true should yield true after shrink";
+        }
 
-    try {
-        ctx->barrier();
-    } catch (const DistributedException&) {
-        ctx->revoke_and_shrink();
-    }
+        // All survivors vote false — should get false
+        {
+            auto result = c->agree(false);
+            ASSERT_TRUE(result.has_value());
+            EXPECT_FALSE(result.value()) << "Rank " << rank << ": unanimous false should yield false after shrink";
+        }
 
-    // Now test agree() on the shrunken communicator
-    // All survivors vote true — should get true
-    {
-        auto result = ctx->agree(true);
-        ASSERT_TRUE(result.has_value())
-            << "Rank " << rank << ": agree() should work on shrunken comm";
-        EXPECT_TRUE(result.value())
-            << "Rank " << rank << ": unanimous true should yield true after shrink";
-    }
-
-    // All survivors vote false — should get false
-    {
-        auto result = ctx->agree(false);
-        ASSERT_TRUE(result.has_value());
-        EXPECT_FALSE(result.value())
-            << "Rank " << rank << ": unanimous false should yield false after shrink";
-    }
-
-    ctx->barrier();
+        c->barrier();
+    });
 }
 
 TEST(FaultTolerance, IsRevokedFalseBeforeFailure) {

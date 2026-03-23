@@ -4,7 +4,7 @@
 #
 # Purpose: Run fault tolerance tests for tt_metal
 
-set -eo pipefail
+set -euo pipefail
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,12 +29,14 @@ _run_ulfm_test() {
     # relying on mpirun's exit code, which is a false positive for rank-kill tests.
     local tmpout
     tmpout=$(mktemp)
+    # Ensure tmpout is removed on any exit path (normal, error, or signal).
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmpout'" RETURN
     { "$@" || true; } 2>&1 | tee "$tmpout"
     if grep -q '\[  FAILED  \]' "$tmpout"; then
         echo "ERROR: GTest failures detected in: $*" >&2
         fail=$((fail + 1))
     fi
-    rm -f "$tmpout"
 }
 
 _run_ulfm_test "$MPIRUN" --with-ft ulfm -np 8 "$TEST_BIN" --gtest_filter=FaultTolerance.ShrinkAfterRankFailure

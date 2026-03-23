@@ -10,6 +10,21 @@ scoping, MPI export classification, and end-to-end rank environment assembly.
 Unit tests (marked @pytest.mark.unit) require no MPI runtime or hardware.
 Multihost integration tests (@pytest.mark.multihost) require a real MPI environment
 with tt-run available and a dual-T3K rank binding configuration.
+
+Running from /tmp with PYTHONPATH unset
+---------------------------------------
+The test runner invokes this file as::
+
+    cd /tmp && env -u PYTHONPATH pytest ... tests/ttnn/distributed/test_ttrun_env_passthrough.py
+
+Reason: when pytest is launched from the repository root, ``PYTHONPATH`` typically
+includes ``TT_METAL_HOME``, which puts the top-level ``ttnn/`` CMake directory on
+the import path.  That directory contains a stub/build-time ``ttnn/`` folder that
+shadows the real installed Python package, breaking ``import ttnn.distributed.ttrun``.
+Running from ``/tmp`` with ``PYTHONPATH`` cleared ensures Python resolves ``ttnn``
+from the installed package (or the editable install) rather than the CMake tree.
+The module-load helper ``_import_ttrun_module()`` additionally falls back to loading
+``ttrun.py`` by source path when the package import fails.
 """
 
 import importlib.util
