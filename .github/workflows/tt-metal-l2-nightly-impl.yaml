@@ -90,6 +90,14 @@ on:
         required: false
         type: boolean
         default: true
+      run_compute_only_tests:
+        required: false
+        type: boolean
+        default: true
+      ttsim-version:
+        required: false
+        type: string
+        default: "v1.4.6"
 
 
 # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
@@ -873,6 +881,74 @@ jobs:
       - name: ttnn misc (rand and ssm) tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-compute-only-tests:
+    if: ${{ inputs.run_compute_only_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        TT_METAL_SIMULATOR_HOME: /work/sim
+        TT_METAL_SIMULATOR: /work/sim/libttsim.so
+        TT_METAL_SLOW_DISPATCH_MODE: 1
+        TT_METAL_DISABLE_SFPLOADMACRO: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn compute-only validation tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Compute ttsim asset name
+        id: ttsim-info
+        run: |
+          case "${{ inputs.arch }}" in
+            wormhole_b0) suffix="wh"; soc="wormhole_b0_80_arch.yaml" ;;
+            blackhole)   suffix="bh"; soc="blackhole_140_arch.yaml" ;;
+            *) echo "::error::Unknown architecture: ${{ inputs.arch }}"; exit 1 ;;
+          esac
+          echo "asset_name=libttsim_${suffix}.so" >> "$GITHUB_OUTPUT"
+          echo "soc_desc=${soc}" >> "$GITHUB_OUTPUT"
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-info.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
+      - name: Install ttsim
+        run: |
+          set -euo pipefail
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          mv /tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
+          cp /work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+      - name: ttnn compute-only validation tests
+        timeout-minutes: 20
+        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
