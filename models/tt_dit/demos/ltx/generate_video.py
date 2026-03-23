@@ -267,42 +267,37 @@ def main():
         return
 
     # Prepare RoPE and prompt on device
-    from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
+    # Build positions using official pipeline (pixel-space coordinates with causal fix)
+    from ltx_core.components.patchifiers import VideoLatentPatchifier, get_pixel_coords
+    from ltx_core.types import VideoLatentShape
+
     from models.tt_dit.utils.mochi import get_rot_transformation_mat
     from models.tt_dit.utils.tensor import bf16_tensor_2dshard
 
-    # RoPE positions: use center of each latent cell in pixel space
-    # Reference uses (start, end) pairs with use_middle_indices_grid=True → takes average
-    # Each latent cell spans: T_scale=8, H_scale=32, W_scale=32 pixels
-    t_ids = torch.arange(latent_frames)
-    h_ids = torch.arange(latent_h)
-    w_ids = torch.arange(latent_w)
-    grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-
     fps = 24.0
-    # Pixel-space start/end for each cell, then take midpoint
-    t_start = (grid_t.float() * 8 + 1 - 8).clamp(min=0) / fps
-    t_end = ((grid_t.float() + 1) * 8 + 1 - 8).clamp(min=0) / fps
-    h_start = grid_h.float() * 32
-    h_end = (grid_h.float() + 1) * 32
-    w_start = grid_w.float() * 32
-    w_end = (grid_w.float() + 1) * 32
+    patchifier = VideoLatentPatchifier(patch_size=1)
+    latent_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_h, width=latent_w)
+    latent_coords = patchifier.get_patch_grid_bounds(output_shape=latent_shape, device="cpu")
+    positions = get_pixel_coords(latent_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
+    positions[:, 0, ...] = positions[:, 0, ...] / fps
 
-    t_mid = (t_start + t_end) / 2
-    h_mid = (h_start + h_end) / 2
-    w_mid = (w_start + w_end) / 2
+    # Use reference interleaved RoPE (each head has unique frequency structure).
+    # rotary_embedding_llama + trans_mat implements interleaved rotation natively:
+    #   output = x * cos + rot(x) * sin  where rot creates (-x1,x0,-x3,x2,...)
+    from ltx_core.model.transformer.rope import LTXRopeType as RefLTXRopeType
+    from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute_freqs_cis
 
-    indices_grid = torch.stack([t_mid.flatten(), h_mid.flatten(), w_mid.flatten()], dim=-1).float().unsqueeze(0)
-
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid,
+    cos_freq, sin_freq = ref_precompute_freqs_cis(
+        positions.bfloat16(),
         dim=4096,
         out_dtype=torch.float32,
         theta=10000.0,
         max_pos=[20, 2048, 2048],
+        use_middle_indices_grid=True,
         num_attention_heads=32,
+        rope_type=RefLTXRopeType.INTERLEAVED,
     )
-
+    # Reshape (1, N, 4096) -> (1, 32, N, 128) for per-head device placement
     head_dim = 128
     cos_heads = cos_freq.reshape(1, num_tokens, 32, head_dim).permute(0, 2, 1, 3)
     sin_heads = sin_freq.reshape(1, num_tokens, 32, head_dim).permute(0, 2, 1, 3)
