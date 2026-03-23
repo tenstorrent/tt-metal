@@ -54,6 +54,9 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -1311,6 +1314,11 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                TT_FATAL(
+                    !experimental::per_core_allocation::is_per_core_allocation(
+                        self.mesh_buffer().device_local_config().sharding_args),
+                    "Per-core allocated tensors do not have a single address. Use "
+                    "experimental_per_core_buffer_address(core) instead.");
                 return self.mesh_buffer().address();
             },
             R"doc(
@@ -1492,6 +1500,53 @@ void pytensor_module(nb::module_& mod) {
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+
+    mod.def(
+        "experimental_to_single_device",
+        [](const Tensor& host_tensor,
+           tt::tt_metal::distributed::MeshDevice* mesh_device,
+           const tt::tt_metal::distributed::MeshCoordinate& coord,
+           const MemoryConfig& mem_config) -> Tensor {
+            TT_FATAL(
+                host_tensor.storage_type() == StorageType::HOST, "experimental_to_single_device expects a host tensor");
+
+            auto tensor_spec = TensorSpec(
+                host_tensor.logical_shape(),
+                TensorLayout(host_tensor.dtype(), host_tensor.tensor_spec().page_config(), mem_config));
+
+            auto mesh_buffer = experimental::per_core_allocation::create_on_single_device(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{
+                    .size = tensor_spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                    .page_size = tensor_spec.compute_page_size_bytes(),
+                    .buffer_type = mem_config.buffer_type(),
+                    .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+                },
+                mesh_device,
+                coord);
+
+            const auto& host_storage = host_tensor.host_storage();
+            auto host_buffer = host_storage.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            TT_FATAL(host_buffer.has_value(), "Host tensor has no data");
+
+            tt::tt_metal::distributed::ShardDataTransfer transfer{coord};
+            transfer.host_data(host_buffer->view_bytes().data());
+            transfer.region(BufferRegion(0, host_buffer->view_bytes().size()));
+
+            mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
+
+            DeviceStorage device_storage(std::move(mesh_buffer), {coord});
+            return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+        },
+        nb::arg("host_tensor"),
+        nb::arg("mesh_device"),
+        nb::arg("coord"),
+        nb::arg("memory_config"),
+        R"doc(
+        Write a host tensor to a single device within a mesh (experimental per-core allocation).
+        Allocates on the target device's own allocator and writes data.
+        Per-core allocations are automatically mirrored into the mesh-level allocator.
+    )doc");
 
     mod.def(
         "get_optimal_worker_cores_for_sharded_tensor",

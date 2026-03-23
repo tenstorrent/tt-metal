@@ -278,7 +278,10 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_addresses(
-    BankManager::AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit) {
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    DeviceAddr size_per_bank,
+    DeviceAddr address_limit,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -382,6 +385,25 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     std::vector<std::pair<DeviceAddr, DeviceAddr>> updated_available_ranges =
         subtract_ranges(available_ranges, allocated_ranges_in_dependent_allocators);
 
+    // Also subtract additional occupied ranges (e.g., from device-level per-bank allocators passed at allocation time)
+    if (!additional_occupied_ranges.empty()) {
+        // Sort and coalesce additional ranges before subtracting
+        auto sorted_additional = additional_occupied_ranges;
+        std::sort(sorted_additional.begin(), sorted_additional.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+        });
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
+        coalesced.reserve(sorted_additional.size());
+        for (const auto& r : sorted_additional) {
+            if (coalesced.empty() || r.first > coalesced.back().second) {
+                coalesced.push_back(r);
+            } else {
+                coalesced.back().second = std::max(coalesced.back().second, r.second);
+            }
+        }
+        updated_available_ranges = subtract_ranges(updated_available_ranges, coalesced);
+    }
+
     return updated_available_ranges;
 }
 
@@ -391,7 +413,8 @@ uint64_t BankManager::allocate_buffer(
     bool bottom_up,
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
-    BankManager::AllocatorDependencies::AllocatorID allocator_id) {
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -456,7 +479,7 @@ uint64_t BankManager::allocate_buffer(
     // Get available address ranges after subtracting dependencies
     // The pair represents (start, end) of the available address range(s)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
-        this->compute_available_addresses(allocator_id, size_per_bank, address_limit);
+        this->compute_available_addresses(allocator_id, size_per_bank, address_limit, additional_occupied_ranges);
 
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
@@ -698,6 +721,43 @@ AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
     }
 
     return merged_state;
+}
+
+void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size) {
+    // Skip if this address is already marked (e.g., multiple devices mirroring the same address)
+    if (allocated_buffers_[allocator_id.get()].contains(address)) {
+        return;
+    }
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
+    auto stats = alloc->get_statistics();
+    auto result = alloc->allocate_at_address(address, size);
+    TT_FATAL(
+        result.has_value(),
+        "Failed to mirror allocation at address {} of size {} in allocator {} "
+        "(num_allocators={}, bank_size={}, alloc_stats: total_alloc={}, total_free={}, largest_free={})",
+        address,
+        size,
+        allocator_id.get(),
+        allocator_dependencies_.num_allocators(),
+        bank_size(),
+        stats.total_allocated_bytes,
+        stats.total_free_bytes,
+        stats.largest_free_block_bytes);
+    allocated_buffers_[allocator_id.get()].insert(address);
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+}
+
+void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address) {
+    // Skip if this address is not marked (e.g., was deduplicated during mirroring)
+    if (!allocated_buffers_[allocator_id.get()].contains(address)) {
+        return;
+    }
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
+    alloc->deallocate(address);
+    allocated_buffers_[allocator_id.get()].erase(address);
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
 void BankManager::apply_state(
