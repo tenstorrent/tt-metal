@@ -4,7 +4,6 @@
 import pytest
 from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import wait_for_tensix_operations_finished
 from helpers.perf import PerfConfig
 from helpers.profiler import Profiler
 from helpers.test_config import TestConfig, TestMode
@@ -36,9 +35,7 @@ def test_profiler_overhead(workers_tensix_coordinates):
 
     configuration.generate_variant_hash()
     configuration.build_elfs()
-    elfs = configuration.run_elf_files(workers_tensix_coordinates)
-
-    wait_for_tensix_operations_finished(elfs, workers_tensix_coordinates)
+    configuration.run_elf_files(workers_tensix_coordinates)
 
     runtime = Profiler.get_data(
         configuration.test_name, configuration.variant_id, workers_tensix_coordinates

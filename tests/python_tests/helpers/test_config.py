@@ -36,8 +36,8 @@ from .device import (
     CHIP_DEFAULT_BOOT_MODES,
     BootMode,
     RiscCore,
-    commit_brisc_command,
     exalens_device_setup,
+    reset_mailboxes,
     set_tensix_soft_reset,
     wait_for_tensix_operations_finished,
 )
@@ -51,22 +51,9 @@ from .format_config import (
     DataFormat,
     InputOutputFormat,
 )
-from .llk_params import (
-    BriscCmd,
-    DestAccumulation,
-    L1Accumulation,
-    MailboxesDebug,
-    MailboxesPerf,
-)
-from .logger import logger
+from .llk_params import DestAccumulation, L1Accumulation, MailboxesDebug, MailboxesPerf
 from .stimuli_config import StimuliConfig
-from .test_variant_parameters import (
-    IN_TILE_DIMS,
-    NUM_FACES,
-    RuntimeParameter,
-    TemplateParameter,
-)
-from .utils import create_directories, run_shell_command
+from .test_variant_parameters import RuntimeParameter, TemplateParameter
 
 
 class ProfilerBuild(Enum):
@@ -77,6 +64,16 @@ class ProfilerBuild(Enum):
 class CoverageBuild(Enum):
     Yes = "true"
     No = "false"
+
+
+from .logger import logger
+from .test_variant_parameters import (
+    IN_TILE_DIMS,
+    NUM_FACES,
+    RuntimeParameter,
+    TemplateParameter,
+)
+from .utils import create_directories, run_shell_command
 
 
 class TestMode(Enum):
@@ -679,18 +676,31 @@ class TestConfig:
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
     def build_shared_artefacts(self):
-        if TestConfig.SHARED_ARTEFACTS_AVAILABLE:
-            return
+        # Profiler builds require different shared artefacts (trisc.cpp compiles with -DLLK_PROFILER)
+        is_profiler = self.profiler_build == ProfilerBuild.Yes
 
-        shared_obj_dir = TestConfig.SHARED_OBJ_DIR
-        shared_elf_dir = TestConfig.SHARED_ELF_DIR
-        lock_file = "/tmp/tt-llk-build-shared.lock"
+        # Select appropriate directories, flags, and lock based on build type
+        if is_profiler:
+            if TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE:
+                return
+            shared_obj_dir = TestConfig.PROFILER_SHARED_OBJ_DIR
+            shared_elf_dir = TestConfig.PROFILER_SHARED_ELF_DIR
+            lock_file = "/tmp/tt-llk-build-shared-profiler.lock"
+        else:
+            if TestConfig.SHARED_ARTEFACTS_AVAILABLE:
+                return
+            shared_obj_dir = TestConfig.SHARED_OBJ_DIR
+            shared_elf_dir = TestConfig.SHARED_ELF_DIR
+            lock_file = "/tmp/tt-llk-build-shared.lock"
 
         done_marker = shared_obj_dir / ".shared_complete"
 
         # Fast path: if shared artefacts are already built
         if done_marker.exists():
-            TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
+            if is_profiler:
+                TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = True
+            else:
+                TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
             return
 
         # Acquire lock for building shared artefacts
@@ -699,14 +709,17 @@ class TestConfig:
         with lock:
             # Check again inside lock
             if done_marker.exists():
-                TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
+                if is_profiler:
+                    TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = True
+                else:
+                    TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
                 return
 
             _, local_memory_layout_ld, local_non_coverage = (
                 self.resolve_compile_options()
             )
 
-            if TestConfig.WITH_COVERAGE:
+            if self.coverage_build == CoverageBuild.Yes:
                 compile_command = (  # coverage.o : coverage.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} "
                     f'-fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}'
@@ -717,7 +730,6 @@ class TestConfig:
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
-                    f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
                     f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
@@ -726,7 +738,10 @@ class TestConfig:
 
             # Mark shared artefacts as complete
             done_marker.touch()
-            TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
+            if is_profiler:
+                TestConfig.PROFILER_SHARED_ARTEFACTS_AVAILABLE = True
+            else:
+                TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
 
     def generate_compile_time_data_formats(self) -> list[str]:
         header_content: list[str] = [
@@ -1014,7 +1029,7 @@ class TestConfig:
             fd.write(coverage_stream)
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
-    LAST_LOADED_ELFS: ClassVar[Path] = Path()
+    PROFILER_BRISC_ELF_LOADED: ClassVar[bool] = False
 
     def run_elf_files(self, location="0,0") -> list:
         boot_mode = (
@@ -1029,19 +1044,10 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        if boot_mode == BootMode.BRISC:
-            if not TestConfig.BRISC_ELF_LOADED:
-                set_tensix_soft_reset(1, location=location)
-                TestConfig.BRISC_ELF_LOADED = True
-                load_elf(
-                    elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
-                    location=location,
-                    risc_name="brisc",
-                    verify_write=False,
-                )
-                set_tensix_soft_reset(0, [RiscCore.BRISC], location)
-
+        set_tensix_soft_reset(1, location=location)
         # unsafe, ordering is not guaranteed :(
+
+        reset_mailboxes(location)
         TensixDump.initialize(location)
 
         VARIANT_ELF_DIR = (
@@ -1053,47 +1059,61 @@ class TestConfig:
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
 
-        if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
-
-            for i, elf_file_path in enumerate(elfs):
-                if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
-                    start_address = load_elf(
-                        elf_file=elf_file_path,
-                        location=location,
-                        risc_name=f"trisc{i}",
-                        return_start_address=True,
-                        verify_write=False,
-                    )
-                    write_words_to_device(
-                        location, TestConfig.TRISC_START_ADDRS[i], [start_address]
-                    )
-                else:
-                    load_elf(
-                        elf_file=elf_file_path,
-                        location=location,
-                        risc_name=f"trisc{i}",
-                        neo_id=(
-                            0
-                            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
-                            else None
-                        ),
-                        verify_write=False,
-                    )
-
-            if (
-                boot_mode == BootMode.BRISC
-                and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-            ):
-                # Instruct Brisc to update it's start addresses cache before it releases T[0-2] from reset
-                commit_brisc_command(
-                    location, BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+        for i, elf in enumerate(elfs):
+            if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+                start_address = load_elf(
+                    elf_file=elf,
+                    location=location,
+                    risc_name=f"trisc{i}",
+                    neo_id=(
+                        0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
+                    ),
+                    return_start_address=True,
+                    verify_write=False,
                 )
-                return elfs
+                write_words_to_device(
+                    location, TestConfig.TRISC_START_ADDRS[i], [start_address]
+                )
+            else:
+                load_elf(
+                    elf_file=elf,
+                    location=location,
+                    risc_name=f"trisc{i}",
+                    neo_id=(
+                        0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
+                    ),
+                    verify_write=False,
+                )
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(location, BriscCmd.START_TRISCS)
+                # Use correct shared ELF directory and loading flag based on profiler build
+                is_profiler = self.profiler_build == ProfilerBuild.Yes
+                if is_profiler:
+                    if not TestConfig.PROFILER_BRISC_ELF_LOADED:
+                        TestConfig.PROFILER_BRISC_ELF_LOADED = True
+                        load_elf(
+                            elf_file=str(
+                                (
+                                    TestConfig.PROFILER_SHARED_ELF_DIR / "brisc.elf"
+                                ).absolute()
+                            ),
+                            location=location,
+                            risc_name="brisc",
+                            verify_write=False,
+                        )
+                else:
+                    if not TestConfig.BRISC_ELF_LOADED:
+                        TestConfig.BRISC_ELF_LOADED = True
+                        load_elf(
+                            elf_file=str(
+                                (TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()
+                            ),
+                            location=location,
+                            risc_name="brisc",
+                            verify_write=False,
+                        )
+                set_tensix_soft_reset(0, [RiscCore.BRISC], location)
             case BootMode.TRISC:
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
             case BootMode.EXALENS:
