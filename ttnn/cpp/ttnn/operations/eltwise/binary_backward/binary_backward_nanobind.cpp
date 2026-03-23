@@ -835,7 +835,33 @@ void py_module(nb::module_& module) {
 
     ttnn::bind_function<"remainder_bw">(
         module,
-        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(
+        Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.
+
+        Args:
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16
+                 - TILE, ROW_MAJOR
+
+            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+        )doc",
         ttnn::overload_t(
             nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
                 &ttnn::remainder_bw),
@@ -848,14 +874,40 @@ void py_module(nb::module_& module) {
             nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(
                 &ttnn::remainder_bw),
             nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
+            nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()));
 
     ttnn::bind_function<"fmod_bw">(
         module,
-        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(
+        Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.
+
+        Args:
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor or scalar.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16
+                 - TILE, ROW_MAJOR
+
+            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+        )doc",
         ttnn::overload_t(
             nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
                 &ttnn::fmod_bw),
@@ -867,7 +919,7 @@ void py_module(nb::module_& module) {
         ttnn::overload_t(
             nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::fmod_bw),
             nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
+            nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()));
