@@ -70,13 +70,6 @@ class Conv1dConfiguration:
     # config_tensors_in_dram: bool = True
 
 
-def reshape_input_to_conv2d(
-    input_tensor: ttnn.Tensor,
-) -> ttnn.Tensor:
-    batch_size, input_length, in_channels = input_tensor.shape
-    return ttnn.reshape(input_tensor, (batch_size, 1, input_length, in_channels))
-
-
 def input_shape_to_memory_config(
     input_shape, output_length, in_channels, kernel_size, device: ttnn.MeshDevice
 ) -> ttnn.MemoryConfig:
@@ -244,7 +237,6 @@ class Conv1d:
 
     def __init__(
         self,
-        # configuration: Conv1dConfiguration | None = None,
         device: ttnn.MeshDevice | None = None,
         *,
         in_channels: int | None = None,
@@ -331,12 +323,10 @@ class Conv1d:
         self,
         input_tensor: ttnn.Tensor,
     ):
-        input_2d = reshape_input_to_conv2d(input_tensor)
-        batch_size = input_2d.shape[0]
-        input_length = input_2d.shape[2]
+        batch_size, input_length, in_channels = input_tensor.shape
         conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
         out, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
-            input_tensor=input_2d,
+            input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
             weight_tensor=self.weight_tensor,
             return_output_dim=False,
             return_weights_and_bias=True,
@@ -357,9 +347,7 @@ class Conv1d:
             compute_config=compute_config,
             slice_config=slice_config,
         )
-        output_shape = out.shape
-        out = ttnn.reshape(out, (batch_size, output_shape[2], output_shape[3]))
-        return out
+        return ttnn.squeeze(out, dim=1)
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
         # Compare TT Conv1d output against torch.nn.functional.conv1d reference.

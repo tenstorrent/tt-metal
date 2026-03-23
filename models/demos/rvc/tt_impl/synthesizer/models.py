@@ -44,14 +44,13 @@ def _interpolate_1d(
     if mode not in ("nearest", "linear"):
         raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
     upsample_mode = "nearest" if mode == "nearest" else "bilinear"
-    x_nhwc = ttnn.reshape(x, (x.shape[0], 1, x.shape[1], 1))
+    x_nhwc = ttnn.unsqueeze(ttnn.unsqueeze(x, dim=1), dim=3)
     y_nhwc = ttnn.upsample(
         x_nhwc,
         [1, scale_factor],
         mode=upsample_mode,
     )
-    y = ttnn.reshape(y_nhwc, (y_nhwc.shape[0], y_nhwc.shape[2], y_nhwc.shape[3]))
-    return y
+    return ttnn.squeeze(y_nhwc, dim=1)
 
 
 def _flip_last_dim_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -602,7 +601,7 @@ class SynthesizerTrnMsNSF:
         self, phone: ttnn.Tensor, pitch: ttnn.Tensor, nsf_f0: ttnn.Tensor, speaker_id: ttnn.Tensor
     ) -> ttnn.Tensor:
         conditioning = self.embedding(speaker_id)
-        conditioning = ttnn.reshape(conditioning, (conditioning.shape[0], 1, conditioning.shape[-1]))
+        conditioning = ttnn.unsqueeze(conditioning, dim=1)
         prior_mean, prior_log = self.enc_p(phone, pitch)
         latent = (
             prior_mean
@@ -672,7 +671,7 @@ class SynthesizerTrnMsNSF_nono:
 
     def __call__(self, phone: ttnn.Tensor, speaker_id: ttnn.Tensor) -> ttnn.Tensor:
         conditioning = self.embedding(speaker_id)
-        conditioning = ttnn.reshape(g, (conditioning.shape[0], 1, conditioning.shape[-1]))
+        conditioning = ttnn.unsqueeze(conditioning, dim=1)
         prior_mean, prior_log = self.enc_p(phone, None)
         latent = (
             prior_mean

@@ -109,9 +109,14 @@ def pad_sequence_length_to_multiple_of_32(x: ttnn.Tensor) -> tuple[ttnn.Tensor, 
     if padded_length == sequnce_length:
         return x, sequnce_length
 
-    x_4d = ttnn.reshape(x, (batch_size, 1, sequnce_length, num_channels))
-    x_padded = ttnn.pad(x_4d, padding=((0, 0), (0, 0), (0, padded_length - sequnce_length), (0, 0)), value=0.0)
-    return ttnn.reshape(x_padded, (batch_size, padded_length, num_channels)), sequnce_length
+    return (
+        ttnn.pad(
+            x,
+            padding=((0, 0), (0, padded_length - sequnce_length), (0, 0)),
+            value=0.0,
+        ),
+        sequnce_length,
+    )
 
 
 class GroupNorm1D:
@@ -202,7 +207,7 @@ class GroupNorm1D:
             is_height_sharded=is_height_sharded,
             is_row_major=True,
         )
-        x0 = ttnn.reshape(x, (batch_size, 1, sequnce_length, num_channels))
+        x0 = ttnn.unsqueeze(x, dim=1)
         x1 = ttnn.to_memory_config(x0, sharded_mem_config)
         out = ttnn.group_norm(
             x1,
@@ -216,15 +221,7 @@ class GroupNorm1D:
             memory_config=sharded_mem_config,
             inplace=False,
         )
-        ttnn.deallocate(x1)
-        out = ttnn.reshape(out, (batch_size, sequnce_length, num_channels))
-        x4_torch = ttnn.to_torch(out)
-        out = ttnn.from_torch(
-            x4_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
+        out = ttnn.squeeze(out, dim=1)
 
         if sequnce_length != original_length:
             out = ttnn.slice(out, (0, 0, 0), (batch_size, original_length, num_channels))
@@ -235,13 +232,14 @@ class GroupNorm1D:
         batch_size, sequnce_length, num_channels = x.shape
         num_cores_nhw = self.grid_size.x * self.grid_size.y
         length_block = 1024 * 9
-        res_cat = []
+        out_blocks = []
         for i in range(0, sequnce_length, length_block):
             x_block = ttnn.slice(x, (0, i, 0), (batch_size, min(i + length_block, sequnce_length), num_channels))
-            x_result = self.__call__(x_block)
-            res_cat.append(x_result)
+            out = self.__call__(x_block)
+            out = ttnn.to_memory_config(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out_blocks.append(out)
 
-        out = ttnn.concat(res_cat, dim=1)
+        out = ttnn.concat(out_blocks, dim=1)
         return out
 
     def deallocate(self):

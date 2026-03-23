@@ -160,13 +160,6 @@ def get_conv_configs(
     )
 
 
-def reshape_input_to_conv2d(
-    input_tensor: ttnn.Tensor,
-) -> ttnn.Tensor:
-    batch_size, input_length, in_channels = input_tensor.shape
-    return ttnn.reshape(input_tensor, (batch_size, 1, input_length, in_channels))
-
-
 class ConvTranspose1d:
     """Stateful ConvTranspose1d wrapper built on top of `ttnn.conv_transpose2d`."""
 
@@ -245,12 +238,10 @@ class ConvTranspose1d:
             )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        input_2d = reshape_input_to_conv2d(input_tensor)
-        batch_size = input_2d.shape[0]
-        input_length = input_2d.shape[2]
+        batch_size, input_length, in_channels = input_tensor.shape
         conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
         out, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
-            input_tensor=input_2d,
+            input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
             weight_tensor=self.weight_tensor,
             return_output_dim=False,
             return_weights_and_bias=True,
@@ -271,6 +262,4 @@ class ConvTranspose1d:
             compute_config=compute_config,
             dram_slice_config=slice_config,
         )
-        output_shape = out.shape
-        out = ttnn.reshape(out, (batch_size, output_shape[2], output_shape[3]))
-        return out
+        return ttnn.squeeze(out, dim=1)
