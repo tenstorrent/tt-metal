@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/bcast.h"
 #include "api/compute/welford.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -27,12 +28,16 @@ void kernel_main() {
     // Number of elements per tile in the W dimension
     // (typically 32, but can be smaller for narrow tiles).
     constexpr uint32_t tile_width = get_compile_time_arg_val(2);
+    // Whether input scaling is required.
+    constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
 
-    // Convenience constant: a single tile count.
     constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
     constexpr auto cb_in = tt::CBIndex::c_0;
+    // Scalar tile produced by the reader via generate_reduce_scaler.
+    // Used to scale every input tile before Welford processing.
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
     // Circular buffer where the final variance output tile is written
     // for the writer kernel to consume.
     constexpr auto cb_out = tt::CBIndex::c_16;
@@ -40,14 +45,25 @@ void kernel_main() {
     // the two transpose steps (Welford produces row-oriented results;
     // we transpose back to column orientation via this buffer).
     constexpr auto cb_var = tt::CBIndex::c_19;
+    // 1-tile intermediate: holds the scaled input tile between the
+    // mul_tiles_bcast_scalar (scale step) and transpose_wh_tile (Welford step).
+    // Only used when do_scale is true.
+    constexpr auto cb_scaled = tt::CBIndex::c_20;
     // Circular buffer holding a pre-computed 1/n look-up table (one entry
     // per column index 1..W) that Welford's online algorithm uses to avoid
     // runtime division.
     //    constexpr auto cb_reciprocals = tt::CBIndex::c_25;
 
+    // The CB that the transpose step reads from: cb_scaled when scaling,
+    // cb_in directly when not.
+    constexpr auto cb_transpose_src = do_scale ? cb_scaled : cb_in;
+
     experimental::CircularBuffer cb_in_obj(cb_in);
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
     experimental::CircularBuffer cb_out_obj(cb_out);
     experimental::CircularBuffer cb_var_obj(cb_var);
+    experimental::CircularBuffer cb_scaled_obj(cb_scaled);
+    experimental::CircularBuffer cb_transpose_src_obj(cb_transpose_src);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -71,37 +87,66 @@ void kernel_main() {
     //    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals,
     //    0);
 
+    if constexpr (do_scale) {
+        // Scalar tile stays resident across all rows
+        cb_scaler_obj.wait_front(onetile);
+    }
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
+        // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
+        // When do_scale is true, each input tile is first multiplied by the scalar,
+        // packed to cb_scaled, then transposed and fed to welford_update.
+        // When do_scale is false, input tiles are transposed directly from cb_in.
+        // The Welford SFPU state (running mean in LREG4, M2 in LREG5) persists
+        // across tile_regs_release/acquire cycles because LREGs are SFPU registers,
+        // separate from the DST register file controlled by the semaphore.
         uint32_t start_N = 0;
-        reconfig_data_format_srca(cb_in);
-        transpose_wh_init_short(cb_in);
-        tile_regs_acquire();
+
+        // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
-        // Process all but the last tile
-        for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
-            cb_in_obj.wait_front(onetile);
-            // Welford's needs transposed input tile
-            transpose_wh_tile(cb_in, 0, input_dst);
-            //            welford_update<W>(input_dst, start_N, *p_reciprocals);
-            welford_update<0>(input_dst, start_N, {});
-            cb_in_obj.pop_front(1);
+
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+            if constexpr (do_scale) {
+                // --- Scale step: multiply input tile by scalar ---
+                cb_in_obj.wait_front(onetile);
+                tile_regs_acquire();
+                mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
+                mul_tiles_bcast_scalar(cb_in, cb_scaler, 0, 0, input_dst);
+                tile_regs_commit();
+                cb_in_obj.pop_front(1);
+                cb_scaled_obj.reserve_back(onetile);
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_scaled);
+                pack_tile(input_dst, cb_scaled);
+                tile_regs_release();
+                cb_scaled_obj.push_back(onetile);
+            }
+
+            // --- Transpose + Welford step ---
+            cb_transpose_src_obj.wait_front(onetile);
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_transpose_src);
+            transpose_wh_init_short(cb_transpose_src);
+            transpose_wh_tile(cb_transpose_src, 0, input_dst);
+
+            if (wt < (Wt - 1)) {
+                //            welford_update<W>(input_dst, start_N, *p_reciprocals);
+                welford_update<0>(input_dst, start_N, {});
+                tile_regs_commit();
+                tile_regs_wait();
+                tile_regs_release();
+            } else {
+                // Last tile: finalize and keep DST acquired for variance packing
+                //        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+                welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
+                // Store the mean and variance to the destination registers
+                //        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+                welford_finalize_to_row<0>(mean_dst, W - 1, {});
+                tile_regs_commit();
+            }
+            cb_transpose_src_obj.pop_front(onetile);
             start_N += tile_width;
         }
-
-        // Process the last tile
-        // cb_in is synced on full blocks, so we need to wait for the
-        // last tile + any remaining in the last block
-        cb_in_obj.wait_front(onetile);
-        transpose_wh_tile(cb_in, 0, input_dst);
-        cb_in_obj.pop_front(1);
-        //        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
-        welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-
-        // Store the mean and variance to the destination registers
-        //        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
-        welford_finalize_to_row<0>(mean_dst, W - 1, {});
-        tile_regs_commit();
 
         // Pack variance and transpose back to column format
         cb_var_obj.reserve_back(onetile);
