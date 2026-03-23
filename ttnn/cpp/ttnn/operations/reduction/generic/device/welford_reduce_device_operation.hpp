@@ -41,6 +41,7 @@ struct WelfordReduceDeviceOperation {
 ttnn::Tensor welford_reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
     float scalar,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,

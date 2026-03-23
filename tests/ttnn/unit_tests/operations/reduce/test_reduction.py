@@ -38,7 +38,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 # @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [320, 640, 327])
 @pytest.mark.parametrize("w", [320, 640, 641])
-@pytest.mark.parametrize("dim", [-1])
+@pytest.mark.parametrize("dim", [-1, -2])
 # @pytest.mark.parametrize("dim", [None, [], -1, -2])
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("correction", [False])
@@ -671,7 +671,8 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 # @pytest.mark.parametrize("scalar", [1.0])
 @pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43])
 @pytest.mark.parametrize("correction", [True, False])
-def test_vs_scalar_applied_to_input(device, op, scalar, correction):
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_vs_scalar_applied_to_input(device, op, scalar, correction, dim):
     torch.manual_seed(42)
     shape = (1, 1, 3, 4)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -680,11 +681,11 @@ def test_vs_scalar_applied_to_input(device, op, scalar, correction):
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     print(f"ttnn input: {ttnn_input}")
     ttnn_op = getattr(ttnn, op)
-    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=-1, scalar=scalar, correction=correction))
+    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
     print(f"scalar = {scalar}, ttnn result: {ttnn_result}")
 
     torch_op = getattr(torch, op)
-    torch_result = torch_op(scalar * torch_input, dim=-1, correction=correction)
+    torch_result = torch_op(scalar * torch_input, dim=dim, correction=correction)
     if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
         torch_result = torch_result.values
     print(f"scalar = {scalar}, torch result: {torch_result}")

@@ -14,6 +14,7 @@ namespace ttnn::prim {
 
 struct WelfordReduceParams {
     tt::tt_metal::ReduceOpMath math_op{};
+    tt::tt_metal::ReduceOpDim reduce_dim{tt::tt_metal::ReduceOpDim::H};
     float scalar{1.0f};
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};

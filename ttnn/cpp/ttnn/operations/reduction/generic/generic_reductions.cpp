@@ -292,8 +292,15 @@ static Tensor std_var_impl(
         return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    // For now, only support reduction on a single dimension.
-    TT_FATAL(dim.size() == 1 && dim[0] == rank - 1, "for now, only support STD/VAR reduction on the W dimension");
+    // For now, only support reduction on a single H or W dimension.
+    TT_FATAL(
+        dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2),
+        "Welford STD/VAR currently supports single-dimension reduction on W (dim={}) or H (dim={}), got dim={}",
+        rank - 1,
+        rank - 2,
+        dim[0]);
+
+    auto reduce_dim = (dim[0] == rank - 1) ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
 
     // For now support only interleaved tensors.
     TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
@@ -351,6 +358,7 @@ static Tensor std_var_impl(
         output_tensor = ttnn::prim::welford_reduce(
             input_tensor,
             tt::tt_metal::ReduceOpMath::STD,
+            reduce_dim,
             scalar,
             memory_config,
             std::nullopt,
@@ -361,6 +369,7 @@ static Tensor std_var_impl(
         output_tensor = ttnn::prim::welford_reduce(
             input_tensor,
             tt::tt_metal::ReduceOpMath::VAR,
+            reduce_dim,
             scalar,
             memory_config,
             std::nullopt,
