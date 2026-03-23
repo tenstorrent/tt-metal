@@ -183,13 +183,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
-    if (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
     const auto default_fp32_acc_math_fidelity =
         (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3
                                                                                    : MathFidelity::HiFi4;
