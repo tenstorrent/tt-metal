@@ -158,6 +158,7 @@ def assert_with_ulp(
     actual_result: Union[ttnn.Tensor, torch.Tensor],
     ulp_threshold=10,
     allow_nonfinite=False,
+    find_ulp_index=None,
 ):
     """
     Assert that two tensors are similar within a given distance expressed in Units of Least Precision (ULP)
@@ -241,9 +242,11 @@ def assert_with_ulp(
             f"ULP threshold {ulp_threshold} is greater than the maximum meaningful ULP threshold of {maximum_meaningful_ulp_threshold} for dtype {expected_result.dtype}"
         )
 
-    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
+    ulp_passed, ulp_message, ulp_message_index = comp_ulp(
+        expected_result, actual_result, ulp_threshold, allow_nonfinite, find_ulp_index
+    )
     # assert ulp_passed, ulp_message
-    return ulp_passed, ulp_message
+    return ulp_passed, ulp_message, ulp_message_index
 
 
 def assert_equal(expected_pytorch_result, actual_pytorch_result):

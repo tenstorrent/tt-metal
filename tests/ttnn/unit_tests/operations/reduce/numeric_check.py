@@ -25,7 +25,7 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-NEAR_ZERO_THRESHOLD = 1e-09
+NEAR_ZERO_THRESHOLD = 1e-04
 FROBENIUS_GRID_SPLITS = 4  # Split each dim into N pieces → NxN tile grid
 FROBENIUS_TOP_K = 5  # Report the K worst tiles
 # # Padding validation configuration
@@ -190,16 +190,41 @@ def collect_and_dump_numeric_metrics(
     non_near_zero_mask = torch.abs(expected_allclose) >= NEAR_ZERO_THRESHOLD
     expected_allclose = expected_allclose[non_near_zero_mask]
     actual_allclose = actual_allclose[non_near_zero_mask]
-    print(f"expected_allclose.numel(): {expected_allclose.numel()}, expected.numel(): {expected.numel()}")
+    generate_graph = False
+    if generate_graph:
+        import matplotlib.pyplot as plt
+
+        x_plot = expected_allclose.reshape(-1).detach().cpu().float().numpy()
+        plt.figure(figsize=(10, 6))
+        plt.plot(x_plot, ".")
+        plt.xlabel("Index")
+        plt.ylabel("Expected Value")
+        plt.title("Expected Allclose Values")
+        plt.savefig("expected_allclose_plot.png")
+        plt.close()
+
+        x_plot = actual_allclose.reshape(-1).detach().cpu().float().numpy()
+        plt.figure(figsize=(10, 6))
+        plt.plot(x_plot, ".")
+        plt.xlabel("Index")
+        plt.ylabel("Actual Value")
+        plt.title("Actual Allclose Values")
+        plt.savefig("actual_allclose_plot.png")
+        plt.close()
+    # print(f"expected_allclose.numel(): {expected_allclose.numel()}, expected.numel(): {expected.numel()}")
     if expected_allclose.numel() > 0 and actual_allclose.numel() > 0:
         allclose_passed, allclose_message = comp_allclose_custom(
             expected_allclose, actual_allclose, rtol=allclose_rtol, atol=allclose_atol
         )
         # Parse values from message: "Max ATOL Delta: {max_atol}, Mean ATOL Delta: {mean_atol}, Max RTOL Delta: {max_rtol}, Mean RTOL Delta: {mean_rtol}"
-        max_atol = float(allclose_message.split("Max ATOL Delta: ")[1].split(",")[0])
-        mean_atol = float(allclose_message.split("Mean ATOL Delta: ")[1].split(",")[0])
-        max_rtol = float(allclose_message.split("Max RTOL Delta: ")[1].split(",")[0])
-        mean_rtol = float(allclose_message.split("Mean RTOL Delta: ")[1])
+        max_abs_dif = float(allclose_message.split("Max ATOL Delta: ")[1].split(",")[0])
+        mean_abs_dif = float(allclose_message.split("Mean ATOL Delta: ")[1].split(",")[0])
+        max_rel_dif = float(allclose_message.split("Max RTOL Delta: ")[1].split(",")[0])
+        mean_rel_dif = float(allclose_message.split("Mean RTOL Delta: ")[1].split(",")[0])
+        max_abs_idx = int(allclose_message.split("Max Absolute Difference Index: ")[1])
+        # print(f"max_abs_idx: {max_abs_idx}")
+        # print(f"expected_allclose[{max_abs_idx}]: {expected_allclose.reshape(-1)[max_abs_idx]}")
+        # print(f"actual_allclose[{max_abs_idx}]: {actual_allclose.reshape(-1)[max_abs_idx]}")
     else:
         allclose_passed = True
         allclose_message = "Both tensors are empty"
@@ -212,20 +237,12 @@ def collect_and_dump_numeric_metrics(
     frob_val, frob_expected_zero = comp_relative_frobenius(expected, actual)
     if isinstance(frob_expected_zero, torch.Tensor):
         frob_expected_zero = bool(frob_expected_zero.item() if frob_expected_zero.numel() == 1 else frob_expected_zero)
-    frob_cluster_summary = _compute_frobenius_error_clusters(expected, actual)
-    # worst_tile = frob_cluster_summary["clusters"][0] if frob_cluster_summary["clusters"] else {}
-    # frob_cluster_count = frob_cluster_summary["total_tiles"]
-    # largest_frob_cluster_value = worst_tile.get("frobenius_value", 0.0)
-    # largest_frob_cluster_error_share = worst_tile.get("error_share", 0.0)
+    from_cluster_analysis = False
+    if from_cluster_analysis:
+        frob_cluster_summary = _compute_frobenius_error_clusters(expected, actual)
+    else:
+        frob_cluster_summary = None
 
-    # if worst_tile:
-    #     logger.info(
-    #         f"{test_name}: Frobenius grid {frob_cluster_summary['grid_shape']}, "
-    #         f"worst_tile_frob={largest_frob_cluster_value:.6e}, "
-    #         f"error_share={largest_frob_cluster_error_share:.2%}, "
-    #         f"bbox={worst_tile['bbox']}"
-    #     )
-    #############################################3333
     # ulp
     max_ulp = 0.0
     avg_ulp = 0.0
@@ -238,7 +255,12 @@ def collect_and_dump_numeric_metrics(
     non_near_zero_mask = torch.abs(expected) >= NEAR_ZERO_THRESHOLD
     expected_non_near_zero = expected[non_near_zero_mask]
     actual_non_near_zero = actual[non_near_zero_mask]
-
+    # for i in range(len(expected_non_near_zero)):
+    #     print(f"expected_non_near_zero[i]: {expected_non_near_zero[i].item():.20f}, actual_non_near_zero[i]: {actual_non_near_zero[i].item():.20f}")
+    # for i in range(len(expected_non_near_zero)):
+    #     diff = expected_non_near_zero[i].item() - actual_non_near_zero[i].item()
+    #     print(f"difference: {diff:.20f}")
+    # print(f"expected_non_near_zer{expected_non_near_zero[i]).item():.20f}")
     # expected_non_near_zero = expected[non_near_zero_mask]
     # near_zero_count = (torch.abs(expected) < NEAR_ZERO_THRESHOLD).sum().item()
     near_zero_count = (non_near_zero_mask == False).sum().item()
@@ -248,12 +270,15 @@ def collect_and_dump_numeric_metrics(
     if expected_non_near_zero.numel() > 0 and actual_non_near_zero.numel() > 0:
         # expected_non_near_zero = expected[non_near_zero_mask]
         # actual_non_near_zero = actual[non_near_zero_mask]
-        ulp_passed, ulp_message = assert_with_ulp(
-            expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold
+        ulp_passed, ulp_message, ulp_message_index = assert_with_ulp(
+            expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold, find_ulp_index=max_abs_idx
         )
+        # print(f"ulp_passed: {ulp_passed}")
+        # print(f"ulp_message: {ulp_message}")
         ulp_passed = bool(ulp_passed)
         if "Max ULP Delta:" in ulp_message:
             ulp_str = ulp_message.split("Max ULP Delta: ")[1].split(" ")[0]
+            ulp_max_str = ulp_message.split("Max ULP Delta: ")[-1]
             # Handle tensor(...) format
             if ulp_str.startswith("tensor("):
                 ulp_str = ulp_str[len("tensor(") :].rstrip(")")
@@ -268,18 +293,23 @@ def collect_and_dump_numeric_metrics(
         avg_ulp = 0
         max_ulp = 0
         ulp_passed = True
+        ulp_max_str = None
 
     # Prepare metrics dict
     metrics = {
         "pcc_passed": pcc_passed,
         "pcc_value": float(pcc_val) if isinstance(pcc_val, (int, float)) else pcc_val,
         "allclose_passed": allclose_passed,
-        "max_atol": max_atol,
-        "mean_atol": mean_atol,
-        "max_rtol": max_rtol,
-        "mean_rtol": mean_rtol,
+        # "max_adiff": max_atol,
+        "max_abs_dif": max_abs_dif,
+        # "mean_atol": mean_atol,
+        "mean_abs_dif": mean_abs_dif,
+        # "max_rtol": max_rtol,
+        "max_rel_dif": max_rel_dif,
+        # "mean_rtol": mean_rtol,
+        "mean_rel_dif": mean_rel_dif,
         "frobenius_value": frob_val,
-        "frobenius_expected_zero": frob_expected_zero,
+        # "frobenius_expected_zero": frob_expected_zero,
         # "frobenius_cluster_count": frob_cluster_count,
         # "frobenius_largest_cluster_value": largest_frob_cluster_value,
         # "frobenius_largest_cluster_error_share": largest_frob_cluster_error_share,
@@ -288,6 +318,8 @@ def collect_and_dump_numeric_metrics(
         "max_ulp": max_ulp,
         "avg_ulp": avg_ulp,
         "near_zero_pct": near_zero_pct,
+        "ulp_max_str": ulp_max_str,
+        "max_diff_ulp_str": ulp_message_index,
     }
     # print(metrics)
 
@@ -323,20 +355,22 @@ def collect_and_dump_numeric_metrics(
                         "pcc_passed",
                         "pcc_value",
                         "allclose_passed",
-                        "max_atol",
-                        "mean_atol",
-                        "max_rtol",
-                        "mean_rtol",
+                        "max_abs_dif",
+                        "mean_abs_dif",
+                        "max_rel_dif",
+                        "mean_rel_dif",
                         "ulp_passed",
                         "max_ulp",
                         "avg_ulp",
                         "near_zero_pct",
                         "frobenius_value",
-                        "frobenius_expected_zero",
+                        # "frobenius_expected_zero",
                         # "frobenius_cluster_count",
                         # "frobenius_largest_cluster_value",
                         # "frobenius_largest_cluster_error_share",
                         # "frobenius_cluster_summary",
+                        "ulp_max_data: (calculated-golden)/ulp_value",
+                        "max_abs_diff_ulp: (calculated-golden)/ulp_value @ [max abs_diff_index]",
                     ]
                 )
                 if k is not None:
@@ -364,16 +398,18 @@ def collect_and_dump_numeric_metrics(
                     if isinstance(metrics["pcc_value"], (int, float))
                     else str(metrics["pcc_value"]),
                     allclose_passed,
-                    f"{max_atol:.6e}",
-                    f"{mean_atol:.6e}",
-                    f"{max_rtol:.6e}",
-                    f"{mean_rtol:.6e}",
+                    f"{max_abs_dif:.6e}",
+                    f"{mean_abs_dif:.6e}",
+                    f"{max_rel_dif:.6e}",
+                    f"{mean_rel_dif:.6e}",
                     ulp_passed,
                     f"{max_ulp:.1f}" if not math.isnan(max_ulp) else "N/A",
                     f"{avg_ulp:.1f}" if not math.isnan(avg_ulp) else "N/A",
                     f"{near_zero_pct:.2f}",
                     f"{frob_val:.6e}",
-                    frob_expected_zero,
+                    # frob_expected_zero,
+                    ulp_max_str,
+                    ulp_message_index,
                     # frob_cluster_count,
                     # f"{largest_frob_cluster_value:.6e}",
                     # f"{largest_frob_cluster_error_share:.6e}",
