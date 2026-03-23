@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
-#include <cstring>
 #include <functional>
 #include <set>
-#include <unordered_set>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
@@ -79,11 +76,11 @@ struct ProcessorMask {
 };
 
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
-using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
+using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
 
 // Kernel -> ProcessorMask maps
 using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
-using ComputeProcessorMaskMap = std::unordered_map<const KernelSpec*, ComputeProcessorMask>;
+using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngineMask>;
 
 // DFB name -> ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
@@ -112,7 +109,7 @@ template <uint8_t NUM_CORES>
 ProcessorMask<NUM_CORES> CreateMask(uint8_t mask);
 template <uint8_t NUM_CORES>
 std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use);
-std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAssignments(
+std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(
     const ProgramSpec& spec, const CollectedSpecData& collected);
 
 // Phase 3: Program Building
@@ -120,17 +117,17 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
-    const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map);
+    const ComputeEngineMaskMap& kernel_to_compute_processor_mask_map);
 tt::tt_metal::KernelSource MakeKernelSource(const KernelSpec& kernel_spec);
 tt::tt_metal::experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
 tt::tt_metal::experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
 std::set<tt::tt_metal::DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask);
-std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeProcessorMask mask);
+std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeEngineMask mask);
 
 // ============================================================================
-//  PUBLIC ENTRY POINTS
+//  PUBLIC ENTRY POINT: MakeProgramFromSpec
 // ============================================================================
 
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
@@ -729,7 +726,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
 }
 
 // Assign compute processor mask for a kernel.
-ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
+ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
     auto reserved = ReserveProcessors(kernel_spec->num_threads, CreateMask<QUASAR_TENSIX_CORES_PER_NODE>(0x00));
     TT_FATAL(
         reserved.has_value(),
@@ -744,10 +741,10 @@ ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, cons
 //      A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
 //   If the input ProgramSpec passes legality checks but fails in the solver, the resulting error
 //   message will make it clear what went wrong (i.e. overly restrictive "common DM cores" assumption).
-std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAssignments(
+std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(
     const ProgramSpec& spec, const CollectedSpecData& collected) {
     DMProcessorMaskMap kernels_to_dm_processor_mask;
-    ComputeProcessorMaskMap kernels_to_compute_processor_mask;
+    ComputeEngineMaskMap kernels_to_compute_processor_mask;
 
     for (const WorkerSpec& worker : spec.workers.value()) {
         // Cumulative DM processor mask for this WorkerSpec
@@ -790,7 +787,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
-    const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map) {
+    const ComputeEngineMaskMap& kernel_to_compute_processor_mask_map) {
     const KernelSpec* producer = dfb_endpoint_info.producer;
     const KernelSpec* consumer = dfb_endpoint_info.consumer;
 
@@ -903,7 +900,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
 
     // Handle defines:
     // Must convert from vector<pair> to map.)
-    // (TODO: Consider changing this in the KernelSpec API to avoid unnecessaryconversion?)
+    // (TODO: Consider changing this in the KernelSpec API to avoid unnecessary conversion?)
     // (The design motivation was consistency with the existing ProgramDescriptor API.)
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
@@ -935,9 +932,9 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     };
 }
 
-// ----------------------------------------------------------------------------
+// --------------------------------------------------------------------------------
 // GetDMProcessorSet: Convert a DMProcessorMask to a set of DataMovementProcessor
-// ----------------------------------------------------------------------------
+// --------------------------------------------------------------------------------
 
 std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
     std::set<DataMovementProcessor> processors;
@@ -949,18 +946,19 @@ std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
     return processors;
 }
 
-// ----------------------------------------------------------------------------
-// GetComputeProcessorSet: Convert a ComputeProcessorMask to a set of QuasarComputeProcessor
-// ----------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------
+// GetComputeProcessorSet: Convert a ComputeEngineMask to a set of QuasarComputeProcessor
+// ------------------------------------------------------------------------------------------
 //
-// The ComputeProcessorMask represents Tensix engines (4 per node).
+// The ComputeEngineMask represents the active Tensix engines on a node.
+// (Based on the number of compute kernel threads running on that node.)
 // Each Tensix engine has 4 compute processors.
 // So if bit i is set in the mask, we include all 4 processors for that engine:
 //   Engine 0 -> NEO_0_COMPUTE_{0,1,2,3}
 //   Engine 1 -> NEO_1_COMPUTE_{0,1,2,3}
 //   etc.
 
-std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeProcessorMask mask) {
+std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeEngineMask mask) {
     using QuasarComputeProcessor = experimental::quasar::QuasarComputeProcessor;
     constexpr uint8_t PROCESSORS_PER_ENGINE = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 
@@ -975,134 +973,6 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
         }
     }
     return processors;
-}
-
-// ============================================================================
-// SetProgramRunParameters & Validation
-// ============================================================================
-
-// Type alias for readability
-using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
-
-// Internal validation function - validates ProgramRunParams against the Program's schema
-static void ValidateProgramRunParams(const Program& program, const ProgramRunParams& params) {
-    const detail::ProgramImpl& program_impl = program.impl();
-
-    // Track which kernels we've seen parameters for
-    std::unordered_set<KernelSpecName> kernels_with_params;
-
-    for (const auto& kernel_params : params.kernel_run_params) {
-        const KernelSpecName& kernel_name = kernel_params.kernel_spec_name;
-        kernels_with_params.insert(kernel_name);
-
-        // Check that the kernel exists
-        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
-        TT_FATAL(
-            schema != nullptr,
-            "Kernel '{}' has no RTA schema registered. Was the Program created from a ProgramSpec?",
-            kernel_name);
-
-        // Validate per-node runtime args counts
-        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
-            auto it = schema->num_runtime_args_per_node.find(node_coord);
-            TT_FATAL(
-                it != schema->num_runtime_args_per_node.end(),
-                "Kernel {} is setting RTAs for node {}, but this is not a valid node for this kernel.",
-                kernel_name,
-                node_coord.str());
-            TT_FATAL(
-                args.size() == it->second,
-                "Kernel '{}' node {} expects {} runtime args, but {} were provided",
-                kernel_name,
-                node_coord.str(),
-                it->second,
-                args.size());
-        }
-
-        // Validate common runtime args count
-        TT_FATAL(
-            kernel_params.common_runtime_args.size() == schema->num_common_runtime_args,
-            "Kernel '{}' expects {} common runtime args, but {} were provided",
-            kernel_name,
-            schema->num_common_runtime_args,
-            kernel_params.common_runtime_args.size());
-
-        // Validate that all nodes in the schema have runtime args provided
-        for (const auto& [node_coord, expected_count] : schema->num_runtime_args_per_node) {
-            bool found = false;
-            for (const auto& [provided_node, args] : kernel_params.runtime_args) {
-                if (provided_node == node_coord) {
-                    found = true;
-                    break;
-                }
-            }
-            TT_FATAL(
-                found,
-                "Kernel '{}' is missing runtime args for node {} (expected {} args)",
-                kernel_name,
-                node_coord.str(),
-                expected_count);
-        }
-    }
-
-    // Validate that all registered kernels have parameters
-    std::vector<KernelSpecName> registered_names = program_impl.get_registered_kernel_names();
-    for (const KernelSpecName& name : registered_names) {
-        TT_FATAL(
-            kernels_with_params.contains(name),
-            "Kernel '{}' is registered in the Program but has no runtime parameters specified in ProgramRunParams",
-            name);
-    }
-}
-
-void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
-    // Validate parameters against the schema
-    ValidateProgramRunParams(program, params);
-
-    detail::ProgramImpl& program_impl = program.impl();
-
-    // Process kernel runtime arguments
-    for (const auto& kernel_params : params.kernel_run_params) {
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
-
-        // Set per-node runtime args
-        // set_runtime_args handles both first-time allocation and subsequent updates
-        for (const auto& [node_coord, args] : kernel_params.runtime_args) {
-            kernel->set_runtime_args(node_coord, args);
-        }
-
-        // Set common runtime args
-        // TODO: Why on earth does SetCommonRuntimeArgs() only work the first time??
-        if (!kernel_params.common_runtime_args.empty()) {
-            if (kernel->common_runtime_args().empty()) {
-                // First time: use the normal setter which allocates storage
-                kernel->set_common_runtime_args(kernel_params.common_runtime_args);
-            } else {
-                // Subsequent calls: update in-place
-                // (set_common_runtime_args fatals if called twice, so use direct access)
-                RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                TT_FATAL(
-                    crta.size() == kernel_params.common_runtime_args.size(),
-                    "Kernel '{}' common runtime args count cannot change from {} to {}",
-                    kernel_params.kernel_spec_name,
-                    crta.size(),
-                    kernel_params.common_runtime_args.size());
-                std::memcpy(
-                    crta.data(),
-                    kernel_params.common_runtime_args.data(),
-                    kernel_params.common_runtime_args.size() * sizeof(uint32_t));
-            }
-        }
-    }
-
-    // Process DFB runtime parameters
-    // Currently, only validate that no unimplemented overrides are attempted
-    for (const auto& dfb_params : params.dfb_run_params) {
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented.",
-            dfb_params.dfb_spec_name);
-    }
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

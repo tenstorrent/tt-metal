@@ -6,6 +6,7 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
