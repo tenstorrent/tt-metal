@@ -34,9 +34,15 @@ static_assert(
     "Fix the value in dispatch_settings.hpp");
 
 DispatchSettings::DispatchSettings(
-    uint32_t num_hw_cqs, const CoreType& core_type, bool is_galaxy_cluster, uint32_t l1_alignment) {
+    uint32_t num_hw_cqs,
+    const CoreType& core_type,
+    bool is_galaxy_cluster,
+    bool are_cqs_dram_backed,
+    uint32_t l1_alignment) {
     switch (core_type) {
-        case CoreType::WORKER: init_worker_defaults(num_hw_cqs, is_galaxy_cluster, l1_alignment); break;
+        case CoreType::WORKER:
+            init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
+            break;
         case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;
         default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
     }
@@ -44,12 +50,15 @@ DispatchSettings::DispatchSettings(
     this->num_hw_cqs_ = num_hw_cqs;
 }
 
-void DispatchSettings::init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_cluster, uint32_t l1_alignment) {
+void DispatchSettings::init_worker_defaults(
+    uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment) {
     uint32_t prefetch_q_entries;
-    if (is_galaxy_cluster) {
+    if (are_cqs_dram_backed) {
+        prefetch_q_entries = 256;
+    } else if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
-        prefetch_q_entries = 256;
+        prefetch_q_entries = 1534;
     }
 
     this->num_hw_cqs(num_hw_cqs)

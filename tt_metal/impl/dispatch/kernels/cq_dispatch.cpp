@@ -261,7 +261,7 @@ void notify_host_of_completion_queue_write_pointer() {
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
 #if defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
     DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
            << " completion_queue_write_ptr_addr=" << completion_queue_write_ptr_addr << ENDL();
@@ -301,7 +301,7 @@ void process_write_host_h() {
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
     DPRINT << "cq_dispatch: cq_noc_async_write_init_state: pcie_noc_xy=" << pcie_noc_xy << ENDL();
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
@@ -328,7 +328,7 @@ void process_write_host_h() {
                 uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
 #if defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-                uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
+                uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
                 DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
                        << " completion_queue_write_addr=" << completion_queue_write_addr
@@ -348,7 +348,7 @@ void process_write_host_h() {
             }
 #if defined(FABRIC_RELAY)
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-            uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
+            uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
             DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
                    << " completion_queue_write_addr=" << completion_queue_write_addr << " xfer_size=" << xfer_size

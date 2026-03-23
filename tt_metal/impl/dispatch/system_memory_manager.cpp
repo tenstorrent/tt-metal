@@ -118,13 +118,13 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->prefetch_q_writers.reserve(num_hw_cqs);
     this->completion_q_writers.reserve(num_hw_cqs);
 
-    uint32_t alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     if (is_mock_device()) {
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
         this->channel_offset = 0;
         this->cq_to_event.resize(num_hw_cqs, 0);
         this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
+        const uint32_t alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
         }
@@ -216,10 +216,10 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->completion_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(tt_cxy_pair(
             completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
-        const uint32_t alignment = ctx.hal().get_alignment(HalMemType::HOST);
+        const uint32_t alignment =
+            is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
         const uint32_t base = is_dram_backed() ? this->get_dram_region_base_addr() : 0;
-        this->cq_interfaces.push_back(
-            SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment, base));
+        this->cq_interfaces.emplace_back(channel, cq_id, this->cq_size, cq_start, alignment, base);
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
@@ -466,12 +466,13 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-    if (issue_q_write_ptr + align(
-                                cmd_size_B,
-                                tt::tt_metal::MetalContext::instance(this->context_id)
-                                    .hal()
-                                    .get_alignment(tt::tt_metal::HalMemType::HOST)) >  // use dram alignment if needed
-        command_issue_limit) {
+    const uint32_t alignment =
+        is_dram_backed()
+            ? tt::tt_metal::MetalContext::instance(this->context_id).hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
+            : tt::tt_metal::MetalContext::instance(this->context_id)
+                  .hal()
+                  .get_alignment(tt::tt_metal::HalMemType::HOST);
+    if (issue_q_write_ptr + align(cmd_size_B, alignment) > command_issue_limit) {
         this->wrap_issue_queue_wr_ptr(cq_id);
         issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
     }
@@ -535,8 +536,13 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    // All data needs to be PCIE_ALIGNMENT aligned
-    uint32_t push_size_16B = align(push_size_B, ctx.hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
+    const uint32_t alignment =
+        is_dram_backed()
+            ? tt::tt_metal::MetalContext::instance(this->context_id).hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
+            : tt::tt_metal::MetalContext::instance(this->context_id)
+                  .hal()
+                  .get_alignment(tt::tt_metal::HalMemType::HOST);
+    const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);

@@ -11,7 +11,7 @@
 namespace tt::tt_metal {
 
 SystemMemoryCQInterface::SystemMemoryCQInterface(
-    uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start, uint32_t host_alignment, uint32_t base) :
+    uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start, uint32_t alignment, uint32_t base) :
     cq_start(cq_start),
     command_completion_region_size(
         (((cq_size - cq_start) / DispatchSettings::TRANSFER_PAGE_SIZE) / 4) * DispatchSettings::TRANSFER_PAGE_SIZE),
@@ -24,10 +24,9 @@ SystemMemoryCQInterface::SystemMemoryCQInterface(
     completion_fifo_size(command_completion_region_size >> 4),
     completion_fifo_limit(issue_fifo_limit + completion_fifo_size) {
     TT_ASSERT(
-        this->command_completion_region_size % host_alignment == 0 and
-            this->command_issue_region_size % host_alignment == 0,
+        this->command_completion_region_size % alignment == 0 and this->command_issue_region_size % alignment == 0,
         "Issue queue and completion queue need to be {}B aligned!",
-        host_alignment);
+        alignment);
     TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
     // Currently read / write pointers on host and device assumes contiguous ranges for each channel
     // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command

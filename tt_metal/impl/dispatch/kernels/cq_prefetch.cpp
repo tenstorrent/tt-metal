@@ -381,7 +381,7 @@ FORCE_INLINE uint32_t read_from_pcie(
         pcie_read_ptr = pcie_base;
     }
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
     DPRINT << "cq_prefetch: pcie_noc_xy=" << pcie_noc_xy << ENDL();
     DPRINT << "cq_prefetch: pcie_read_ptr=" << pcie_read_ptr << ENDL();
 #endif
