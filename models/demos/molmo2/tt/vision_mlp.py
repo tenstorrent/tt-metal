@@ -133,8 +133,8 @@ class VisionMLP(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences to fit matmul on device
-        if seq_len > 1024:
+        # Reshape for long sequences to fit matmul on device (only when divisible)
+        if seq_len > 1024 and seq_len % 1024 == 0:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
         # w1 with QuickGELU activation (gelu_pytorch_tanh in HF)
@@ -159,7 +159,7 @@ class VisionMLP(LightweightModule):
         ttnn.deallocate(hidden)
 
         # Reshape back if needed
-        if seq_len > 1024:
+        if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output
