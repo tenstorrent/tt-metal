@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import SOCKET_L1_BASE_ADDRESS, PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3DenseLayerWeights, DeepSeekV3MoELayerWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
@@ -83,7 +83,7 @@ class DecoderBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1  # 2
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -139,6 +139,7 @@ class DecoderBlockStage(StageKind):
             downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -280,7 +281,7 @@ class DenseBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1  # 2
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -330,6 +331,7 @@ class DenseBlockStage(StageKind):
             downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -517,7 +519,7 @@ def test_persistent_decoder_15_stages(
     pipeline_core = DecoderBlockStage.PIPELINE_CORE
     token_size_bytes = DecoderBlockStage.TOKEN_SIZE_BYTES
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 1
+    embedding_fifo_size = embedding_size_bytes * 1  # 2
 
     layer_idx = 4
     num_routed_experts = 8
@@ -534,7 +536,14 @@ def test_persistent_decoder_15_stages(
         num_routed_experts=num_routed_experts,
     )
 
-    ctx = StageContext(mesh_device=mesh_device, pipeline_config=pipeline_config, my_mesh_id=my_mesh_id)
+    socket_base = SOCKET_L1_BASE_ADDRESS
+
+    ctx = StageContext(
+        mesh_device=mesh_device,
+        pipeline_config=pipeline_config,
+        my_mesh_id=my_mesh_id,
+        socket_l1_base_address=SOCKET_L1_BASE_ADDRESS,
+    )
     decoder_stage = None
 
     pipeline_block = None
@@ -556,10 +565,11 @@ def test_persistent_decoder_15_stages(
                 downstream_d2d_socket_fifo_size=embedding_fifo_size,
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
-                h2d_socket_fifo_size=token_size_bytes * 1,
+                h2d_socket_fifo_size=token_size_bytes * 1,  # 2
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
+                socket_l1_base_address=socket_base,
             )
         else:
             decoder_stage = DecoderBlockStage(
@@ -695,7 +705,7 @@ def test_persistent_moe_multi_token(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 1  # 2
 
     torch.manual_seed(42)
     print("Create torch embedding")
@@ -717,6 +727,8 @@ def test_persistent_moe_multi_token(
         logger.info(f"[rank={my_mesh_id}] stage entry device: {stage_entry_device}")
         logger.info(f"[rank={my_mesh_id}] reduce aggregator core: {aggregator_core}")
 
+    socket_base = SOCKET_L1_BASE_ADDRESS
+
     # ── Pipeline block setup (collective) ──
     pipeline_block = None
     try:
@@ -737,10 +749,11 @@ def test_persistent_moe_multi_token(
                 downstream_d2d_socket_fifo_size=embedding_fifo_size,
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
-                h2d_socket_fifo_size=token_size_bytes * 2,
+                h2d_socket_fifo_size=token_size_bytes * 1,  # 2
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
+                socket_l1_base_address=socket_base,
             )
         else:
             pipeline_block = PipelineBlock(
@@ -752,6 +765,7 @@ def test_persistent_moe_multi_token(
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+                socket_l1_base_address=socket_base,
             )
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")

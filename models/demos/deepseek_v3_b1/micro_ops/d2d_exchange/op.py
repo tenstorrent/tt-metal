@@ -54,9 +54,9 @@ class SocketInterface:
         receiver_mesh=None,
         sender_packet_header_cb_index=None,
         receiver_packet_header_cb_index=None,
-        sender_config_buffer_address=None,
-        receiver_config_buffer_address=None,
-        data_buffer_address=None,
+        upstream_socket_addresses=None,
+        downstream_socket_addresses=None,
+        internal_socket_addresses=None,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -77,6 +77,15 @@ class SocketInterface:
         self.upstream_socket = None
         self.downstream_socket = None
 
+        mesh_id = sender_mesh.get_mesh_id() if sender_mesh.get_mesh_device() else receiver_mesh.get_mesh_id()
+        print(
+            f"[SocketInterface] mesh_id={mesh_id}, send_core={send_core_coord}, recv_core={recv_core_coord}, "
+            f"local={self.local_socket}, fifo_size={socket_fifo_size}, page_size={page_size}"
+        )
+        print(f"[SocketInterface]   upstream_socket_addresses={upstream_socket_addresses}")
+        print(f"[SocketInterface]   downstream_socket_addresses={downstream_socket_addresses}")
+        print(f"[SocketInterface]   internal_socket_addresses={internal_socket_addresses}")
+
         if sender_mesh.get_mesh_device():
             # Initialize the upstream socket on the sender mesh, or reuse an existing socket if provided
             if upstream_socket is not None:
@@ -84,21 +93,28 @@ class SocketInterface:
                 assert upstream_socket.get_mesh_device().get_system_mesh_id() == sender_mesh.get_mesh_id()
                 self.upstream_socket = upstream_socket
                 assert upstream_core_coord is None
+                print(f"[SocketInterface]   upstream: REUSING existing socket")
             else:
                 # Upstream socket not provided, create a new socket, on the sender mesh
                 socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
-                # In this case, the sender is the upstream, the receiver is the pipeline core
+                us_addrs = upstream_socket_addresses or {}
+                print(
+                    f"[SocketInterface]   upstream: CREATING new pair, "
+                    f"data={us_addrs.get('data')}, sender_cfg={us_addrs.get('sender_config')}, "
+                    f"receiver_cfg={us_addrs.get('receiver_config')}"
+                )
                 socket_memory_config = ttnn.SocketMemoryConfig(
                     ttnn.BufferType.L1,
                     socket_fifo_size,
-                    data_buffer_address=data_buffer_address,
-                    sender_config_buffer_address=sender_config_buffer_address,
-                    receiver_config_buffer_address=receiver_config_buffer_address,
+                    data_buffer_address=us_addrs.get("data"),
+                    sender_config_buffer_address=us_addrs.get("sender_config"),
+                    receiver_config_buffer_address=us_addrs.get("receiver_config"),
                 )
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.upstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize upstream as receiver socket
                 self.upstream_socket = self.upstream_socket_pair[1]
+                print(f"[SocketInterface]   upstream: created OK")
 
         if receiver_mesh.get_mesh_device():
             if downstream_socket is not None:
@@ -106,20 +122,27 @@ class SocketInterface:
                 assert downstream_socket.get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
                 self.downstream_socket = downstream_socket
                 assert downstream_core_coord is None
+                print(f"[SocketInterface]   downstream: REUSING existing socket")
             else:
                 socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
-                # In this case, the sender is the pipeline core, the receiver is the downstream
+                ds_addrs = downstream_socket_addresses or {}
+                print(
+                    f"[SocketInterface]   downstream: CREATING new pair, "
+                    f"data={ds_addrs.get('data')}, sender_cfg={ds_addrs.get('sender_config')}, "
+                    f"receiver_cfg={ds_addrs.get('receiver_config')}"
+                )
                 socket_memory_config = ttnn.SocketMemoryConfig(
                     ttnn.BufferType.L1,
                     socket_fifo_size,
-                    data_buffer_address=data_buffer_address,
-                    sender_config_buffer_address=sender_config_buffer_address,
-                    receiver_config_buffer_address=receiver_config_buffer_address,
+                    data_buffer_address=ds_addrs.get("data"),
+                    sender_config_buffer_address=ds_addrs.get("sender_config"),
+                    receiver_config_buffer_address=ds_addrs.get("receiver_config"),
                 )
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
+                print(f"[SocketInterface]   downstream: created OK")
 
         self.page_size = page_size
         self.send_core_coord = send_core_coord
@@ -127,13 +150,18 @@ class SocketInterface:
 
         # Create a socket between the sender and receiver cores
         socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
-        # In this case the sender is the pipeline core at stage n - 1 and the receiver is the pipeline core at stage n
+        int_addrs = internal_socket_addresses or {}
+        print(
+            f"[SocketInterface]   internal: CREATING pair, "
+            f"data={int_addrs.get('data')}, sender_cfg={int_addrs.get('sender_config')}, "
+            f"receiver_cfg={int_addrs.get('receiver_config')}"
+        )
         socket_memory_config = ttnn.SocketMemoryConfig(
             ttnn.BufferType.L1,
             socket_fifo_size,
-            data_buffer_address=data_buffer_address,
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=int_addrs.get("data"),
+            sender_config_buffer_address=int_addrs.get("sender_config"),
+            receiver_config_buffer_address=int_addrs.get("receiver_config"),
         )
 
         if self.local_socket:

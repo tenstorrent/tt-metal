@@ -40,6 +40,49 @@ from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, S
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
+L1_ALIGNMENT = 16
+SOCKET_CONFIG_BUFFER_SIZE = 256
+SOCKET_L1_BASE_ADDRESS = 1024 * 1024  # 1MB — safe fixed address for manual socket allocation
+
+
+class SocketL1Allocator:
+    """Bump allocator that hands out non-overlapping L1 address ranges for socket buffers."""
+
+    def __init__(self, base_address: int):
+        self._base = base_address
+        self._current = base_address
+
+    @staticmethod
+    def _align(addr: int) -> int:
+        return (addr + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1)
+
+    def allocate(self, fifo_size: int, label: str = "") -> dict:
+        """Return a dict of {data, sender_config, receiver_config} addresses for one socket pair."""
+        data_addr = self._align(self._current)
+        self._current = data_addr + fifo_size
+
+        sender_cfg_addr = self._align(self._current)
+        self._current = sender_cfg_addr + SOCKET_CONFIG_BUFFER_SIZE
+
+        receiver_cfg_addr = self._align(self._current)
+        self._current = receiver_cfg_addr + SOCKET_CONFIG_BUFFER_SIZE
+
+        result = {
+            "data": data_addr,
+            "sender_config": sender_cfg_addr,
+            "receiver_config": receiver_cfg_addr,
+        }
+        print(
+            f"[SocketL1Allocator] alloc '{label}': fifo_size={fifo_size}, "
+            f"data=0x{data_addr:x}, sender_cfg=0x{sender_cfg_addr:x}, receiver_cfg=0x{receiver_cfg_addr:x}, "
+            f"total_allocated={self.bytes_allocated}"
+        )
+        return result
+
+    @property
+    def bytes_allocated(self) -> int:
+        return self._current - self._base
+
 
 class PipelineBlock:
     def __init__(
@@ -57,9 +100,7 @@ class PipelineBlock:
         exit_node_upstream=None,
         embedding_tensor=None,
         initialize_loopback=True,
-        sender_config_buffer_address=None,
-        receiver_config_buffer_address=None,
-        data_buffer_address=None,
+        socket_l1_base_address=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -91,6 +132,15 @@ class PipelineBlock:
 
         token_size_bytes = 64
 
+        print(
+            f"[PipelineBlock] mesh_id={self.my_mesh_id}, num_procs={self.num_procs}, "
+            f"is_start={self.is_pipeline_start}, is_last={self.is_last_stage}, "
+            f"has_exit={self.has_exit}, has_d2h={self.has_d2h}, "
+            f"loopback={initialize_loopback}, "
+            f"socket_l1_base_address={'0x{:x}'.format(socket_l1_base_address) if socket_l1_base_address is not None else 'None'}, "
+            f"up_fifo={upstream_d2d_socket_fifo_size}, down_fifo={downstream_d2d_socket_fifo_size}"
+        )
+
         if self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,
@@ -105,8 +155,7 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 embedding_tensor,
-                config_buffer_address=receiver_config_buffer_address,
-                data_buffer_address=data_buffer_address,
+                socket_l1_base_address,
             )
         elif self.is_last_stage and not initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -120,9 +169,7 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 exit_node_upstream,
-                sender_config_buffer_address,
-                receiver_config_buffer_address,
-                data_buffer_address,
+                socket_l1_base_address,
             )
         else:
             self._init_forwarding_stage(
@@ -135,9 +182,7 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 entry_node_downstream,
                 exit_node_upstream,
-                sender_config_buffer_address,
-                receiver_config_buffer_address,
-                data_buffer_address,
+                socket_l1_base_address,
             )
 
     def _init_first_stage(
@@ -154,6 +199,7 @@ class PipelineBlock:
         d2h_socket_fifo_size,
         d2h_socket_page_size,
         embedding_tensor,
+        socket_l1_base_address,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
@@ -170,6 +216,24 @@ class PipelineBlock:
         assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
+        allocator = SocketL1Allocator(socket_l1_base_address) if socket_l1_base_address is not None else None
+
+        # Host IO sockets: downstream (h2d→pipeline) and upstream (pipeline→d2h)
+        host_downstream_addrs = (
+            allocator.allocate(downstream_d2d_socket_page_size, "first_stage:host_downstream") if allocator else None
+        )
+        host_upstream_addrs = (
+            allocator.allocate(downstream_d2d_socket_page_size, "first_stage:host_upstream") if allocator else None
+        )
+        # Exit socket: internal (pipeline→next stage)
+        exit_internal_addrs = (
+            allocator.allocate(downstream_d2d_socket_fifo_size, "first_stage:exit_internal") if allocator else None
+        )
+        # Entry socket (loopback): internal (last stage→pipeline)
+        entry_internal_addrs = (
+            allocator.allocate(upstream_d2d_socket_fifo_size, "first_stage:entry_internal") if allocator else None
+        )
+
         self.h2d_socket = ttnn.H2DSocket(
             mesh_device,
             ttnn.MeshCoreCoord(h2d_device_coord, pipeline_core_coord),
@@ -178,12 +242,13 @@ class PipelineBlock:
             ttnn.H2DMode.HOST_PUSH,
         )
 
+        d2h_sender_cfg = allocator.allocate(0, "first_stage:d2h_sender_cfg") if allocator else None
         if self.initialize_loopback:
             self.d2h_socket = ttnn.D2HSocket(
                 mesh_device,
                 ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord),
                 d2h_socket_fifo_size,
-                config_buffer_address=sender_config_buffer_address,
+                config_buffer_address=d2h_sender_cfg["sender_config"] if d2h_sender_cfg else None,
             )
 
         self.host_io = HostInterface(
@@ -197,9 +262,8 @@ class PipelineBlock:
             ),
             d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
             embedding_tensor=embedding_tensor,
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
-            data_buffer_address=data_buffer_address,
+            downstream_socket_addresses=host_downstream_addrs,
+            upstream_socket_addresses=host_upstream_addrs,
         )
 
         self.exit_socket_interface = SocketInterface(
@@ -211,9 +275,7 @@ class PipelineBlock:
             upstream_socket=self.host_io.get_downstream_socket(),
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
-            data_buffer_address=data_buffer_address,
+            internal_socket_addresses=exit_internal_addrs,
         )
 
         if self.initialize_loopback:
@@ -226,9 +288,7 @@ class PipelineBlock:
                 downstream_socket=self.host_io.get_upstream_socket(),
                 sender_mesh=MeshWrapper(mesh_id=self.num_procs - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
-                sender_config_buffer_address=sender_config_buffer_address,
-                receiver_config_buffer_address=receiver_config_buffer_address,
-                data_buffer_address=data_buffer_address,
+                internal_socket_addresses=entry_internal_addrs,
             )
 
     def _init_last_stage_with_d2h(
@@ -243,12 +303,19 @@ class PipelineBlock:
         d2h_socket_fifo_size,
         d2h_socket_page_size,
         exit_node_upstream,
-        sender_config_buffer_address,
-        receiver_config_buffer_address,
-        data_buffer_address,
+        socket_l1_base_address,
     ):
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
         assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
+
+        allocator = SocketL1Allocator(socket_l1_base_address) if socket_l1_base_address is not None else None
+
+        host_upstream_addrs = (
+            allocator.allocate(downstream_d2d_socket_page_size, "last_stage:host_upstream") if allocator else None
+        )
+        entry_internal_addrs = (
+            allocator.allocate(upstream_d2d_socket_fifo_size, "last_stage:entry_internal") if allocator else None
+        )
 
         d2h_device_coord = pipeline_config[self.num_procs - 1].exit_node_coord
         d2h_upstream_core = (
@@ -271,6 +338,7 @@ class PipelineBlock:
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
             d2h_upstream_core=d2h_upstream_core,
+            upstream_socket_addresses=host_upstream_addrs,
         )
 
         self.entry_socket_interface = SocketInterface(
@@ -282,9 +350,7 @@ class PipelineBlock:
             downstream_socket=self.host_io.get_upstream_socket(),
             sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
             receiver_mesh=MeshWrapper(mesh_device),
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
-            data_buffer_address=data_buffer_address,
+            internal_socket_addresses=entry_internal_addrs,
         )
 
     def _init_forwarding_stage(
@@ -298,10 +364,21 @@ class PipelineBlock:
         downstream_d2d_socket_page_size,
         entry_node_downstream,
         exit_node_upstream,
-        sender_config_buffer_address,
-        receiver_config_buffer_address,
-        data_buffer_address,
+        socket_l1_base_address,
     ):
+        allocator = SocketL1Allocator(socket_l1_base_address) if socket_l1_base_address is not None else None
+
+        # Only manually allocate internal sockets (pipeline-core-to-pipeline-core).
+        # entry_downstream and exit_upstream touch non-pipeline cores (MoE sender,
+        # aggregator) whose L1 is also used by MoE/reduce CBs.  Manual addresses
+        # there would bypass the allocator and collide with those CBs.
+        entry_internal_addrs = (
+            allocator.allocate(upstream_d2d_socket_fifo_size, "fwd_stage:entry_internal") if allocator else None
+        )
+        exit_internal_addrs = (
+            allocator.allocate(downstream_d2d_socket_fifo_size, "fwd_stage:exit_internal") if allocator else None
+        )
+
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
             upstream_d2d_socket_fifo_size,
@@ -313,9 +390,7 @@ class PipelineBlock:
             else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
             sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
             receiver_mesh=MeshWrapper(mesh_device),
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
-            data_buffer_address=data_buffer_address,
+            internal_socket_addresses=entry_internal_addrs,
         )
 
         next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
@@ -329,23 +404,32 @@ class PipelineBlock:
             upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
-            sender_config_buffer_address=sender_config_buffer_address,
-            receiver_config_buffer_address=receiver_config_buffer_address,
-            data_buffer_address=data_buffer_address,
+            internal_socket_addresses=exit_internal_addrs,
         )
 
     def run(self):
+        print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}, is_start={self.is_pipeline_start}")
         if self.is_pipeline_start:
+            print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching host_io.run()")
             self.host_io.run()
+            print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching exit_socket_interface.run()")
             self.exit_socket_interface.run()
             if self.initialize_loopback:
+                print(
+                    f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching entry_socket_interface.run() (loopback)"
+                )
                 self.entry_socket_interface.run()
+            print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: first stage launch complete")
         else:
+            print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching entry_socket_interface.run()")
             self.entry_socket_interface.run()
             if self.has_exit:
+                print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching exit_socket_interface.run()")
                 self.exit_socket_interface.run()
             if self.host_io is not None:
+                print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: launching host_io.run()")
                 self.host_io.run()
+            print(f"[PipelineBlock.run] mesh_id={self.my_mesh_id}: forwarding stage launch complete")
 
     def terminate(self):
         # Multi-Process barrier here that all outstanding requests issued to pipeline block
@@ -368,16 +452,44 @@ class PipelineBlock:
 
     def write_token(self, token_tensor):
         assert self.is_first_pipeline_stage(), "Token can only be written to the first pipeline stage"
+        print(f"[PipelineBlock] write_token: h2d_socket config_addr=0x{self.h2d_socket.get_config_buffer_address():x}")
         self.h2d_socket.write_tensor(token_tensor)
+        print(f"[PipelineBlock] write_token: done")
 
     def read_output(self, output_tensor):
         assert (
             self.d2h_socket is not None
         ), "read_output requires a D2H socket: valid on stage 0 with loopback, or last stage without loopback"
+        print(f"[PipelineBlock] read_output: d2h_socket config_addr=0x{self.d2h_socket.get_config_buffer_address():x}")
         self.d2h_socket.read_tensor(output_tensor)
+        print(f"[PipelineBlock] read_output: done")
 
     def get_upstream_socket(self):
         return self.exit_socket_interface.get_upstream_socket()
 
     def get_downstream_socket(self):
         return self.entry_socket_interface.get_downstream_socket()
+
+    @staticmethod
+    def compute_forwarding_socket_l1_size(upstream_fifo_size, downstream_fifo_size):
+        """Compute L1 bytes needed for manual socket allocation in a forwarding stage.
+
+        Only internal sockets (pipeline-core-to-pipeline-core) use manual
+        allocation.  entry_downstream and exit_upstream touch non-pipeline cores
+        and must auto-allocate to avoid colliding with MoE/reduce CBs.
+        """
+        alloc = SocketL1Allocator(0)
+        alloc.allocate(upstream_fifo_size)  # entry internal
+        alloc.allocate(downstream_fifo_size)  # exit internal
+        return alloc.bytes_allocated
+
+    @staticmethod
+    def compute_first_stage_socket_l1_size(downstream_fifo_size, upstream_fifo_size, page_size):
+        """Compute L1 bytes needed for manual socket allocation in the first (embedding) stage."""
+        alloc = SocketL1Allocator(0)
+        alloc.allocate(page_size)  # host downstream
+        alloc.allocate(page_size)  # host upstream
+        alloc.allocate(downstream_fifo_size)  # exit internal
+        alloc.allocate(upstream_fifo_size)  # entry internal (loopback)
+        alloc.allocate(0)  # d2h sender config
+        return alloc.bytes_allocated

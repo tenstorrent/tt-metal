@@ -50,9 +50,8 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
-        sender_config_buffer_address=None,
-        receiver_config_buffer_address=None,
-        data_buffer_address=None,
+        downstream_socket_addresses=None,
+        upstream_socket_addresses=None,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -125,23 +124,37 @@ class HostInterface:
         if loopback_mode:
             self.intermed_cb_index = 0
         else:
+            ds_addrs = downstream_socket_addresses or {}
+            us_addrs = upstream_socket_addresses or {}
+            print(
+                f"[HostInterface] loopback={loopback_mode}, "
+                f"h2d={'yes' if self.h2d_socket else 'no'}, d2h={'yes' if self.d2h_socket else 'no'}, "
+                f"core_to_core_buf_size={core_to_core_socket_buffer_size}"
+            )
+            print(f"[HostInterface]   downstream_addrs={downstream_socket_addresses}")
+            print(f"[HostInterface]   upstream_addrs={upstream_socket_addresses}")
+
             downstream_socket_memory_config = ttnn.SocketMemoryConfig(
                 ttnn.BufferType.L1,
                 core_to_core_socket_buffer_size,
-                data_buffer_address=data_buffer_address,
-                sender_config_buffer_address=sender_config_buffer_address,
-                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=ds_addrs.get("data"),
+                sender_config_buffer_address=ds_addrs.get("sender_config"),
+                receiver_config_buffer_address=ds_addrs.get("receiver_config"),
             )
 
             upstream_socket_memory_config = ttnn.SocketMemoryConfig(
                 ttnn.BufferType.L1,
                 core_to_core_socket_buffer_size,
-                data_buffer_address=data_buffer_address,
-                sender_config_buffer_address=sender_config_buffer_address,
-                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=us_addrs.get("data"),
+                sender_config_buffer_address=us_addrs.get("sender_config"),
+                receiver_config_buffer_address=us_addrs.get("receiver_config"),
             )
 
             if self.h2d_socket and self.h2d_downstream_core is not None:
+                print(
+                    f"[HostInterface]   creating downstream socket pair: "
+                    f"{self.h2d_mesh_core_coord} -> {self.h2d_downstream_core}"
+                )
                 downstream_socket_connection = ttnn.SocketConnection(
                     self.h2d_mesh_core_coord,
                     self.h2d_downstream_core,
@@ -153,8 +166,13 @@ class HostInterface:
                 self.downstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, downstream_socket_config
                 )
+                print(f"[HostInterface]   downstream socket pair created OK")
 
             if self.d2h_socket and self.d2h_upstream_core is not None:
+                print(
+                    f"[HostInterface]   creating upstream socket pair: "
+                    f"{self.d2h_upstream_core} -> {self.d2h_mesh_core_coord}"
+                )
                 upstream_socket_connection = ttnn.SocketConnection(
                     self.d2h_upstream_core,
                     self.d2h_mesh_core_coord,
@@ -166,6 +184,7 @@ class HostInterface:
                 self.upstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, upstream_socket_config
                 )
+                print(f"[HostInterface]   upstream socket pair created OK")
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:

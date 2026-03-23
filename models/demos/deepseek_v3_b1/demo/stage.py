@@ -31,7 +31,7 @@ TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 3  # 2
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 
@@ -42,6 +42,7 @@ class StageContext:
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
     my_mesh_id: int
+    socket_l1_base_address: int | None = None
 
 
 class StageKind(ABC):
@@ -77,6 +78,7 @@ class EmbeddingStage(StageKind):
             d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
 
@@ -106,6 +108,7 @@ class PassthroughStage(StageKind):
             downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
 
@@ -124,6 +127,7 @@ class MoEDecoderStage(StageKind):
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -148,6 +152,7 @@ class DenseDecoderStage(StageKind):
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -204,6 +209,7 @@ class LMHeadStage(StageKind):
             downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            socket_l1_base_address=ctx.socket_l1_base_address,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
