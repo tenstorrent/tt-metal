@@ -4,6 +4,7 @@
 
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
 
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
@@ -246,7 +247,7 @@ void append_fabric_vc2_connection_rt_args(
     log_trace(tt::LogFabric, "\tVC2 connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
     log_trace(
         tt::LogFabric, "\tVC2 connection. buffer_index_semaphore_id: {}", edm_connection.buffer_index_semaphore_id);
-    log_trace(tt::LogFabric, "\tVC2 connection. edm_direction: {}", edm_connection.edm_direction);
+    log_trace(tt::LogFabric, "\tVC2 connection. edm_direction: {}", static_cast<int>(edm_connection.edm_direction));
     append_worker_to_fabric_edm_sender_rt_args(
         edm_connection,
         worker_flow_control_semaphore_id,
