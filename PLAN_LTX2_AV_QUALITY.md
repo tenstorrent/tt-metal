@@ -87,10 +87,13 @@ Run the full AV pipeline and compare against CPU reference at PSNR > 20 dB.
 
 ## Progress
 
-- [ ] Milestone 1: Isolate cross-attention vs video path
-- [ ] Milestone 2: Layer-by-layer trace
-- [ ] Milestone 3: Fix root cause
-- [ ] Milestone 4: End-to-end verification
+- [x] (2026-03-23) Milestone 1: Measured per-layer PCC — both video-only and AV have PCC 0.998. AV cross-attention doesn't degrade per-layer PCC. The issue is compounding across 48 layers × more ops per layer.
+- [x] (2026-03-23) Tested HiFi4 for attention matmuls — no improvement (0.998449 vs 0.998451). Error not from matmul fidelity.
+- [x] (2026-03-23) Fixed AV pipeline: added CFG, bf16 noise dtype, negative prompt encoding, CUDA patch.
+- [x] (2026-03-23) Generated CPU AV reference: step ranges match TT within 5%.
+- [ ] Milestone 2: Identify which specific TT op contributes most to 0.998 PCC gap
+- [ ] Milestone 3: Fix the dominant precision bottleneck
+- [ ] Milestone 4: End-to-end AV PSNR > 20 dB vs CPU AV ref
 
 ## Surprises & Discoveries
 
