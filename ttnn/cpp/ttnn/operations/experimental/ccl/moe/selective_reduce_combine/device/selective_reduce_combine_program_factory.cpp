@@ -571,8 +571,6 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-
-
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
@@ -585,7 +583,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
         reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
 
         writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-        writer_runtime_args.at(3) = (uint32_t)init_semaphore.address();
+        writer_runtime_args.at(3) = static_cast<uint32_t>(init_semaphore.address());
 
         writer_runtime_args.at(4) = (optional_cross_device_semaphore.has_value())
                                         ? optional_cross_device_semaphore->address()

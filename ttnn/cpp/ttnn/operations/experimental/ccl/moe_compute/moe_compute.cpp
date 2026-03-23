@@ -48,5 +48,5 @@ std::vector<ttnn::Tensor> moe_compute(
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
     return ttnn::prim::get_moe_combine_cores(mesh_device);
-};
+}
 }  // namespace ttnn::experimental

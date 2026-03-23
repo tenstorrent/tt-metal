@@ -129,7 +129,7 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device
 
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
     const MoEComputeParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
     const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
@@ -154,13 +154,13 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
 
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
-    for (const auto& coord : tensor_coords.coords()) {
+    for (const auto& coord : mesh_coordinates.coords()) {
         auto cached_program = MoEComputeMeshWorkloadFactory::create_at(
             args,
             coord,
             tensor_args,
             tensor_return_value,
-            tensor_coords,
+            mesh_coordinates,
             init_barrier_semaphore,
             final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
@@ -1153,15 +1153,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
     auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
     auto combine_data_cb_handle = selective_reduce_combine_artifacts.data_cb_handle;
-    auto combine_init_semaphore = selective_reduce_combine_artifacts.init_semaphore;
-    auto combine_cross_device_semaphore = selective_reduce_combine_artifacts.cross_device_semaphore;
-
-    //    if (combine_dm1_kernel_handle_opt.has_value() && combine_semaphore_id_opt.has_value()) {
-    //        const std::vector<uint32_t> combine_runtime_args = {*combine_semaphore_id_opt};
-    //        for (const auto& core : combine_cores) {
-    //            tt::tt_metal::SetRuntimeArgs(program, *combine_dm1_kernel_handle_opt, core, combine_runtime_args);
-    //        }
-    //    }
 
     //-------------------------------------------------------------------------
     // Cached program
@@ -1191,7 +1182,6 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
-    // const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
     ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {

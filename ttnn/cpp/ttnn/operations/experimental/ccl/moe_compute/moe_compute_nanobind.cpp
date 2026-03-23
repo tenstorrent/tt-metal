@@ -46,7 +46,6 @@ void bind_get_moe_combine_cores(nb::module_& mod) {
     ttnn::bind_function<"get_moe_combine_cores", "ttnn.experimental.">(
         mod,
         doc,
-        // Overload 1: single split_size (int64_t)
         ttnn::overload_t(
             nb::overload_cast<ttnn::MeshDevice*>(&ttnn::experimental::get_moe_combine_cores), nb::arg("input_tensor")));
 }
