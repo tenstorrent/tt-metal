@@ -868,43 +868,38 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
 // ----------------------------------------------------------------------------
 // MakeQuasarComputeConfig: Create a QuasarComputeConfig from a KernelSpec
 // ----------------------------------------------------------------------------
-//
-// The unpack_to_dest_mode vector is indexed by DFB ID (which maps to CB index in the
-// underlying build system). The KernelSpec provides modes keyed by DFB name, so we need
-// the dfb_name_to_id map to translate names to indices.
-//
-// NOTE: This indexing scheme is a legacy artifact of the CB-based API.
-// It would be MUCH cleaner for ProgramImpl to accept a map<dfb_id, UnpackToDestMode> and
-// handle the vector construction internally. (TODO)
 
 experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
-
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    // Convert defines from vector<pair> to map
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
+    // Handle unpack_to_dest_mode:
+    //  - The user-facing KernelSpec provides the modes keyed by DFB name.
+    //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
+    //  - DFB IDs are always issued sequentially from zero, so this works.
 
-    // We need to convert UnpackToDestMode entries to a vector indexed by DFB ID. (Yuck.)
-    // Why? The underlying build system expects unpack_to_dest_mode[i] to correspond to buf_dataformat_arr[i],
-    // and DFB IDs are used as indices into buf_dataformat_arr (see set_dfb_data_fmt in dataflow_buffer.cpp).
-
-    // DFB indices are issued sequentially from zero, size the vector to the number of DFBs.
+    // Size the vector to the number of DFBs.
     std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
 
-    // Populate the vector, using DFB ID as the index
+    // Populate unpack_modes using DFB ID as the index
     for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
         unpack_modes[dfb_id] = mode;
     }
 
+    // Handle defines:
+    // Must convert from vector<pair> to map.)
+    // (TODO: Consider changing this in the KernelSpec API to avoid unnecessaryconversion?)
+    // (The design motivation was consistency with the existing ProgramDescriptor API.)
+    std::map<std::string, std::string> defines_map;
+    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
+        defines_map[key] = value;
+    }
+
     // Start with user-provided compile-time args, then add DFB accessor mappings
     // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
+    //    A follow-up PR that will introduce a more elegant kernel-side mechanism
     //    for creating DFBs from local accessor names.
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
