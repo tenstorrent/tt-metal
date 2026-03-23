@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 #include <vector>
+#include "impl/context/context_types.hpp"
 
 using ChipId = int;
 
@@ -21,7 +22,9 @@ namespace tt::tt_metal {
 
 class SystemMemoryManager {
 public:
-    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs);
+    // Create a SystemMemoryManager for accessing system memory accessible by the given device
+    // TODO: context_id will be removed in favor of directly passing around the MetalContext and MetalEnv reference.
+    SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs);
 
     uint32_t get_next_event(uint8_t cq_id);
 
@@ -65,6 +68,8 @@ public:
 
     ChipId get_device_id() const;
 
+    ContextId get_context_id() const;
+
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
     void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
@@ -95,6 +100,9 @@ public:
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
 private:
+    bool is_mock_device() const;
+
+    ContextId context_id;
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;

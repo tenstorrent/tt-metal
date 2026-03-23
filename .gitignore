@@ -151,4 +151,7 @@ Testing
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
 
+*.out
+*.err
+
 .claude
