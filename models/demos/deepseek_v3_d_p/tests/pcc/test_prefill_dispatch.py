@@ -15,12 +15,14 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
+    get_dispatch_input_mesh_mapper,
+    get_ep_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -261,7 +263,7 @@ def test_ttnn_dispatch(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -269,9 +271,9 @@ def test_ttnn_dispatch(
     )
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -285,7 +287,7 @@ def test_ttnn_dispatch(
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
@@ -297,16 +299,12 @@ def test_ttnn_dispatch(
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # x and indices: replicated across EP ranks
-    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
-    )
+    # x and indices: sharded across SP axis, replicated across EP ranks
+    mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
@@ -325,7 +323,7 @@ def test_ttnn_dispatch(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -388,12 +386,7 @@ def test_ttnn_dispatch(
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Convert TTNN outputs to torch for comparison
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
-        ),
-    )
+    mesh_composer = get_ep_mesh_composer(mesh_device)
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
 
@@ -443,4 +436,4 @@ def test_ttnn_dispatch(
     assert (
         buffer_result.passed and metadata_result.passed
     ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
-    logger.info("✅ TTNN dispatch operation matches torch reference!")
+    logger.debug("✅ TTNN dispatch operation matches torch reference!")

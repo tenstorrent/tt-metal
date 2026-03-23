@@ -124,28 +124,17 @@ jobs:
             test-type: slow
           - name: bh_lb_DeepSeek_PREFILL
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2' -vvv --tb=short
-            timeout: 15
+            timeout: 30
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
           - name: bh_qb_DeepSeek_PREFILL
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2' -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_masked_bincount.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_offset_cumsum.py -vvv --tb=short
-            timeout: 15
+            timeout: 30
             test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill

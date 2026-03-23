@@ -16,13 +16,16 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
-from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
+from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
+    get_ep_mesh_composer,
+    get_ep_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -209,14 +212,14 @@ def test_ttnn_combine(
     num_devices = mesh_device.get_num_devices()
 
     # Log fabric config
-    logger.info(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
+    logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -226,9 +229,9 @@ def test_ttnn_combine(
 
     # Compute configuration
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -242,7 +245,7 @@ def test_ttnn_combine(
             max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size,
@@ -254,7 +257,7 @@ def test_ttnn_combine(
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
@@ -267,7 +270,7 @@ def test_ttnn_combine(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -296,18 +299,8 @@ def test_ttnn_combine(
     # Run dispatch for each EP rank with rank-specific weights
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
-    # Transform logical chip IDs to linearized coords
-    # metadata[..., 0] contains the destination logical chip ID
-    for r in range(num_dispatch_groups):
-        # dest_linearized = dest_logical * num_dispatch_groups + replica_index
-        dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
-
     # Use different sharding: shard both dimensions
-    mesh_mapper = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
-    )
+    mesh_mapper = get_ep_mesh_mapper(mesh_device)
 
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
@@ -354,7 +347,7 @@ def test_ttnn_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG,
         init_zeros=True,
     )
 
@@ -365,12 +358,7 @@ def test_ttnn_combine(
     )
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: replicated; Axis 1: shard on tensor dim 0
-        ),
-    )
+    mesh_composer = get_ep_mesh_composer(mesh_device)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
@@ -411,4 +399,4 @@ def test_ttnn_combine(
 
     result.assert_passed("Combine data mismatch")
 
-    logger.info("✅ TTNN combine operation matches torch reference!")
+    logger.debug("✅ TTNN combine operation matches torch reference!")

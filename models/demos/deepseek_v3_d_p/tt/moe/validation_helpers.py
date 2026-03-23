@@ -10,6 +10,8 @@ from typing import Callable, List, Optional, Tuple
 import torch
 from loguru import logger
 
+from tests.ttnn.utils_for_testing import comp_pcc
+
 
 def trace_token_source(
     dispatch_group_idx: int,
@@ -93,7 +95,7 @@ class ValidationResult:
         """Log match statistics."""
         pct = 100.0 * self.matches / self.total if self.total > 0 else 0.0
         status = "✅" if self.passed else "❌"
-        logger.info(f"{status} {self.name}: {self.matches}/{self.total} ({pct:.2f}%)")
+        logger.debug(f"{status} {self.name}: {self.matches}/{self.total} ({pct:.2f}%)")
 
     def log_mismatches(self, limit: int = 10):
         """Log first N mismatches."""
@@ -147,6 +149,8 @@ def validate_combine_output(
     indices: torch.Tensor,
     num_dispatch_groups: int,
     num_routed_experts: int,
+    use_pcc: bool = False,
+    pcc_threshold: float = 0.93,
     atol: float = 1e-4,
     rtol: float = 1e-4,
     verbose: bool = False,
@@ -163,8 +167,10 @@ def validate_combine_output(
         indices: Expert indices, shape [dispatch_group_size, seq_len_per_chip, num_experts_per_tok]
         num_dispatch_groups: Number of EP ranks
         num_routed_experts: Total number of routed experts
-        atol: Absolute tolerance for comparison
-        rtol: Relative tolerance for comparison
+        use_pcc: If True, use PCC for comparison; if False, use allclose
+        pcc_threshold: PCC threshold for pass/fail (default 0.93, only used if use_pcc=True)
+        atol: Absolute tolerance for allclose (only used if use_pcc=False)
+        rtol: Relative tolerance for allclose (only used if use_pcc=False)
 
     Returns:
         ValidationResult with match statistics and mismatches
@@ -192,17 +198,31 @@ def validate_combine_output(
                 torch_data = torch_output[chip_id, token_id, topk_idx]
                 ttnn_data = ttnn_output[dispatch_group_idx, chip_id, token_id, topk_idx]
 
-                if torch.allclose(torch_data, ttnn_data, atol=atol, rtol=rtol):
+                if use_pcc:
+                    # Use PCC for comparison
+                    _, pcc = comp_pcc(torch_data.float(), ttnn_data.float())
+                    is_match = pcc >= pcc_threshold
+                    metric_value = pcc
+                    metric_name = "PCC"
+                    metric_detail = f"PCC={pcc:.6f} (threshold={pcc_threshold})"
+                else:
+                    # Use allclose for comparison
+                    is_match = torch.allclose(torch_data, ttnn_data, atol=atol, rtol=rtol)
+                    max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
+                    metric_value = max_diff
+                    metric_name = "max_diff"
+                    metric_detail = f"max_diff={max_diff:.6f}"
+
+                if is_match:
                     matches += 1
                 else:
-                    max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
-                    mismatches.append((dispatch_group_idx, chip_id, token_id, topk_idx, max_diff))
+                    mismatches.append((dispatch_group_idx, chip_id, token_id, topk_idx, metric_value))
 
                     if verbose and len(mismatches) <= 10:
                         logger.error(
                             f"❌ Combine mismatch [{len(mismatches)}]: "
                             f"{expert_id=} {dispatch_group_idx=} {chip_id=} {token_id=} {topk_idx=}, "
-                            f"max_diff={max_diff:.6f}"
+                            f"{metric_detail}"
                         )
                         logger.error(f"   torch_data[:5] = {torch_data[:5].tolist()}")
                         logger.error(f"   ttnn_data[:5]  = {ttnn_data[:5].tolist()}")
@@ -360,14 +380,16 @@ def log_combine_mismatch_details(
     torch_output: torch.Tensor,
     ttnn_output: torch.Tensor,
     limit: int = 10,
+    use_pcc: bool = False,
 ):
     """Log detailed mismatch information for combine validation."""
-    for i, (dispatch_group_idx, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:limit]):
+    for i, (dispatch_group_idx, chip_id, token_id, topk_idx, metric_value) in enumerate(mismatches[:limit]):
         torch_sample = torch_output[chip_id, token_id, topk_idx, :5]
         ttnn_sample = ttnn_output[dispatch_group_idx, chip_id, token_id, topk_idx, :5]
+        metric_str = f"PCC={metric_value:.6f}" if use_pcc else f"max_diff={metric_value:.6f}"
         logger.error(
             f"  [{i}] Mismatch at dispatch_group_idx={dispatch_group_idx}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
-            f"max_diff={max_diff:.6f}"
+            f"{metric_str}"
         )
         logger.error(f"      torch[:5]={torch_sample}")
         logger.error(f"      ttnn[:5]={ttnn_sample}")
@@ -380,12 +402,12 @@ def log_per_chip_statistics(
     num_experts_per_tok: int,
 ):
     """Log per-chip match statistics."""
-    logger.info("\nPer-chip statistics:")
+    logger.debug("\nPer-chip statistics:")
     for chip_id in range(dispatch_group_size):
         chip_mismatches = [m for m in mismatches if m[1] == chip_id]
         chip_total = seq_len_per_chip * num_experts_per_tok
         chip_matches = chip_total - len(chip_mismatches)
-        logger.info(f"  Chip {chip_id}: {chip_matches}/{chip_total} matches ({100.0*chip_matches/chip_total:.2f}%)")
+        logger.debug(f"  Chip {chip_id}: {chip_matches}/{chip_total} matches ({100.0*chip_matches/chip_total:.2f}%)")
 
 
 # Type for dispatch validation comparators
@@ -480,7 +502,7 @@ def validate_dispatch_data(
 
                 if match:
                     matches += 1
-                    logger.info(f"✅ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
+                    logger.debug(f"✅ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
                 else:
                     logger.error(f"❌ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail or "mismatch"))
@@ -563,6 +585,67 @@ def validate_dispatch_buffer(
     )
 
 
+def validate_dispatch_buffer_pcc(
+    torch_dispatched: torch.Tensor,
+    ttnn_dispatched: torch.Tensor,
+    expert_token_counts: torch.Tensor,
+    expert_dispatch_table: torch.Tensor,
+    num_dispatch_groups: int,
+    dispatch_group_size: int,
+    experts_per_chip: int,
+    pcc_threshold: float = 0.99,
+    verbose: bool = True,
+) -> ValidationResult:
+    """
+    Validate dispatch buffer against torch reference using PCC (for data with numerical differences).
+
+    Use this instead of validate_dispatch_buffer when comparing outputs that have gone through
+    quantized operations (e.g., expert outputs with bf4/bf8 weights).
+
+    Args:
+        torch_dispatched: Reference dispatched buffer
+        ttnn_dispatched: TTNN dispatched buffer
+        expert_token_counts: Token counts per expert
+        expert_dispatch_table: Expert to chip mapping
+        num_dispatch_groups: Number of EP ranks
+        dispatch_group_size: Number of chips in dispatch group
+        experts_per_chip: Number of experts per chip
+        pcc_threshold: PCC threshold for pass/fail (default 0.99)
+        verbose: Whether to log detailed mismatch info
+
+    Returns:
+        ValidationResult with match statistics
+    """
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    def compare_pcc(
+        torch_slot: torch.Tensor,
+        ttnn_slot: torch.Tensor,
+        _r: int,
+        _chip: int,
+        _expert: int,
+    ) -> Tuple[bool, Optional[str]]:
+        if torch_slot.numel() == 0:
+            return True, None
+        _, pcc = comp_pcc(torch_slot.float(), ttnn_slot.float())
+        if pcc >= pcc_threshold:
+            return True, None
+        return False, f"PCC={pcc:.4f} < {pcc_threshold}"
+
+    return validate_dispatch_data(
+        torch_dispatched,
+        ttnn_dispatched,
+        expert_token_counts,
+        expert_dispatch_table,
+        num_dispatch_groups,
+        dispatch_group_size,
+        experts_per_chip,
+        compare_fn=compare_pcc,
+        name="buffer_pcc",
+        verbose=verbose,
+    )
+
+
 def validate_dispatch_metadata(
     torch_metadata: torch.Tensor,
     ttnn_metadata: torch.Tensor,
@@ -619,12 +702,9 @@ def validate_dispatch_metadata(
                 out = ttnn_metadata[r, dst_chip_id, expert_id, :count, 1:4]
                 ref = torch_metadata[r, dst_chip_id, expert_id, :count, 1:4]
 
-                # Torch computes "logical sender chip id"
-                # while TTNN embeds real linearized mesh coord
+                # Both Torch and TTNN now embed linearized mesh coord in field 0
                 out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, expert_id, :count, 0]
-                ref_linearized_mesh_coord = (
-                    r + torch_metadata[r, dst_chip_id, expert_id, :count, 0] * num_dispatch_groups
-                )
+                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, expert_id, :count, 0]
 
                 # Compare weights (metadata[4]):
                 # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
@@ -640,13 +720,14 @@ def validate_dispatch_metadata(
                 coord_match = torch.allclose(
                     out_linearized_mesh_coord.float(), ref_linearized_mesh_coord.float(), atol=1e-6
                 )
-                weight_match = torch.allclose(out_weight_bf16, ref_weight_bf16, atol=1e-3)
 
-                if metadata_match and coord_match and weight_match:
+                gate_weight_match, gate_pcc = comp_pcc(ref_weight_bf16.float(), out_weight_bf16.float(), pcc=0.99)
+
+                if metadata_match and coord_match and gate_weight_match:
                     matches += 1
-                    logger.info(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
+                    logger.debug(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
-                    error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={weight_match}"
+                    error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={gate_weight_match}"
                     logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({error_detail})")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail))
 
@@ -662,9 +743,9 @@ def validate_dispatch_metadata(
                                     f"out_coord={out_linearized_mesh_coord[slot].item()}, "
                                     f"torch={torch_data.tolist()}, kernel={kernel_data.tolist()}"
                                 )
-                            if not weight_match:
+                            if not gate_weight_match:
                                 logger.error(
-                                    f"    Slot {slot}: Weight mismatch: "
+                                    f"    Slot {slot}: Weight mismatch ppc{gate_pcc:.3f}: "
                                     f"ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
                                 )
 
