@@ -709,14 +709,14 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_use_socket")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    // CCL Broadcast reader runtime args (socket fields are BRISC common RT args 2..4).
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_named_compile_time_arg_val("bcast_socket_config_addr"),  // socket_config_addr
-            get_named_compile_time_arg_val("bcast_socket_page_size"),    // socket_page_size
-            get_named_compile_time_arg_val("bcast_socket_num_pages"),    // socket_num_pages
+            get_common_arg_val<uint32_t>(2),  // socket_config_addr
+            get_common_arg_val<uint32_t>(3),  // socket_page_size
+            get_common_arg_val<uint32_t>(4),  // socket_num_pages
         };
     }
 
@@ -1201,20 +1201,6 @@ void kernel_main() {
             noc_semaphore_wait(ccl_sync_sem, VALID);
             noc_semaphore_set(ccl_sync_sem, INVALID);
 #endif
-        }
-
-        // ====================================================================
-        // Input core: RMSNorm + Mcast send
-        // ====================================================================
-        {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(mcast_args);
         }
 
         if (!skip_attention) {

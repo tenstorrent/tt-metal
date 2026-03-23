@@ -98,6 +98,7 @@ def test_attention_block(
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
+    num_links = 1
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -109,7 +110,7 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh)
+    attention_block_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
 
     # ========================================================================
     # Configuration
@@ -887,7 +888,7 @@ def test_attention_block(
             attention_block_semaphores,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links,
             epsilon,
             use_fp32,
             skip_ccl,

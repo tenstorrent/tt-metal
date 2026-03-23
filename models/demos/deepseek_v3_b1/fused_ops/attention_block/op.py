@@ -3467,7 +3467,10 @@ class AttentionBlock:
                     + brisc_named_compile_time_args_base
                     + kv_cache_sp_named_compile_time_args
                 )
-                brisc_common_runtime_args = [kv_cache_tensor_device.buffer_address(), position_ids_tensor_addr]
+                brisc_common_runtime_args = [
+                    kv_cache_tensor_device.buffer_address(),
+                    position_ids_tensor_addr,
+                ] + list(bcast_config.get_brisc_common_rt_args(mesh_coord))
 
                 trisc_named_compile_time_args = (
                     bcast_trisc_named_compile_time_args
