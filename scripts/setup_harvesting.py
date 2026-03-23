@@ -17,6 +17,18 @@ import subprocess
 import sys
 import os
 
+# Directory containing this script.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def tensix_update_script_path():
+    """Path to update_tensix_disable_count.py (clone may be in cwd or next to this script)."""
+    for base in (os.getcwd(), SCRIPT_DIR):
+        p = os.path.join(base, "tt-system-firmware", "scripts", "update_tensix_disable_count.py")
+        if os.path.isfile(p):
+            return p
+    return os.path.join(os.getcwd(), "tt-system-firmware", "scripts", "update_tensix_disable_count.py")
+
 
 def run_command(cmd, cwd=None, shell=True, check=True, capture_output=False):
     """Run a shell command and return the result."""
@@ -179,12 +191,14 @@ def setup_harvesting_tools(venv_path):
     run_command(f"{pip_path} install protobuf 'tt-flash>=3.6.0'")
     run_command(f"{pip_path} install click")
 
-    print("\nInstalling tt-update-tensix-disable-count tool...")
-    tool_dir = "tt-system-firmware/scripts/tooling/tt_update_tensix_disable_count"
-    run_command(f"{pip_path} install {tool_dir}")
+    # The pip package under tooling/ expects `build-package.sh` to symlink sources into the
+    # package before build; a plain `pip install` omits `update_tensix_disable_count.py` and
+    # breaks the console script. Install the same runtime deps and run the repo script instead.
+    print("\nInstalling dependencies for update_tensix_disable_count.py...")
+    run_command(f"{pip_path} install pykwalify pyyaml intelhex imgtool 'protobuf>=3.19.0'")
 
 
-def apply_harvesting(input_fwbundle, harvesting_cols):
+def apply_harvesting(venv_path, input_fwbundle, harvesting_cols):
     """Apply harvesting configuration to firmware."""
     print("\n" + "=" * 80)
     print("STEP 6: Applying harvesting configuration")
@@ -202,8 +216,18 @@ def apply_harvesting(input_fwbundle, harvesting_cols):
         print(f"\nERROR: Input firmware bundle not found at: {input_absolute}")
         sys.exit(1)
 
+    tensix_script = tensix_update_script_path()
+    if not os.path.isfile(tensix_script):
+        print(
+            f"\nERROR: Tensix update script not found at:\n  {tensix_script}\n"
+            "Ensure tt-system-firmware is cloned (run from the directory that contains it, "
+            "or place it next to setup_harvesting.py)."
+        )
+        sys.exit(1)
+
+    python = os.path.join(venv_path, "bin", "python3")
     cmd = (
-        f"tt-update-tensix-disable-count "
+        f"{python} {tensix_script} "
         f"--input {input_absolute} "
         f"--output {output_absolute} "
         f"--board P150A-1 --board P150B-1 --board P150C-1 "
@@ -322,7 +346,7 @@ def main():
             setup_harvesting_tools(venv_path)
 
             # Step 6: Apply harvesting
-            firmware_to_flash = apply_harvesting(fwbundle_path, harvesting_cols)
+            firmware_to_flash = apply_harvesting(venv_path, fwbundle_path, harvesting_cols)
 
         # Step 7: Flash firmware
         flash_firmware(venv_path, firmware_to_flash)
