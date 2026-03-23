@@ -17,6 +17,7 @@
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -699,8 +700,11 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
-        print_summary(device_id, samples);
+    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
+        for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
+            print_summary(device_id, samples);
+        }
     }
 }
 

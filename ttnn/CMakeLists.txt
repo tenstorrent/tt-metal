@@ -279,6 +279,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
@@ -689,6 +690,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
+        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
@@ -929,6 +931,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
