@@ -514,6 +514,66 @@ class Model:
         )
         return logits
 
+    def prepare_row_sharded_prefill_iter(
+        self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
+    ):
+        """Prepare one iteration of row-sharded batched prefill."""
+        num_rows = self.mesh_device.shape[0]
+        users_per_row = len(prompt_lens) // num_rows
+        user_indices = [
+            row * users_per_row + iter_idx
+            for row in range(num_rows)
+            if row * users_per_row + iter_idx < len(prompt_lens)
+        ]
+        while len(user_indices) < num_rows:
+            user_indices.append(user_indices[0])
+        tokens_list, pt_list, last_idxs = [], [], []
+        for uid in user_indices:
+            plen = int(prompt_lens[uid])
+            toks = torch.cat(
+                [tokens[uid : uid + 1, :plen], torch.zeros(1, max_padded_len - plen, dtype=torch.long)], dim=-1
+            )
+            tokens_list.append(toks)
+            pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
+            last_idxs.append(plen - 1)
+        return torch.cat(tokens_list, dim=0), torch.cat(pt_list, dim=0), last_idxs, user_indices
+
+    def run_row_sharded_prefill_forward(self, tokens_iter, pt_iter, kv_cache, fixed_glt, skip_lm_head=False):
+        """Run one non-traced row-sharded prefill iteration."""
+        host_out = self.prepare_inputs_prefill(tokens_iter, page_table=pt_iter, batched_prefill=True)
+        return self.ttnn_prefill_forward(
+            host_out[0],
+            rot_mats_global=host_out[1],
+            rot_mats_local=host_out[2],
+            user_id=0,
+            page_table=host_out[3],
+            get_last_token=fixed_glt,
+            kv_cache=kv_cache,
+            batch_size=1,
+            skip_lm_head=skip_lm_head,
+        )
+
+    def extract_prefill_logits_to_host(self, tt_logits, last_idxs, user_indices, fixed_glt, output_tensor):
+        """Extract per-row TP-gathered logits to host output_tensor."""
+        device_tensors = ttnn.get_device_tensors(tt_logits)
+        nc = self.mesh_device.shape[1]
+        for row_idx, uid in enumerate(user_indices):
+            if uid >= output_tensor.shape[0]:
+                continue
+            device_base = row_idx * nc
+            row_logits = [ttnn.to_torch(device_tensors[device_base + col]) for col in range(nc)]
+            torch_output = torch.cat(row_logits, dim=-1)
+            pos = last_idxs[row_idx] % 32 if fixed_glt != -1 else last_idxs[row_idx]
+            output_tensor[uid, 0] = torch_output[..., pos, : self.vocab_size].view(-1)
+
+    def clear_kv_caches(self):
+        """Clear all KV caches (guard against None for vLLM)."""
+        for layer_obj in self.layers:
+            lp = getattr(layer_obj.self_attn, "layer_past", None)
+            if lp is not None:
+                ttnn.mul(lp[0], 0, output_tensor=lp[0])
+                ttnn.mul(lp[1], 0, output_tensor=lp[1])
+
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
         Prepare inputs for decode mode - matches tt_transformers interface (4 values).
