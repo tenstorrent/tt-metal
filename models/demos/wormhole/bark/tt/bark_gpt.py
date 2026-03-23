@@ -256,9 +256,11 @@ class TtBarkAttention:
 
         if layer_past is not None:
             past_key, past_value = layer_past
-            # Update KV cache
-            new_key = ttnn.concat([past_key, key], dim=-2, memory_config=memory_config)
-            new_value = ttnn.concat([past_value, value], dim=-2, memory_config=memory_config)
+            # Update KV cache — always use DRAM to prevent L1 overflow
+            # during long autoregressive sequences (KV grows linearly)
+            kv_mem = ttnn.DRAM_MEMORY_CONFIG
+            new_key = ttnn.concat([past_key, key], dim=-2, memory_config=kv_mem)
+            new_value = ttnn.concat([past_value, value], dim=-2, memory_config=kv_mem)
             ttnn.deallocate(key)
             ttnn.deallocate(value)
             ttnn.deallocate(past_key)
@@ -298,20 +300,21 @@ class TtBarkAttention:
                 compute_kernel_config=self.compute_kernel_config,
             )
         else:
-            # Edge case fallback for small sequences (1 < seq < 32, no KV cache)
-            q_torch = ttnn.to_torch(query)
-            k_torch = ttnn.to_torch(key)
-            v_torch = ttnn.to_torch(value)
-            attn_output_torch = torch.nn.functional.scaled_dot_product_attention(
-                q_torch,
-                k_torch,
-                v_torch,
-                scale=None,
-                is_causal=self.is_causal and layer_past is None,
-            )
-            attn_output = ttnn.from_torch(
-                attn_output_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-            )
+            # Decode mode (seq < 32): matmul-based attention on-device.
+            # TTNN SDPA requires chunk_size >= 32, so we use explicit matmul.
+            # Q: [B, heads, q_seq, head_dim]
+            # K: [B, heads, kv_seq, head_dim] (may be large from KV cache)
+            # V: [B, heads, kv_seq, head_dim]
+            attn_scores = ttnn.matmul(query, ttnn.transpose(key, -2, -1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_scores = ttnn.multiply(attn_scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # Causal masking is not needed during decode with KV cache
+            # (q_seq=1, all KV positions are valid past positions)
+            attn_probs = ttnn.softmax(attn_scores, dim=-1)
+            ttnn.deallocate(attn_scores)
+
+            attn_output = ttnn.matmul(attn_probs, value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_probs)
         ttnn.deallocate(query)
         if not use_cache:
             ttnn.deallocate(key)
