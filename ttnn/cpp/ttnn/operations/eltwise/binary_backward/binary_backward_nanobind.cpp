@@ -789,7 +789,7 @@ void bind_binary_backward_assign(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()),
+            nb::arg("input_a_grad") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
@@ -800,13 +800,13 @@ void bind_binary_backward_assign(nb::module_& mod) {
                 std::optional<Tensor>,
                 std::optional<Tensor>>(&ttnn::assign_bw),
             nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg("other_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+            nb::arg("input_a_grad") = nb::none(),
+            nb::arg("input_b_grad") = nb::none()));
 }
 
 }  // namespace
