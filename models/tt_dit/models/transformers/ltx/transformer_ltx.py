@@ -131,10 +131,18 @@ class LTXTransformerBlock(Module):
 
         self.norm3 = DistributedRMSNorm(embedding_dim=dim, **rms_norm_kwargs)
 
-        # AdaLN scale_shift_table: 6 modulation params (shift, scale, gate for self-attn + FF)
+        # AdaLN scale_shift_table: 9 modulation params
+        # (shift, scale, gate for self-attn) + (shift, scale, gate for FF) + (shift, scale, gate for cross-attn)
         self.scale_shift_table = Parameter(
-            total_shape=[1, 1, 6, dim],
+            total_shape=[1, 1, 9, dim],
             mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
+            device=mesh_device,
+            dtype=ttnn.float32,
+        )
+        # Prompt context modulation (2 params: shift_kv, scale_kv)
+        self.prompt_scale_shift_table = Parameter(
+            total_shape=[1, 1, 2, dim],
+            mesh_axes=[None, None, None, None],
             device=mesh_device,
             dtype=ttnn.float32,
         )
@@ -152,8 +160,9 @@ class LTXTransformerBlock(Module):
         rename_substate(state, "ff.net.0.proj", "ffn.ff1")
         rename_substate(state, "ff.net.2", "ffn.ff2")
 
-        if "scale_shift_table" in state:
-            state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0).unsqueeze(0)
+        for key in ["scale_shift_table", "prompt_scale_shift_table"]:
+            if key in state:
+                state[key] = state[key].unsqueeze(0).unsqueeze(0)
 
     def forward(
         self,
@@ -164,23 +173,24 @@ class LTXTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
+        prompt_temb: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
-        Same interface as WanTransformerBlock.forward().
-
-        temb_1BTD: (1, B, 6, D) — 6 modulation params from AdaLayerNormSingle
+        temb_1BTD: (1, B, 9, D) — 9 modulation params from AdaLayerNormSingle
+        prompt_temb: (1, B, 2, D) — prompt context modulation (optional)
         """
-        assert temb_1BTD.shape[2] == 6, "LTX-2 expects 6 chunks in timestep embedding"
+        shifted_temb = self.scale_shift_table.data + temb_1BTD
+        (shift_sa, scale_sa, gate_sa, shift_ff, scale_ff, gate_ff, shift_ca, scale_ca, gate_ca) = ttnn.chunk(
+            shifted_temb, 9, dim=2
+        )
 
-        shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
-        shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted_temb_1BTD, 6, dim=2)
+        gate_sa = ttnn.typecast(gate_sa, dtype=ttnn.bfloat16)
+        gate_ff = ttnn.typecast(gate_ff, dtype=ttnn.bfloat16)
+        gate_ca = ttnn.typecast(gate_ca, dtype=ttnn.bfloat16)
 
-        gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
-        c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
-
-        # Self-attention with AdaLN: rms_norm(x) * (1 + scale) + shift
+        # Self-attention with AdaLN
         spatial_normed = self.norm1(spatial_1BND)
-        spatial_normed = spatial_normed * (1.0 + scale_msa) + shift_msa
+        spatial_normed = spatial_normed * (1.0 + scale_sa) + shift_sa
 
         spatial_1BND = self.attn1(
             spatial_1BND=spatial_normed,
@@ -189,17 +199,23 @@ class LTXTransformerBlock(Module):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             addcmul_residual=spatial_1BND,
-            addcmul_gate=gate_msa,
+            addcmul_gate=gate_sa,
         )
 
-        # Cross-attention: rms_norm(x) only (no AdaLN modulation for cross-attn in base LTX-2)
-        spatial_normed = self.norm2(spatial_1BND)
-        attn_output = self.attn2(spatial_1BND=spatial_normed, N=N, prompt_1BLP=prompt_1BLP)
-        spatial_1BND = spatial_1BND + attn_output
+        # Cross-attention with AdaLN (query modulation + context modulation)
+        ca_input = self.norm2(spatial_1BND) * (1.0 + scale_ca) + shift_ca
+        if prompt_temb is not None:
+            shifted_prompt = self.prompt_scale_shift_table.data + prompt_temb
+            kv_shift, kv_scale = ttnn.chunk(shifted_prompt, 2, dim=2)
+            prompt_mod = prompt_1BLP * (1.0 + kv_scale) + kv_shift
+        else:
+            prompt_mod = prompt_1BLP
+        ca_output = self.attn2(spatial_1BND=ca_input, N=N, prompt_1BLP=prompt_mod)
+        spatial_1BND = spatial_1BND + ca_output * gate_ca
 
-        # Feedforward with AdaLN: rms_norm(x) * (1 + scale) + shift
+        # Feedforward with AdaLN
         spatial_normed = self.norm3(spatial_1BND)
-        spatial_normed = spatial_normed * (1.0 + c_scale_msa) + c_shift_msa
+        spatial_normed = spatial_normed * (1.0 + scale_ff) + shift_ff
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
@@ -207,7 +223,7 @@ class LTXTransformerBlock(Module):
             )
 
         spatial_ff = self.ffn(spatial_normed, compute_kernel_config=self.ff_compute_kernel_config)
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff, c_gate_msa)
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff, gate_ff)
 
         return spatial_1BND
 
@@ -259,10 +275,16 @@ class LTXTransformerModel(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Timestep conditioning
+        # Timestep conditioning (9 params for self-attn + FF + cross-attn)
         self.adaln_single = LTXAdaLayerNormSingle(
             embedding_dim=self.inner_dim,
-            embedding_coefficient=6,
+            embedding_coefficient=9,
+            mesh_device=mesh_device,
+        )
+        # Prompt timestep (2 params for context modulation)
+        self.prompt_adaln_single = LTXAdaLayerNormSingle(
+            embedding_dim=self.inner_dim,
+            embedding_coefficient=2,
             mesh_device=mesh_device,
         )
 
@@ -319,12 +341,16 @@ class LTXTransformerModel(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "scale_shift_table" in state:
-            state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0).unsqueeze(0)
+            sst = state["scale_shift_table"]
+            # 22B checkpoint has 2 output modulation params but shape matches, just unsqueeze
+            state["scale_shift_table"] = sst.unsqueeze(0).unsqueeze(0)
 
-        # Remove caption_projection if present (handled separately)
+        # No truncation needed — adaln_single uses coefficient=9 matching 22B
+
+        # Remove 22B-specific keys not in video-only model
         pop_substate(state, "caption_projection")
-        # Remove prompt_adaln_single if present
-        pop_substate(state, "prompt_adaln_single")
+        pop_substate(state, "video_embeddings_connector")
+        pop_substate(state, "audio_embeddings_connector")
 
     def forward(
         self,
@@ -347,29 +373,30 @@ class LTXTransformerModel(Module):
         # Patch embedding
         spatial_1BND = self.patchify_proj(spatial_1BND)
 
-        # Timestep conditioning
+        # Timestep conditioning (9 params)
         modulation_params, _embedded_timestep = self.adaln_single(temb)
-        # modulation_params shape: (1, 1, B, 6*dim) from adaln_single
-        # Reshape to (1, B, 6, dim) for blocks to chunk into 6 modulation params
         B = modulation_params.shape[2]
-        modulation_1B6D = ttnn.reshape(modulation_params, (1, B, 6, self.inner_dim))
-
-        # TP-shard the modulation params to match scale_shift_table sharding
+        modulation_1B9D = ttnn.reshape(modulation_params, (1, B, 9, self.inner_dim))
         if self.parallel_config.tensor_parallel.factor > 1:
-            modulation_1B6D = ttnn.mesh_partition(
-                modulation_1B6D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+            modulation_1B9D = ttnn.mesh_partition(
+                modulation_1B9D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+
+        # Prompt timestep (2 params, NOT TP-sharded)
+        prompt_mod, _ = self.prompt_adaln_single(temb)
+        prompt_1B2D = ttnn.reshape(prompt_mod, (1, B, 2, self.inner_dim))
 
         # Transformer blocks
         for block in self.transformer_blocks:
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
-                temb_1BTD=modulation_1B6D,
+                temb_1BTD=modulation_1B9D,
                 N=N,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 trans_mat=trans_mat,
+                prompt_temb=prompt_1B2D,
             )
 
         # Output projection with AdaLN
@@ -439,11 +466,15 @@ class LTXTransformerModel(Module):
         modulation_params, _embedded_timestep = self.adaln_single(timestep)
 
         B = modulation_params.shape[2]
-        modulation_1B6D = ttnn.reshape(modulation_params, (1, B, 6, self.inner_dim))
+        modulation_1B9D = ttnn.reshape(modulation_params, (1, B, 9, self.inner_dim))
         if self.parallel_config.tensor_parallel.factor > 1:
-            modulation_1B6D = ttnn.mesh_partition(
-                modulation_1B6D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+            modulation_1B9D = ttnn.mesh_partition(
+                modulation_1B9D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+
+        # Prompt timestep uses SAME scaled timestep as main adaln
+        prompt_mod, _ = self.prompt_adaln_single(timestep)
+        prompt_1B2D = ttnn.reshape(prompt_mod, (1, B, 2, self.inner_dim))
 
         # Patch embedding
         spatial_1BND = self.patchify_proj(spatial_1BNI)
@@ -453,11 +484,12 @@ class LTXTransformerModel(Module):
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
-                temb_1BTD=modulation_1B6D,
+                temb_1BTD=modulation_1B9D,
                 N=N,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 trans_mat=trans_mat,
+                prompt_temb=prompt_1B2D,
             )
 
         # Output AdaLN + projection
