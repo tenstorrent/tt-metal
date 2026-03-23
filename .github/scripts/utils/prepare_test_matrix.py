@@ -63,6 +63,23 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
+def substitute_cmd_placeholders(entry):
+    """
+    Replace placeholders in entry["cmd"] with values from the same entry.
+
+    Placeholders use the form {key_name}; e.g. {tt_cache_path} is replaced with
+    entry["tt_cache_path"]. This allows per-SKU values (e.g. different TT_CACHE_PATH
+    paths) to be injected into the same base command.
+    """
+    cmd = entry.get("cmd")
+    if not cmd or not isinstance(cmd, str):
+        raise ValueError(f"cmd is not a string: {cmd}")
+    for key, value in entry.items():
+        placeholder = "{" + key + "}"
+        if placeholder in cmd:
+            entry["cmd"] = entry["cmd"].replace(placeholder, str(value))
+
+
 def load_tests(tests_yaml_path):
     """
     Load test definitions from YAML file.
@@ -150,6 +167,7 @@ def build_test_matrix(tests, enabled_skus, sku_config):
             for key, value in sku_test_config.items():
                 if key != "timeout" and value is not None:
                     entry[key] = value
+            substitute_cmd_placeholders(entry)
             filtered_tests.append(entry)
 
     if not filtered_tests:

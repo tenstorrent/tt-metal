@@ -121,6 +121,11 @@ models:
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
+  device_perf:
+    wh_n150: 100
+    bh_p150: 100
+    bh_p300: 100
+
   demo:
     wh_llmbox_perf: 1090
     wh_llmbox_perf_release: 1090
