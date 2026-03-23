@@ -12,6 +12,8 @@
 #include <thread>
 #include <unistd.h>
 
+using multihost::common::ContextPtr;
+using multihost::common::kill_rank_and_recover;
 using tt::tt_metal::distributed::multihost::Color;
 using tt::tt_metal::distributed::multihost::DistributedContext;
 using tt::tt_metal::distributed::multihost::DistributedException;
