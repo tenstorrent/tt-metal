@@ -11,6 +11,8 @@
 #include <reflect>
 #include <set>
 #include <stack>
+#include <string_view>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
@@ -232,6 +234,11 @@ inline void tracy_frame() {
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(ChipId device_id, const Program& program) {
+    // Deduplicate by source file: ops with per-core compile-time args produce one
+    // Kernel object per core (all sharing the same source), which would otherwise
+    // emit hundreds of identical entries and blow past Tracy's 64KiB message limit.
+    std::unordered_set<std::string_view> seenComputeSources;
+    std::unordered_set<std::string_view> seenDMSources;
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
@@ -530,9 +537,29 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
+        // Tracy hard limit is uint16_t::max bytes including null terminator.
+        // The message is wrapped in backticks which serve as the CSV quotechar.
+        // If the message is truncated by tracy_message(), the closing backtick is
+        // lost, causing the CSV reader to absorb subsequent rows into this field.
+        // Build with pretty JSON first, then compact, then drop kernel_info to fit.
+        constexpr size_t tracy_limit = std::numeric_limits<uint16_t>::max() - 1;
         auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
-        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
+        if (msg.size() > tracy_limit) {
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+        }
+        if (msg.size() > tracy_limit) {
+            // kernel_info is the largest field. Drop it to fit within the limit;
+            // process_ops_logs.py guards all kernel_info accesses with "if in".
+            j.erase("kernel_info");
+            msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+            log_warning(
+                tt::LogMetal,
+                "Tracy op profiler message for op '{}' (call {}, device {}) exceeded the {} byte limit even after "
+                "compacting JSON. kernel_info was dropped from the perf report for this op.",
+                j.value("op_code", "?"),
+                operation_id,
+                device_id,
+                tracy_limit);
         }
         return msg;
     }
