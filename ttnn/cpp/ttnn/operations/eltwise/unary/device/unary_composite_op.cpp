@@ -27,9 +27,8 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
-
-// Existing implementation of lgamma.
-// TODO: Remove this once the lgamma kernel for float32 is supported.
+// Existing implementation of _lgamma.
+// TODO: Remove this once the multigammaln is uplifted.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {

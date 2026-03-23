@@ -111,25 +111,33 @@ inline void calculate_lgamma_stirling_fp32(
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        sfpi::vFloat range1 = z - 1.0f;  // (0.8 to 1.2)
-        sfpi::vFloat range2 = z - 2.0f;  // (1.8 to 2.2)
-        sfpi::vFloat abs_range1 = sfpi::abs(range1);
-        sfpi::vFloat abs_range2 = sfpi::abs(range2);
+        sfpi::vFloat d1 = z - 1.0f;
+        sfpi::vFloat d2 = z - 2.0f;
+        sfpi::vFloat abs_range1 = sfpi::abs(d1);
+        sfpi::vFloat abs_range2 = sfpi::abs(d2);
 
         sfpi::vFloat res = z;
 
         // Polynomial bridge for small range inputs (z near 1 or 2 only)
-        v_if((abs_range1 < 0.2f) || (abs_range2 < 0.2f)) {
-            sfpi::vFloat d = range2;
-            v_if(abs_range1 < abs_range2) { d = range1; }
-            v_endif;
-            constexpr float p0 = -0.57721566f;
-            constexpr float p1 = 0.82246703f;
-            constexpr float p2 = -0.40068563f;
-            constexpr float p3 = 0.27058081f;
-            constexpr float p4 = -0.20738555f;
+
+        v_if(abs_range1 < 0.25f) {
+            // Taylor Expansion around z=1 (d = z - 1.0)
+            constexpr float p0 = -0.57721566f;  // -gamma
+            constexpr float p1 = 0.82246703f;   // zeta(2)/2
+            constexpr float p2 = -0.40068563f;  // -zeta(3)/3
+            constexpr float p3 = 0.27058081f;   // zeta(4)/4
+            constexpr float p4 = -0.20738555f;  // -zeta(5)/5
             // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
-            res = d * PolynomialEvaluator::eval(d, p0, p1, p2, p3, p4);
+            res = d1 * PolynomialEvaluator::eval(d1, p0, p1, p2, p3, p4);
+        }
+        v_elseif(abs_range2 < 0.25f) {
+            // Taylor Expansion around z=2 (d = z - 2.0)
+            constexpr float q0 = 0.42278434f;   // 1 - gamma
+            constexpr float q1 = 0.32246703f;   // (zeta(2)-1)/2
+            constexpr float q2 = -0.06735230f;  // -(zeta(3)-1)/3
+            constexpr float q3 = 0.02058081f;   // (zeta(4)-1)/4
+            constexpr float q4 = -0.00738555f;  // -(zeta(5)-1)/5
+            res = d2 * PolynomialEvaluator::eval(d2, q0, q1, q2, q3, q4);
         }
         v_else {
             // Stirling base + Bernoulli correction
