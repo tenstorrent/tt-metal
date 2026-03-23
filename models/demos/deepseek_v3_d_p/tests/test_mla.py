@@ -101,7 +101,7 @@ def random_weights(config_only):
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.timeout(900)  # Increase timeout to 15 minutes for large sequence lengths
 def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison, scale_down_sl, is_balanced):
     """
