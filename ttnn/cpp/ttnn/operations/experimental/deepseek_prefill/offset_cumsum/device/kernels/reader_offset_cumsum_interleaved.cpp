@@ -2,6 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Offset Cumsum Kernel
+//
+// Computes per-device dispatch offsets into each expert's token buffer by
+// taking a shifted (exclusive) prefix sum over gathered per-device histograms.
+//
+// Inputs:
+//   - input [H, W]: UINT32 interleaved tensor of per-device expert histograms
+//     (H = num_devices, W = n_routed_experts). Produced by all_gather of each
+//     device's masked_bincount output.
+//
+// Outputs:
+//   - offsets [H, W]: row k = sum of input rows 0..k-1 (row 0 is all zeros).
+//     These are the starting positions where each device writes into each
+//     expert's buffer — hence the name "offsets" rather than prefix sum.
+//   - totals  [1, W]: sum of all H input rows (total tokens per expert).
+//
+// The kernel loops over H rows. Before the loop it writes a zeroed row to
+// offsets[0]. On each iteration it reads input row h, adds it element-wise into
+// the running sum, then writes the updated sum to offsets[h+1] (or to totals
+// on the final iteration).
+//
+// Design choices:
+//  - This is a single data-movement kernel that reads, computes,
+// and writes — there is no separate compute or writer kernel. W is typically
+// n_routed_experts (e.g. 256 for DeepSeek-V3), so the element-wise add is a
+// short scalar loop on UINT32 values in L1 and does not warrant SFPU/FPU
+// compute.
+//  - Because there is only one kernel there is no producer/consumer
+// relationship, so CBs are used as raw L1 scratch (no cb_push_back /
+// cb_pop_front).
+//  - The partial sums are called "offsets" because in the MoE
+// dispatch context they are the starting write positions for each device into
+// each expert's token buffer.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
@@ -35,6 +69,15 @@ void kernel_main() {
 
     uint32_t out_cb_addr = get_write_ptr(cb_id_out0);
     volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_cb_addr);
+
+    // The three tensors are allocated independently and could in principle have
+    // different aligned page sizes (even though in practice they'll likely be the
+    // same, since they all share W and dtype). This doesn't cause correctness
+    // issues because:
+    //  - The inner loop always operates on exactly W elements and ignores any
+    //    padding bytes beyond the W-th element.
+    //  - NOC writes use the destination tensor's own page size (offsets_page_size
+    //    or totals_page_size)
 
     for (uint32_t i = 0; i < W; i++) {
         running_sum[i] = 0;

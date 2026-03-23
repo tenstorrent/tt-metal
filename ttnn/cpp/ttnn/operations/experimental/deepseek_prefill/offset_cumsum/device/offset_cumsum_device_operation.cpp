@@ -16,6 +16,8 @@ void OffsetCumsumDeviceOperation::validate_on_program_cache_miss(
         input_shape.size() == 2,
         "Input tensor must be 2D [num_devices, n_routed_experts], got {} dimensions",
         input_shape.size());
+    TT_FATAL(input_shape[-2] > 0, "H (num_devices) must be > 0, got {}", input_shape[-2]);
+    TT_FATAL(input_shape[-1] > 0, "W (n_routed_experts) must be > 0, got {}", input_shape[-1]);
 }
 
 OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::compute_output_specs(
