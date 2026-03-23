@@ -1641,6 +1641,13 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
 
     ttnn::Tensor bias_tensor_ = bias_tensor.value();
     bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
+    log_trace(
+        tt::LogOp,
+        "prepare_conv_bias_internal: enter logical_shape={} layout={} on_device={} out_channels={}",
+        bias_tensor_.logical_shape(),
+        static_cast<int>(bias_tensor_.layout()),
+        is_bias_tensor_is_on_device,
+        out_channels);
     if (!is_bias_tensor_is_on_device) {
         TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
         uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
@@ -1661,6 +1668,11 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     }
     TT_ASSERT(bias_tensor_.dtype() == weight_dtype, "Bias tensor should be in the same dtype as the weights tensor");
 
+    log_info(
+        tt::LogOp,
+        "prepare_conv_bias_internal: returning bias on device, logical_shape={} padded_shape={}",
+        bias_tensor_.logical_shape(),
+        bias_tensor_.padded_shape());
     return bias_tensor_;
 }
 
@@ -1770,6 +1782,11 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& /*dram_slice_config_*/) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
+    log_trace(
+        tt::LogOp,
+        "prepare_conv_bias ENTER logical_shape={} out_channels={}",
+        bias_tensor.logical_shape(),
+        out_channels);
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");

@@ -17,6 +17,7 @@ Conv2d requirements (see trial-and-error / #31714):
   per-slice conv2d_L1 which allocates L1_SMALL.
 - Weights: host ROW_MAJOR (OIHW), or device tensors produced by ttnn.prepare_conv_weights. Passing
   raw TILE weights on device without the prepared [1,1,KhKwCi,Co] shape fails host validation on reprocess.
+- Bias: host ROW_MAJOR ``[1,1,1,Co]``, or tensors produced by ``ttnn.prepare_conv_bias`` (host bias in, device TILE out).
 """
 
 import torch
@@ -159,6 +160,7 @@ def test_conv2d_input_memory(device, input_memory_strategy):
 # =============================================================================
 # Note: Varying arbitrary DRAM/L1/sharded memory on raw [O,I,kH,kW] TILE weights is not supported —
 # conv2d expects host ROW_MAJOR or pre-prepared device weights (see prepare_conv_weights).
+# Same idea for bias: host ROW_MAJOR [1,1,1,Co] or prepare_conv_bias (see test_conv2d_bias_preparation_paths).
 
 
 @pytest.mark.parametrize("weight_setup", ["host_row_major", "prepare_conv_weights"])
@@ -226,6 +228,83 @@ def test_conv2d_weight_preparation_paths(device, weight_setup):
     )
 
     torch_output = torch.nn.functional.conv2d(torch_input.float(), torch_weight.float(), padding=pad).bfloat16()
+    out_h = (input_h + 2 * pad - kernel_size) // 1 + 1
+    out_w = (input_w + 2 * pad - kernel_size) // 1 + 1
+    tt_result = tt_conv2d_output_to_nchw(tt_output, batch_size, out_h, out_w, out_channels)
+
+    assert_with_pcc(torch_output, tt_result, 0.97)
+
+
+@pytest.mark.parametrize("bias_setup", ["host_row_major", "prepare_conv_bias"])
+def test_conv2d_bias_preparation_paths(device, bias_setup):
+    """Valid bias paths: host ROW_MAJOR [1,1,1,Co], or ttnn.prepare_conv_bias (matches activation memory config)."""
+    batch_size = 1
+    in_channels = 32
+    out_channels = 32
+    input_h = 32
+    input_w = 32
+    kernel_size = 3
+    pad = 1
+
+    torch_input = torch.randn(batch_size, in_channels, input_h, input_w, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch_input.permute(0, 2, 3, 1)
+    flat_shape = [1, 1, batch_size * input_h * input_w, in_channels]
+    torch_input_flat = torch_input_nhwc.reshape(flat_shape)
+
+    input_mem = ttnn.DRAM_MEMORY_CONFIG
+    tt_input = ttnn.from_torch(
+        torch_input_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem
+    )
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    if bias_setup == "host_row_major":
+        tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        bias_host = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
+        tt_bias = ttnn.prepare_conv_bias(
+            bias_tensor=bias_host,
+            input_memory_config=input_mem,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            input_height=input_h,
+            input_width=input_w,
+            kernel_size=(kernel_size, kernel_size),
+            stride=(1, 1),
+            padding=(pad, pad),
+            dilation=(1, 1),
+            groups=1,
+            device=device,
+            input_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+        )
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(1, 1),
+        padding=(pad, pad),
+        batch_size=batch_size,
+        input_height=input_h,
+        input_width=input_w,
+    )
+
+    torch_output = torch.nn.functional.conv2d(
+        torch_input.float(),
+        torch_weight.float(),
+        bias=torch_bias.reshape(-1).float(),
+        padding=pad,
+    ).bfloat16()
     out_h = (input_h + 2 * pad - kernel_size) // 1 + 1
     out_w = (input_w + 2 * pad - kernel_size) // 1 + 1
     tt_result = tt_conv2d_output_to_nchw(tt_output, batch_size, out_h, out_w, out_channels)

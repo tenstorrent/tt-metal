@@ -220,3 +220,112 @@ def test_manual_conv2d_prepared_weights(device, input_memory_config):
     # print("torch_output", torch_output)
     # print("tt_result", tt_result)
     assert_with_pcc(torch_output, tt_result, 0.99)
+
+
+@pytest.mark.parametrize("bias_setup", ["host_row_major", "device_row_major", "device_tile", "prepare_conv_bias"])
+@pytest.mark.parametrize("bias_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_conv2d_bias_preparation_paths(device, bias_setup, bias_config):
+    """Valid bias paths: host ROW_MAJOR [1,1,1,Co], or ttnn.prepare_conv_bias (matches activation memory config)."""
+    batch_size = 1
+    in_channels = 32
+    out_channels = 32
+    input_h = 32
+    input_w = 32
+    kernel_size = 3
+    pad = 1
+
+    torch_input = torch.randn(batch_size, in_channels, input_h, input_w, dtype=torch.bfloat16)
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch_input.permute(0, 2, 3, 1)
+    flat_shape = [1, 1, batch_size * input_h * input_w, in_channels]
+    torch_input_flat = torch_input_nhwc.reshape(flat_shape)
+
+    print("torch_input shape", torch_input.shape)
+    print("torch_weight shape", torch_weight.shape)
+    print("torch_input_flat shape/ tt_input", torch_input_flat.shape)
+
+    input_mem = ttnn.DRAM_MEMORY_CONFIG
+    tt_input = ttnn.from_torch(
+        torch_input_flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem
+    )
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    print("tt_weight shape", tt_weight.shape)
+
+    if bias_setup == "host_row_major":
+        tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        print("host bias shape", tt_bias.shape)
+    elif bias_setup == "device_row_major":
+        tt_bias = ttnn.from_torch(
+            torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=bias_config, device=device
+        )
+        print("device RM bias shape", tt_bias.shape)
+    elif bias_setup == "device_tile":
+        tt_bias = ttnn.from_torch(
+            torch_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=bias_config, device=device
+        )
+        print("device tile bias shape", tt_bias.shape)
+    else:
+        bias_host = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
+        tt_bias = ttnn.prepare_conv_bias(
+            bias_tensor=bias_host,
+            input_memory_config=input_mem,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            input_height=input_h,
+            input_width=input_w,
+            kernel_size=(kernel_size, kernel_size),
+            stride=(1, 1),
+            padding=(pad, pad),
+            dilation=(1, 1),
+            groups=1,
+            device=device,
+            input_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+        )
+        print("prepared bias shape", tt_bias.shape)
+        print("prepared bias layout", tt_bias.layout)
+        print("prepared bias dtype", tt_bias.dtype)
+
+        # print("prepared bias memory_config", tt_bias.memory_config.memory_type)
+
+    tt_output = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(1, 1),
+        padding=(pad, pad),
+        batch_size=batch_size,
+        input_height=input_h,
+        input_width=input_w,
+    )
+
+    torch_output = torch.nn.functional.conv2d(
+        torch_input.float(),
+        torch_weight.float(),
+        bias=torch_bias.reshape(-1).float(),
+        padding=pad,
+    ).bfloat16()
+    out_h = (input_h + 2 * pad - kernel_size) // 1 + 1
+    out_w = (input_w + 2 * pad - kernel_size) // 1 + 1
+    # tt_result = tt_conv2d_output_to_nchw(tt_output, batch_size, out_h, out_w, out_channels)
+
+    # TT conv2d returns flattened [1, 1, out_h*out_w, out_ch]. Convert to NCHW to match torch.
+    # Flattened order may be row-major (H, W) or column-major (W, H); try row-major first.
+    tt_result = ttnn.to_torch(tt_output)
+    tt_result = tt_result.reshape(batch_size, out_h, out_w, out_channels)
+    # If TT uses column-major spatial, swap H and W: (0, 2, 1, 3) then (0, 3, 1, 2) -> NCHW
+    tt_result = tt_result.permute(0, 3, 1, 2)  # (N,H,W,C) -> NCHW
+
+    print("tt_result shape", tt_result.shape)
+
+    assert_with_pcc(torch_output, tt_result, 0.99)
