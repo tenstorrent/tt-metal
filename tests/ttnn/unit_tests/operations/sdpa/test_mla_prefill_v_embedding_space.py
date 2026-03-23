@@ -135,7 +135,7 @@ def run_flash_mla_prefill_impl(
 
     # Premultiply V by W_v
     # workaround for #37416
-    tt_v_latent_post_repeat = ttnn.repeat(tt_v_latent, [1, nh, 1, 1])
+    tt_v_latent_post_repeat = ttnn.repeat(tt_v_latent, [1, nh, 1, 1])  # JAKSA remove this??
     tt_v_embedding = ttnn.linear(tt_v_latent_post_repeat, tt_v_out, dtype=dtype)
 
     tt_new_sdpa_out = ttnn.transformer.flash_mla_prefill(

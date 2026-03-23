@@ -149,8 +149,7 @@ void kernel_main() {
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
 
-    constexpr uint32_t max_batch_size = (in0_B > in1_B) ? in0_B : in1_B;
-    for (uint32_t b = 0; b < max_batch_size; ++b) {
+    for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
             noc_async_read_barrier();
@@ -188,18 +187,6 @@ void kernel_main() {
                 }
             }
 
-            // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
-            // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
-            // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
-            // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
-            // CB so compute kernel thinks it has new data
-            if (in0_B == 1 && in1_B > 1 && b > 0) {
-                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                    cb_push_back(cb_id_in0, in0_block_num_tiles);
-                }
-                continue;
-            }
 #ifdef IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
 #endif  // IN0_SHARDED
@@ -359,6 +346,20 @@ void kernel_main() {
 
         if constexpr (bcast_A) {
             in0_tensor_start_tile_id += MtKt;
+        }
+
+        // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
+        // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
+        // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
+        // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
+        // CB so compute kernel thinks it has new data
+        if (in0_B == 1 && in1_B > 1) {
+            for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
+                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+                }
+            }
         }
     }
     noc_async_write_barrier();
