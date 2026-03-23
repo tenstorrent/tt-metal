@@ -115,6 +115,20 @@ class ttMLA:
             ),
         )
 
+        # KV cache for prefill — each SP device holds its local chunk of the cache
+        # Replicated across the mesh since each device stores only its local seq portion
+        sp_factor = mesh_device.shape[sp_axis]
+        seq_len_local = seq_len // sp_factor
+
+        self.kvpe_cache = ttnn.from_torch(
+            torch.zeros(1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
         num_heads_local = self.num_heads // self.tp_factor
         joint_shard_dims = [None, None]
@@ -445,6 +459,9 @@ class ttMLA:
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+
+        # Update KV cache with compressed latent representation
+        ttnn.kv_cache.fill_cache_for_user_(self.kvpe_cache, tt_kvpe, 0)
 
         # expand v with wkv_b2
         # TODO: workaround for #37416, remove when resolved

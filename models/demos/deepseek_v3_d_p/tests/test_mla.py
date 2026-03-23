@@ -9,6 +9,7 @@ This test verifies that both modules can be created and weights are loaded corre
 import pytest
 import torch
 from loguru import logger
+from transformers.cache_utils import DynamicCache
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
@@ -196,17 +197,18 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         # Create position IDs
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
-        # Run reference forward pass
+        # Run reference forward pass with cache to capture KVPE
         logger.info("Running reference CPU forward pass...")
         mla_ref = mla_ref.eval().to(torch.bfloat16)
+        ref_cache = DynamicCache()
         with torch.no_grad():
-            ref_output, _, _ = mla_ref(
+            ref_output, _, ref_cache = mla_ref(
                 hidden_states=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
-                past_key_value=None,
+                past_key_value=ref_cache,
                 output_attentions=False,
-                use_cache=False,
+                use_cache=True,
             )
 
         logger.info(f"✓ Reference forward pass complete")
@@ -244,8 +246,34 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         if is_balanced:
             tt_output_cpu = reverse_reorder_tensor_chunks(tt_output_cpu, chunk_order, seq_dim=2)
 
-        _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
-        logger.info(f"PCC is {pcc_message}")
+        _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.99)
+        logger.info(f"Output PCC is {pcc_message}")
+
+        # Validate KVPE cache contents
+        # Reference KVPE: [batch, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
+        ref_kvpe = ref_cache.key_cache[0]  # layer 0
+
+        # Read back KVPE cache from device
+        # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
+        tt_kvpe_cache = ttnn.to_torch(
+            mla_tt.kvpe_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        ).to(torch.bfloat16)
+        tt_kvpe_cache = tt_kvpe_cache[:, :1, :, :]
+
+        if is_balanced:
+            tt_kvpe_cache = reverse_reorder_tensor_chunks(tt_kvpe_cache, chunk_order, seq_dim=2)
+
+        # Check PCC separately for KV (latent) and PE (rope) parts
+        kv_lora_rank = config.kv_lora_rank
+        _, kv_pcc_message = assert_with_pcc(
+            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache[:, :, :, :kv_lora_rank], 0.99
+        )
+        logger.info(f"KVPE cache KV part PCC is {kv_pcc_message}")
+        _, pe_pcc_message = assert_with_pcc(
+            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache[:, :, :, kv_lora_rank:], 0.99
+        )
+        logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
     else:
         ttnn.synchronize_device(mesh_device)
 
