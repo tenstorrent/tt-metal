@@ -22,6 +22,9 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+static constexpr uint8_t default_worker_vc_id = 0;
+static constexpr uint8_t vc2_worker_vc_id = 2;
+
 // Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
 enum class PerformanceTestMode {
     NONE,       // No performance testing (functional test only)
@@ -59,6 +62,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<ParsedDestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
 };
 
 struct ParsedSenderConfig {
@@ -67,6 +71,7 @@ struct ParsedSenderConfig {
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id;     // VC selection: 0=VC0 (default), 2=VC2
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -93,6 +98,7 @@ struct TrafficPatternConfig {
     std::optional<DestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
 
     // Credit info
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender
@@ -104,7 +110,9 @@ struct SenderConfig {
     std::optional<CoreCoord> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
-    uint32_t link_id = 0;  // Link ID for multi-link tests
+    uint32_t link_id = 0;          // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id.value_or(0) == 2; }
 };
 
 // Sync configuration for a single device
@@ -139,6 +147,7 @@ struct TestFabricSetup {
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
     std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
     bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
+    bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
 struct HighLevelPatternConfig {

@@ -40,6 +40,7 @@ set(FABRIC_SOURCES
     channel_trimming_io.cpp
     channel_trimming_report.cpp
     fabric.cpp
+    fabric_vc2_connection.cpp
     fabric_init.cpp
     fabric_host_utils.cpp
     fabric_switch_manager.cpp
