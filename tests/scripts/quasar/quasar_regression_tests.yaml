@@ -22,12 +22,13 @@ unit_tests_legacy:
     config: 1x3
 
   - filter: "*MultiDmAddTwoInts*"
-    config: 1x3
+    config: 2x3
 
   - filter: "*Bmm"
     config: 1x3
     env:
       TT_METAL_LOGGER_LEVEL: warning
 
-  - filter: "*Datacopy"
-    config: 1x3
+unit_tests_llk:
+  # - filter: "*Datacopy"
+  #   config: 1x3

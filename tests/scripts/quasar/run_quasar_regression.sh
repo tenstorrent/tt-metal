@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_HOME="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+export TT_METAL_HOME="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+export TT_METAL_RUNTIME_ROOT="$TT_METAL_HOME"
+export TT_METAL_SLOW_DISPATCH_MODE=1
 
 # Defaults
 TESTS_FILE="$SCRIPT_DIR/quasar_regression_tests.yaml"
@@ -23,6 +25,8 @@ Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
                            (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/)
                            The script sets TT_METAL_SIMULATOR per test automatically.
+                           If TT_METAL_SIMULATOR is already set, the base is
+                           derived automatically (one directory up).
   NNG_SOCKET_ADDR          NNG socket address
   NNG_SOCKET_LOCAL_PORT    NNG local port
 
@@ -58,9 +62,15 @@ if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2
     exit 1
 fi
 
+# Derive SIMULATOR_BASE from TT_METAL_SIMULATOR if available
+if [[ -z "${TT_METAL_SIMULATOR_BASE:-}" && -n "${TT_METAL_SIMULATOR:-}" ]]; then
+    TT_METAL_SIMULATOR_BASE="$(cd "$(dirname "${TT_METAL_SIMULATOR%/}")" && pwd)"
+    echo "Derived TT_METAL_SIMULATOR_BASE=$TT_METAL_SIMULATOR_BASE from TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR"
+fi
+
 # Validate required environment variables
 missing_vars=()
-[[ -z "${TT_METAL_SIMULATOR_BASE:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE")
+[[ -z "${TT_METAL_SIMULATOR_BASE:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE (or TT_METAL_SIMULATOR)")
 [[ -z "${NNG_SOCKET_ADDR:-}" ]]       && missing_vars+=("NNG_SOCKET_ADDR")
 [[ -z "${NNG_SOCKET_LOCAL_PORT:-}" ]] && missing_vars+=("NNG_SOCKET_LOCAL_PORT")
 
@@ -101,8 +111,6 @@ if [[ "$BUILD" == true ]]; then
     ./build_metal.sh -c --build-tests
     echo ""
 fi
-
-export TT_METAL_SLOW_DISPATCH_MODE=1
 
 if [[ -n "$LOG_DIR" ]]; then
     LOG_DIR="$LOG_DIR/$(date +%Y-%m-%d_%H%M%S)"
