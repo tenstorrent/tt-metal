@@ -580,7 +580,12 @@ void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> ad
     per_core_addresses_ = std::move(addrs);
 }
 
-void Buffer::copy_per_core_addresses_from(const Buffer& other) { per_core_addresses_ = other.per_core_addresses_; }
+void Buffer::copy_per_core_addresses_from(const Buffer& other) {
+    TT_FATAL(
+        this->per_core_allocation_ && other.per_core_allocation_,
+        "copy_per_core_addresses_from requires both buffers to use per-core allocation");
+    per_core_addresses_ = other.per_core_addresses_;
+}
 
 ShardSpecBuffer Buffer::shard_spec() const {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");

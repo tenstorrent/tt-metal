@@ -134,6 +134,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
         bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
         auto cores = corerange_to_cores(grid, std::nullopt, row_major);
+        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
