@@ -315,7 +315,10 @@ class TestUlfmGuardFaultTolerant:
             with pytest.raises(mf.MPIRankFailureError) as excinfo:
                 with mf.ulfm_guard(comm, "Scatter", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
-            err = excinfo.value
+            # False positive: GitHub code-quality flags this as unreachable
+            # because it does not model ``pytest.raises`` catching the
+            # intentional exception raised through ``ulfm_guard``.
+            err = excinfo.value  # pylint: disable=unreachable
             assert err.rank == 0
             assert err.error_code == 54
             assert err.operation == "Scatter"
@@ -345,7 +348,10 @@ class TestUlfmGuardFaultTolerant:
                 with mf.ulfm_guard(comm, "Allreduce", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
-            assert excinfo.value.failed_ranks == [0, 1]
+            # Same false positive as above: ``pytest.raises`` catches the
+            # exception, but the analyzer treats the inner ``raise`` as
+            # escaping the block.
+            assert excinfo.value.failed_ranks == [0, 1]  # pylint: disable=unreachable
 
     def test_success_path_in_fault_tolerant(self):
         """No exception means no error — guard passes through."""
