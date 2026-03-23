@@ -47,7 +47,7 @@ on:
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
-      (github.event.schedule == '0 */3 * * *' && 'Multi host T3K/Dual Galaxy Validation' ||
+      (github.event.schedule == '0 */3 * * *' && 'Multi host T3K/SKIPPED Dual Galaxy Validation' ||
        github.event.schedule == '0 4 * * *'  && 'Multi host Quad Galaxy Nightly' ||
        'Multi host Scheduled Run')
       || 'Multi host Manual Run' }}
