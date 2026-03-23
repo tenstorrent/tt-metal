@@ -19,6 +19,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Tuple
 
+from ttnn.operations.auto_config.math_fidelity import (
+    MathFidelity,
+    valid_fidelities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +210,30 @@ def validate_l1_budget(
     return True, "ok"
 
 
+def validate_math_fidelity(
+    candidate_fidelity: MathFidelity,
+    features: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Check that the candidate's math fidelity is valid for the input dtypes.
+
+    This encodes the dtype→fidelity mapping table from the matrix engine
+    tech report and PR #39628 as a hard constraint.
+    """
+    allowed = features.get("math_fidelity_valid")
+    if allowed is None:
+        # No fidelity info in features — skip validation
+        return True, "ok"
+
+    if candidate_fidelity not in allowed:
+        return False, (
+            f"MathFidelity.{candidate_fidelity.name} is not valid for "
+            f"dtype_a={features['dtype_a']}, dtype_b={features['dtype_b']}. "
+            f"Valid fidelities: {[f.name for f in allowed]}"
+        )
+
+    return True, "ok"
+
+
 def validate_candidate(
     config: Any,
     config_family: str,
@@ -253,6 +281,13 @@ def validate_candidate(
     is_valid, reason = validate_l1_budget(config, config_family, features)
     if not is_valid:
         return False, reason
+
+    # 8. Math fidelity constraints
+    candidate_fidelity = features.get("math_fidelity_default")
+    if candidate_fidelity is not None and isinstance(candidate_fidelity, MathFidelity):
+        is_valid, reason = validate_math_fidelity(candidate_fidelity, features)
+        if not is_valid:
+            return False, reason
 
     return True, "valid"
 

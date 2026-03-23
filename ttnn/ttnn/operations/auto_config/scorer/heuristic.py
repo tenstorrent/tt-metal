@@ -21,6 +21,12 @@ from ttnn.operations.auto_config.base import ConfigCandidate
 
 logger = logging.getLogger(__name__)
 
+from ttnn.operations.auto_config.math_fidelity import (
+    CYCLES_PER_TILE,
+    MAX_CYCLES_PER_TILE,
+    MathFidelity,
+)
+
 TILE_SIZE = 32
 
 
@@ -37,11 +43,12 @@ class HeuristicScorer:
 
     def __init__(self):
         # Weight factors for each scoring component
-        self.w_utilization = 0.35
-        self.w_block_efficiency = 0.25
-        self.w_layout_alignment = 0.20
-        self.w_subblock_efficiency = 0.10
+        self.w_utilization = 0.30
+        self.w_block_efficiency = 0.20
+        self.w_layout_alignment = 0.17
+        self.w_subblock_efficiency = 0.08
         self.w_backend_preference = 0.10
+        self.w_fidelity_cost = 0.15  # Math fidelity efficiency
 
     def score(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
         """Score a candidate configuration. Returns value in [0, 1]."""
@@ -51,6 +58,7 @@ class HeuristicScorer:
             "layout_alignment": self._score_layout_alignment(candidate, features),
             "subblock_efficiency": self._score_subblock_efficiency(candidate, features),
             "backend_preference": self._score_backend_preference(candidate, features),
+            "fidelity_cost": self._score_fidelity_cost(candidate, features),
         }
 
         total = (
@@ -59,13 +67,14 @@ class HeuristicScorer:
             + self.w_layout_alignment * scores["layout_alignment"]
             + self.w_subblock_efficiency * scores["subblock_efficiency"]
             + self.w_backend_preference * scores["backend_preference"]
+            + self.w_fidelity_cost * scores["fidelity_cost"]
         )
 
         logger.debug(
             f"Scored {candidate.config_family}: {total:.3f} "
             f"(util={scores['utilization']:.2f}, block={scores['block_efficiency']:.2f}, "
             f"layout={scores['layout_alignment']:.2f}, subblk={scores['subblock_efficiency']:.2f}, "
-            f"backend={scores['backend_preference']:.2f})"
+            f"backend={scores['backend_preference']:.2f}, fidelity={scores['fidelity_cost']:.2f})"
         )
 
         return total
@@ -176,3 +185,25 @@ class HeuristicScorer:
         if candidate.backend == "minimal_matmul":
             return 0.6  # Experimental, may have better throughput for specific shapes
         return 0.5
+
+    def _score_fidelity_cost(
+        self, candidate: ConfigCandidate, features: Dict[str, Any]
+    ) -> float:
+        """Score based on math fidelity efficiency.
+
+        Lower fidelity = fewer cycles per tile = higher score.
+        Prefer the minimum fidelity that is valid for the dtype pair.
+
+        Cycle costs:
+            LoFi:  16 cycles → score 1.0 (fastest)
+            HiFi2: 32 cycles → score 0.75
+            HiFi3: 48 cycles → score 0.50
+            HiFi4: 64 cycles → score 0.25 (full precision but slowest)
+        """
+        fidelity = features.get("math_fidelity_default")
+        if fidelity is None or not isinstance(fidelity, MathFidelity):
+            return 0.5  # No fidelity info, neutral score
+
+        cycle_cost = CYCLES_PER_TILE.get(fidelity, MAX_CYCLES_PER_TILE)
+        # Linear scale: 16 cycles → 1.0, 64 cycles → 0.25
+        return 1.0 - (0.75 * (cycle_cost - 16) / (MAX_CYCLES_PER_TILE - 16))

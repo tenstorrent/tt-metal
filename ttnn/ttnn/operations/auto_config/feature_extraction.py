@@ -17,6 +17,13 @@ from typing import Any, Dict, Optional
 
 import ttnn
 
+from ttnn.operations.auto_config.math_fidelity import (
+    MathFidelity,
+    default_fidelity,
+    fidelity_cycle_cost,
+    valid_fidelities,
+)
+
 logger = logging.getLogger(__name__)
 
 # Standard tile dimensions
@@ -170,6 +177,12 @@ def extract_matmul_features(
         "activation": activation,
         # Output config
         "output_memory_config": str(memory_config) if memory_config else "default",
+        # Math fidelity — first-class dimension for compute config selection
+        "math_fidelity_default": default_fidelity(str(dtype_a), str(dtype_b)),
+        "math_fidelity_valid": valid_fidelities(str(dtype_a), str(dtype_b)),
+        "math_fidelity_cycle_cost": fidelity_cycle_cost(
+            default_fidelity(str(dtype_a), str(dtype_b))
+        ),
     }
 
     return features
@@ -203,6 +216,7 @@ def get_cache_key_from_features(features: Dict[str, Any]) -> str:
         f"tb={features['transpose_b']}",
         f"bias={features['has_bias']}",
         f"act={features['activation']}",
+        f"mf={features.get('math_fidelity_default', 'unknown')}",
     ]
     if features.get("shard_shape_a"):
         key_parts.append(f"ss={features['shard_shape_a']}")
