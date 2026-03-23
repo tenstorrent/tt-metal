@@ -355,8 +355,6 @@ class Generator(WarmupForwardMixin):
 
             logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
 
-            # deallocate device tensors that are not needed by decode
-            # [INFO] logits is a torch tensor
             ttnn.deallocate(tt_logits)
             ttnn.deallocate(prefill_input)
             if page_table is not None:

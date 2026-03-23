@@ -595,13 +595,16 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        qkv_output_dtype = (
+            getattr(self, "qkv_output_dtype", self.ccl_dtype) if self.TG else self.activation_dtype or ttnn.bfloat16
+        )
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
             memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
             program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=qkv_output_dtype,
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
@@ -616,6 +619,7 @@ class Attention(LightweightModule):
         qkv_all_reduce_mem_cfg = self.args.get_attn_qkv_all_reduce_output_mem_config(
             Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
         )
+        qkv_ccl_dtype = getattr(self, "qkv_ccl_dtype", self.ccl_dtype)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
@@ -625,7 +629,7 @@ class Attention(LightweightModule):
             if qkv_all_reduce_mem_cfg is not None
             else xqkv_fused_sharded.memory_config(),
             sharded=True,
-            dtype=self.ccl_dtype,
+            dtype=qkv_ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
@@ -847,13 +851,14 @@ class Attention(LightweightModule):
                 )
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
+            wo_output_dtype = getattr(self, "wo_output_dtype", ttnn.bfloat8_b if self.TG else None)
             dense_out_sharded = ttnn.linear(
                 attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=wo_output_dtype,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
@@ -862,6 +867,7 @@ class Attention(LightweightModule):
             ttnn.deallocate(attn_output_cat)
 
             # All reduce
+            wo_ccl_dtype = getattr(self, "wo_ccl_dtype", self.ccl_dtype)
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
@@ -873,7 +879,7 @@ class Attention(LightweightModule):
                     Mode.DECODE, self.hidden_size, list(self.mesh_device.shape)[0], self.prefetcher
                 ),
                 sharded=True,
-                dtype=self.ccl_dtype,
+                dtype=wo_ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )

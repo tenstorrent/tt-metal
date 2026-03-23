@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,34 +8,48 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 from models.tt_transformers.tt.common import Mode
 
 
-class DistributedNorm(LightweightModule):
+class QwenDistributedNorm(LightweightModule):
+    """DistributedNorm variant for Qwen2.5-VL on TG (8,4) mesh.
+
+    The base DistributedNorm uses core_grid = (rows, 8) for TG, which
+    requires dim/4 to be divisible by rows*8*32. For Qwen2.5-VL-7B
+    (dim=3584, dim/4=896), no valid row count produces tile-aligned
+    shards with 8 columns.
+
+    This class uses core_grid = (4, 7) -> 28 cores -> shard_width = 32,
+    which is tile-aligned.  The forward path is identical to the base.
+    """
+
     def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
-
-        # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
 
         if TG:
-            core_grid_ln = (
-                min(4, args.dim // 4 // 32 // 8),
-                8,
-            )  # dividing by 4 and 8 for num_cols and num_rows of mesh, and 32 for tile size
+            hidden_size = args.dim // 4
+            num_tiles = hidden_size // 32
+            best_grid = (1, 1)
+            for r in range(1, 9):
+                for c in range(1, 9):
+                    if num_tiles % (r * c) == 0 and r * c > best_grid[0] * best_grid[1]:
+                        best_grid = (r, c)
+            core_grid_ln = best_grid
             num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
-            hidden_size_per_device_distributed_ln = args.dim // 4
+            shard_w = hidden_size // num_cores_ln
+
             self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(1, 1, 32, hidden_size_per_device_distributed_ln),
+                shape=(1, 1, 32, hidden_size),
                 core_grid=ttnn.CoreGrid(y=core_grid_ln[0], x=core_grid_ln[1]),
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
             self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
-                subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+                subblock_w=shard_w // 32,
                 block_h=1,
-                block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+                block_w=shard_w // 32,
                 inplace=False,
             )
             self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
@@ -58,7 +72,7 @@ class DistributedNorm(LightweightModule):
 
         if self.TG:
             if mode == Mode.DECODE:
-                return tt_sharded_distributed_rmsnorm(
+                x = tt_sharded_distributed_rmsnorm(
                     x,
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
@@ -69,6 +83,7 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
                     compute_kernel_config=self.ln_cfg,
                 )
+                return ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             else:
                 return tt_distributed_rmsnorm(
                     x,
@@ -81,7 +96,6 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
-        # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
                 x,
@@ -110,7 +124,6 @@ class DistributedNorm(LightweightModule):
             x, mode=mode, in_sharded=(mode == Mode.DECODE), out_sharded=(mode == Mode.DECODE), norm_config=norm_config
         )
 
-        # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode) and self.enable_all_gather:
             x = ttnn.experimental.all_gather_async(
                 x,

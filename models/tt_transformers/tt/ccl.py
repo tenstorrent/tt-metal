@@ -438,6 +438,7 @@ def tt_sharded_distributed_rmsnorm(
     ln_sharded_progcfg,
     ln_sharded_stats_memcfg,
     num_links=None,
+    compute_kernel_config=None,
 ):
     """
     Perform sharded distributed RMS normalization across devices.
@@ -452,6 +453,7 @@ def tt_sharded_distributed_rmsnorm(
         ln_sharded_progcfg: Program config for sharded layernorm.
         ln_sharded_stats_memcfg: Memory config for sharded stats.
         num_links: Number of links to use. If None, uses max available for cluster_axis=1.
+        compute_kernel_config: Optional compute kernel config for rms_norm ops.
 
     Returns:
         The normalized tensor.
@@ -463,8 +465,12 @@ def tt_sharded_distributed_rmsnorm(
 
     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
+    pre_all_gather_kwargs = {"program_config": ln_sharded_progcfg}
+    if compute_kernel_config is not None:
+        pre_all_gather_kwargs["compute_kernel_config"] = compute_kernel_config
+
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, **pre_all_gather_kwargs)
 
     # All gather stats
     tt_stats = ttnn.experimental.all_gather_async(
@@ -482,14 +488,17 @@ def tt_sharded_distributed_rmsnorm(
         num_buffers_per_channel=2,
     )
 
+    post_all_gather_kwargs = {
+        "epsilon": epsilon,
+        "weight": gamma,
+        "program_config": ln_sharded_progcfg,
+        "stats": tt_stats,
+    }
+    if compute_kernel_config is not None:
+        post_all_gather_kwargs["compute_kernel_config"] = compute_kernel_config
+
     # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
-        inp,
-        epsilon=epsilon,
-        weight=gamma,
-        program_config=ln_sharded_progcfg,
-        stats=tt_stats,
-    )
+    tt_out = ttnn.rms_norm_post_all_gather(inp, **post_all_gather_kwargs)
     tt_stats.deallocate(True)
 
     return tt_out

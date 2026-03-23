@@ -67,33 +67,45 @@ def test_rms_norm_inference(
         is_distributed=False,
     )
 
-    # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
-
     input = torch.rand(1, 1, max_seq_len, model_args.vision_dim)
     reference_output = reference_model(input)
 
-    # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
-    tt_input = ttnn.from_torch(
-        input,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=(ttnn.DRAM_MEMORY_CONFIG),
-    )
+    if model_args.is_galaxy:
+        # Vision model runs replicated on TG; test RMSNorm directly without distributed wrapping
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_output = tt_inner_norm(tt_input, mode=Mode.PREFILL)
+        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
+    else:
+        # Wrap in DistributedNorm for non-TG multi-device configs
+        tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=False)
 
-    tt_output = tt_model(tt_input, mode=Mode.PREFILL)
+        # DistributedNorm inputs are fractured across devices and interleaved in DRAM
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-    # DistributedNorm outputs are replicated across devices
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            dims=(0, 3) if model_args.is_galaxy else (3, 0),
-            mesh_shape=model_args.cluster_shape,
-        ),
-    )[:1, :, :, :]
+        tt_output = tt_model(tt_input, mode=Mode.PREFILL)
+
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device,
+                dims=(3, 0),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )[:1, :, :, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

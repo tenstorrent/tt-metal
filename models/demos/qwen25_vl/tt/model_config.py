@@ -55,11 +55,9 @@ class VisionModelArgs(ModelArgs):
             self.model_name
         )  # todo)) implement finer grained control similar to tt_transformers'
 
-        num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
-        k_dim = self.vision_dim // self.cluster_shape[0] if self.is_galaxy else self.vision_dim
-        n_dim = self.vision_dim // self.cluster_shape[1] if self.is_galaxy else self.vision_dim
-        # WO weight K dimension is n_heads * padded_head_dim (e.g. 1536), not vision_dim (1280)
-        # Use in0_block_w=2 which safely divides all possible Kt values
+        num_rows = lambda seq_len: min(seq_len, 2048)
+        # Vision encoder runs replicated (no tensor parallelism), so use full dimensions
+        n_dim = self.vision_dim
         wo_k_dim = self.vision_n_heads * self.vision_padded_head_dim
 
         # SDPA program config: f(seq_len) or f(seq_len, chunk_start_idx) for chunked prefill
@@ -88,7 +86,7 @@ class VisionModelArgs(ModelArgs):
             k=wo_k_dim,
             n=n_dim,
             grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-            in0_block_w=1 if self.is_galaxy else 2,
+            in0_block_w=2,
             fuse_batch=seq_len <= 1024,
         )
 

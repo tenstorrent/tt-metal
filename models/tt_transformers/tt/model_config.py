@@ -641,8 +641,9 @@ class ModelArgs:
             )
             if self.num_devices == 32:
                 lm_head_num_rows = 4
-                while self.dim % (32 * 32 * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
+                if self.dim % (32 * 32) == 0:
+                    while self.dim % (32 * 32 * lm_head_num_rows) != 0:
+                        lm_head_num_rows -= 1
             else:
                 lm_head_num_rows = 8
             lm_head_cores_per_row = 8
@@ -2253,8 +2254,8 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": None, "P150x4": None},
-                "olmOCR-2-7B-1025": {"N150": 4, "N300": 16, "T3K": 128, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
+                "olmOCR-2-7B-1025": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
@@ -2532,9 +2533,9 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
 
-        # Pad heads so T3K TP=8 divisibility is satisfied for Qwen2.5-VL-7B and olmOCR-2-7B-1025
-        # Also apply to N150x4 when running with T3K configuration (T3K4 mode)
-        if self.device_name == "T3K" and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B"):
+        # Pad heads so divisibility by 8 is satisfied for Qwen2.5-VL-7B and olmOCR-2-7B-1025
+        # T3K needs it for TP=8; TG needs it because 2D weight sharding splits QKV across 8 mesh rows
+        if self.device_name in ("T3K", "TG") and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B"):
             self.n_heads = 32  # padded from 28 (nearest mult of 8)
             self.n_kv_heads = 8  # padded from 4 (nearest mult of 8)
 
@@ -2576,9 +2577,10 @@ class ModelArgs:
             2,
             4,
             8,
+            32,
         ]:
             raise AssertionError(
-                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), or 8 devices (T3K), run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), 8 devices (T3K), or 32 devices (TG), run on an N300 or use MESH_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim

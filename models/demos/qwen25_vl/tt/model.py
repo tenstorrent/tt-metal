@@ -2,19 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen25_vl.tt.rope import RotarySetup
 from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.common import get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
@@ -126,7 +127,7 @@ class VisionTransformer(LightweightModule):
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(
             x,
-            force_replicated=False if self.args.is_galaxy else True,
+            force_replicated=True,
         )
         return x
 
@@ -189,21 +190,10 @@ class DropInVisionTransformer(torch.nn.Module):
         reference_model,
         model_args: VisionModelArgs,
         dtype=ttnn.bfloat8_b,
-        debug=False,
     ):
-        """
-        Initialize the TorchVisionTransformer wrapper.
-
-        Args:
-            tt_model (VisionTransformer): Initialized TT VisionTransformer instance.
-            reference_model (Qwen2_5_VisionTransformerPretrainedModel): Initialized reference HF model instance.
-            model_args (VisionModelArgs): Model configuration arguments.
-            mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
-        """
         super().__init__()
         self.reference_model = reference_model
         self.model_args = model_args
-        self.debug = debug
 
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
@@ -374,11 +364,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 .unsqueeze(0)
             )
             # Convert to TT tensors on the mesh device
-            vision_mesh_mapper = (
-                ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0)
-                if self.model_args.is_galaxy
-                else ttnn.ReplicateTensorToMesh(self.model_args.mesh_device)
-            )
+            vision_mesh_mapper = ttnn.ReplicateTensorToMesh(self.model_args.mesh_device)
             cos = ttnn.from_torch(
                 cos_padded,
                 dtype=ttnn.bfloat16,
@@ -459,12 +445,6 @@ class DropInVisionTransformer(torch.nn.Module):
             reverse_indices = torch.argsort(window_index)
             final_output = tt_output_torch[reverse_indices, :]
 
-            if self.debug:
-                logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output = self.reference_model.forward(pixel_values, grid_thw)
-                _, pcc = comp_pcc(reference_output, final_output)
-                logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
-
             final_outputs.append(final_output)
 
         # concatenate all the outputs
@@ -485,7 +465,16 @@ class Transformer(TTTransformer):
         rope_setup_class=None,
         prefetcher=None,
     ):
-        # Call parent constructor with vision-specific classes
+        if args.is_galaxy:
+            self._apply_tg_patches(args)
+            # Qwen2.5-VL vocab_size=152064 exceeds Galaxy default padded_vocab_size=131072.
+            # On-device sampling computes per-device offsets from padded_vocab_size; an
+            # undersized value produces wrong global token IDs from row 1+ → garbage output.
+            if args.padded_vocab_size is not None and args.vocab_size > args.padded_vocab_size:
+                rows = args.cluster_shape[0]
+                align = rows * args.tile_size
+                args.padded_vocab_size = math.ceil(args.vocab_size / align) * align
+
         super().__init__(
             args=args,
             dtype=dtype,
@@ -496,6 +485,446 @@ class Transformer(TTTransformer):
             use_paged_kv_cache=use_paged_kv_cache,
             attention_class=Attention,
             rope_setup_class=RotarySetup,
+        )
+
+        if args.is_galaxy:
+            self._undo_tg_patches(args)
+            self._rebuild_tg_attention_biases(args, state_dict, weight_cache_path)
+            self._upgrade_tg_decode_precision(args)
+            self._replace_lm_head(args, mesh_device, dtype, state_dict, weight_cache_path)
+
+    @staticmethod
+    def _apply_tg_patches(args):
+        """Monkey-patch DistributedNorm, head rearrangement, and configs before model creation."""
+        import models.tt_transformers.tt.attention as attn_module
+        import models.tt_transformers.tt.decoder as decoder_module
+        import models.tt_transformers.tt.distributed_norm as dn_module
+        import models.tt_transformers.tt.model as model_module
+        from models.demos.qwen25_vl.tt.distributed_norm import QwenDistributedNorm
+
+        Transformer._orig_dn_class = dn_module.DistributedNorm
+        dn_module.DistributedNorm = QwenDistributedNorm
+        decoder_module.DistributedNorm = QwenDistributedNorm
+        model_module.DistributedNorm = QwenDistributedNorm
+
+        Transformer._orig_needs_head_rearrangement = attn_module.Attention._needs_head_rearrangement
+        attn_module.Attention._needs_head_rearrangement = lambda self: (
+            self.args.device_name in ("T3K", "TG")
+            and hasattr(self.args, "base_model_name")
+            and self.args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B")
+        )
+
+        Transformer._pad_tg_head_counts(args)
+        Transformer._patch_tg_configs(args)
+
+    @staticmethod
+    def _pad_tg_head_counts(args):
+        """Pad n_heads/n_kv_heads so QKV weight rows align to head boundaries.
+
+        On TG (8×4), the QKV weight is sharded across 8 rows via
+        ShardTensor2dMesh(dims=(3,2)).  The attention module groups heads by
+        num_devices_per_group = n_kv_heads.  For Qwen-7B (28Q, 4KV, head_dim=128):
+
+            qkv_per_group = (7Q + 1K + 1V) × 128 = 1152
+            qkv_size      = 4 × 1152 = 4608
+            per_row        = 4608 / 8 = 576  ← NOT a multiple of head_dim!
+
+        nlp_create_qkv_heads_decode infers head_dim = 576/9 = 64 (wrong).
+
+        Fix: set n_kv_heads = n_rows so every row is its own device-group.
+        Replicate each KV head to fill extra rows, pad Q heads with zeros:
+
+            n_kv_heads  4 → 8   (each KV head duplicated to 2 rows)
+            n_heads    28 → 32  (4 zero-padded Q heads, one per odd row)
+            qkv_size         → 128 × (32 + 16) = 6144
+            per_row           = 6144 / 8 = 768 = 6 × 128  ✓
+        """
+        n_rows = args.cluster_shape[0]
+        if args.n_kv_heads >= n_rows:
+            return
+
+        Transformer._orig_n_heads = args.n_heads
+        Transformer._orig_n_kv_heads = args.n_kv_heads
+        Transformer._orig_qkv_size = args.qkv_size
+
+        orig_gqa = args.n_heads // args.n_kv_heads
+        devs_per_kv = n_rows // args.n_kv_heads
+        heads_per_dev = math.ceil(orig_gqa / devs_per_kv)
+
+        args.n_kv_heads = n_rows
+        args.n_heads = heads_per_dev * n_rows
+        args.qkv_size = args.head_dim * (2 * args.n_kv_heads + args.n_heads)
+
+    @staticmethod
+    def _pad_tg_state_dict(state_dict, args):
+        """No-op: _rearrange_qkv_2d / _rearrange_wo / _rearrange_qkv_1d in the
+        Attention module already handle Q zero-padding, K/V duplication, and Wo
+        column padding via the head-order lists built by _head_rearrangement_params.
+        Pre-padding the state_dict here would shift the indices those methods use,
+        causing K/V heads to be mapped incorrectly (e.g. kv2/kv3 lost entirely).
+        """
+
+    @staticmethod
+    def _undo_tg_patches(args):
+        """Restore the original DistributedNorm and Attention classes."""
+        import models.tt_transformers.tt.attention as attn_module
+        import models.tt_transformers.tt.decoder as decoder_module
+        import models.tt_transformers.tt.distributed_norm as dn_module
+        import models.tt_transformers.tt.model as model_module
+
+        orig = Transformer._orig_dn_class
+        dn_module.DistributedNorm = orig
+        decoder_module.DistributedNorm = orig
+        model_module.DistributedNorm = orig
+
+        attn_module.Attention._needs_head_rearrangement = Transformer._orig_needs_head_rearrangement
+
+        if hasattr(Transformer, "_orig_n_heads"):
+            args.n_heads = Transformer._orig_n_heads
+            args.n_kv_heads = Transformer._orig_n_kv_heads
+            args.qkv_size = Transformer._orig_qkv_size
+            del Transformer._orig_n_heads
+            del Transformer._orig_n_kv_heads
+            del Transformer._orig_qkv_size
+
+    def _rebuild_tg_attention_biases(self, args, state_dict, weight_cache_path):
+        """Rebuild QKV bias tensors on each attention layer for TG (8,4) mesh.
+
+        The base Attention.__init__ shards biases with ShardTensorToMesh across
+        all 32 devices, which gives the wrong device-to-bias mapping on a 2D mesh.
+        This method replaces them with correctly sharded biases:
+          1. Chunked by num_devices_per_group (8 mesh rows), not 32
+          2. Sharded with ShardTensor2dMesh(dims=(3, None)) -- across rows, replicated cols
+          3. Scaled by 1/cs[1] (1/4) so the existing pre-all-reduce bias addition
+             in the base forward methods yields the correct result after column-wise
+             all-reduce: 4 * (bias/4) = bias
+        """
+        cs = args.cluster_shape
+        bias_mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, None), mesh_shape=cs)
+        needs_rearrangement = (
+            args.device_name in ("T3K", "TG")
+            and hasattr(args, "base_model_name")
+            and args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B")
+        )
+
+        for layer_idx in range(args.n_layers):
+            attn = self.layers[layer_idx].attention
+            if attn.wqkv_bias_prefill is None:
+                continue
+
+            ttnn.deallocate(attn.wqkv_bias_prefill)
+            for b in attn.wqkv_bias_decode:
+                ttnn.deallocate(b)
+
+            layer_name = args.get_state_dict_prefix("Attention", layer_idx)
+            if args.dummy_weights or weight_cache_path is None:
+                cache_name = lambda _: None
+            else:
+                cache_name = lambda name, _ln=layer_name: weight_cache_path / f"{_ln}.{name}"
+
+            wq_bias = state_dict[f"{layer_name}.wq.bias"]
+            wk_bias = state_dict[f"{layer_name}.wk.bias"]
+            wv_bias = state_dict[f"{layer_name}.wv.bias"]
+
+            if needs_rearrangement:
+                wq_bias, wk_bias, wv_bias = attn._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
+
+            num_chunks = attn.num_devices_per_group
+            qkv_bias = torch.concat(
+                [
+                    torch.concat(
+                        [
+                            torch.chunk(wq_bias, num_chunks)[i],
+                            torch.chunk(wk_bias, num_chunks)[i],
+                            torch.chunk(wv_bias, num_chunks)[i],
+                        ],
+                        dim=-1,
+                    )
+                    for i in range(num_chunks)
+                ],
+                dim=-1,
+            )
+            qkv_bias = qkv_bias / cs[1]
+
+            attn.wqkv_bias_prefill = ttnn.as_tensor(
+                qkv_bias.reshape(1, 1, 1, -1),
+                device=self.mesh_device,
+                mesh_mapper=bias_mesh_mapper,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wqkv_bias_prefill_tg_2d"),
+            )
+
+            attn.wqkv_bias_decode = []
+            for batch_size in range(
+                args.tile_size,
+                args.max_batch_size + args.tile_size,
+                args.tile_size,
+            ):
+                qkv_bias_decode = qkv_bias.unsqueeze(0).expand(batch_size, -1)
+                bias_tensor = ttnn.as_tensor(
+                    qkv_bias_decode.unsqueeze(0).unsqueeze(0),
+                    device=self.mesh_device,
+                    mesh_mapper=bias_mesh_mapper,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    cache_file_name=cache_name(f"wqkv_bias_decode_tg_2d_{batch_size}"),
+                )
+                attn.wqkv_bias_decode.append(bias_tensor)
+
+    def _upgrade_tg_decode_precision(self, args):
+        """Upgrade attention precision from BFP8 to BF16 on TG.
+
+        On TG, ccl_dtype defaults to BFP8, which is used for:
+          - Prefill QKV matmul output and all-reduce
+          - Prefill Wo all-reduce
+          - Decode QKV matmul output and all-reduce
+
+        activation_dtype defaults to None (→ BFP8) and controls:
+          - Prefill Wo matmul output
+          - Prefill SDPA Q typecast
+
+        Upgrading both to BF16 improves the KV cache precision (K/V
+        values written during prefill carry BF16 precision instead of
+        BFP8), which reduces softmax-amplified errors in decode SDPA.
+        The decode Wo path is also upgraded via explicit overrides.
+        """
+        for layer_idx in range(args.n_layers):
+            attn = self.layers[layer_idx].attention
+            attn.ccl_dtype = ttnn.bfloat16
+            attn.activation_dtype = ttnn.bfloat16
+            attn.wo_output_dtype = ttnn.bfloat16
+            attn.wo_ccl_dtype = ttnn.bfloat16
+
+    @staticmethod
+    def _find_tile_compatible_grid(k_val, n_val, tile=32, max_dim=8):
+        """Find a (rows, cols) grid where k_val%(tile*cols)==0 and n_val%(tile*rows)==0."""
+        k_tiles = k_val // tile
+        n_tiles = n_val // tile
+        best_cols = 1
+        for c in range(1, max_dim + 1):
+            if k_tiles % c == 0:
+                best_cols = c
+        best_rows = 1
+        for r in range(1, max_dim + 1):
+            if n_tiles % r == 0:
+                best_rows = r
+        return (best_rows, best_cols)
+
+    @staticmethod
+    def _tiles_to_coregrid(num_tiles):
+        """Convert tile count to a CoreGrid(y, x) with both dims <= 8."""
+        n = num_tiles
+        if n % 8 == 0:
+            return ttnn.CoreGrid(y=n // 8, x=8)
+        for y in range(1, 9):
+            if n % y == 0 and n // y <= 8:
+                return ttnn.CoreGrid(y=y, x=n // y)
+        raise ValueError(f"Cannot create core grid for {n} cores within 8x8")
+
+    @staticmethod
+    def _patch_tg_configs(args):
+        """Override MLP and attention configs that fail for dim=3584 on TG.
+
+        The base TG configs in model_config.py are parameterised for models with
+        tile-aligned dimension splits (e.g. Llama-70B dim=8192). Qwen-2.5-VL
+        (dim=3584, hidden_dim=18944) produces non-tile-aligned shards when
+        divided by the standard TG core counts.  This method overwrites every
+        config that would produce a shard width not divisible by 32.
+        """
+        from functools import lru_cache
+
+        from models.tt_transformers.tt.common import Mode
+
+        dim = args.dim
+        hidden_dim = args.hidden_dim
+        cs = args.cluster_shape
+        tile = 32
+        qkv_size = args.qkv_size
+
+        # ------------------------------------------------------------------ #
+        # MLP program configs                                                 #
+        # ------------------------------------------------------------------ #
+        @lru_cache(maxsize=None)
+        def get_mlp_ff1_3_prg_config(mode, seq_len=1, prefetcher=None):
+            if mode == Mode.DECODE:
+                return args.matmul_1d_config_from_tensor_shapes(
+                    (1, 1, 32, dim // 4),
+                    (1, 1, dim // 4, hidden_dim // 8),
+                    grid=ttnn.CoreGrid(x=8, y=2),
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
+            elif mode == Mode.PREFILL:
+                k_val = dim // cs[1]
+                n_val = hidden_dim // cs[1]
+                grid = Transformer._find_tile_compatible_grid(k_val, n_val)
+                return args.matmul_config(
+                    m=min(seq_len, args.prefill_len_cutoff),
+                    k=k_val,
+                    n=n_val,
+                    grid_size=grid,
+                )
+
+        @lru_cache(maxsize=None)
+        def get_mlp_ff2_prg_config(mode, seq_len=1, prefetcher=None):
+            if mode == Mode.DECODE:
+                return args.matmul_1d_config(
+                    m=32,
+                    k=hidden_dim // 8,
+                    n=dim // 4,
+                    grid=ttnn.CoreGrid(x=8, y=2),
+                    overwrite_per_core_k=2,
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
+            elif mode == Mode.PREFILL:
+                k_val = hidden_dim // cs[0]
+                n_val = dim // cs[1]
+                grid = Transformer._find_tile_compatible_grid(k_val, n_val)
+                return args.matmul_config(
+                    m=min(seq_len, args.prefill_len_cutoff),
+                    k=k_val,
+                    n=n_val,
+                    grid_size=grid,
+                )
+
+        args.get_mlp_ff1_3_prg_config = get_mlp_ff1_3_prg_config
+        args.get_mlp_ff2_prg_config = get_mlp_ff2_prg_config
+
+        # ------------------------------------------------------------------ #
+        # MLP all-reduce memory configs                                       #
+        # ------------------------------------------------------------------ #
+        # FF1/3 output per row device: hidden_dim/cs[0].
+        # 18944/8 = 2368 = 74 tiles; 74 = 2*37, no grid ≤8×8 gives many cores.
+        # Fall back to DRAM to avoid tile-alignment issues.
+        args.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
+
+        # FF2 all-reduce output: dim/cs[1] = 896 = 28 tiles → 28 cores, shard=32
+        dim_per_col = dim // cs[1]
+        dim_per_col_tiles = dim_per_col // tile
+        ff2_ar_grid = Transformer._tiles_to_coregrid(dim_per_col_tiles)
+        ff2_ar_shard_cfg = lambda mesh_rows: ttnn.create_sharded_memory_config(
+            shape=(tile * mesh_rows, tile),
+            core_grid=ff2_ar_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        args.model_config["SELF_OUT_GATHERED_MEMCFG"] = ff2_ar_shard_cfg
+
+        orig_ff2_ar = args.get_mlp_ff2_all_reduce_mem_config
+
+        def get_mlp_ff2_all_reduce_mem_config(mode, tensor):
+            if mode == Mode.DECODE and args.is_galaxy:
+                return ff2_ar_shard_cfg(cs[0])
+            return orig_ff2_ar(mode, tensor)
+
+        args.get_mlp_ff2_all_reduce_mem_config = get_mlp_ff2_all_reduce_mem_config
+
+        # ------------------------------------------------------------------ #
+        # Attention QKV program config                                        #
+        # ------------------------------------------------------------------ #
+        orig_qkv_prg = args.get_attn_qkv_program_config
+
+        def get_attn_qkv_program_config(mode, seq_len=1, prefetcher=None):
+            if mode == Mode.DECODE and prefetcher is None:
+                return None
+            return orig_qkv_prg(mode, seq_len, prefetcher)
+
+        args.get_attn_qkv_program_config = get_attn_qkv_program_config
+
+        # ------------------------------------------------------------------ #
+        # Attention QKV all-reduce output memory config                       #
+        # ------------------------------------------------------------------ #
+        qkv_per_row = qkv_size // cs[0]
+        qkv_tiles = qkv_per_row // tile
+        qkv_ar_grid = Transformer._tiles_to_coregrid(qkv_tiles)
+
+        orig_qkv_ar = args.get_attn_qkv_all_reduce_output_mem_config
+
+        def get_attn_qkv_all_reduce_output_mem_config(mode, mesh_cols=1, prefetcher=None):
+            if mode == Mode.DECODE and prefetcher is None:
+                return ttnn.create_sharded_memory_config(
+                    (tile * mesh_cols, tile),
+                    core_grid=qkv_ar_grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            return orig_qkv_ar(mode, mesh_cols, prefetcher)
+
+        args.get_attn_qkv_all_reduce_output_mem_config = get_attn_qkv_all_reduce_output_mem_config
+
+        # ------------------------------------------------------------------ #
+        # Attention gather-users memory config                                #
+        # ------------------------------------------------------------------ #
+        # After nlp_concat_heads_decode, width = n_local_heads * head_dim
+        n_local_heads = args.n_heads // cs[0]
+        gather_width = n_local_heads * args.head_dim
+        gather_tiles = gather_width // tile
+        gather_grid = Transformer._tiles_to_coregrid(gather_tiles)
+        args.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+            shape=(tile * mesh_cols, tile),
+            core_grid=gather_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # NOTE: Wo matmul uses the default core_grid=(4,8) auto-config.
+        # The input is sharded on 8x2 (from user_selection_matrix), so
+        # any program_config grid must contain that 8x2 grid.  Since
+        # 28 N-tiles can't divide evenly across any grid with x>=8,y>=2,
+        # we rely on ttnn's internal handling of non-integer tile distribution.
+
+    def _replace_lm_head(self, args, mesh_device, dtype, state_dict, weight_cache_path):
+        """Replace the base LMHead with a TG-compatible 2D-sharded version."""
+        from models.demos.qwen25_vl.tt.lm_head import QwenLMHead
+
+        self.lm_head = QwenLMHead(
+            args=args,
+            mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
+            dtype=ttnn.bfloat16,
+            state_dict=state_dict,
+            state_dict_prefix=args.get_state_dict_prefix("", None),
+            weight_cache_path=weight_cache_path,
+        )
+
+    def forward(
+        self,
+        x,
+        current_pos,
+        rot_mats_global=None,
+        rot_mats_local=None,
+        user_id=0,
+        mode=Mode.DECODE,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+    ):
+        if mode == Mode.PREFILL and self.args.is_galaxy:
+            ttnn.synchronize_device(self.mesh_device)
+
+        return super().forward(
+            x,
+            current_pos,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            user_id=user_id,
+            mode=mode,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            get_last_token=get_last_token,
+            kv_cache=kv_cache,
+            batch_size=batch_size,
         )
 
     def _prepare_cos_sin(self, rot_mats):
@@ -573,8 +1002,7 @@ class Transformer(TTTransformer):
     def prepare_inputs_prefill(self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
-        # tokens is actually embeddings
-        assert tokens.dim() == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
+        assert tokens.dim() == 3, "tokens should be a 3D tensor"
         S = tokens.shape[-2]
         tokens_embd = ttnn.from_torch(
             tokens.unsqueeze(1),
@@ -585,8 +1013,6 @@ class Transformer(TTTransformer):
                 mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
             ),
         )
-
-        # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
         assert (
             cos_matrix.shape[2] >= start_pos + S
@@ -595,7 +1021,6 @@ class Transformer(TTTransformer):
             cos_matrix[:, :, start_pos : start_pos + S, :],
             sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
-
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,

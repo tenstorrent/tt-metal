@@ -142,10 +142,11 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
+        ff1_dtype = getattr(self, "ff1_output_dtype", ttnn.bfloat8_b) if TG else activation_dtype or ttnn.bfloat16
         w1_out = ttnn.linear(
             x,
             self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            dtype=ff1_dtype,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
@@ -155,10 +156,11 @@ class MLP(LightweightModule):
             if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
+        ff3_dtype = getattr(self, "ff3_output_dtype", ttnn.bfloat8_b) if TG else activation_dtype or ttnn.bfloat16
         w3_out = ttnn.linear(
             x,
             self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            dtype=ff3_dtype,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
@@ -233,11 +235,12 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
+        silu_dtype = getattr(self, "silu_output_dtype", activation_dtype or ttnn.bfloat8_b)
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
+            dtype=silu_dtype,
             memory_config=w1_out.memory_config(),
         )
 
@@ -272,11 +275,14 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
+        w2_output_dtype = (
+            getattr(self, "w2_output_dtype", self.args.ccl_dtype) if TG else activation_dtype or ttnn.bfloat16
+        )
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
             compute_kernel_config=li_ff2_compute_kernel_cfg,
-            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+            dtype=w2_output_dtype,
             program_config=pc_2,
             memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
@@ -287,6 +293,7 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
+        w2_ccl_dtype = getattr(self, "w2_ccl_dtype", self.args.ccl_dtype)
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
@@ -298,7 +305,7 @@ class MLP(LightweightModule):
             rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
             if mode == Mode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
+            dtype=w2_ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
             chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,

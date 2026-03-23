@@ -384,7 +384,7 @@ def test_demo(
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
     else:
         visual_model = reference_model.visual
     processor = AutoProcessor.from_pretrained(ref_model_name)

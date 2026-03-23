@@ -63,7 +63,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         ),
         dtype=ttnn.bfloat16,
