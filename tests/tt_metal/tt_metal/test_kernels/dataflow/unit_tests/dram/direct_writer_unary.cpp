@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
+#include "api/kernel_thread_globals.h"
 #include "experimental/dataflow_buffer.h"
 #include "experimental/endpoints.h"
 #include "experimental/noc.h"
@@ -35,7 +36,7 @@ void kernel_main() {
     }
 
     // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
-    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
     for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
         noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
     }

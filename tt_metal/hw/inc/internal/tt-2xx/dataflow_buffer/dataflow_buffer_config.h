@@ -6,9 +6,9 @@
 
 #include <cstdint>
 
-namespace experimental {
+namespace dfb {
 
-enum AccessPattern : uint8_t {  // this should be put into experimental/hostdev or should it be a host file???
+enum AccessPattern : uint8_t {
     STRIDED,
     BLOCKED,
     UNKNOWN,
@@ -46,7 +46,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 }
 // NOLINTEND(readability-redundant-inline-specifier)
 
-// move configs and LocalDFBInterface structs to hw/inc/hostdev
+}  // namespace dfb
 
 /*
     tensix + dm or tensix + tensix via remapper dfb
@@ -64,7 +64,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     (36 + (44 * 12)) * 16 = 8336 bytes
 */
 struct dfb_txn_id_descriptor_t {
-    uint8_t txn_ids[NUM_TXN_IDS];
+    uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
     uint8_t num_txn_ids;
     uint8_t num_entries_per_txn_id;
@@ -89,11 +89,11 @@ struct dfb_initializer_t {  // 36 bytes
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 44 bytes
-    uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint32_t base_addr[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint32_t limit[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
                             // (R). TC can be value between 0 and 31 (5 bits, max of 4 TCs)
-    PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
+    dfb::PackedTileCounter packed_tile_counter[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     struct {
         uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
         uint8_t tc_init_done : 1;
@@ -118,62 +118,10 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint32_t base_addr;
     uint32_t limit;
     uint16_t capacity;
-    PackedTileCounter packed_tile_counter;
+    dfb::PackedTileCounter packed_tile_counter;
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-
-// TODO: Put LocalDFBInterface into device only header so fields can be ifdef for trisc vs dm
-
-// Per–tile-counter slot
-struct DFBTCSlot {
-    uint32_t rd_ptr;
-    uint32_t wr_ptr;
-    uint32_t base_addr;
-    uint32_t limit;
-    PackedTileCounter packed_tile_counter;
-} __attribute__((packed));
-
-// on WH/BH arrays will be sized to 1
-struct LocalDFBInterface {
-    DFBTCSlot tc_slots[MAX_NUM_TILE_COUNTERS_TO_RR];
-
-    uint32_t entry_size;
-    uint32_t stride_size;
-
-    // Entry indices tracking how many entries from DFB base the rd/wr pointers are
-    uint32_t stride_size_tiles; // used by triscs to calculate tile offset from base L1 address
-    uint32_t rd_entry_idx;
-    uint32_t wr_entry_idx;
-    uint32_t wr_entry_ptr;
-
-    uint8_t txn_ids[NUM_TXN_IDS];
-    uint8_t
-        num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t num_tcs_to_rr;
-    uint8_t num_txn_ids;
-    uint8_t tc_idx;
-    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
-    uint8_t broadcast_tc;       // DM-DM BLOCKED producer: post to all TCs instead of round-robin
-
-} __attribute__((packed));
-
-// Holds metadata for transaction ID based ISR handling
-// It is used by the ISR to understand which tile counters need to update which credits (post/ack)
-struct TxnDFBDescriptor {
-    uint8_t num_counters;
-    PackedTileCounter tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
-    union {
-        uint8_t tiles_to_post;
-        uint8_t tiles_to_ack;
-    } __attribute__((packed));
-};
-
-static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 103, "LocalDFBInterface size is incorrect");
-
-}  // namespace experimental

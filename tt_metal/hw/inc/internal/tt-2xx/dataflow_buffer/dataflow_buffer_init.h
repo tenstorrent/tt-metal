@@ -6,26 +6,18 @@
 
 #include <cstdint>
 
-#include "internal/dataflow_buffer_interface.h"
-#include "internal/circular_buffer_interface.h"  // for cb_addr_shift
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
+#include "internal/circular_buffer_interface.h"  // for cb_addr_shift
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
-#include "internal/tt-2xx/quasar/overlay/dataflow_buffer_isr.h"
 #else
 #include "ckernel_trisc_common.h"
 #endif
 
 #include "api/debug/dprint.h"
-
-// Global DFB interface array - defined in firmware, declared here for use by setup functions
-// For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
-extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS];
-#ifndef COMPILE_FOR_TRISC
-extern RemapperAPI g_remapper_configurator;
-#endif
-
-namespace experimental {
 
 FORCE_INLINE void setup_isr_csrs() {
 #ifndef COMPILE_FOR_TRISC
@@ -76,7 +68,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
 
             // Populate LocalDFBInterface from combined dfb_initializer_t + dfb_initializer_per_risc_t
-            LocalDFBInterface& dfb_interface = ::g_dfb_interface[logical_dfb_id];
+            LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
 
             // DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
             dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_and_init.num_tcs_to_rr;
@@ -129,7 +121,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     }
 
 #ifndef COMPILE_FOR_TRISC
-    // DM0 handles all remapper configuration and DM producer TC initialization
+    // DM0 handles all remapper configuration and transaction id ISR initialization
     if (hartid == 0) {
         // Pass A: configure remapper for all DM producers across all DFBs, then enable
         bool enable_remapper = false;
@@ -144,9 +136,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
             uint8_t num_producer_tcs = 0;
-            uint8_t producer_tcs[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t producer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
             uint8_t num_consumer_tcs = 0;
-            uint8_t consumer_tcs[MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+            uint8_t consumer_tcs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
             for (uint8_t i = 0; i < num_riscs; i++) {
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 
@@ -163,7 +155,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                         //        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                         g_remapper_configurator.configure_clientL_all_fields(
                             producer_client_type,
-                            get_counter_id(per_risc_ptr->packed_tile_counter[0]),
+                            dfb::get_counter_id(per_risc_ptr->packed_tile_counter[0]),
                             clientR_valid_mask,
                             1,  // is_producer
                             1,  // group mode
@@ -266,15 +258,15 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
                 // Note: resetting tile counters does not reset the buffer capacity to 0
                 for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
-                    PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
-                    uint8_t tc_id = get_counter_id(ptc);
+                    dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
+                    uint8_t tc_id = dfb::get_counter_id(ptc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
                     //         << " initializing tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
                     ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
 #elif !defined(COMPILE_FOR_TRISC)
-                    uint8_t tensix_id = get_tensix_id(ptc);
+                    uint8_t tensix_id = dfb::get_tensix_id(ptc);
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
                     //         << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
                     //         << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
@@ -319,5 +311,3 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     }
     // DPRINT << "all_tcs_initialized" << ENDL();
 }
-
-}  // namespace experimental
