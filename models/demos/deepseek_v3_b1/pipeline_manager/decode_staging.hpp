@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <cstdint>
 
 #include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
@@ -15,26 +17,43 @@ struct DecodeStagingEntry {
     int32_t user_id = -1;
     int32_t token_id = EMPTY_TOKEN;
     int32_t position = 0;
+    uint32_t generation = 0;
 };
 
 // Decode token handoff from Reader thread to Writer thread.
-// Reader stages completed decode tokens; Writer pops them for re-injection.
-// Stale entries from cancelled users are handled by the Writer checking
-// cancel_pending after popping — no per-entry invalidation needed.
+// Each entry carries a generation counter. The Writer skips entries
+// whose generation doesn't match the current user generation, handling
+// stale entries from cancelled sessions without timing dependencies.
 struct DecodeStaging {
     BoundedQueue<DecodeStagingEntry, MAX_USERS> fifo;
+    std::array<std::atomic<uint32_t>, MAX_USERS> generation;
 
-    void stage(int uid, int32_t tok, int32_t pos) { fifo.try_push({.user_id = uid, .token_id = tok, .position = pos}); }
+    DecodeStaging() {
+        for (int i = 0; i < MAX_USERS; i++) {
+            generation[i].store(0, std::memory_order_relaxed);
+        }
+    }
 
+    void advance_generation(int uid) { generation[uid].fetch_add(1, std::memory_order_release); }
+
+    void stage(int uid, int32_t tok, int32_t pos) {
+        uint32_t gen = generation[uid].load(std::memory_order_relaxed);
+        fifo.try_push({.user_id = uid, .token_id = tok, .position = pos, .generation = gen});
+    }
+
+    // Pops the next entry, silently skipping stale entries from old generations.
     bool try_pop(int& uid, int32_t& tok, int32_t& pos) {
         DecodeStagingEntry entry;
-        if (!fifo.try_pop(entry)) {
-            return false;
+        while (fifo.try_pop(entry)) {
+            uint32_t current_gen = generation[entry.user_id].load(std::memory_order_acquire);
+            if (entry.generation == current_gen) {
+                uid = entry.user_id;
+                tok = entry.token_id;
+                pos = entry.position;
+                return true;
+            }
         }
-        uid = entry.user_id;
-        tok = entry.token_id;
-        pos = entry.position;
-        return true;
+        return false;
     }
 };
 

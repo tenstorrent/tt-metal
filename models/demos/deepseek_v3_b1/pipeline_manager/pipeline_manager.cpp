@@ -122,6 +122,10 @@ struct PipelineManager::Impl {
 
                 bool is_last = (cur_pos == prompt_len - 1);
 
+                user_table.prefill_pos[pfuid] = cur_pos + 1;
+                user_table.current_position[pfuid].store(cur_pos + 1, std::memory_order_release);
+                user_table.prefill_chunk_remaining[pfuid] = chunk_rem - 1;
+
                 pipeline.inject(InjectDescriptor{
                     .user_id = static_cast<int32_t>(pfuid),
                     .token_id = prompt_table.get_token(pfuid, cur_pos),
@@ -133,9 +137,6 @@ struct PipelineManager::Impl {
                     .top_k = user_table.top_k[pfuid],
                 });
                 user_table.in_flight_count[pfuid].fetch_add(1, std::memory_order_relaxed);
-                user_table.prefill_pos[pfuid] = cur_pos + 1;
-                user_table.current_position[pfuid] = cur_pos + 1;
-                user_table.prefill_chunk_remaining[pfuid] = chunk_rem - 1;
                 continue;
             }
 
@@ -176,22 +177,26 @@ struct PipelineManager::Impl {
             bool is_max = (user_table.tokens_generated[uid] >= user_table.max_new_tokens[uid]);
             bool is_complete = is_eos || is_max;
 
-            output_queue.try_push(OutputMessage{
+            OutputMessage msg{
                 .user_id = static_cast<int32_t>(uid),
                 .token_id = tok,
                 .is_eos = is_eos,
                 .is_complete = is_complete,
                 .tokens_generated = user_table.tokens_generated[uid],
-            });
+                .generation = decode_staging.generation[uid].load(std::memory_order_relaxed),
+            };
+            while (!output_queue.try_push(msg)) {
+                std::this_thread::yield();
+            }
 
             if (is_complete) {
                 user_table.state[uid].store(UserState::COMPLETE, std::memory_order_release);
             } else {
                 // Decode loopback: stage token for re-injection by Writer.
                 // current_position is the next free KV slot.
-                int32_t next_pos = user_table.current_position[uid];
+                int32_t next_pos = user_table.current_position[uid].load(std::memory_order_acquire);
                 decode_staging.stage(uid, tok, next_pos);
-                user_table.current_position[uid] = next_pos + 1;
+                user_table.current_position[uid].store(next_pos + 1, std::memory_order_release);
             }
         }
     }
@@ -210,11 +215,14 @@ struct PipelineManager::Impl {
                         user_table.reset(uid);
                         cancel_pending.clear(uid);
                     }
-                    response_queue.try_push(PMResponse{
+                    PMResponse resp{
                         .request_id = req.request_id,
                         .user_id = static_cast<int32_t>(uid),
                         .error_code = (uid < 0) ? 1 : 0,
-                    });
+                    };
+                    while (!response_queue.try_push(resp)) {
+                        std::this_thread::yield();
+                    }
                     break;
                 }
 
@@ -222,7 +230,7 @@ struct PipelineManager::Impl {
                     int uid = req.user_id;
                     prompt_table.store(uid, req.tokens.data(), req.token_count);
                     user_table.state[uid].store(UserState::PREFILL, std::memory_order_release);
-                    user_table.current_position[uid] = 0;
+                    user_table.current_position[uid].store(0, std::memory_order_relaxed);
                     user_table.prefill_pos[uid] = 0;
                     user_table.max_new_tokens[uid] = req.max_new_tokens;
                     user_table.tokens_generated[uid] = 0;
@@ -238,7 +246,7 @@ struct PipelineManager::Impl {
 
                 case RequestType::CONTINUE: {
                     int uid = req.user_id;
-                    int start_pos = user_table.current_position[uid];
+                    int start_pos = user_table.current_position[uid].load(std::memory_order_relaxed);
                     prompt_table.store(uid, req.tokens.data(), req.token_count, start_pos);
 
                     user_table.state[uid].store(UserState::PREFILL, std::memory_order_release);
@@ -256,6 +264,7 @@ struct PipelineManager::Impl {
                 case RequestType::CANCEL: {
                     int uid = req.user_id;
                     cancel_pending.mark(uid);
+                    decode_staging.advance_generation(uid);
                     prefill_queue.remove(uid);
                     maybe_finalize_cleanup(uid);
                     break;

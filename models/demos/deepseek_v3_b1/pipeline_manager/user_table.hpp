@@ -16,7 +16,7 @@ namespace models::demos::deepseek_v3_b1::pipeline_manager {
 // Per-user register file. MAX_USERS entries, parallel arrays indexed by user_id.
 struct UserTable {
     std::array<std::atomic<UserState>, MAX_USERS> state;
-    std::array<int32_t, MAX_USERS> current_position;
+    std::array<std::atomic<int32_t>, MAX_USERS> current_position;
     std::array<int32_t, MAX_USERS> max_new_tokens;
     std::array<int32_t, MAX_USERS> tokens_generated;
     std::array<std::atomic<int32_t>, MAX_USERS> in_flight_count;
@@ -37,7 +37,7 @@ struct UserTable {
 
     void reset(int uid) {
         state[uid].store(UserState::INACTIVE, std::memory_order_relaxed);
-        current_position[uid] = 0;
+        current_position[uid].store(0, std::memory_order_relaxed);
         max_new_tokens[uid] = 0;
         tokens_generated[uid] = 0;
         in_flight_count[uid].store(0, std::memory_order_relaxed);

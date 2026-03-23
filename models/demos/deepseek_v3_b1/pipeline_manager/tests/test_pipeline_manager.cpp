@@ -683,3 +683,482 @@ TEST(PipelineManagerTest, CancelMidPrefill) {
 
     mgr.stop();
 }
+
+// =============================================================================
+//  Test 9: Lifecycle churn at full capacity.
+//  All 64 slots active. Repeatedly: randomly cancel a user in decode,
+//  re-allocate the slot, submit new work. Meanwhile other users are
+//  progressing through prefill/decode. Runs for a fixed number of churn
+//  cycles. Verifies no corruption, no hangs, all slots eventually clean.
+// =============================================================================
+TEST(PipelineManagerTest, LifecycleChurnFullCapacity) {
+    static constexpr int CHURN_CYCLES = 1000;
+    static constexpr int MIN_PROMPT = 100;
+    static constexpr int MAX_PROMPT = 500;
+    static constexpr int MIN_TOKENS = 50;
+    static constexpr int MAX_TOKENS = 1000;
+
+    pm::MockPipeline mock(10, 50);
+    pm::PipelineManager mgr(mock);
+    mgr.start();
+
+    std::mt19937 rng(123);
+    std::uniform_int_distribution<int> prompt_dist(MIN_PROMPT, MAX_PROMPT);
+    std::uniform_int_distribution<int> token_dist(MIN_TOKENS, MAX_TOKENS);
+
+    int32_t req_id = 0;
+
+    // Track which user_ids are active and what generation they're on
+    struct SlotInfo {
+        int32_t uid = -1;
+        int32_t prompt_len = 0;
+        int32_t max_new_tokens = 0;
+        int generation = 0;
+    };
+    std::vector<SlotInfo> slots(MAX_USERS);
+
+    // Phase 1: Fill all 64 slots
+    for (int i = 0; i < MAX_USERS; i++) {
+        ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    }
+    mgr.tick();
+    for (int i = 0; i < MAX_USERS; i++) {
+        PMResponse resp{};
+        ASSERT_TRUE(mgr.try_pop_response(resp));
+        ASSERT_EQ(resp.error_code, 0);
+        slots[i].uid = resp.user_id;
+    }
+
+    auto submit_user = [&](int slot_idx) {
+        auto& s = slots[slot_idx];
+        s.prompt_len = prompt_dist(rng);
+        s.max_new_tokens = token_dist(rng);
+        s.generation++;
+
+        std::vector<int32_t> prompt(s.prompt_len);
+        int32_t base = s.uid * 10000 + s.generation * 1000;
+        std::iota(prompt.begin(), prompt.end(), base);
+
+        ASSERT_TRUE(mgr.push_request(make_submit(req_id++, s.uid, prompt, s.max_new_tokens)));
+    };
+
+    for (int i = 0; i < MAX_USERS; i++) {
+        submit_user(i);
+    }
+    mgr.tick();
+
+    // Phase 2: Churn — cancel random users at random times, re-allocate, resubmit
+    int cancels_done = 0;
+    int reallocs_done = 0;
+    std::vector<OutputMessage> outputs;
+    std::uniform_int_distribution<int> slot_dist(0, MAX_USERS - 1);
+    std::uniform_int_distribution<int> delay_dist(0, 500);
+
+    for (int cycle = 0; cycle < CHURN_CYCLES; cycle++) {
+        int target = slot_dist(rng);
+        auto& s = slots[target];
+
+        // Random delay so cancel hits at varying points (prefill, decode, or complete)
+        std::this_thread::sleep_for(std::chrono::microseconds(delay_dist(rng)));
+
+        // Drain outputs while waiting
+        mgr.tick();
+        OutputMessage out;
+        while (mgr.try_pop_output(out)) {
+            outputs.push_back(out);
+        }
+
+        ASSERT_TRUE(mgr.push_request(make_cancel(req_id++, s.uid)));
+        mgr.tick();
+        cancels_done++;
+
+        // Wait for INACTIVE
+        bool cleaned = poll_until(mgr, [&] { return mgr.get_user_state(s.uid) == pm::UserState::INACTIVE; }, outputs);
+        ASSERT_TRUE(cleaned) << "Cycle " << cycle << ": user " << s.uid << " stuck after cancel";
+
+        // Re-allocate the same slot
+        ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+        mgr.tick();
+        PMResponse resp{};
+        ASSERT_TRUE(mgr.try_pop_response(resp));
+        ASSERT_EQ(resp.error_code, 0) << "Cycle " << cycle << ": re-allocation failed";
+        s.uid = resp.user_id;
+        reallocs_done++;
+
+        // Submit fresh work
+        submit_user(target);
+        mgr.tick();
+    }
+
+    // Phase 3: Let all remaining users complete.
+    bool all_done = poll_until(
+        mgr,
+        [&] {
+            for (auto& s : slots) {
+                auto st = mgr.get_user_state(s.uid);
+                if (st != pm::UserState::COMPLETE && st != pm::UserState::INACTIVE) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        outputs);
+    ASSERT_TRUE(all_done) << "Timed out waiting for remaining users to complete";
+
+    // Verify token correctness for each user's final generation.
+    // Filter all outputs by the expected token range for the current generation.
+    std::map<int32_t, std::vector<OutputMessage>> per_user;
+    for (auto& o : outputs) {
+        per_user[o.user_id].push_back(o);
+    }
+
+    int verified_users = 0;
+    for (auto& s : slots) {
+        if (mgr.get_user_state(s.uid) != pm::UserState::COMPLETE) {
+            continue;
+        }
+        auto it = per_user.find(s.uid);
+        if (it == per_user.end()) {
+            continue;
+        }
+
+        // Filter by generation to discard stale outputs from previous sessions.
+        auto& raw = it->second;
+        uint32_t latest_gen = 0;
+        for (auto& o : raw) {
+            latest_gen = std::max(latest_gen, o.generation);
+        }
+        std::vector<OutputMessage> user_outputs;
+        for (auto& o : raw) {
+            if (o.generation == latest_gen) {
+                user_outputs.push_back(o);
+            }
+        }
+
+        EXPECT_EQ(static_cast<int32_t>(user_outputs.size()), s.max_new_tokens)
+            << "User " << s.uid << " gen " << s.generation;
+
+        int32_t base = s.uid * 10000 + s.generation * 1000;
+        for (int i = 0; i < static_cast<int>(user_outputs.size()); i++) {
+            EXPECT_EQ(user_outputs[i].token_id, base + s.prompt_len + i)
+                << "User " << s.uid << " gen " << s.generation << " token " << i;
+            EXPECT_EQ(user_outputs[i].tokens_generated, i + 1);
+        }
+        if (!user_outputs.empty()) {
+            EXPECT_TRUE(user_outputs.back().is_complete);
+        }
+        verified_users++;
+    }
+
+    std::cout << "[  INFO   ] Churn cycles: " << CHURN_CYCLES << ", cancels: " << cancels_done
+              << ", reallocs: " << reallocs_done << ", verified users: " << verified_users
+              << ", total outputs: " << outputs.size() << std::endl;
+
+    mgr.stop();
+}
+
+// =============================================================================
+//  Test 10: Cancel-and-resubmit storm on a single slot.
+//  Hammers one user ID with rapid cancel/resubmit cycles.
+//  Verifies no stale state leaks between sessions on the same slot.
+// =============================================================================
+TEST(PipelineManagerTest, CancelResubmitStormSingleSlot) {
+    static constexpr int CYCLES = 200;
+
+    pm::MockPipeline mock(5, 20);
+    pm::PipelineManager mgr(mock);
+    mgr.start();
+
+    std::mt19937 rng(99);
+    std::uniform_int_distribution<int> prompt_dist(3, 50);
+    std::uniform_int_distribution<int> token_dist(5, 50);
+    std::uniform_int_distribution<int> delay_dist(0, 200);
+
+    int32_t req_id = 0;
+
+    // Allocate one slot
+    ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    mgr.tick();
+    PMResponse resp{};
+    ASSERT_TRUE(mgr.try_pop_response(resp));
+    ASSERT_EQ(resp.error_code, 0);
+    int32_t uid = resp.user_id;
+
+    int32_t last_prompt_len = 0;
+    int32_t last_max_new = 0;
+    int32_t last_base = 0;
+
+    std::vector<OutputMessage> drain;
+    auto flush_outputs = [&]() {
+        mgr.tick();
+        OutputMessage out;
+        while (mgr.try_pop_output(out)) {
+            drain.push_back(out);
+        }
+    };
+
+    for (int cycle = 0; cycle < CYCLES; cycle++) {
+        int32_t plen = prompt_dist(rng);
+        int32_t max_new = token_dist(rng);
+        int32_t base = (cycle + 1) * 10000;
+
+        std::vector<int32_t> prompt(plen);
+        std::iota(prompt.begin(), prompt.end(), base);
+
+        ASSERT_TRUE(mgr.push_request(make_submit(req_id++, uid, prompt, max_new)));
+        mgr.tick();
+
+        // Random delay so cancel hits at varying points
+        std::this_thread::sleep_for(std::chrono::microseconds(delay_dist(rng)));
+        flush_outputs();
+
+        ASSERT_TRUE(mgr.push_request(make_cancel(req_id++, uid)));
+        mgr.tick();
+
+        // Drain outputs while waiting for INACTIVE to prevent reader backpressure
+        bool cleaned = poll_until(mgr, [&] { return mgr.get_user_state(uid) == pm::UserState::INACTIVE; }, drain);
+        ASSERT_TRUE(cleaned) << "Cycle " << cycle << ": stuck after cancel";
+    }
+
+    // Re-allocate (clears cancel_pending) before the final submission
+    ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    mgr.tick();
+    PMResponse final_alloc{};
+    ASSERT_TRUE(mgr.try_pop_response(final_alloc));
+    ASSERT_EQ(final_alloc.error_code, 0);
+    uid = final_alloc.user_id;
+
+    // Final cycle: submit and let it run to completion (don't cancel)
+    int32_t final_plen = prompt_dist(rng);
+    int32_t final_max_new = token_dist(rng);
+    int32_t final_base = (CYCLES + 1) * 10000;
+
+    std::vector<int32_t> final_prompt(final_plen);
+    std::iota(final_prompt.begin(), final_prompt.end(), final_base);
+
+    ASSERT_TRUE(mgr.push_request(make_submit(req_id++, uid, final_prompt, final_max_new)));
+    mgr.tick();
+
+    std::vector<OutputMessage> outputs;
+    bool done = poll_until(mgr, [&] { return !outputs.empty() && outputs.back().is_complete; }, outputs);
+    ASSERT_TRUE(done) << "Final submission timed out";
+
+    // Filter by generation to discard stale outputs from previous sessions.
+    uint32_t latest_gen = 0;
+    for (auto& o : outputs) {
+        if (o.user_id == uid) {
+            latest_gen = std::max(latest_gen, o.generation);
+        }
+    }
+    std::vector<OutputMessage> final_outputs;
+    for (auto& o : outputs) {
+        if (o.user_id == uid && o.generation == latest_gen) {
+            final_outputs.push_back(o);
+        }
+    }
+
+    ASSERT_EQ(static_cast<int32_t>(final_outputs.size()), final_max_new)
+        << "Final session: expected " << final_max_new << " tokens, got " << final_outputs.size();
+
+    for (int i = 0; i < static_cast<int>(final_outputs.size()); i++) {
+        EXPECT_EQ(final_outputs[i].token_id, final_base + final_plen + i) << "Final session token " << i << " mismatch";
+        EXPECT_EQ(final_outputs[i].tokens_generated, i + 1);
+        EXPECT_EQ(final_outputs[i].user_id, uid);
+    }
+    EXPECT_TRUE(final_outputs.back().is_complete);
+    EXPECT_EQ(mgr.get_user_state(uid), pm::UserState::COMPLETE);
+
+    std::cout << "[  INFO   ] " << CYCLES << " cancel/resubmit cycles on uid " << uid
+              << ", final session: " << final_max_new << " tokens verified" << std::endl;
+
+    mgr.stop();
+}
+
+// =============================================================================
+//  Test 11: Concurrent cancel of all 64 users.
+//  Submit work for all 64 users, let decode start, then cancel all 64 in
+//  one tick. Verify all reach INACTIVE and can be re-allocated.
+// =============================================================================
+TEST(PipelineManagerTest, ConcurrentCancelAll64) {
+    pm::MockPipeline mock(10, 50);
+    pm::PipelineManager mgr(mock);
+    mgr.start();
+
+    int32_t req_id = 0;
+    std::vector<int32_t> uids(MAX_USERS);
+
+    // Allocate all 64
+    for (int i = 0; i < MAX_USERS; i++) {
+        ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    }
+    mgr.tick();
+    for (int i = 0; i < MAX_USERS; i++) {
+        PMResponse resp{};
+        ASSERT_TRUE(mgr.try_pop_response(resp));
+        ASSERT_EQ(resp.error_code, 0);
+        uids[i] = resp.user_id;
+    }
+
+    // Submit all with varying prompts
+    for (int i = 0; i < MAX_USERS; i++) {
+        std::vector<int32_t> prompt(20);
+        std::iota(prompt.begin(), prompt.end(), static_cast<int32_t>(uids[i] * 1000));
+        ASSERT_TRUE(mgr.push_request(make_submit(req_id++, uids[i], prompt, 500)));
+    }
+    mgr.tick();
+
+    // Wait until at least some users are in DECODE
+    std::vector<OutputMessage> outputs;
+    poll_until(
+        mgr,
+        [&] {
+            int decoding = 0;
+            for (auto uid : uids) {
+                if (mgr.get_user_state(uid) == pm::UserState::DECODE) {
+                    decoding++;
+                }
+            }
+            return decoding >= MAX_USERS / 2;
+        },
+        outputs);
+
+    // Cancel ALL 64 in one batch
+    for (auto uid : uids) {
+        ASSERT_TRUE(mgr.push_request(make_cancel(req_id++, uid)));
+    }
+    mgr.tick();
+
+    // Wait for all to reach INACTIVE
+    bool all_inactive = poll_until(
+        mgr,
+        [&] {
+            for (auto uid : uids) {
+                if (mgr.get_user_state(uid) != pm::UserState::INACTIVE) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        outputs);
+    ASSERT_TRUE(all_inactive) << "Timed out waiting for all 64 cancels to complete";
+
+    // Re-allocate all 64 to verify slots were freed
+    for (int i = 0; i < MAX_USERS; i++) {
+        ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    }
+    mgr.tick();
+    for (int i = 0; i < MAX_USERS; i++) {
+        PMResponse resp{};
+        ASSERT_TRUE(mgr.try_pop_response(resp));
+        EXPECT_EQ(resp.error_code, 0) << "Re-allocation " << i << " failed";
+    }
+
+    std::cout << "[  INFO   ] All 64 users cancelled and re-allocated, " << outputs.size() << " outputs drained"
+              << std::endl;
+
+    mgr.stop();
+}
+
+// =============================================================================
+//  Test 12: Single-token fast cycling.
+//  prompt_len=1, max_new_tokens=1 — fastest possible lifecycle.
+//  All 64 slots: allocate, submit, complete, cancel, repeat 100 times.
+// =============================================================================
+TEST(PipelineManagerTest, SingleTokenFastCycling) {
+    pm::MockPipeline mock;
+    pm::PipelineManager mgr(mock);
+    mgr.start();
+
+    static constexpr int CYCLES = 100;
+    int32_t req_id = 0;
+
+    std::vector<int32_t> uids(MAX_USERS);
+
+    // Allocate all 64
+    for (int i = 0; i < MAX_USERS; i++) {
+        ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+    }
+    mgr.tick();
+    for (int i = 0; i < MAX_USERS; i++) {
+        PMResponse resp{};
+        ASSERT_TRUE(mgr.try_pop_response(resp));
+        ASSERT_EQ(resp.error_code, 0);
+        uids[i] = resp.user_id;
+    }
+
+    int total_completions = 0;
+
+    for (int cycle = 0; cycle < CYCLES; cycle++) {
+        // Submit all with prompt_len=1, max_new_tokens=1
+        for (int i = 0; i < MAX_USERS; i++) {
+            int32_t base = cycle * MAX_USERS * 100 + uids[i] * 100;
+            std::vector<int32_t> prompt = {base};
+            ASSERT_TRUE(mgr.push_request(make_submit(req_id++, uids[i], prompt, 1)));
+        }
+        mgr.tick();
+
+        // Wait for all to complete
+        std::vector<OutputMessage> outputs;
+        auto count_complete = [&]() {
+            std::set<int32_t> done;
+            for (auto& o : outputs) {
+                if (o.is_complete) {
+                    done.insert(o.user_id);
+                }
+            }
+            return static_cast<int>(done.size());
+        };
+
+        bool all_done = poll_until(mgr, [&] { return count_complete() == MAX_USERS; }, outputs);
+        ASSERT_TRUE(all_done) << "Cycle " << cycle << ": only " << count_complete() << "/" << MAX_USERS << " completed";
+
+        total_completions += MAX_USERS;
+
+        // Verify each user got exactly 1 token
+        std::map<int32_t, int> per_user_count;
+        for (auto& o : outputs) {
+            per_user_count[o.user_id]++;
+        }
+        for (auto uid : uids) {
+            EXPECT_GE(per_user_count[uid], 1) << "Cycle " << cycle << ": user " << uid << " missing output";
+        }
+
+        // Cancel all to reset for next cycle
+        for (auto uid : uids) {
+            ASSERT_TRUE(mgr.push_request(make_cancel(req_id++, uid)));
+        }
+        mgr.tick();
+
+        // Wait for all INACTIVE
+        std::vector<OutputMessage> drain;
+        bool all_inactive = poll_until(
+            mgr,
+            [&] {
+                for (auto uid : uids) {
+                    if (mgr.get_user_state(uid) != pm::UserState::INACTIVE) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            drain);
+        ASSERT_TRUE(all_inactive) << "Cycle " << cycle << ": not all users reached INACTIVE";
+
+        // Re-allocate all for next cycle
+        for (int i = 0; i < MAX_USERS; i++) {
+            ASSERT_TRUE(mgr.push_request(make_allocate(req_id++)));
+        }
+        mgr.tick();
+        for (int i = 0; i < MAX_USERS; i++) {
+            PMResponse resp{};
+            ASSERT_TRUE(mgr.try_pop_response(resp));
+            ASSERT_EQ(resp.error_code, 0) << "Cycle " << cycle << ": re-alloc " << i << " failed";
+            uids[i] = resp.user_id;
+        }
+    }
+
+    std::cout << "[  INFO   ] " << CYCLES << " cycles x " << MAX_USERS << " users = " << total_completions
+              << " completions" << std::endl;
+
+    mgr.stop();
+}

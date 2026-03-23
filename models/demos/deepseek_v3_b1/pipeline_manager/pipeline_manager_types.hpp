@@ -60,6 +60,7 @@ struct OutputMessage {
     bool is_eos = false;
     bool is_complete = false;
     int32_t tokens_generated = 0;
+    uint32_t generation = 0;
 };
 
 struct InjectDescriptor {

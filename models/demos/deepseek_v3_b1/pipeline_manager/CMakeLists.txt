@@ -7,6 +7,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 
+option(ENABLE_TSAN "Enable thread sanitizer" OFF)
+if(ENABLE_TSAN)
+    add_compile_options(
+        -fsanitize=thread
+        -g
+    )
+    add_link_options(-fsanitize=thread)
+endif()
+
 # ===========================================================================
 #  Core library — scheduling logic only, no hardware/socket dependencies.
 # ===========================================================================
