@@ -18,6 +18,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -45,6 +46,11 @@
 
 namespace tt::tt_metal::distributed::test {
 namespace {
+
+static_assert(!std::is_copy_constructible_v<MeshBuffer>, "MeshBuffer should not be copy constructible");
+static_assert(!std::is_copy_assignable_v<MeshBuffer>, "MeshBuffer should not be copy assignable");
+static_assert(std::is_move_constructible_v<MeshBuffer>, "MeshBuffer should be move constructible");
+static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move assignable");
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
@@ -278,6 +284,91 @@ TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{2, 4}));
 
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{1, 3}));
+}
+
+TEST_F(MeshBufferTestSuite, MoveConstructor) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto original_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto original_address = original_buffer->address();
+    const auto original_size = original_buffer->size();
+    const auto original_device_local_size = original_buffer->device_local_size();
+
+    EXPECT_TRUE(original_buffer->is_allocated());
+
+    MeshBuffer moved_buffer(std::move(*original_buffer));
+
+    EXPECT_TRUE(moved_buffer.is_allocated());
+    EXPECT_EQ(moved_buffer.address(), original_address);
+    EXPECT_EQ(moved_buffer.size(), original_size);
+    EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
+
+    EXPECT_FALSE(original_buffer->is_allocated());
+}
+
+TEST_F(MeshBufferTestSuite, MoveAssignment) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto source_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto source_address = source_buffer->address();
+    const auto source_size = source_buffer->size();
+    const auto source_device_local_size = source_buffer->device_local_size();
+
+    EXPECT_TRUE(source_buffer->is_allocated());
+
+    const ReplicatedBufferConfig target_buffer_config{.size = 8 << 10};
+    auto target_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
+    const auto target_original_address = target_buffer->address();
+
+    EXPECT_TRUE(target_buffer->is_allocated());
+    EXPECT_NE(target_buffer->address(), source_address);
+
+    *target_buffer = std::move(*source_buffer);
+
+    EXPECT_TRUE(target_buffer->is_allocated());
+    EXPECT_EQ(target_buffer->address(), source_address);
+    EXPECT_EQ(target_buffer->size(), source_size);
+    EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
+
+    EXPECT_FALSE(source_buffer->is_allocated());
+
+    auto new_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_EQ(new_buffer->address(), target_original_address);
+}
+
+TEST_F(MeshBufferTestSuite, MoveConstructorPreservesData) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 4096};
+    auto original_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    std::vector<uint32_t> src_vec(1024, 0);
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+
+    for (std::size_t col = 0; col < original_buffer->device()->num_cols(); col++) {
+        for (std::size_t row = 0; row < original_buffer->device()->num_rows(); row++) {
+            WriteShard(mesh_device_->mesh_command_queue(), original_buffer, src_vec, MeshCoordinate(row, col));
+        }
+    }
+
+    MeshBuffer moved_buffer(std::move(*original_buffer));
+
+    auto moved_buffer_ptr = std::shared_ptr<MeshBuffer>(&moved_buffer, [](MeshBuffer*) {});
+
+    for (std::size_t col = 0; col < moved_buffer.device()->num_cols(); col++) {
+        for (std::size_t row = 0; row < moved_buffer.device()->num_rows(); row++) {
+            std::vector<uint32_t> dst_vec = {};
+            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, moved_buffer_ptr, MeshCoordinate(row, col));
+            EXPECT_EQ(dst_vec, src_vec);
+        }
+    }
 }
 
 class DeviceLocalMeshBufferShardingTest
