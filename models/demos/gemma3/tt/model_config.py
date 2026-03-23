@@ -462,6 +462,11 @@ class ModelArgs:
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
+        if self.dummy_weights:
+            logger.info(
+                "dummy_weights=True: device weights are random (no HF checkpoint load); weight_cache_path is None — "
+                "no tensor_cache / .tensorbin read or write under model_cache for weights."
+            )
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.CKPT_DIR)
@@ -583,7 +588,13 @@ class ModelArgs:
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
-        self.tokenizer = None if dummy_weights else self.create_tokenizer()
+        # HF dummy weights: still load tokenizer from HF_MODEL id (small); Meta-style dummy has no tokenizer here.
+        if dummy_weights and self.from_hf_url:
+            self.tokenizer = self.create_tokenizer()
+        elif dummy_weights:
+            self.tokenizer = None
+        else:
+            self.tokenizer = self.create_tokenizer()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]

@@ -33,6 +33,11 @@ Tested with [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb300645
 HF_MODEL=google/gemma-3-27b-it MESH_DEVICE=T3K python examples/offline_inference_tt.py --model "google/gemma-3-27b-it" --multi_modal --max_seqs_in_batch 32 --override_tt_config "{\"l1_small_size\": 768, \"fabric_config\": \"FABRIC_1D\"}"
 ```
 
+### Dummy weights (debug / perf without checkpoints)
+Pass **`--dummy_weights`** to **`text_demo.py`** or **`vision_demo.py`** (same pattern as Llama3 Galaxy `text_demo`): random tensors from the bundled local HF `config.json`, no full checkpoint load. Example:
+`HF_MODEL=google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and batch-1" --dummy_weights`
+Smoke test only: `HF_MODEL=google/gemma-3-4b-it pytest models/demos/gemma3/tests/test_e2e_dummy.py`.
+
 ## Details
 - The entry point to the model is located at:`models/demos/gemma3/tt/gemma_e2e_model.py`
 - Batch Size :1-32

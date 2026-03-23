@@ -65,12 +65,15 @@ def create_multimodal_model(
     checkpoint=None,
     optimizations=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
     from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
+    tt_model_args = ModelArgs(
+        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, dummy_weights=dummy_weights
+    )
     assert tt_model_args.is_vision(), "This model is multimodal"
 
     # limit length or we'll run out of space
@@ -118,6 +121,7 @@ def prepare_generator_args(
     use_paged_kv_cache=False,
     optimizations=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -135,6 +139,7 @@ def prepare_generator_args(
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
+            dummy_weights=dummy_weights,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -206,6 +211,7 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 def test_multimodal_demo_text(
+    request,
     mesh_device,
     warmup_iters,
     enable_trace,
@@ -234,6 +240,8 @@ def test_multimodal_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
+    dummy_weights = request.config.getoption("--dummy_weights")
+
     model_args, model = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
@@ -242,6 +250,7 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         num_layers=num_layers,
+        dummy_weights=dummy_weights,
     )
 
     HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace

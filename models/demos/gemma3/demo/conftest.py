@@ -57,3 +57,9 @@ def pytest_addoption(parser):
         dest="enable_trace",
         help="Whether to enable tracing",
     )
+    parser.addoption(
+        "--dummy_weights",
+        action="store_true",
+        default=False,
+        help="Random weights from local HF config only (no full checkpoint load); for perf/debug",
+    )
