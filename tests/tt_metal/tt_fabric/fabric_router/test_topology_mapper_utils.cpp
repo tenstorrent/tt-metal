@@ -11,9 +11,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <initializer_list>
 #include <map>
 #include <set>
+#include <vector>
 #include <random>
+#include <unordered_set>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -39,6 +42,19 @@ protected:
     const MeshId mesh_id_{kDefaultMeshId};
     const MeshHostRankId rank0_{0};
     const MeshHostRankId rank1_{1};
+
+    static void set_strict_intra_mesh(TopologyMappingConfig& config, std::initializer_list<MeshId> meshes) {
+        for (MeshId m : meshes) {
+            config.mesh_validation_modes[m] = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+        }
+    }
+
+    static void set_strict_intra_and_inter_mesh(TopologyMappingConfig& config, std::initializer_list<MeshId> meshes) {
+        config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+        for (MeshId m : meshes) {
+            config.mesh_validation_modes[m] = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Factory helpers
@@ -101,6 +117,102 @@ protected:
             }
         }
         return adj;
+    }
+
+    // Three meshes in a triangle, two-node chains, two physical inter-mesh links per mesh pair.
+    static void build_three_mesh_two_node_triangle_topology(
+        uint32_t mesh_level_multiplicity,
+        uint32_t exit_multiplicity,
+        LogicalMultiMeshGraph& logical,
+        PhysicalMultiMeshGraph& physical) {
+        using namespace ::tt::tt_fabric;
+
+        auto make_chain_nodes = [](MeshId m) {
+            std::vector<FabricNodeId> n;
+            n.push_back(FabricNodeId(m, 0));
+            n.push_back(FabricNodeId(m, 1));
+            return n;
+        };
+
+        for (uint32_t mid = 0; mid < 3; ++mid) {
+            const MeshId m{mid};
+            auto nodes = make_chain_nodes(m);
+            logical.mesh_adjacency_graphs_[m] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(nodes));
+        }
+
+        AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level;
+        for (uint32_t a = 0; a < 3; ++a) {
+            for (uint32_t b = 0; b < 3; ++b) {
+                if (a == b) {
+                    continue;
+                }
+                for (uint32_t k = 0; k < mesh_level_multiplicity; ++k) {
+                    logical_mesh_level[MeshId{a}].push_back(MeshId{b});
+                }
+            }
+        }
+        logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level);
+
+        auto push_mesh_exit_edges =
+            [](AdjacencyGraph<LogicalExitNode>::AdjacencyMap& adj, MeshId src_mesh, MeshId dst_mesh, uint32_t count) {
+                LogicalExitNode src{src_mesh, std::nullopt};
+                LogicalExitNode dst{dst_mesh, std::nullopt};
+                for (uint32_t k = 0; k < count; ++k) {
+                    adj[src].push_back(dst);
+                }
+            };
+
+        AdjacencyGraph<LogicalExitNode>::AdjacencyMap exit0, exit1, exit2;
+        push_mesh_exit_edges(exit0, MeshId{0}, MeshId{1}, exit_multiplicity);
+        push_mesh_exit_edges(exit0, MeshId{0}, MeshId{2}, exit_multiplicity);
+        push_mesh_exit_edges(exit1, MeshId{1}, MeshId{0}, exit_multiplicity);
+        push_mesh_exit_edges(exit1, MeshId{1}, MeshId{2}, exit_multiplicity);
+        push_mesh_exit_edges(exit2, MeshId{2}, MeshId{0}, exit_multiplicity);
+        push_mesh_exit_edges(exit2, MeshId{2}, MeshId{1}, exit_multiplicity);
+        logical.mesh_exit_node_graphs_[MeshId{0}] = AdjacencyGraph<LogicalExitNode>(exit0);
+        logical.mesh_exit_node_graphs_[MeshId{1}] = AdjacencyGraph<LogicalExitNode>(exit1);
+        logical.mesh_exit_node_graphs_[MeshId{2}] = AdjacencyGraph<LogicalExitNode>(exit2);
+
+        std::vector<tt::tt_metal::AsicID> as0 = make_asics(2, 100);
+        std::vector<tt::tt_metal::AsicID> as1 = make_asics(2, 200);
+        std::vector<tt::tt_metal::AsicID> as2 = make_asics(2, 300);
+
+        PhysicalAdjacencyMap flat;
+        auto g0 = build_chain_adjacency(as0);
+        auto g1 = build_chain_adjacency(as1);
+        auto g2 = build_chain_adjacency(as2);
+        for (const auto& [asic, neighbors] : g0) {
+            flat[asic] = neighbors;
+        }
+        for (const auto& [asic, neighbors] : g1) {
+            flat[asic] = neighbors;
+        }
+        for (const auto& [asic, neighbors] : g2) {
+            flat[asic] = neighbors;
+        }
+
+        flat[as0[0]].push_back(as1[0]);
+        flat[as1[0]].push_back(as0[0]);
+        flat[as0[1]].push_back(as1[1]);
+        flat[as1[1]].push_back(as0[1]);
+
+        flat[as1[0]].push_back(as2[0]);
+        flat[as2[0]].push_back(as1[0]);
+        flat[as1[1]].push_back(as2[1]);
+        flat[as2[1]].push_back(as1[1]);
+
+        flat[as0[0]].push_back(as2[0]);
+        flat[as2[0]].push_back(as0[0]);
+        flat[as0[1]].push_back(as2[1]);
+        flat[as2[1]].push_back(as0[1]);
+
+        AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
+        std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+        mesh_groupings.push_back({as0[0], as0[1]});
+        mesh_groupings.push_back({as1[0], as1[1]});
+        mesh_groupings.push_back({as2[0], as2[1]});
+
+        physical = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
     }
 
     // Build a fully connected graph (clique)
@@ -543,7 +655,7 @@ TEST_F(TopologyMapperUtilsTest, StrictMode_SufficientChannels_Succeeds) {
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh_id_});
 
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
@@ -568,7 +680,7 @@ TEST_F(TopologyMapperUtilsTest, StrictMode_InsufficientChannels_Fails) {
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh_id_});
 
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
@@ -594,7 +706,6 @@ TEST_F(TopologyMapperUtilsTest, RelaxedMode_InsufficientChannels_Succeeds) {
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
 
     TopologyMappingConfig config;
-    config.strict_mode = false;
 
     const auto result = map_mesh_to_physical(mesh_id_, logical_adj, physical_adj, node_ranks, asic_ranks, config);
 
@@ -1174,7 +1285,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     // Create mapping config
     TopologyMappingConfig config;
-    config.strict_mode = true;            // Use strict mode for testing
+    set_strict_intra_and_inter_mesh(config, {logical_mesh0, logical_mesh1});
     config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
 
     // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
@@ -1249,12 +1360,238 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_Fail
     physical_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_adj);
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}});
     config.disable_rank_bindings = true;
     const auto result = map_multi_mesh_to_physical(logical_graph, physical_graph, config);
 
     EXPECT_FALSE(result.success);
     EXPECT_LT(result.fabric_node_to_asic.size(), 13u);  // Should not map all 9+4 nodes
+}
+
+// Mesh-level exit multiplicity is aggregated into one cardinality constraint per (source mesh, destination mesh) with
+// min_count equal to the number of parallel logical exit channels. Two fabric nodes cannot satisfy four distinct
+// required (node, physical-exit-ASIC) pairs, so mapping fails even when inter-mesh validation is RELAXED.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshLevelExitChannelCountExceedsMappablePairs_Fails) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    PhysicalMultiMeshGraph physical;
+    build_three_mesh_two_node_triangle_topology(
+        /*mesh_level_multiplicity=*/4, /*exit_multiplicity=*/4, logical, physical);
+
+    for (MeshId m : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto& nbrs = logical.mesh_level_graph_.get_neighbors(m);
+        for (MeshId other : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+            if (other == m) {
+                continue;
+            }
+            EXPECT_EQ(count_occurrences(nbrs, other), 4u)
+                << "Logical mesh " << m.get() << " should list mesh " << other.get() << " four times";
+        }
+    }
+
+    for (MeshId m : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto& pexit = physical.mesh_exit_node_graphs_.at(m);
+        size_t edge_count = 0;
+        for (const auto& pen : pexit.get_nodes()) {
+            edge_count += pexit.get_neighbors(pen).size();
+        }
+        EXPECT_EQ(edge_count, 4u) << "mesh " << m.get();
+    }
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    EXPECT_FALSE(result.success) << "Expected failure when mesh-level exit multiplicity (4) exceeds mappable "
+                                    "(fabric_node, exit-ASIC) pairs (2) per destination mesh";
+}
+
+// Boundary: three parallel mesh-level exit channels per neighbor with only two fabric nodes cannot satisfy min_count 3.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshLevelExitMultiplicityThreeWithTwoNodes_Fails) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    PhysicalMultiMeshGraph physical;
+    build_three_mesh_two_node_triangle_topology(
+        /*mesh_level_multiplicity=*/3, /*exit_multiplicity=*/3, logical, physical);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    EXPECT_FALSE(result.success);
+}
+
+// Same topology as above but exit multiplicity matches the number of fabric nodes (and physical exit ASICs) per
+// direction, so aggregated cardinality constraints are satisfiable.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityMatchesNodes_Succeeds) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    PhysicalMultiMeshGraph physical;
+    build_three_mesh_two_node_triangle_topology(
+        /*mesh_level_multiplicity=*/2, /*exit_multiplicity=*/2, logical, physical);
+
+    for (MeshId m : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto& nbrs = logical.mesh_level_graph_.get_neighbors(m);
+        for (MeshId other : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+            if (other == m) {
+                continue;
+            }
+            EXPECT_EQ(count_occurrences(nbrs, other), 2u);
+        }
+    }
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 6u);
+}
+
+// Single mesh-level exit channel per neighbor: min_count 1 per destination; should map.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityOne_Succeeds) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    PhysicalMultiMeshGraph physical;
+    build_three_mesh_two_node_triangle_topology(
+        /*mesh_level_multiplicity=*/1, /*exit_multiplicity=*/1, logical, physical);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 6u);
+}
+
+// One fabric node advertises more parallel exit edges to a neighbor mesh than there are physical inter-mesh ASICs.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicityExceedsPhysicalExitAsics_Fails) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    logical.mesh_adjacency_graphs_[MeshId{0}] = AdjacencyGraph<FabricNodeId>(
+        build_chain_adjacency(std::vector<FabricNodeId>{FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)}));
+    logical.mesh_adjacency_graphs_[MeshId{1}] = AdjacencyGraph<FabricNodeId>(
+        build_chain_adjacency(std::vector<FabricNodeId>{FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)}));
+
+    AdjacencyGraph<MeshId>::AdjacencyMap mesh_level;
+    mesh_level[MeshId{0}] = {MeshId{1}};
+    mesh_level[MeshId{1}] = {MeshId{0}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level);
+
+    LogicalExitNode src_fabric{MeshId{0}, FabricNodeId(MeshId{0}, 0)};
+    LogicalExitNode dst_mesh{MeshId{1}, std::nullopt};
+    AdjacencyGraph<LogicalExitNode>::AdjacencyMap exit0;
+    for (int k = 0; k < 3; ++k) {
+        exit0[src_fabric].push_back(dst_mesh);
+    }
+    logical.mesh_exit_node_graphs_[MeshId{0}] = AdjacencyGraph<LogicalExitNode>(exit0);
+    LogicalExitNode src_m1{MeshId{1}, std::nullopt};
+    LogicalExitNode dst_m0{MeshId{0}, std::nullopt};
+    AdjacencyGraph<LogicalExitNode>::AdjacencyMap exit1;
+    exit1[src_m1].push_back(dst_m0);
+    logical.mesh_exit_node_graphs_[MeshId{1}] = AdjacencyGraph<LogicalExitNode>(exit1);
+
+    std::vector<tt::tt_metal::AsicID> as0 = make_asics(2, 100);
+    std::vector<tt::tt_metal::AsicID> as1 = make_asics(2, 200);
+    PhysicalAdjacencyMap flat;
+    for (const auto& [asic, neighbors] : build_chain_adjacency(as0)) {
+        flat[asic] = neighbors;
+    }
+    for (const auto& [asic, neighbors] : build_chain_adjacency(as1)) {
+        flat[asic] = neighbors;
+    }
+    flat[as0[0]].push_back(as1[0]);
+    flat[as1[0]].push_back(as0[0]);
+    flat[as0[1]].push_back(as1[1]);
+    flat[as1[1]].push_back(as0[1]);
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> groupings;
+    groupings.push_back({as0[0], as0[1]});
+    groupings.push_back({as1[0], as1[1]});
+    PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph, groupings);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    EXPECT_FALSE(result.success)
+        << "Three parallel fabric-level exit edges to one neighbor require more than two physical exit ASICs";
+}
+
+// Two parallel fabric-level edges to the same neighbor with two physical inter-mesh links: allowed (<= 2 ASICs).
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicityWithinPhysicalCap_Succeeds) {
+    using namespace ::tt::tt_fabric;
+
+    LogicalMultiMeshGraph logical;
+    logical.mesh_adjacency_graphs_[MeshId{0}] = AdjacencyGraph<FabricNodeId>(
+        build_chain_adjacency(std::vector<FabricNodeId>{FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)}));
+    logical.mesh_adjacency_graphs_[MeshId{1}] = AdjacencyGraph<FabricNodeId>(
+        build_chain_adjacency(std::vector<FabricNodeId>{FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 1)}));
+
+    AdjacencyGraph<MeshId>::AdjacencyMap mesh_level;
+    mesh_level[MeshId{0}] = {MeshId{1}};
+    mesh_level[MeshId{1}] = {MeshId{0}};
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(mesh_level);
+
+    LogicalExitNode src_fabric{MeshId{0}, FabricNodeId(MeshId{0}, 0)};
+    LogicalExitNode dst_mesh{MeshId{1}, std::nullopt};
+    AdjacencyGraph<LogicalExitNode>::AdjacencyMap exit0;
+    exit0[src_fabric].push_back(dst_mesh);
+    exit0[src_fabric].push_back(dst_mesh);
+    logical.mesh_exit_node_graphs_[MeshId{0}] = AdjacencyGraph<LogicalExitNode>(exit0);
+    LogicalExitNode src_m1{MeshId{1}, std::nullopt};
+    LogicalExitNode dst_m0{MeshId{0}, std::nullopt};
+    AdjacencyGraph<LogicalExitNode>::AdjacencyMap exit1;
+    exit1[src_m1].push_back(dst_m0);
+    logical.mesh_exit_node_graphs_[MeshId{1}] = AdjacencyGraph<LogicalExitNode>(exit1);
+
+    std::vector<tt::tt_metal::AsicID> as0 = make_asics(2, 100);
+    std::vector<tt::tt_metal::AsicID> as1 = make_asics(2, 200);
+    PhysicalAdjacencyMap flat;
+    for (const auto& [asic, neighbors] : build_chain_adjacency(as0)) {
+        flat[asic] = neighbors;
+    }
+    for (const auto& [asic, neighbors] : build_chain_adjacency(as1)) {
+        flat[asic] = neighbors;
+    }
+    flat[as0[0]].push_back(as1[0]);
+    flat[as1[0]].push_back(as0[0]);
+    flat[as0[1]].push_back(as1[1]);
+    flat[as1[1]].push_back(as0[1]);
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> groupings;
+    groupings.push_back({as0[0], as0[1]});
+    groupings.push_back({as1[0], as1[1]});
+    PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph, groupings);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+
+    const auto result = map_multi_mesh_to_physical(logical, physical, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
 }
 
 TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_SingleMesh) {
@@ -1668,7 +2005,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
 
     // Run mapping
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}});
     config.disable_rank_bindings = true;
     const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
 
@@ -1825,7 +2162,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
 
     // Run mapping - should fail at intra-mesh level
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}, MeshId{2}});
     config.disable_rank_bindings = true;
 
     TopologyMappingResult result =
@@ -2117,7 +2454,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
 
     // Perform mapping
     TopologyMappingConfig config;
-    config.strict_mode = false;  // Use relaxed mode for mapping (allows flexibility)
 
     const auto result =
         map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank);
@@ -2278,7 +2614,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }
 
     TopologyMappingConfig config;
-    config.strict_mode = false;
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
@@ -2455,7 +2790,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     // =========================================================================
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}, MeshId{2}});
     config.disable_rank_bindings = true;
 
     TopologyMappingResult result;
@@ -2637,7 +2972,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     // =========================================================================
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}, MeshId{2}});
     config.disable_rank_bindings = true;
 
     const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
@@ -2787,7 +3122,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_Partia
     fabric_node_id_to_mesh_rank[mesh0][logical_nodes[3]] = MeshHostRankId{3};
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     config.hostname_to_asics["host0"] = {physical_asics[0]};
     config.hostname_to_asics["host1"] = {physical_asics[1]};
@@ -2862,7 +3197,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_NoHost
     }
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     // 4 hosts, 2 ASICs each. Rotated layout - solver picks assignment (same-host same-rank enforced).
     config.hostname_to_asics["host0"] = {physical_asics[2], physical_asics[3]};
@@ -2944,7 +3279,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_2x2Tor
     fabric_node_id_to_mesh_rank[mesh0][logical_nodes[3]] = MeshHostRankId{1};
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     config.hostname_to_asics["host0"] = {physical_asics[0], physical_asics[1]};
     config.hostname_to_asics["host1"] = {physical_asics[2], physical_asics[3]};
@@ -2997,7 +3332,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_1x1) {
     fabric_node_id_to_mesh_rank[mesh0][logical_nodes[0]] = MeshHostRankId{0};
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     config.hostname_to_asics["host0"] = {physical_asics[0]};
 
@@ -3048,7 +3383,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_4x4Tor
     }
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     config.hostname_to_asics["host0"] = {physical_asics[4], physical_asics[5], physical_asics[6], physical_asics[7]};
     config.hostname_to_asics["host1"] = {physical_asics[0], physical_asics[1], physical_asics[2], physical_asics[3]};
@@ -3130,7 +3465,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_4x6Tor
     fabric_node_id_to_mesh_rank[mesh0][logical_nodes[23]] = MeshHostRankId{5};
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh0});
     config.disable_rank_bindings = false;
     config.hostname_to_asics["host0"] = {physical_asics[2], physical_asics[3], physical_asics[8], physical_asics[9]};
     config.hostname_to_asics["host1"] = {physical_asics[0], physical_asics[1], physical_asics[6], physical_asics[7]};
@@ -3214,7 +3549,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoAsicsEach_Rota
         }
 
         TopologyMappingConfig config;
-        config.strict_mode = true;
+        set_strict_intra_mesh(config, {mesh0});
         config.disable_rank_bindings = false;
         config.hostname_to_asics = hostname_to_asics;
 
@@ -3322,7 +3657,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     asic_id_to_mesh_rank[mesh_id][physical_asics[3]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
 
     TopologyMappingConfig config;
-    config.strict_mode = true;
+    set_strict_intra_mesh(config, {mesh_id});
     config.hostname_to_asics["host_0"] = {physical_asics[0], physical_asics[1]};
     config.hostname_to_asics["host_1"] = {physical_asics[2], physical_asics[3]};
 
