@@ -143,27 +143,27 @@ class _TTTransformerAdapter:
         prompt = input_dict["text_emb"]
         timesteps = input_dict["timesteps"]
         grid_id = input_dict["grid_id"]
-        if timesteps.dim() == 2:
-            timestep = timesteps[:, 0].clone().to(torch.float32)
+        B = spatial.shape[0]
+        device = spatial.device
+        ts = timesteps.detach().to(device=device, dtype=torch.float32)
+
+        # Match reference/transformer_wan.py: latent_time_steps = repeat_interleave(
+        #     input_dict["timesteps"], patches_per_frame, dim=1) — always per-frame [B, F] first.
+        if ts.dim() == 2:
+            timestep_per_frame = ts.clone()
+            timestep = timestep_per_frame[:, 0].contiguous()
+        elif ts.dim() == 1:
+            F_frames = ts.shape[0]
+            timestep_per_frame = ts.unsqueeze(0).expand(B, F_frames).contiguous()
+            timestep = timestep_per_frame[:, 0].contiguous()
         else:
-            timestep = timesteps.squeeze().clone().to(torch.float32)
+            t0 = ts.reshape(-1)[0]
+            F_spatial = spatial.shape[2]
+            timestep_per_frame = t0.view(1, 1).expand(B, F_spatial).contiguous()
+            timestep = t0.unsqueeze(0).expand(B).contiguous()
+
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
-
-        # Use per-frame timesteps when frames have different timestep values
-        timestep_per_frame = None
-        if timesteps.dim() >= 1:
-            ts_1d = timesteps.flatten() if timesteps.dim() == 1 else timesteps[0]
-            if not torch.all(ts_1d == ts_1d[0]):
-                B = spatial.shape[0]
-                F_frames = ts_1d.shape[0]
-                timestep_per_frame = ts_1d.unsqueeze(0).expand(B, F_frames).to(torch.float32)
-        # When dumping for transformer compare test, use per-token conditioning so TT norm_out
-        # matches reference (reference always has per-token scale/shift for final norm).
-        if dump_iter is not None and timestep_per_frame is None:
-            B = spatial.shape[0]
-            F = spatial.shape[2]
-            timestep_per_frame = timestep.unsqueeze(0).expand(B, F).to(torch.float32)
 
         return self._tt_model(
             spatial=spatial,

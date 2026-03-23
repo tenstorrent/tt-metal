@@ -263,6 +263,18 @@ def _compare_one_pair(
         torch_t, torch_note = _to_compare_tensor(torch_raw, f"{stage}.torch")
         tt_t, tt_note = _to_compare_tensor(tt_raw, f"{stage}.tt")
 
+        if stage == "text_hidden":
+            if isinstance(tt_t, torch.Tensor):
+                if tt_t.dim() == 4 and tt_t.shape[2] == 1:
+                    tt_t = tt_t.squeeze(2)
+                if tt_t.dim() == 4 and tt_t.shape[1] == 1:
+                    tt_t = tt_t.squeeze(1)
+                while tt_t.dim() > 3 and tt_t.shape[0] == 1:
+                    tt_t = tt_t.squeeze(0)
+            if isinstance(torch_t, torch.Tensor):
+                while torch_t.dim() > 3 and torch_t.shape[0] == 1:
+                    torch_t = torch_t.squeeze(0)
+
         try:
             # final_out_video: TT returns (B, C, F, H, W), torch is (B, L*n, C).
             # Use exact inverse patch-order mapping to match reference sequence order.
