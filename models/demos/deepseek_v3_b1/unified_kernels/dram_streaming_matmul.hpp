@@ -150,7 +150,11 @@ struct DRAMStreamingMatmul {
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
 
-            // Expert indexing: compute DRAM offset based on expert index
+            // Expert indexing: compute DRAM offset based on expert index.
+            // Contract: for a given projection (gate/up/down), all expert weight tensors must
+            // be packed contiguously in DRAM starting at in1_tensor_addr (base of expert 0).
+            // expert_offset_bytes = expert_idx * expert_size_bytes; see Python
+            // MoERoutedExpertWeights.validate_contiguous_dram / load_moe_routed_experts.
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready

@@ -102,6 +102,8 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
+TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
+
 
 @dataclass
 class TensorConfig:
@@ -821,8 +823,8 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                2. TTNN_MASTER_JSON_PATH env var (optional explicit path)
+                3. TTNN_OPERATIONS_MASTER_JSON (canonical: ttnn_operations_master.json)
                 4. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
@@ -836,18 +838,13 @@ class MasterConfigLoader:
                 MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
-            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
-
-            if os.path.exists(reconstructed_v2_path):
-                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
-                master_file_path = reconstructed_v2_path
-            elif os.path.exists(default_trace_path):
-                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
-                master_file_path = default_trace_path
-            else:
-                master_file_path = None
+            env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+            if env_path and os.path.exists(env_path):
+                logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
+                master_file_path = env_path
+            elif os.path.exists(TTNN_OPERATIONS_MASTER_JSON):
+                logger.info(f"✅ Using canonical master JSON: {TTNN_OPERATIONS_MASTER_JSON}")
+                master_file_path = TTNN_OPERATIONS_MASTER_JSON
 
         self.master_file_path = master_file_path
         self.master_data = None

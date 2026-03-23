@@ -27,6 +27,7 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
     const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
 
     constexpr uint32_t face_size = 16;
@@ -69,7 +70,7 @@ void kernel_main() {
         uint32_t token_casted = static_cast<uint32_t>(u.f);
         src_noc_addr = get_noc_addr(token_casted, weights);
 #else
-        src_noc_addr = weights.get_noc_addr(token);
+        src_noc_addr = get_noc_addr(token, weights);
 #endif
 #endif
         noc_async_read(src_noc_addr, weight_l1_addr, width_size);
@@ -87,6 +88,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
+            uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
             noc_async_read_tile(curr_tile, s, input_l1_addr);
             noc_async_read_barrier();
             read_indices = false;
