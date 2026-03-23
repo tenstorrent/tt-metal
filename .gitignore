@@ -161,3 +161,4 @@ CLAUDE.md
 .worktree_building
 .worktree_ready
 .worktree_setup.log
+.claude/
