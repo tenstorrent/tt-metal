@@ -88,8 +88,6 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             .set_page_size(input_cb_index, input_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
-    // TODO: Add support for scalar.
-
     CBIndex scalar_cb_index = CBIndex::c_2;
 
     tt_metal::CircularBufferConfig scalar_cb_config =
@@ -114,6 +112,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::CircularBufferConfig(scratch_single_tile_size, {{scratch_cb_index, scratch_cb_data_format}})
             .set_page_size(scratch_cb_index, scratch_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_config);
+
+    // Intermediate buffer for scaled input tiles (scale step writes here,
+    // transpose step reads from here). Only 1 tile needed for streaming.
+    CBIndex scaled_cb_index = CBIndex::c_20;
+    tt_metal::CircularBufferConfig scaled_cb_config =
+        tt_metal::CircularBufferConfig(input_single_tile_size, {{scaled_cb_index, input_cb_data_format}})
+            .set_page_size(scaled_cb_index, input_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, scaled_cb_config);
 
     bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
     uint32_t packed_scalar_value = pack_two_bfloat16_into_uint32({bfloat_scalar_value, bfloat_scalar_value});
@@ -142,10 +148,13 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
+    bool do_scale = (operation_attributes.scalar != 1.0f);
+
     std::vector<uint32_t> compute_compile_args = {
         Wt,
         W,
         tile_width,
+        static_cast<uint32_t>(do_scale),
     };
 
     const std::string compute_kernel =
