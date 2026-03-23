@@ -447,7 +447,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B,     // in0 batch.
+        (std::uint32_t)B,     // batch
         (std::uint32_t)false  // get_batch_from_reader
     };
 
@@ -677,7 +677,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        in0_B,                   // batch
+        B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
@@ -3051,7 +3051,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             packer_l1_acc,
             compute_with_storage_grid_size,
             throttle_level,
-            B,
+            in0_B,
             Mt,
             Nt,
             Kt,

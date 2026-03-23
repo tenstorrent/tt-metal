@@ -510,8 +510,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)false   // get_batch_from_reader
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
@@ -838,7 +838,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        in0_B,                   // batch (use in0_B when broadcasting in1, otherwise in1_B)
+        B,                       // batch,
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out

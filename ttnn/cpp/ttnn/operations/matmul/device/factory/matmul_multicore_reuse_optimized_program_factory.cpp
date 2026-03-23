@@ -236,9 +236,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
-    uint32_t in0_B = get_batch_size(ashape);
-    uint32_t in1_B = get_batch_size(bshape);
-    uint32_t B = in0_B;  // For compatibility with existing code
+    uint32_t B = get_batch_size(ashape);
     uint32_t Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
     uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -465,7 +463,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         out_subblock_h,
         out_subblock_w,
         out_subblock_num_tiles,
-        bcast_batch ? in0_B : in1_B,  // batch (use in0_B when broadcasting in1, otherwise in1_B)
+        num_blocks_per_core_group_1,
         out_block_tiles,
         untilize_out,
         false,  // get_batch_from_reader
@@ -610,7 +608,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             out_subblock_h,
             out_subblock_w,
             out_subblock_num_tiles,
-            bcast_batch ? in0_B : in1_B,  // batch (use in0_B when broadcasting in1, otherwise in1_B)
+            num_blocks_per_core_group_2,
             out_block_tiles,
             untilize_out,
             false,  // get_batch_from_reader
