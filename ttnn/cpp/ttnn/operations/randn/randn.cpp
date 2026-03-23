@@ -6,11 +6,12 @@
 
 #include "ttnn/operations/randn/device/randn_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::randn {
+namespace ttnn {
 
-Tensor Randn::invoke(
+Tensor randn(
     const ttnn::Shape& shape,
     MeshDevice& device,
     const DataType dtype,
@@ -21,4 +22,5 @@ Tensor Randn::invoke(
     auto tensor = ttnn::prim::randn(shape, dtype, layout, memory_config, device, compute_kernel_config, seed);
     return tensor;
 }
-}  // namespace ttnn::operations::randn
+
+}  // namespace ttnn

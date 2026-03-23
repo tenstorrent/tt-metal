@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "randn.hpp"
 
 namespace ttnn::operations::randn {
@@ -49,29 +49,17 @@ void bind_randn_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
         )doc";
 
-    using OperationType = decltype(ttnn::randn);
-    bind_registered_operation(
+    ttnn::bind_function<"randn">(
         mod,
-        ttnn::randn,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& shape,
-               MeshDevice& device,
-               const DataType dtype,
-               const Layout layout,
-               const MemoryConfig& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               std::optional<uint32_t> seed) {
-                return self(shape, device, dtype, layout, memory_config, compute_kernel_config, seed);
-            },
-            nb::arg("shape"),
-            nb::arg("device"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::TILE,
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-            nb::arg("compute_kernel_config") = std::nullopt,
-            nb::arg("seed") = std::nullopt});
+        doc.c_str(),
+        &ttnn::randn,
+        nb::arg("shape"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("layout") = nb::cast(Layout::TILE),
+        nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
+        nb::arg("compute_kernel_config") = nb::cast(std::nullopt),
+        nb::arg("seed") = nb::cast(std::nullopt));
 }
 }  // namespace ttnn::operations::randn
