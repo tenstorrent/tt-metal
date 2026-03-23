@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
     indirect=["device_params"],
 )
-def test_reduce_to_one_2d(
+def test_pipeline_stage_sync_2d(
     bh_2d_mesh_device,
     stalling_device_mesh_coord,
     signalling_device_mesh_coord,
