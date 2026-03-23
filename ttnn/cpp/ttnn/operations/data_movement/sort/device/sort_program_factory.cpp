@@ -52,8 +52,8 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
 
     // uint32 index tensor support
-    const bool is_32_bit_data =
-        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
     // Calculate core range
     /**
      * Calculates the core range based on the input tensor shape (Ht) and the total number of cores available
@@ -179,7 +179,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
-        static_cast<uint32_t>(is_32_bit_data)};
+        static_cast<uint32_t>(is_32_bit_index)};
     TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_single_core.cpp";
@@ -205,11 +205,11 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    // }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -350,8 +350,8 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         total_number_of_cores_virtual);
 
     // uint32 index tensor support
-    const bool is_32_bit_data =
-        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     /**
      * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
@@ -576,7 +576,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         number_of_tiles_per_core,
         total_number_of_cores_virtual,
         semaphore_exchange_readers,
-        static_cast<uint32_t>(is_32_bit_data)};
+        static_cast<uint32_t>(is_32_bit_index)};
     TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_cross_core_data_exchange.cpp";
@@ -607,13 +607,13 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    // }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -745,8 +745,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
 
     // uint32 index tensor support
-    const bool is_32_bit_data =
-        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     // Log 2 of Wt for compute kernel
     const uint32_t log2Wt = std::log2(Wt);
@@ -869,7 +869,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         number_of_available_cores,
         input_tensor_cb_index,
         index_tensor_cb_index,
-        static_cast<uint32_t>(is_32_bit_data)};
+        static_cast<uint32_t>(is_32_bit_index)};
     TensorAccessorArgs(*input_buffer).append_to(coordinator_compile_time_args);
     TensorAccessorArgs(*value_buffer).append_to(coordinator_compile_time_args);
     TensorAccessorArgs(*index_buffer).append_to(coordinator_compile_time_args);
@@ -965,11 +965,11 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    //     unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    // }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
