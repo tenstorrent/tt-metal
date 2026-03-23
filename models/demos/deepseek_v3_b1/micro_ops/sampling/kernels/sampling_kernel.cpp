@@ -47,7 +47,8 @@ void kernel_main() {
         0,
         0xFFFFFFFF,
         0,
-        get_named_compile_time_arg_val("sampling_gather_cb")>;
+        get_named_compile_time_arg_val("sampling_gather_cb"),
+        get_named_compile_time_arg_val("sampling_winner_cb")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
         .scores_addr = get_common_arg_val<uint32_t>(0),

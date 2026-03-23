@@ -48,7 +48,8 @@ struct TopKSampling {
         uint32_t SocketPageSizeBytes = 0,
         uint32_t ScoresCBId = 0xFFFFFFFF,
         uint32_t ScoresNumPages = 0,
-        uint32_t GatherCBId = 0xFFFFFFFF>
+        uint32_t GatherCBId = 0xFFFFFFFF,
+        uint32_t WinnerCBId = 0xFFFFFFFF>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t topk_k = TopK;
@@ -78,6 +79,7 @@ struct TopKSampling {
         static constexpr uint32_t scores_cb_id = ScoresCBId;
         static constexpr uint32_t scores_num_pages = ScoresNumPages;
         static constexpr uint32_t gather_cb_id = GatherCBId;
+        static constexpr uint32_t winner_cb_id = WinnerCBId;
 
         // Gather buffer layout (globally split for LLK compatibility):
         //   [core0 scores | core1 scores | ... | coreN scores]
@@ -223,24 +225,45 @@ struct TopKSampling {
             noc_semaphore_set(sem_ptr, 0);
         }
 
-        // Temporary: find the single best (argmax) across all gathered top-K candidates.
-        // Will be replaced with a proper global top-K merge + softmax + top-P in later phases.
-        FORCE_INLINE void phase2_reduce_gathered_topk_to_argmax(
-            uint32_t gather_addr, uint16_t& best_score, uint32_t& best_index) {
+        // N-way merge of per-core sorted-descending top-K arrays into a single
+        // global top-K (also descending).  Each core contributed a sorted array;
+        // we maintain one head pointer per core and greedily pick the best head
+        // K times.  O(K * N) comparisons -- for K=32, N~100 that is ~3200.
+        FORCE_INLINE void phase2_merge_global_topk(
+            uint32_t gather_addr,
+            volatile tt_l1_ptr uint16_t* global_scores,
+            volatile tt_l1_ptr uint32_t* global_indices) {
             constexpr uint32_t K = CTArgs::topk_k;
-            best_score = NEG_INF_BFLOAT16;
-            best_index = 0xFFFFFFFF;
-            for (uint32_t slot = 0; slot < CTArgs::num_senders; ++slot) {
-                auto s =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(gather_addr + slot * CTArgs::topk_scores_stride);
-                auto idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    gather_addr + CTArgs::gather_indices_offset + slot * CTArgs::topk_indices_stride);
-                for (uint32_t j = 0; j < K; ++j) {
-                    if (is_better_candidate(s[j], idx[j], best_score, best_index)) {
-                        best_score = s[j];
-                        best_index = idx[j];
+            constexpr uint32_t N = CTArgs::num_senders;
+
+            uint8_t heads[N];
+            for (uint32_t c = 0; c < N; ++c) {
+                heads[c] = 0;
+            }
+
+            for (uint32_t out = 0; out < K; ++out) {
+                uint16_t best_score = NEG_INF_BFLOAT16;
+                uint32_t best_index = 0xFFFFFFFF;
+                uint32_t best_core = 0;
+
+                for (uint32_t c = 0; c < N; ++c) {
+                    if (heads[c] >= K) {
+                        continue;
+                    }
+                    auto s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        gather_addr + c * CTArgs::topk_scores_stride);
+                    auto idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        gather_addr + CTArgs::gather_indices_offset + c * CTArgs::topk_indices_stride);
+                    if (is_better_candidate(s[heads[c]], idx[heads[c]], best_score, best_index)) {
+                        best_score = s[heads[c]];
+                        best_index = idx[heads[c]];
+                        best_core = c;
                     }
                 }
+
+                global_scores[out] = best_score;
+                global_indices[out] = best_index;
+                heads[best_core]++;
             }
         }
 #endif
@@ -426,28 +449,30 @@ struct TopKSampling {
                 cb_pop_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
             }
 
-            // Phase 2: final-core reduction across all gathered top-K candidates.
-            // Currently produces argmax; later phases will add global top-K merge,
-            // softmax (TRISC), top-P filtering, and random selection (BRISC).
+            // Phase 2: merge per-core top-K arrays into a single device-wide top-K.
+            // Output goes to the winner CB in split layout [K scores | K indices].
+            // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
 
-                uint16_t global_best_score = NEG_INF_BFLOAT16;
-                uint32_t global_best_index = 0xFFFFFFFF;
-                phase2_reduce_gathered_topk_to_argmax(gather_addr, global_best_score, global_best_index);
+                const uint32_t winner_addr = get_write_ptr(CTArgs::winner_cb_id);
+                auto global_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(winner_addr);
+                auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    winner_addr + CTArgs::topk_scores_stride);
+                phase2_merge_global_topk(gather_addr, global_scores, global_indices);
 
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
-                    output_ptr[0] = global_best_index;
+                    output_ptr[0] = global_indices[0];
                 } else {
                     // TODO: mesh top-K reduction stages
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
                         write_winner_slot(
                             args.scratch_addr + CTArgs::mesh_local_send_slot_offset,
-                            global_best_score,
-                            global_best_index);
+                            global_scores[0],
+                            global_indices[0]);
                         auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             get_semaphore(CTArgs::local_ready_semaphore_id));
                         noc_semaphore_set(local_ready_sem_ptr, 1);
