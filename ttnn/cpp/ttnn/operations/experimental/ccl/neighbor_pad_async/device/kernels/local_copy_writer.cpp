@@ -71,4 +71,5 @@ void kernel_main() {
         // Ensure sem inc signals are delivered before kernel exits.
         noc_async_write_barrier();
     }
+    noc_async_atomic_barrier();
 }

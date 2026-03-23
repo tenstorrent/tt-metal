@@ -432,4 +432,5 @@ void kernel_main() {
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
