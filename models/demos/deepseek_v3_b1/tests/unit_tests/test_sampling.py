@@ -283,3 +283,224 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
     assert torch.equal(
         final_output_index, torch_expected_idx
     ), f"Mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_index.item())}"
+
+
+@pytest.mark.parametrize(
+    "seed, k, p",
+    [
+        (42, 32, 0.9),
+        (17, 32, 0.5),
+        (1337, 32, 1.0),
+        (2005, 32, 0.1),
+        (999, 32, 0.0),
+    ],
+)
+def test_sampling_topk_topp_golden(seed, k, p):
+    """
+    Validate the golden reference for top-k + top-p + random sampling.
+    Checks that the selected token lives inside the top-k set and inside
+    the top-p cumulative probability mass, and that the result is
+    deterministic for a given seed.
+    """
+    torch.manual_seed(seed)
+    vocab_size = 16160
+    scores = torch.randn((1, vocab_size), dtype=torch.bfloat16)
+    indices = torch.arange(vocab_size, dtype=torch.int32).reshape(1, -1)
+
+    result = SamplingOp.golden(scores, indices, k=k, p=p, seed=seed)
+    assert result.shape == (1, 1)
+    selected_idx = int(result.item())
+    assert 0 <= selected_idx < vocab_size
+
+    scores_f32 = scores.float().reshape(-1)
+    topk_values, topk_positions = torch.topk(scores_f32, k=k, sorted=True)
+    topk_original_indices = indices.reshape(-1)[topk_positions].tolist()
+    assert selected_idx in topk_original_indices, (
+        f"Selected index {selected_idx} not in top-{k}"
+    )
+
+    probs = torch.softmax(topk_values, dim=-1)
+    cum_probs = torch.cumsum(probs, dim=-1)
+    num_kept = int((cum_probs < p).sum().item()) + 1
+    num_kept = max(1, min(num_kept, k))
+    kept_indices = set(topk_original_indices[:num_kept])
+    assert selected_idx in kept_indices, (
+        f"Selected index {selected_idx} not in top-p={p} set (kept {num_kept} tokens)"
+    )
+
+    result2 = SamplingOp.golden(scores, indices, k=k, p=p, seed=seed)
+    assert torch.equal(result, result2), "Golden must be deterministic with the same seed"
+
+    logger.info(
+        f"Sampling golden test passed: k={k}, p={p}, seed={seed}, "
+        f"selected={selected_idx}, kept_tokens={num_kept}"
+    )
+
+
+def test_sampling_topk_topp_distribution():
+    """
+    Statistical sanity check: run sampling many times with different seeds
+    and verify that (a) every sampled token is inside the top-k set, and
+    (b) higher-probability tokens are sampled more often than lower ones.
+    """
+    vocab_size = 1000
+    k = 32
+    p = 0.9
+    num_samples = 500
+
+    torch.manual_seed(42)
+    scores = torch.randn((1, vocab_size), dtype=torch.bfloat16)
+    indices = torch.arange(vocab_size, dtype=torch.int32).reshape(1, -1)
+
+    scores_f32 = scores.float().reshape(-1)
+    topk_values, topk_positions = torch.topk(scores_f32, k=k, sorted=True)
+    topk_indices_set = set(indices.reshape(-1)[topk_positions].tolist())
+
+    probs = torch.softmax(topk_values, dim=-1)
+    cum_probs = torch.cumsum(probs, dim=-1)
+    num_kept = int((cum_probs < p).sum().item()) + 1
+    num_kept = max(1, min(num_kept, k))
+
+    counts: dict[int, int] = {}
+    for i in range(num_samples):
+        result = SamplingOp.golden(scores, indices, k=k, p=p, seed=i)
+        idx = int(result.item())
+        assert idx in topk_indices_set, f"Sampled index {idx} not in top-{k}"
+        counts[idx] = counts.get(idx, 0) + 1
+
+    top1_idx = int(indices.reshape(-1)[topk_positions[0]].item())
+    top1_count = counts.get(top1_idx, 0)
+    bottom_half_count = sum(
+        counts.get(int(indices.reshape(-1)[topk_positions[i]].item()), 0)
+        for i in range(num_kept // 2, num_kept)
+    )
+
+    logger.info(
+        f"Distribution test: {len(counts)} unique tokens from {num_samples} trials, "
+        f"top-1 count={top1_count}, bottom-half count={bottom_half_count}, kept={num_kept}"
+    )
+
+    assert top1_count > 0, "Top-1 token should appear at least once in 500 samples"
+    assert top1_count > bottom_half_count / max(1, num_kept // 2), (
+        "Top-1 token should be sampled more often than the average of the bottom half"
+    )
+
+
+def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: int):
+    """
+    Run the top-K sampling kernel (k>1 path) on a single device.
+
+    Currently the kernel gathers per-core top-K results and reduces them to a
+    single argmax.  Validating that the argmax is correct proves that every
+    core's local top-K contains the true local maximum.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
+    active_cores = all_device_cores[:101]
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
+    assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
+    final_core = active_cores[final_core_idx]
+
+    num_cores = len(active_cores)
+    scores_shape = (1, 160 * num_cores)
+    input_shard_shape = (1, 160)
+    output_shape = (1, 1)
+    tile_1x32 = ttnn.Tile([1, 32])
+
+    logger.info(
+        f"Testing sampling top-K: single-device/101-cores, seed={seed}, k={k}, "
+        f"final_core_idx={final_core_idx}, 160 values per core"
+    )
+
+    torch.manual_seed(seed)
+    torch_scores = torch.randn(scores_shape, dtype=torch.bfloat16)
+    torch_indices = torch.arange(scores_shape[1], dtype=torch.int32).reshape(scores_shape)
+
+    torch_expected_idx = SamplingOp.golden(torch_scores, torch_indices, k=1, p=1.0)
+
+    input_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        input_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
+    output_shard_spec = ttnn.ShardSpec(
+        final_core_grid,
+        output_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        output_shard_spec,
+    )
+    ttnn_scores = ttnn.from_torch(
+        torch_scores,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+        tile=tile_1x32,
+    )
+
+    ttnn_indices = ttnn.from_torch(
+        torch_indices,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+    )
+
+    ttnn_result = SamplingOp.op(
+        scores_tensor=ttnn_scores,
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        k=k,
+        p=0.9,
+        final_core_coord=final_core,
+        final_mesh_coord=None,
+    )
+
+    output_torch = ttnn.to_torch(ttnn_result)
+    assert output_torch.shape == output_shape, f"Expected output shape {output_shape}, got {output_torch.shape}"
+    logger.info(f"Top-K output index: {output_torch}")
+    logger.info(f"Expected argmax index: {torch_expected_idx}")
+    assert torch.equal(
+        output_torch.to(torch.uint32), torch_expected_idx
+    ), f"Top-K argmax mismatch. expected={torch_expected_idx.item()}, got={output_torch.item()}"
+
+    logger.info(
+        f"Sampling top-K test passed. seed={seed}, k={k}, "
+        f"final_core_idx={final_core_idx}, index={int(output_torch.item())}"
+    )
+
+
+@pytest.mark.parametrize(
+    "seed, final_core_idx",
+    [
+        (2005, 100),
+        (17, 0),
+        (1337, 50),
+        (4242, 73),
+    ],
+)
+@pytest.mark.requires_grid_size(101)
+def test_sampling_topk_single_device(device, seed, final_core_idx):
+    """
+    Test k=32 top-K gather path for a single device and 101 cores.
+
+    The kernel finds top-32 per core, gathers to a final core, and reduces
+    to argmax.  Matching the golden argmax validates that every core's local
+    top-32 correctly contains the true local winner.
+    """
+    _run_sampling_topk_single_device(device, seed=seed, k=32, final_core_idx=final_core_idx)
