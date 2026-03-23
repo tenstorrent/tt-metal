@@ -98,8 +98,12 @@ def train_grpo():
     prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train")
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
 
-    prompts_to_train = 2
+    prompts_to_train = 32
     prompts, answers = prompts[:prompts_to_train], answers[:prompts_to_train]
+
+    base_lr = 1e-6
+    warmup_steps = 20
+    step = 0
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
         ctx, prompts, answers, batch_size=32
@@ -109,6 +113,8 @@ def train_grpo():
             B = len(c)
 
             r_np, adv_np = compute_rewards_advantages(ctx, ans, c)
+            print(f"{step=}, {r_np.mean()=}")
+
             adv_tt = ttml.autograd.Tensor.from_numpy(
                 adv_np.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
             )
@@ -158,7 +164,11 @@ def train_grpo():
             print(".backward")
 
         optimizer.step()
-        print(".step")
+        print(f"step={step} done!")
+
+        step += 1
+        warmup_factor = min(1.0, step / warmup_steps)
+        optimizer.set_lr(base_lr * warmup_factor)
 
 
 if __name__ == "__main__":
