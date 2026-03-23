@@ -81,7 +81,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     bool transpose_a = operation_attributes.transpose_a;
     const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
-    uint32_t in0_B = get_batch_size(ashape);
+    uint32_t B = get_batch_size(ashape);
     uint32_t M = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
 
     bool transpose_b = operation_attributes.transpose_b;
@@ -91,7 +91,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
 
     uint32_t per_core_M = program_config.per_core_M;
     uint32_t per_core_N = program_config.per_core_N;
-    uint32_t num_output_blocks_total = (in0_B * M / per_core_M) * (N / per_core_N);
+    uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
 
     uint32_t num_cores = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -236,8 +236,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
-    uint32_t in0_B = get_batch_size(ashape);
-    uint32_t in1_B = get_batch_size(bshape);
+    uint32_t B = get_batch_size(ashape);
     uint32_t Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
     uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -315,7 +314,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
-    uint32_t num_output_blocks_total = (in0_B * M / per_core_M) * (N / per_core_N);
+    uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
 
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
     if (in0_is_sharded) {
@@ -464,9 +463,8 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         out_subblock_h,
         out_subblock_w,
         out_subblock_num_tiles,
-        in0_B,            // in0_batch
-        in1_B,            // in1_batch
-        out_block_tiles,  // out_block_num_tiles
+        num_blocks_per_core_group_1,
+        out_block_tiles,
         untilize_out,
         false,  // get_batch_from_reader
         in0_transpose_tile,
@@ -610,9 +608,8 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             out_subblock_h,
             out_subblock_w,
             out_subblock_num_tiles,
-            in0_B,            // in0_batch
-            in1_B,            // in1_batch
-            out_block_tiles,  // out_block_num_tiles
+            num_blocks_per_core_group_2,
+            out_block_tiles,
             untilize_out,
             false,  // get_batch_from_reader
             in0_transpose_tile,

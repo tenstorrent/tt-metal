@@ -1128,10 +1128,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
+
     if (in0_B == 1 && in1_B > 1) {
         in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
-    }
-    if (in0_is_sharded) {
+    } else if (in0_is_sharded) {
         in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
     } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
@@ -1317,6 +1317,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
+
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
     } else {
@@ -1539,7 +1540,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        in0_B,                   // batch
         in1_B,                   // batch
         out_block_tiles,         // out_block_num_tiles
 
