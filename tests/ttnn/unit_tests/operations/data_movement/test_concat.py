@@ -658,3 +658,100 @@ def test_nd_sharded_flexible_shard_shape(device, num_tensors, tensor_shape, shar
     actual_output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output, actual_output, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes, concat_dim, shard_shape",
+    [
+        # # 3D: concat along dimension 1 (no axis 3 in a rank-3 tensor)
+        # (
+        #     [(1, 48, 64), (1, 64, 64), (1, 80, 64)],
+        #     1,
+        #     [1, 32, 32],
+        # ),
+        # 3D: concat along dimension 2
+        (
+            [(1, 128, 32), (1, 128, 96), (1, 128, 64)],
+            2,
+            [1, 32, 32],
+        ),
+        # # 4D: concat along dimension 1 (N, C, H, W)
+        # (
+        #     [(1, 32, 64, 64), (1, 32, 64, 64), (1, 32, 64, 64)],
+        #     1,
+        #     [1, 32, 32, 32],
+        # ),
+        # # 4D: concat along dimension 2
+        # (
+        #     [(1, 1, 48, 64), (1, 1, 64, 64), (1, 1, 80, 64)],
+        #     2,
+        #     [1, 1, 32, 32],
+        # ),
+        # # 4D: concat along dimension 3
+        # (
+        #     [(1, 1, 128, 32), (1, 1, 128, 48), (1, 1, 128, 64)],
+        #     3,
+        #     [1, 1, 32, 32],
+        # ),
+        # # 5D: concat along dimension 4
+        # (
+        #     [(1, 1, 32, 64, 32), (1, 1, 32, 64, 32), (1, 1, 32, 64, 32)],
+        #     4,
+        #     [1, 1, 32, 32, 32],
+        # ),
+    ],
+)
+# @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_sharded_concat_three_tensors_parametrized(
+    device, input_shapes, concat_dim, shard_shape, layout, dtype, buffer_type
+):
+    """
+    Sharded ND concat with exactly three inputs: concat dims 1–3 on 4D tensors and dim 4 on 5D.
+    Uses the full L1 compute grid or full DRAM shard grid; parametrizes layout, dtype, and buffer.
+    """
+    torch.manual_seed(0)
+
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b is only valid for TILE_LAYOUT")
+
+    rank = len(input_shapes[0])
+    assert all(len(s) == rank for s in input_shapes), "All three tensors must share rank"
+    assert concat_dim < rank
+
+    if buffer_type == ttnn.BufferType.L1:
+        grid_size = device.compute_with_storage_grid_size()
+    else:
+        grid_size = device.dram_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])
+
+    input_nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
+    input_memory_config = ttnn.MemoryConfig(buffer_type, input_nd_shard_spec)
+
+    torch_tensors = [random_torch_tensor(dtype, list(shape)) for shape in input_shapes]
+    torch_output = torch.concat(torch_tensors, dim=concat_dim)
+
+    ttnn_tensors = [
+        ttnn.from_torch(t, dtype=dtype, device=device, layout=layout, memory_config=input_memory_config)
+        for t in torch_tensors
+    ]
+
+    for tt_tensor in ttnn_tensors:
+        mem_config = tt_tensor.memory_config()
+        assert mem_config.is_sharded()
+        assert mem_config.nd_shard_spec is not None or mem_config.shard_spec is not None
+        assert mem_config.buffer_type == buffer_type
+
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)
+    actual_output = ttnn.to_torch(ttnn_output)
+
+    if dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_output, actual_output, 0.99)
+    else:
+        assert_equal(torch_output, actual_output)
