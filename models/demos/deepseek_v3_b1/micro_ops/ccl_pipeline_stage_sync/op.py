@@ -58,9 +58,9 @@ class PipelineStageSync:
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
 
         is_stalling_device_equal_signalling_device = stalling_device_mesh_coord == signalling_device_mesh_coord
-        if is_stalling_device_equal_signalling_device and stalling_core == signalling_core:
-            # NOTE: unsupported config, should error out
-            return
+        assert not (
+            is_stalling_device_equal_signalling_device and stalling_core == signalling_core
+        ), f"If the stalling device is the same as the signalling device, then the stalling core must be different than the siganlling core"
 
         global_semaphore = ttnn.create_global_semaphore(
             mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_device_mesh_coord, stalling_device_mesh_coord)]), 0
