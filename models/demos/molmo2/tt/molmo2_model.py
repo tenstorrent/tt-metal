@@ -291,7 +291,8 @@ class Molmo2Model(LightweightModule):
         ttnn.deallocate(selector_ttnn)
         ttnn.deallocate(valid_visual_ttnn)
 
-        # Fuse: text + visual_contribution (on device, no host roundtrip)
+        # Fuse: ADD visual to text at image positions (matching HuggingFace reference)
+        # Reference: x.view(-1, x.shape[-1])[is_image_patch] += image_features
         fused_ttnn = ttnn.add(text_embeddings_ttnn, visual_contribution)
         ttnn.deallocate(text_embeddings_ttnn)
         ttnn.deallocate(visual_contribution)
