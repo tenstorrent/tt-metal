@@ -22,10 +22,8 @@ class ProgramImpl;
 
 namespace experimental::metal2_host_api {
 struct ProgramSpec;
-
-// Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
-// This will become a constructor for the Program class.
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false);
+// Forward declaration of experimental API (to enable friend access)
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation);
 }  // namespace experimental::metal2_host_api
 
 using ProgramId = std::uint64_t;

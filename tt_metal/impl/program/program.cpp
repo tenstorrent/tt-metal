@@ -428,6 +428,40 @@ uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const 
     TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
     return it->second;
 }
+
+void ProgramImpl::register_kernel_rta_schema(
+    const KernelSpecName& name,
+    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+    size_t num_common_runtime_args) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
+        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
+    TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
+}
+
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->kernel_rta_schemas.find(name);
+    if (it == metal2_registry_->kernel_rta_schemas.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<KernelSpecName> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->kernel_handles.size());
+        for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
 // ============================================================================
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
