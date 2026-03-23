@@ -511,7 +511,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Clean up sampling trace state
         try:
             if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-                ttnn.synchronize_device(self.mesh_device)
                 self.sampling_generator.reset_trace()
         except Exception as e:
             logger.warning(f"Failed to reset sampling trace state: {e}")
@@ -1680,7 +1679,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.enable_trace and batch_idx > 0:
                     # Previous batch deallocates trace-owned sampling output tensors.
                     # Reset trace so the next batch captures fresh outputs.
-                    ttnn.synchronize_device(self.mesh_device)
                     self.sampling_generator.reset_trace()
                 self._reset_sampling_state(
                     self.sampling_params,
