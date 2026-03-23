@@ -9,6 +9,7 @@ MPIRankFailureError exception, and graceful degradation without mpi4py.
 These run without a real MPI runtime by mocking mpi4py where needed.
 """
 
+import importlib
 import importlib.util
 import pathlib
 import sys
@@ -17,26 +18,28 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# mpi_fault.py lives at ttnn/ttnn/distributed/mpi_fault.py in the source tree
-# but is NOT installed into the ttnn site-package.  Load it by absolute path
-# so the tests work regardless of which ttnn package is active.
-_mpi_fault_path = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "mpi_fault.py"
+_MOD_NAME = "ttnn.distributed.mpi_fault"
+# Source-tree path used as fallback when the package is not installed.
+_SOURCE_PATH = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "mpi_fault.py"
 
 
-def _load_mpi_fault_from_source() -> object:
-    """Load mpi_fault.py directly from the source tree.
+def _import_mpi_fault() -> object:
+    """Import ttnn.distributed.mpi_fault, falling back to the source tree.
 
-    This bypasses the installed ttnn package (which does not include
-    mpi_fault.py) and executes the source file in a fresh module object
-    registered under 'ttnn.distributed.mpi_fault'.  Any import statements
-    inside mpi_fault.py still go through builtins.__import__, so patches
-    (e.g. mocking mpi4py) applied at call-time are honoured.
+    mpi_fault.py is part of the ttnn.distributed package and is importable
+    via ``import ttnn.distributed.mpi_fault`` in CI (where the wheel is
+    installed) and in editable installs.  When the package is not installed
+    (e.g. local dev without a wheel build) we load the source file directly
+    so the tests still work without jumping through extra setup hoops.
     """
-    spec = importlib.util.spec_from_file_location("ttnn.distributed.mpi_fault", _mpi_fault_path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["ttnn.distributed.mpi_fault"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    try:
+        return importlib.import_module(_MOD_NAME)
+    except ModuleNotFoundError:
+        spec = importlib.util.spec_from_file_location(_MOD_NAME, _SOURCE_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[_MOD_NAME] = mod
+        spec.loader.exec_module(mod)
+        return mod
 
 
 # =====================================================================
@@ -46,18 +49,20 @@ def _load_mpi_fault_from_source() -> object:
 
 @contextmanager
 def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
-    """Import mpi_fault.py with a mocked mpi4py environment.
+    """Import ttnn.distributed.mpi_fault with a mocked mpi4py environment.
+
+    Each call evicts the cached module from sys.modules so that the
+    module-level ``try: from mpi4py import MPI`` runs again against
+    whatever mock we install for that test.
 
     Args:
-        mpi_available: If True, mock mpi4py.MPI is importable.
+        mpi_available: If True, inject a mock mpi4py into sys.modules.
         ulfm_available: If True, mock MPI has ULFM error constants.
 
     Yields:
         The freshly imported mpi_fault module.
     """
-    # Remove cached module to get a fresh import
-    mod_name = "ttnn.distributed.mpi_fault"
-    saved = sys.modules.pop(mod_name, None)
+    saved = sys.modules.pop(_MOD_NAME, None)
     saved_mpi = sys.modules.pop("mpi4py", None)
     saved_mpi_MPI = sys.modules.pop("mpi4py.MPI", None)
 
@@ -65,6 +70,8 @@ def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
         if mpi_available:
             mock_MPI = MagicMock()
             mock_MPI.ERRORS_RETURN = "ERRORS_RETURN_SENTINEL"
+            # Standard MPI_UNDEFINED sentinel used by MPI_Group_translate_ranks
+            mock_MPI.UNDEFINED = -32766
 
             if ulfm_available:
                 mock_MPI.ERR_PROC_FAILED = 54
@@ -91,8 +98,13 @@ def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
             mock_mpi4py.MPI = mock_MPI
             sys.modules["mpi4py"] = mock_mpi4py
             sys.modules["mpi4py.MPI"] = mock_MPI
+
+            yield _import_mpi_fault()
         else:
-            # Simulate mpi4py not installed
+            # Simulate mpi4py not installed by intercepting any import of it.
+            # builtins.__import__ is called for every ``import``/``from``
+            # statement executed during module load, so patching it is the
+            # right hook here.
             import builtins
 
             real_import = builtins.__import__
@@ -103,19 +115,12 @@ def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
                 return real_import(name, *args, **kwargs)
 
             with patch("builtins.__import__", side_effect=fake_import):
-                mpi_fault_mod = _load_mpi_fault_from_source()
-
-                yield mpi_fault_mod
-                return
-
-        mpi_fault_mod = _load_mpi_fault_from_source()
-
-        yield mpi_fault_mod
+                yield _import_mpi_fault()
     finally:
         # Restore original module state
-        sys.modules.pop(mod_name, None)
+        sys.modules.pop(_MOD_NAME, None)
         if saved is not None:
-            sys.modules[mod_name] = saved
+            sys.modules[_MOD_NAME] = saved
         # Restore mpi4py
         sys.modules.pop("mpi4py", None)
         sys.modules.pop("mpi4py.MPI", None)
