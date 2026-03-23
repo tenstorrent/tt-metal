@@ -23,6 +23,7 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "api/compute/experimental/pack_custom.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -149,11 +150,14 @@ struct RMSNorm {
                     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
                 }
 
+                pack_block_init_custom(CTArgs::output_cb, num_tiles);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile_block(0, CTArgs::output_cb, num_tiles);
-                cb_push_back(CTArgs::output_cb, num_tiles);
+                // pack_tile_block(0, CTArgs::output_cb, num_tiles);
+                pack_tile(0, CTArgs::output_cb);
                 tile_regs_release();
+                cb_push_back(CTArgs::output_cb, num_tiles);
+                pack_block_init_custom(CTArgs::output_cb, 1);
             }
         }
 #endif
