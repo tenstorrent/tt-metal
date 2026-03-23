@@ -343,17 +343,17 @@ MPIContext::CommunicatorState::~CommunicatorState() {
 }
 
 std::shared_ptr<MPIContext::CommunicatorState> MPIContext::build_state(MPI_Comm comm, MPI_Group group) {
-    MPI_CHECK(MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN));
+    mpi_check(MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN), "MPI_Comm_set_errhandler");
 
     auto state = std::make_shared<CommunicatorState>();
     state->comm = comm;
     if (group == MPI_GROUP_NULL) {
-        MPI_CHECK(MPI_Comm_group(comm, &state->group));
+        mpi_check(MPI_Comm_group(comm, &state->group), "MPI_Comm_group");
     } else {
         state->group = group;
     }
-    MPI_CHECK(MPI_Comm_rank(comm, &state->rank));
-    MPI_CHECK(MPI_Comm_size(comm, &state->size));
+    mpi_check(MPI_Comm_rank(comm, &state->rank), "MPI_Comm_rank");
+    mpi_check(MPI_Comm_size(comm, &state->size), "MPI_Comm_size");
     return state;
 }
 
