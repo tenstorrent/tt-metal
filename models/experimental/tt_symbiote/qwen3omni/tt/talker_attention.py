@@ -2,10 +2,9 @@ import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
 from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
-from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
 
 
 class TTNNQwen3Attention(TTNNModule):
@@ -40,6 +39,30 @@ class TTNNQwen3Attention(TTNNModule):
                 packer_l1_acc=True,
             )
 
+        # Pre-place q/k norm weights for inline ttnn.rms_norm to avoid module-boundary reshards.
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+        q_norm = self.torch_layer.q_norm
+        self._q_norm_weight = ttnn.from_torch(
+            q_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._q_norm_eps = q_norm.variance_epsilon
+
+        k_norm = self.torch_layer.k_norm
+        self._k_norm_weight = ttnn.from_torch(
+            k_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._k_norm_eps = k_norm.variance_epsilon
+
     # -------------------------
     # Parameter initialization
     # -------------------------
@@ -48,11 +71,8 @@ class TTNNQwen3Attention(TTNNModule):
         self.q_proj = TTNNLinear.from_torch(self.torch_layer.q_proj)
         self.k_proj = TTNNLinear.from_torch(self.torch_layer.k_proj)
         self.v_proj = TTNNLinear.from_torch(self.torch_layer.v_proj)
-
-        self.o_proj = TTNNLinear.from_torch(self.torch_layer.o_proj)
-
-        self.q_norm = TTNNRMSNorm.from_torch(self.torch_layer.q_norm)
-        self.k_norm = TTNNRMSNorm.from_torch(self.torch_layer.k_norm)
+        # Use mesh-safe output projection (same pattern as thinker attention).
+        self.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(self.torch_layer.o_proj)
 
     @classmethod
     def from_torch(cls, torch_layer):
@@ -73,6 +93,30 @@ class TTNNQwen3Attention(TTNNModule):
 
         return new_attn
 
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
     # -------------------------
     # Forward
     # -------------------------
@@ -85,33 +129,47 @@ class TTNNQwen3Attention(TTNNModule):
         past_key_values=None,
         **kwargs,
     ):
-        input_shape = list(hidden_states.shape)[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
+        # All-gather sharded hidden_states so QKV projections see full hidden dim.
+        expected_hidden = self.q_proj.in_features
+        if hidden_states.shape[-1] != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
 
         # -------------------------
         # Q K V projections
         # -------------------------
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        query_states = self._to_ttnn(self.q_proj(hidden_states))
+        key_states = self._to_ttnn(self.k_proj(hidden_states))
+        value_states = self._to_ttnn(self.v_proj(hidden_states))
 
-        query_states = query_states.view(hidden_shape).transpose(1, 2)
-        key_states = key_states.view(hidden_shape).transpose(1, 2)
-        value_states = value_states.view(hidden_shape).transpose(1, 2)
+        batch_size = query_states.shape[0]
+        seq_length = query_states.shape[1]
+        num_q_heads = query_states.shape[-1] // self.head_dim
+        num_kv_heads = key_states.shape[-1] // self.head_dim
+
+        query_states = ttnn.reshape(query_states, (batch_size, seq_length, num_q_heads, self.head_dim))
+        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
+
+        key_states = ttnn.reshape(key_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
+
+        value_states = ttnn.reshape(value_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
 
         # -------------------------
         # Q / K normalization
         # -------------------------
 
-        query_states = self.q_norm(query_states)
-        key_states = self.k_norm(key_states)
+        query_states = ttnn.rms_norm(query_states, weight=self._q_norm_weight, epsilon=self._q_norm_eps)
+        key_states = ttnn.rms_norm(key_states, weight=self._k_norm_weight, epsilon=self._k_norm_eps)
 
         # -------------------------
         # Rotary positional embedding
         # -------------------------
 
         cos, sin = position_embeddings
+        cos = self._maybe_all_gather(cos)
+        sin = self._maybe_all_gather(sin)
 
         query_states, key_states = self.rope(
             query_states,
@@ -119,84 +177,62 @@ class TTNNQwen3Attention(TTNNModule):
             cos,
             sin,
         )
+        query_states = self._to_ttnn(query_states)
+        key_states = self._to_ttnn(key_states)
 
         # -------------------------
         # KV cache
         # -------------------------
 
         if past_key_values is not None:
-            key_states, value_states = past_key_values.update(
-                key_states,
-                value_states,
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
+            k_torch = ttnn.to_torch(key_states, mesh_composer=mesh_composer)
+            v_torch = ttnn.to_torch(value_states, mesh_composer=mesh_composer)
+            if self._is_distributed:
+                k_torch = k_torch[:1]
+                v_torch = v_torch[:1]
+
+            k_torch, v_torch = past_key_values.update(
+                k_torch,
+                v_torch,
                 self.torch_layer.layer_idx,
             )
 
-        # -------------------------
-        # Sliding Window Logic
-        # -------------------------
-
-        seq_len = query_states.shape[2]
-        print("Sequence length:", seq_len)
-        print("Sliding window size:", self.sliding_window)
-
-        if self.sliding_window is not None and seq_len > self.sliding_window:
-            W = self.sliding_window
-
-            assert seq_len % W == 0, "seq_len must be divisible by sliding_window"
-
-            total_windows = seq_len // W
-
-            q_batched = ttnn.view(
-                query_states.to_ttnn,
-                [query_states.shape[1], total_windows, W, self.head_dim],
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+            key_states = ttnn.from_torch(
+                k_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            value_states = ttnn.from_torch(
+                v_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            k_batched = ttnn.view(
-                key_states.to_ttnn,
-                [key_states.shape[1], total_windows, W, self.head_dim],
-            )
-
-            v_batched = ttnn.view(
-                value_states.to_ttnn,
-                [value_states.shape[1], total_windows, W, self.head_dim],
-            )
-            print("Query shape before SDPA:", query_states.shape)
-            print("Key shape before SDPA:", key_states.shape)
-            print("Value shape before SDPA:", value_states.shape)
-
-            attn_output_batched = self.sdpa(
-                self,
-                q_batched,
-                k_batched,
-                v_batched,
-                attention_mask,
-                dropout=0.0,
-                scaling=self.scaling,
-                is_causal=False,
-                transpose_output=False,
-            )
-
-            attn_output = ttnn.view(
-                attn_output_batched,
-                [1, query_states.shape[1], seq_len, self.head_dim],
-            )
-
-        else:
-            print("Query shape before SDPA:", query_states.shape)
-            print("Key shape before SDPA:", key_states.shape)
-            print("Value shape before SDPA:", value_states.shape)
-
-            attn_output = self.sdpa(
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                dropout=0.0,
-                scaling=self.scaling,
-                is_causal=self.is_causal,
-                transpose_output=False,
-            )
+        # Keep full-sequence SDPA output shape [B, H, S, D].
+        # The chunked sliding-window path can collapse sequence length in prefill
+        # and break residual add shape (e.g., 1024 vs 8192).
+        print("Query shape before SDPA:", query_states.shape)
+        print("Key shape before SDPA:", key_states.shape)
+        print("Value shape before SDPA:", value_states.shape)
+        attn_output = self.sdpa(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=self.is_causal,
+            transpose_output=False,
+        )
 
         # -------------------------
         # Merge heads

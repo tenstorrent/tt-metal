@@ -1,8 +1,10 @@
 import copy
+import json
+import os
+import warnings
 
 import pytest
 import torch
-from safetensors.torch import safe_open
 from transformers import AutoConfig
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeTalkerModel,
@@ -10,29 +12,46 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
 
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.utils.device_management import set_device
-from models.experimental.qwen3omni.tt.talker_attention import TTNNQwen3Attention
+from models.experimental.tt_symbiote.qwen3omni.tt.talker_attention import TTNNQwen3Attention
 
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 
-SAFETENSOR_PATH = "/home/ubuntu/tt-metal/models/experimental/qwen3omni/checkpoints/" "model-00013-of-00015.safetensors"
+# Local directory containing model.safetensors.index.json and shard files.
+CHECKPOINT_DIR = os.environ.get(
+    "QWEN3OMNI_CHECKPOINT_DIR",
+    "/home/ubuntu/.cache/huggingface/hub/models--Qwen--Qwen3-Omni-30B-A3B-Instruct/snapshots/26291f793822fb6be9555850f06dfe95f2d7e695",
+)
 
 TALKER_PREFIX = "talker.model.layers.0.self_attn."
 
 
-def load_talker_attention_weights():
-    """Load only talker layer0 attention weights from safetensor."""
+def load_state_dict_filtered_local(ckpt_dir, key_prefix):
+    """Load only weights with the given prefix from a local checkpoint (index + shards)."""
+    from safetensors.torch import safe_open as safetensors_safe_open
+
+    ckpt_dir = os.path.abspath(ckpt_dir)
+    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    if not os.path.isfile(index_path):
+        raise FileNotFoundError(f"Index not found: {index_path}")
+
+    with open(index_path, "r") as f:
+        index_data = json.load(f)
+    weight_map = index_data["weight_map"]
+
+    file_to_keys = {}
+    for key, file_name in weight_map.items():
+        if key.startswith(key_prefix):
+            file_to_keys.setdefault(file_name, []).append(key)
 
     loaded = {}
-
-    with safe_open(SAFETENSOR_PATH, framework="pt", device="cpu") as f:
-        for key in f.keys():
-            if key.startswith(TALKER_PREFIX):
+    for file_name, keys in file_to_keys.items():
+        path = os.path.join(ckpt_dir, file_name)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Shard not found: {path}")
+        with safetensors_safe_open(path, framework="pt", device="cpu") as f:
+            for key in keys:
                 loaded[key] = f.get_tensor(key)
-
-    if not loaded:
-        raise RuntimeError("No talker attention weights found")
-
     return loaded
 
 
@@ -45,14 +64,19 @@ def build_talker_attention_layer():
 
     text_config.num_hidden_layers = 1
 
-    state_dict = load_talker_attention_weights()
-
-    # Map full-model keys to talker-model keys: talker.model.layers.0.self_attn.* -> layers.0.self_attn.*
-    mapped_sd = {k.replace("talker.model.", "", 1): v for k, v in state_dict.items()}
-
     text_model = Qwen3OmniMoeTalkerModel(text_config).to(torch.bfloat16)
-
-    text_model.load_state_dict(mapped_sd, strict=False)
+    try:
+        state_dict = load_state_dict_filtered_local(CHECKPOINT_DIR, TALKER_PREFIX)
+        if not state_dict:
+            raise RuntimeError(f"No weights found with prefix {TALKER_PREFIX!r} in {CHECKPOINT_DIR}")
+        # Map full-model keys to talker-model keys: talker.model.layers.0.self_attn.* -> layers.0.self_attn.*
+        mapped_sd = {k.replace("talker.model.", "", 1): v for k, v in state_dict.items()}
+        text_model.load_state_dict(mapped_sd, strict=False)
+    except (FileNotFoundError, RuntimeError) as e:
+        warnings.warn(
+            f"{e}. Falling back to random-initialized talker layer for parity test.",
+            RuntimeWarning,
+        )
 
     text_model.eval()
 
