@@ -9,9 +9,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include <vector>
+#include <tt-metalium/device_types.hpp>
+// UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
 

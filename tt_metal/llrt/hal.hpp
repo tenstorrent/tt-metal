@@ -34,6 +34,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
 enum class AddressableCoreType : uint8_t;
 
@@ -58,33 +59,7 @@ enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED 
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
-// A set of processors distinguishing programmable core type and index within that core type.
-// See get_processor_index and get_processor_class_and_type_from_index.
-class HalProcessorSet {
-private:
-    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
-
-public:
-    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
-        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
-    }
-    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
-        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
-    }
-    bool empty() const {
-        for (const auto& mask : masks_) {
-            if (mask != 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-    // Returns the bitmask of processors for the given core type.
-    // Bit i set <=> processor index i is in the set.
-    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
-        return masks_[static_cast<size_t>(core_type)];
-    }
-};
+enum class NoCTopologyType : uint8_t { MESH = 0, TORUS = 1 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 24;
@@ -116,6 +91,13 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Re-initialize the link including the MAC/PCS level
+    // arg0: no of attempts, arg1: reinit_option, arg2: unused
+    // Use reinit_option 2 to reinit MAC + SERDES from reset
+    ETH_MSG_PORT_REINIT_MACPCS,
+    // Bring the port up or down
+    // arg0: 1 = link up, 2 = link down, arg1: unused, arg2: unused
+    ETH_MSG_PORT_ACTION,
     // Heartbeat counter
     HEARTBEAT,
     // Retrain Count
@@ -324,6 +306,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
@@ -370,6 +353,9 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    // Returns the NoC topology type (MESH or TORUS)
+    NoCTopologyType get_noc_topology() const { return noc_topology_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }

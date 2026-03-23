@@ -10,7 +10,6 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "tt-metalium/constants.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
@@ -21,6 +20,8 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 void kernel_main() {
@@ -111,6 +112,7 @@ void kernel_main() {
     // These are numbers in absolute terms, on a per group, per batch without tiling
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
     constexpr uint32_t reciprocal_size = get_named_compile_time_arg_val("reciprocal_size");
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -143,16 +145,16 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (do_gamma or do_beta)
-                                    ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
-                                    : cb_out0;
+    constexpr uint32_t cb_out = (do_gamma or do_beta) ? cb_out0 : cb_reread_write_out;
 #endif
 
 #ifdef UNTILIZE_OUT
     constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
+    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_reread_write_out;
     constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
+    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma
+                                   : do_beta                  ? cb_outbeta
+                                                              : cb_reread_write_out;
     constexpr int cb_untilize_out =
 #ifdef READER_REPACK
         cb_repack_out;
@@ -168,23 +170,26 @@ void kernel_main() {
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_in0, cb_in0);
@@ -268,7 +273,7 @@ void kernel_main() {
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // Start Welford Partial Tile Updates
-                        uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                        uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                         welford_restore_state(mean_dst, g);
@@ -297,7 +302,7 @@ void kernel_main() {
 
                         // All available columns have been used for this tile, so we don't do any
                         // more groups for this tile.
-                        if (group_offset == tt::constants::TILE_WIDTH) {
+                        if (group_offset == tile_width) {
                             break;
                         }
                     }
@@ -450,7 +455,7 @@ void kernel_main() {
                         tile_regs_release();
                         cb_push_back(cb_x, 1);
 
-                        uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                        uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
@@ -473,7 +478,7 @@ void kernel_main() {
 
                         // All available columns have been used for this tile, so we don't do any
                         // more groups for this tile.
-                        if (group_offset == tt::constants::TILE_WIDTH) {
+                        if (group_offset == tile_width) {
                             break;
                         }
                     }
@@ -520,25 +525,23 @@ void kernel_main() {
                     copy_tile(cb_x, 0, dst0);
                     tile_regs_commit();
                     cb_pop_front(cb_x, 1);
-                    cb_reserve_back(cb_out0, 1);
+                    cb_reserve_back(cb_out, 1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_out0);
+                    pack_tile(dst0, cb_out);
                     tile_regs_release();
-                    cb_push_back(cb_out0, 1);
+                    cb_push_back(cb_out, 1);
                 }
             }
 
 #ifdef UNTILIZE_OUT
-            // untilize
-            untilize_init(cb_untilize_in);
-            cb_wait_front(cb_untilize_in, per_core_MN);
-            for (uint32_t m = 0; m < per_core_M; ++m) {
-                cb_reserve_back(cb_untilize_out, per_core_N);
-                untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-                cb_push_back(cb_untilize_out, per_core_N);
-                cb_pop_front(cb_untilize_in, per_core_N);
-            }
-            untilize_uninit(cb_untilize_in);
+            // untilize - DEST capacity auto-detected
+            compute_kernel_lib::untilize<
+                per_core_N,
+                cb_untilize_in,
+                cb_untilize_out,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
         }
         // End Final Normalization

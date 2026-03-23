@@ -24,16 +24,34 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     captured_graph = ttnn.graph.end_graph_capture()
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
-    assert "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
+    assert "ttnn.from_torch" in calltrace or "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
-    assert captured_graph[1]["params"]["name"] == "ttnn::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-2]["node_type"] == "buffer_deallocate"
+    first_op = captured_graph[1]["params"]["name"]
+    assert first_op in ("ttnn.from_torch", "ttnn::convert_python_tensor_to_tt_tensor")
     assert captured_graph[-1]["node_type"] == "capture_end"
 
     ttnn.graph.pretty_print(captured_graph)
 
     ttnn.graph.visualize(captured_graph, file_name=tmp_path / pathlib.Path("graph.svg"))
+
+
+@pytest.mark.parametrize("k", [2])
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_graph_capture_topk(device, k, mode):
+    """Sanity check that graph capture doesn't fail"""
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 32, 128)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.graph.begin_graph_capture(mode)
+    _ = ttnn.topk(tt_input, k, dim=-1, largest=True, sorted=True)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    assert captured_graph[0]["node_type"] == "capture_start"
+    assert captured_graph[-1]["node_type"] == "capture_end"
 
 
 def test_graph_capture_with_all_parameters(device):
@@ -503,3 +521,88 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
         assert False
 
     assert True
+
+
+# Tests for new features: buffer pages, full tensor info
+
+
+def test_detailed_buffer_tracing_control():
+    """Test detailed buffer tracing enable/disable API"""
+    # Default should be disabled
+    assert not ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+    # Enable
+    ttnn.graph.enable_detailed_buffer_tracing()
+    assert ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+    # Disable
+    ttnn.graph.disable_detailed_buffer_tracing()
+    assert not ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_full_tensor_info_captured(device, mode):
+    """Test that full tensor info (dtype, layout, memory_config, etc.) is captured"""
+    ttnn.graph.begin_graph_capture(mode)
+    ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Find tensor nodes and verify they have full info
+    found_tensor_with_full_info = False
+    for node in captured_graph:
+        if node["node_type"] == "tensor":
+            params = node["params"]
+            # Check for required fields
+            assert "tensor_id" in params
+            assert "shape" in params
+
+            # Check for extended tensor info (dtype, layout)
+            if "dtype" in params:
+                found_tensor_with_full_info = True
+                assert isinstance(params["dtype"], str)
+                assert "layout" in params
+                assert isinstance(params["layout"], str)
+
+                # For device tensors, check device-specific fields
+                if "device_id" in params:
+                    assert isinstance(params["device_id"], (int, str))
+                    assert "address" in params
+                    assert isinstance(params["address"], (int, str))
+
+    assert found_tensor_with_full_info, "Expected at least one tensor with full info"
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_duration_captured(device, mode):
+    """Test that durations are captured for function_end and capture_end nodes"""
+    ttnn.graph.begin_graph_capture(mode)
+    input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.relu(input_tensor)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Check function_end nodes have duration
+    found_function_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "function_end":
+            if "duration_ns" in node:
+                found_function_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    # Check capture_end node has duration
+    found_capture_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "capture_end":
+            if "duration_ns" in node:
+                found_capture_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    assert found_function_end_with_duration, "Expected function_end nodes to have duration"
+    assert found_capture_end_with_duration, "Expected capture_end node to have duration"

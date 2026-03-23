@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.common.utility_functions import torch_random
 
 
@@ -54,3 +54,17 @@ def test_min_global(device, batch_size, h, w):
     output_tensor = output_tensor
 
     assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("input_shape, dim, keepdim", [((512, 1024, 1, 2), -1, False), ((64, 512), -1, False)])
+def test_min_row_major(device, input_shape, dim, keepdim):
+    """Test ttnn.min with ROW_MAJOR layout (issue #32829: +inf padding during tilization)."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor, _ = torch.min(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
