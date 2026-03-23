@@ -15,7 +15,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -132,8 +134,7 @@ static bool check_floats_close(const vector<float>& a, const vector<float>& b, f
     }
     for (size_t i = 0; i < a.size(); i++) {
         if (!is_close(a[i], b[i], rtol, atol)) {
-            std::cerr << "check_floats_close: mismatch at index " << i << " - a[i] = " << a[i] << ", b[i] = " << b[i]
-                      << std::endl;
+            log_info(tt::LogTest, "check_floats_close: mismatch at index {} - a[i] = {}, b[i] = {}", i, a[i], b[i]);
             return false;
         }
     }
@@ -166,7 +167,7 @@ static double compute_pcc(const vector<float>& a, const vector<float>& b) {
 static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {
     double pcc = compute_pcc(a, b);
     if (pcc < min_pcc) {
-        std::cerr << "check_pcc: PCC = " << pcc << " < min_pcc = " << min_pcc << std::endl;
+        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
         return false;
     }
     return true;
