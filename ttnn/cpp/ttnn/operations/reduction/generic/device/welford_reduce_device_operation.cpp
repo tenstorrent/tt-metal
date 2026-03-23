@@ -38,8 +38,12 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
-    // Always reduce the W dimension for Welford reduce.
-    output_shape[-1] = 1;
+    // The reduced dimension always has size of 1.
+    if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H) {
+        output_shape[-2] = 1;
+    } else {
+        output_shape[-1] = 1;
+    }
 
     TensorSpec tensor_spec(
         output_shape,
@@ -84,6 +88,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<WelfordReduceDeviceOperation>(
         operation_attributes.math_op,
+        operation_attributes.reduce_dim,
         operation_attributes.scalar,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
@@ -99,6 +104,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
 ttnn::Tensor welford_reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
     float scalar,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
@@ -115,6 +121,7 @@ ttnn::Tensor welford_reduce(
     return ttnn::device_operation::launch<WelfordReduceDeviceOperation>(
         WelfordReduceParams{
             reduce_math,
+            reduce_dim,
             scalar,
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
