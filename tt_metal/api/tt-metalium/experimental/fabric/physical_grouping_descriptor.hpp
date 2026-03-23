@@ -126,17 +126,18 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
-    // Find all possible ASIC IDs that could be part of any valid mapping of groupings to a physical system descriptor
-    // Returns vector of unordered_sets, where each set corresponds to one mapped copy (no differentiation by grouping
-    // type) Returns empty vector if no valid mapping exists
+    // Find all possible ASIC IDs that could appear in any valid mapping of the input `groupings` to the physical
+    // system descriptor.
+    // Returns a vector of unordered_sets. Each element is one complete valid mapping: the set of ASIC IDs used
+    // across all of the input groupings for that mapping (grouping type is not distinguished in the set).
+    // Returns an empty vector if no valid combined mapping exists.
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Find all possible ASIC IDs that could be part of any valid mapping of groupings to a physical system descriptor
-    // Returns vector of unordered_sets, where each set corresponds to one mapped copy (no differentiation by grouping
-    // type) Returns empty vector if no valid mapping exists errors_out will be populated with detailed error messages
-    // if mapping fails
+    // Same semantics as the overload without `errors_out`.
+    // Additionally, `errors_out` receives detailed messages when mapping fails or no valid combined mapping can be
+    // formed.
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,

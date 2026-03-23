@@ -745,11 +745,11 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
 
             // Validate ASIC location enum value
             if (has_asic_location) {
-                proto::AsicLocation loc = instance.asic_location();
-                // ASIC_LOCATION_UNSPECIFIED (256) is allowed - it means "any ASIC ID" (no constraint)
-                // Valid range: 0-8 (ASIC locations) or 256 (UNSPECIFIED)
-                bool is_valid_location = (loc >= 0 && loc <= 8);
-                bool is_unspecified = (loc == static_cast<int>(proto::AsicLocation::ASIC_LOCATION_UNSPECIFIED));
+                const proto::AsicLocation loc = instance.asic_location();
+                // ASIC_LOCATION_UNSPECIFIED means "any ASIC ID" (no constraint)
+                const bool is_unspecified = (loc == proto::AsicLocation::ASIC_LOCATION_UNSPECIFIED);
+                const bool is_valid_location =
+                    (loc >= proto::AsicLocation::ASIC_LOCATION_0 && loc <= proto::AsicLocation::ASIC_LOCATION_8);
                 if (!is_valid_location && !is_unspecified) {
                     errors.push_back(fmt::format(
                         "Grouping '{}' instance {} uses invalid ASIC location value {}",
