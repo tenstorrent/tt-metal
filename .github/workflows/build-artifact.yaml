@@ -223,6 +223,11 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      publish-artifact:
+        required: false
+        type: boolean
+        default: true
+        description: "Make resulting artifact available in the workflow"
 
 jobs:
   # =============================================================================
