@@ -305,15 +305,23 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         to_set["qkv_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
     if config.output_compute_kernel_cfg is None:
         to_set["output_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
+        )
+
+    if config.score_prg_config is None:
+        to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
         )
 
     # Phase D: resolve single target device.
