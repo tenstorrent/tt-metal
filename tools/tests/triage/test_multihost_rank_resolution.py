@@ -38,14 +38,16 @@ _HOSTS = ["node-0", "node-1", "node-2"]
 
 def _make_kernels_yaml(rank: int) -> str:
     """Minimal kernels.yaml with a name that encodes the rank for assertions."""
-    return textwrap.dedent(f"""\
+    return textwrap.dedent(
+        f"""\
         - kernel:
             watcher_kernel_id: {rank}
             name: rank_{rank}_matmul_kernel
             path: /fake/path/rank_{rank}/kernel.cpp
             source: void kernel_main() {{}}
             program_id: {rank}
-    """)
+    """
+    )
 
 
 def _make_inspector_dir(logs_root: Path, hostname: str, rank: int) -> Path:
@@ -87,30 +89,34 @@ def _assert_rank_data(log_dir: str, expected_rank: int) -> None:
     kernels = get_kernels(log_dir)
     assert kernels, f"No kernels found in {log_dir}"
     names = [k.name for k in kernels.values()]
-    assert any(f"rank_{expected_rank}_" in name for name in names), (
-        f"Expected kernel name containing 'rank_{expected_rank}_', got: {names}"
-    )
+    assert any(
+        f"rank_{expected_rank}_" in name for name in names
+    ), f"Expected kernel name containing 'rank_{expected_rank}_', got: {names}"
     # Verify no other rank's kernels bled in
     for other_rank in range(3):
         if other_rank != expected_rank:
-            assert not any(f"rank_{other_rank}_" in name for name in names), (
-                f"rank_{other_rank} kernel unexpectedly present in rank_{expected_rank} dir: {names}"
-            )
+            assert not any(
+                f"rank_{other_rank}_" in name for name in names
+            ), f"rank_{other_rank} kernel unexpectedly present in rank_{expected_rank} dir: {names}"
 
 
 # ---------------------------------------------------------------------------
 # Core rank selection: each supported env var resolves the right rank
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("rank_var,rank", [
-    ("OMPI_COMM_WORLD_RANK", 0),
-    ("OMPI_COMM_WORLD_RANK", 1),
-    ("OMPI_COMM_WORLD_RANK", 2),
-    ("PMI_RANK",             1),
-    ("SLURM_PROCID",         2),
-    ("PMIX_RANK",            0),
-    ("TT_MESH_HOST_RANK",    1),
-])
+
+@pytest.mark.parametrize(
+    "rank_var,rank",
+    [
+        ("OMPI_COMM_WORLD_RANK", 0),
+        ("OMPI_COMM_WORLD_RANK", 1),
+        ("OMPI_COMM_WORLD_RANK", 2),
+        ("PMI_RANK", 1),
+        ("SLURM_PROCID", 2),
+        ("PMIX_RANK", 0),
+        ("TT_MESH_HOST_RANK", 1),
+    ],
+)
 def test_rank_var_selects_correct_data(monkeypatch, multihost_tree, rank_var: str, rank: int):
     """Each supported rank env var resolves get_log_directory() to the right rank's data."""
     _clear_rank_vars(monkeypatch)
@@ -119,15 +125,16 @@ def test_rank_var_selects_correct_data(monkeypatch, multihost_tree, rank_var: st
 
     log_dir = get_log_directory()
 
-    assert log_dir == str(multihost_tree["dirs"][rank]), (
-        f"{rank_var}={rank}: expected dir for rank {rank}, got {log_dir}"
-    )
+    assert log_dir == str(
+        multihost_tree["dirs"][rank]
+    ), f"{rank_var}={rank}: expected dir for rank {rank}, got {log_dir}"
     _assert_rank_data(log_dir, rank)
 
 
 # ---------------------------------------------------------------------------
 # Precedence: higher-priority var wins when multiple are set
 # ---------------------------------------------------------------------------
+
 
 def test_ompi_beats_pmi_end_to_end(monkeypatch, multihost_tree):
     """OMPI_COMM_WORLD_RANK takes precedence over PMI_RANK; data confirms correct rank selected."""
@@ -169,6 +176,7 @@ def test_slurm_beats_pmix_end_to_end(monkeypatch, multihost_tree):
 # Fallback: no rank env → rank 0
 # ---------------------------------------------------------------------------
 
+
 def test_no_rank_env_falls_back_to_rank_zero_data(monkeypatch, multihost_tree):
     """Without any rank env var, triage falls back to rank 0 and reads rank 0 data."""
     _clear_rank_vars(monkeypatch)
@@ -182,6 +190,7 @@ def test_no_rank_env_falls_back_to_rank_zero_data(monkeypatch, multihost_tree):
 # ---------------------------------------------------------------------------
 # Explicit path override: bypasses all rank resolution
 # ---------------------------------------------------------------------------
+
 
 def test_explicit_path_override_bypasses_rank_resolution(monkeypatch, multihost_tree):
     """An explicit log_directory argument overrides ALL rank env var logic."""
@@ -199,6 +208,7 @@ def test_explicit_path_override_bypasses_rank_resolution(monkeypatch, multihost_
 # ---------------------------------------------------------------------------
 # Invalid rank value: skipped, falls back to next var / rank 0
 # ---------------------------------------------------------------------------
+
 
 def test_invalid_rank_value_falls_through_to_next_var(monkeypatch, multihost_tree):
     """A non-integer rank value in OMPI var is skipped; PMI_RANK is used instead."""
@@ -227,6 +237,7 @@ def test_negative_rank_value_falls_through_to_next_var(monkeypatch, multihost_tr
 # ---------------------------------------------------------------------------
 # Rank env points to non-existent rank: falls back to rank 0
 # ---------------------------------------------------------------------------
+
 
 def test_rank_env_for_missing_rank_falls_back_to_rank_zero(monkeypatch, multihost_tree):
     """If the rank env points to a rank with no inspector dir, fall back to rank 0."""
