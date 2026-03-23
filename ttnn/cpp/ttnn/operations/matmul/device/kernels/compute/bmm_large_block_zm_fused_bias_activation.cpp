@@ -199,9 +199,9 @@ void kernel_main() {
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
+
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
