@@ -10,6 +10,8 @@
 #include <optional>
 #include <reflect>
 #include <stack>
+#include <string_view>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
@@ -231,6 +233,11 @@ inline void tracy_frame() {
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(ChipId device_id, const Program& program) {
+    // Deduplicate by source file: ops with per-core compile-time args produce one
+    // Kernel object per core (all sharing the same source), which would otherwise
+    // emit hundreds of identical entries and blow past Tracy's 64KiB message limit.
+    std::unordered_set<std::string_view> seenComputeSources;
+    std::unordered_set<std::string_view> seenDMSources;
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
@@ -252,17 +259,20 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
     for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
-        json kernelObj;
-        kernelObj["source"] = kernel.source;
-        kernelObj["name"] = kernel.name;
-
         auto processor_class = kernel.processor_class;
-        if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = kernel.math_fidelity.value();
-            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
-            computeKernels.push_back(std::move(kernelObj));
-        } else {
-            datamovementKernels.push_back(std::move(kernelObj));
+        auto& seenSources = (processor_class == HalProcessorClassType::COMPUTE) ? seenComputeSources : seenDMSources;
+
+        if (seenSources.insert(kernel.source).second) {
+            // First time seeing this source file for this processor class — emit one entry.
+            json kernelObj;
+            kernelObj["source"] = kernel.source;
+            kernelObj["name"] = kernel.name;
+            if (processor_class == HalProcessorClassType::COMPUTE) {
+                kernelObj["math_fidelity"] = enchantum::to_string(kernel.math_fidelity.value());
+                computeKernels.push_back(std::move(kernelObj));
+            } else {
+                datamovementKernels.push_back(std::move(kernelObj));
+            }
         }
 
         auto core_type = kernel.programmable_core_type;
@@ -516,9 +526,29 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
+        // Tracy hard limit is uint16_t::max bytes including null terminator.
+        // The message is wrapped in backticks which serve as the CSV quotechar.
+        // If the message is truncated by tracy_message(), the closing backtick is
+        // lost, causing the CSV reader to absorb subsequent rows into this field.
+        // Build with pretty JSON first, then compact, then drop kernel_info to fit.
+        constexpr size_t tracy_limit = std::numeric_limits<uint16_t>::max() - 1;
         auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
-        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
+        if (msg.size() > tracy_limit) {
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+        }
+        if (msg.size() > tracy_limit) {
+            // kernel_info is the largest field. Drop it to fit within the limit;
+            // process_ops_logs.py guards all kernel_info accesses with "if in".
+            j.erase("kernel_info");
+            msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+            log_warning(
+                tt::LogMetal,
+                "Tracy op profiler message for op '{}' (call {}, device {}) exceeded the {} byte limit even after "
+                "compacting JSON. kernel_info was dropped from the perf report for this op.",
+                j.value("op_code", "?"),
+                operation_id,
+                device_id,
+                tracy_limit);
         }
         return msg;
     }
