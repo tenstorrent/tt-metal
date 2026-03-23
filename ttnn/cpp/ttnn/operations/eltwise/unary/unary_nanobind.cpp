@@ -1909,7 +1909,7 @@ void py_module(nb::module_& mod) {
         R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation(
+    bind_unary_operation_subcoregrids(
         mod,
         ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",

@@ -333,17 +333,23 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    std::map<std::string, std::string> reader_writer_kernel_defines;
+    if (ops_chain[0].type() == UnaryOpType::COS) {
+        reader_writer_kernel_defines["COS"] = "1";
+        log_info(tt::LogOp, "COS kernel");
+    }
+
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_writer_kernel_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, reader_writer_kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
@@ -368,6 +374,11 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
         unary_defines["INP_UINT32"] = "1";
     } else {
         unary_defines["INP_FLOAT"] = "1";
+    }
+
+    if (ops_chain[0].type() == UnaryOpType::COS) {
+        unary_defines["COS"] = "1";
+        log_info(tt::LogOp, "COS kernel 2");
     }
 
     if (!ops_chain[0].empty()) {

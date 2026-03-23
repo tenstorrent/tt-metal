@@ -23,9 +23,14 @@ class BinaryMulTest(OpTestBase):
         self.compute_grid = compute_grid
 
     def run_device_operation(self):
-        return ttnn.mul(
+        for _ in range(self.loop_count):
+            ttnn.mul(
+                self.activations,
+                self.inputs[0],
+                sub_core_grids=self.compute_grid,
+            )
+        return ttnn.cos(
             self.activations,
-            self.inputs[0],
             sub_core_grids=self.compute_grid,
         )
 

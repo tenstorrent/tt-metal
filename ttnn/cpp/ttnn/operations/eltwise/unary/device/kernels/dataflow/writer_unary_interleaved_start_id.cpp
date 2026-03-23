@@ -5,6 +5,12 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+#ifdef COS
+    // -------------------- IDLE LOOPS START -------------------- //
+    // this "ebreak" will cause the riscv core to break and wait forever
+    asm volatile("ebreak");
+#endif
+
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);

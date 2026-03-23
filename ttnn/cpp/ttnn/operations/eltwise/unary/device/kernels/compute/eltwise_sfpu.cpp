@@ -14,6 +14,12 @@
 #include "api/compute/eltwise_unary/fill.h"
 
 void kernel_main() {
+#ifdef COS
+    // -------------------- IDLE LOOPS START -------------------- //
+    // this "ebreak" will cause the riscv core to break and wait forever
+    asm volatile("ebreak");
+#endif
+
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 

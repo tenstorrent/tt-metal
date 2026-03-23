@@ -24,9 +24,14 @@ class MaxTest(OpTestBase):
         self.compute_grid = compute_grid
 
     def run_device_operation(self):
-        return ttnn.max(
+        for _ in range(self.loop_count):
+            ttnn.max(
+                self.activations,
+                dim=self.reduce_dim,
+                sub_core_grids=self.compute_grid,
+            )
+        return ttnn.cos(
             self.activations,
-            dim=self.reduce_dim,
             sub_core_grids=self.compute_grid,
         )
 

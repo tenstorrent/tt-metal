@@ -23,7 +23,12 @@ class SinTest(OpTestBase):
         self.compute_grid = compute_grid
 
     def run_device_operation(self):
-        return ttnn.sin(
+        for _ in range(self.loop_count):
+            ttnn.sin(
+                self.activations,
+                sub_core_grids=self.compute_grid,
+            )
+        return ttnn.cos(
             self.activations,
             sub_core_grids=self.compute_grid,
         )
