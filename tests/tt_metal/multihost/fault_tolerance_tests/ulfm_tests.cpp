@@ -273,9 +273,9 @@ TEST(FaultTolerance, FastFailExitCode70) {
     // subprocess by checking that the FAST_FAIL path is the default,
     // and that killing a rank causes the expected behavior.
     //
-    // For a proper integration test, we rely on the external test runner
-    // (run_single_node_ulfm_tests.sh) which launches mpirun and checks
-    // the exit code of the entire job.
+    // The shell harness covers the real FAST_FAIL integration path
+    // separately with FaultTolerance.FastFailEmitsGithubAnnotation,
+    // which expects mpirun to terminate after emitting the annotation.
     //
     // Here we do a simpler in-process check: verify that FAST_FAIL is
     // the default policy, and that we can detect failure in FAULT_TOLERANT
@@ -298,8 +298,8 @@ TEST(FaultTolerance, FastFailExitCode70) {
     ASSERT_NE(mpi_ctx, nullptr);
 
     // We use FAULT_TOLERANT to test the detection path without killing
-    // the test runner. The FAST_FAIL path is tested by the shell-level
-    // test in run_single_node_ulfm_tests.sh.
+    // the test runner. The real FAST_FAIL shutdown path is covered by
+    // the shell-level test in run_single_node_ulfm_tests.sh.
     mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
 
     if (rank == 1) {
@@ -323,6 +323,37 @@ TEST(FaultTolerance, FastFailExitCode70) {
     EXPECT_TRUE(agreed.value());
 
     ctx->barrier();
+}
+
+TEST(FaultTolerance, FastFailEmitsGithubAnnotation) {
+    //----------------------------------------------------------------------
+    // Exercise the real FAST_FAIL path under an explicit annotation opt-in.
+    //
+    // The shell harness runs this test with
+    // TT_METAL_GITHUB_ACTIONS_ANNOTATIONS=1 and expects mpirun to exit
+    // non-zero after the surviving rank emits a policy=fast_fail annotation.
+    //----------------------------------------------------------------------
+    const auto& ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(ctx);
+
+    const int world = *ctx->size();
+    const int rank = *ctx->rank();
+
+    if (world < 2) {
+        GTEST_SKIP() << "Need at least 2 ranks";
+    }
+
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr);
+    mpi_ctx->set_failure_policy(FailurePolicy::FAST_FAIL);
+
+    if (rank == 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        raise(SIGKILL);
+    }
+
+    ctx->barrier();
+    FAIL() << "FAST_FAIL should terminate surviving ranks before barrier returns";
 }
 
 TEST(FaultTolerance, FinalizeWatchdogPath) {

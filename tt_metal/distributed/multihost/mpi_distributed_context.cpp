@@ -7,6 +7,7 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <csignal>
 #include <cstdio>
@@ -16,9 +17,10 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <string>
-#include <system_error>
 #include <string_view>
+#include <system_error>
 #include <unistd.h>
 #include <vector>
 #include <fmt/format.h>
@@ -246,13 +248,79 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
     return (policy == FailurePolicy::FAST_FAIL) ? "fast_fail" : "fault_tolerant";
 }
 
+inline constexpr std::string_view kUnknownRankName = "unknown-world-rank";
+inline constexpr std::string_view kUnknownHostname = "unknown-hostname";
 static constexpr char kGithubActionsAnnotationEnvVar[] = "TT_METAL_GITHUB_ACTIONS_ANNOTATIONS";
 static constexpr std::string_view kRankFailureAnnotationFile =
     "tt_metal/distributed/multihost/mpi_distributed_context.cpp";
 
+[[nodiscard]] std::string_view hostname_for_rank(std::span<const std::string> rank_hostnames, int rank) noexcept {
+    if (rank < 0) {
+        return kUnknownHostname;
+    }
+    const auto rank_index = static_cast<std::size_t>(rank);
+    if (rank_index >= rank_hostnames.size() || rank_hostnames[rank_index].empty()) {
+        return kUnknownHostname;
+    }
+    return rank_hostnames[rank_index];
+}
+
+[[nodiscard]] std::string format_rank_failure_annotation_title(
+    std::string_view failed_rank_name, std::string_view failed_hostname) {
+    if (failed_hostname == kUnknownHostname) {
+        return fmt::format("MPI rank failure {}", failed_rank_name);
+    }
+    return fmt::format("MPI rank failure {} on {}", failed_rank_name, failed_hostname);
+}
+
+[[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {
+    if (size <= 0) {
+        return {};
+    }
+
+    std::vector<std::string> rank_hostnames(static_cast<std::size_t>(size), std::string{kUnknownHostname});
+    std::array<char, MPI_MAX_PROCESSOR_NAME> local_hostname{};
+    int local_hostname_length = 0;
+    if (MPI_Get_processor_name(local_hostname.data(), &local_hostname_length) != MPI_SUCCESS ||
+        local_hostname_length <= 0) {
+        return rank_hostnames;
+    }
+
+    const auto capped_length = std::clamp(local_hostname_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
+    local_hostname[static_cast<std::size_t>(capped_length)] = '\0';
+    if (local_rank >= 0 && local_rank < size) {
+        rank_hostnames[static_cast<std::size_t>(local_rank)] = local_hostname.data();
+    }
+
+    std::vector<char> gathered_hostnames(static_cast<std::size_t>(size) * MPI_MAX_PROCESSOR_NAME, '\0');
+    if (MPI_Allgather(
+            local_hostname.data(),
+            MPI_MAX_PROCESSOR_NAME,
+            MPI_CHAR,
+            gathered_hostnames.data(),
+            MPI_MAX_PROCESSOR_NAME,
+            MPI_CHAR,
+            comm) != MPI_SUCCESS) {
+        return rank_hostnames;
+    }
+
+    for (int rank = 0; rank < size; ++rank) {
+        const auto begin = gathered_hostnames.begin() +
+                           static_cast<std::ptrdiff_t>(static_cast<std::size_t>(rank) * MPI_MAX_PROCESSOR_NAME);
+        const auto end = begin + MPI_MAX_PROCESSOR_NAME;
+        const auto nul = std::find(begin, end, '\0');
+        if (begin != nul) {
+            rank_hostnames[static_cast<std::size_t>(rank)] = std::string(begin, nul);
+        }
+    }
+
+    return rank_hostnames;
+}
+
 void emit_github_rank_failure_annotations(
     const std::vector<Rank>& failed_ranks,
     std::string_view failed_ranks_text,
+    std::span<const std::string> rank_hostnames,
     int detecting_rank,
     std::string_view operation,
     int error_code,
@@ -262,16 +330,19 @@ void emit_github_rank_failure_annotations(
     }
 
     const std::string detecting_rank_name = format_world_rank_name(detecting_rank);
-    auto emit_annotation_for = [&](const std::string& failed_rank_name) {
+    const std::string_view detecting_hostname = hostname_for_rank(rank_hostnames, detecting_rank);
+    auto emit_annotation_for = [&](std::string_view failed_rank_name, std::string_view failed_hostname) {
         // Emit stable key/value fields so workflow annotation consumers can
-        // query GitHub's annotations API for a specific failed rank name.
-        const auto title = fmt::format("MPI rank failure {}", failed_rank_name);
+        // query GitHub's annotations API for a specific failed rank or host.
+        const auto title = format_rank_failure_annotation_title(failed_rank_name, failed_hostname);
         const auto message = fmt::format(
-            "ULFM detected a rank failure; failed_rank_name={}; failed_ranks={}; detecting_rank_name={}; "
-            "operation={}; error_code={}; policy={}",
+            "ULFM detected a rank failure; failed_rank_name={}; failed_hostname={}; failed_ranks={}; "
+            "detecting_rank_name={}; detecting_hostname={}; operation={}; error_code={}; policy={}",
             failed_rank_name,
+            failed_hostname,
             failed_ranks_text,
             detecting_rank_name,
+            detecting_hostname,
             operation,
             error_code,
             failure_policy_name(policy));
@@ -285,10 +356,10 @@ void emit_github_rank_failure_annotations(
     };
 
     if (failed_ranks.empty()) {
-        emit_annotation_for("unknown-world-rank");
+        emit_annotation_for(kUnknownRankName, kUnknownHostname);
     } else {
         for (const auto failed_rank : failed_ranks) {
-            emit_annotation_for(format_world_rank_name(*failed_rank));
+            emit_annotation_for(format_world_rank_name(*failed_rank), hostname_for_rank(rank_hostnames, *failed_rank));
         }
     }
 }
@@ -299,6 +370,7 @@ static void handle_rank_failure(
     int error_code,
     std::string_view operation,
     FailurePolicy policy,
+    const std::vector<std::string>* rank_hostnames,
     std::vector<Rank>* failed_ranks_cache,
     std::mutex* failed_ranks_cache_mutex,
     std::atomic_flag* revoked_flag) {
@@ -337,7 +409,10 @@ static void handle_rank_failure(
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
     MPIX_Comm_revoke(comm);
 
-    emit_github_rank_failure_annotations(parsed_failed_ranks, failed, cached_rank, operation, error_code, policy);
+    const auto hostnames =
+        (rank_hostnames != nullptr) ? std::span<const std::string>(*rank_hostnames) : std::span<const std::string>{};
+    emit_github_rank_failure_annotations(
+        parsed_failed_ranks, failed, hostnames, cached_rank, operation, error_code, policy);
 
     fmt::print(
         stderr,
@@ -391,6 +466,7 @@ inline void mpi_check_ctx(
     [[maybe_unused]] MPI_Comm comm,
     int cached_rank,
     [[maybe_unused]] FailurePolicy policy,
+    [[maybe_unused]] const std::vector<std::string>* rank_hostnames = nullptr,
     [[maybe_unused]] std::vector<Rank>* failed_ranks_cache = nullptr,
     [[maybe_unused]] std::mutex* failed_ranks_cache_mutex = nullptr,
     [[maybe_unused]] std::atomic_flag* revoked_flag = nullptr) {
@@ -405,6 +481,7 @@ inline void mpi_check_ctx(
             error_code,
             call_text,
             policy,
+            rank_hostnames,
             failed_ranks_cache,
             failed_ranks_cache_mutex,
             revoked_flag);
@@ -448,6 +525,10 @@ std::shared_ptr<MPIContext::CommunicatorState> MPIContext::build_state(MPI_Comm 
     }
     mpi_check(MPI_Comm_rank(state->comm, &state->rank), "MPI_Comm_rank");
     mpi_check(MPI_Comm_size(state->comm, &state->size), "MPI_Comm_size");
+#if OMPI_HAS_ULFM
+    // Hostname resolution is best-effort diagnostic data for failure annotations.
+    state->rank_hostnames = best_effort_gather_rank_hostnames(state->comm, state->rank, state->size);
+#endif
     return state;
 }
 
@@ -467,6 +548,7 @@ std::shared_ptr<MPIContext::CommunicatorState> MPIContext::snapshot_state() cons
         (state)->comm,                                   \
         (state)->rank,                                   \
         failure_policy_.load(std::memory_order_acquire), \
+        &(state)->rank_hostnames,                        \
         &cached_failed_ranks_,                           \
         &failed_ranks_cache_mutex_,                      \
         &revoked_)

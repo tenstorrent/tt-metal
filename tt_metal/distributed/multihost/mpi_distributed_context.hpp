@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 #include "api/tt-metalium/distributed_context.hpp"
 
@@ -202,6 +203,7 @@ private:
         MPI_Group group{MPI_GROUP_NULL};
         int rank{0};
         int size{0};
+        std::vector<std::string> rank_hostnames;
 
         ~CommunicatorState();
     };

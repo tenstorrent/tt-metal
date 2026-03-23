@@ -7,6 +7,7 @@
 # These tests exercise ULFM control-plane behavior that does NOT require
 # actual Tenstorrent hardware or a multi-host cluster. They verify:
 #   - FAST_FAIL exit code 70 propagation
+#   - GitHub Actions FAST_FAIL annotation emission
 #   - MPI_Finalize watchdog (SIGALRM) path
 #   - std::set_terminate handler
 #   - MPIX_Comm_agree consensus
@@ -33,6 +34,55 @@ fi
 
 fail=0
 
+_run_expected_fast_fail_annotation_test() {
+    local expected_test="$1"
+    shift
+
+    local tmpout
+    local cmd_status=0
+    tmpout=$(mktemp)
+
+    if "$@" 2>&1 | tee "$tmpout"; then
+        cmd_status=0
+    else
+        cmd_status=${PIPESTATUS[0]}
+    fi
+
+    if [[ ! -s "$tmpout" ]]; then
+        echo "ERROR: no output captured for ${expected_test}; launcher exited ${cmd_status}" >&2
+        fail=$((fail + 1))
+        rm -f "$tmpout"
+        return
+    fi
+
+    if ! grep -Fq "[ RUN      ] ${expected_test}" "$tmpout"; then
+        echo "ERROR: missing GTest start marker for ${expected_test}; launcher exited ${cmd_status}" >&2
+        fail=$((fail + 1))
+        rm -f "$tmpout"
+        return
+    fi
+
+    if [[ $cmd_status -eq 0 ]]; then
+        echo "ERROR: ${expected_test} exited 0; FAST_FAIL should terminate mpirun non-zero" >&2
+        fail=$((fail + 1))
+        rm -f "$tmpout"
+        return
+    fi
+
+    if ! grep -Fq "::error " "$tmpout" || \
+       ! grep -Fq "policy=fast_fail" "$tmpout" || \
+       ! grep -Fq "failed_hostname=" "$tmpout" || \
+       ! grep -Fq "detecting_hostname=" "$tmpout"; then
+        echo "ERROR: ${expected_test} did not emit the expected FAST_FAIL rank-failure annotation" >&2
+        fail=$((fail + 1))
+        rm -f "$tmpout"
+        return
+    fi
+
+    echo "INFO: ${expected_test} emitted FAST_FAIL annotation with hostname fields (mpirun exit ${cmd_status})" >&2
+    rm -f "$tmpout"
+}
+
 echo "=== Single-node ULFM gap tests (Section 7.8) ==="
 
 # ── 1. Agree consensus (no rank death, pure control-plane) ─────────────
@@ -46,6 +96,13 @@ echo "--- FailurePolicySwitching (-np 4) ---"
 # ── 3. Fast-fail exit code 70 detection path ──────────────────────────
 echo "--- FastFailExitCode70 (-np 2) ---"
 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.FastFailExitCode70 || fail=$((fail + 1))
+
+# ── 3b. FAST_FAIL GitHub annotation coverage ─────────────────────────
+echo "--- FastFailEmitsGithubAnnotation (-np 2) ---"
+_run_expected_fast_fail_annotation_test \
+  "FaultTolerance.FastFailEmitsGithubAnnotation" \
+  env TT_METAL_GITHUB_ACTIONS_ANNOTATIONS=1 \
+  "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.FastFailEmitsGithubAnnotation
 
 # ── 4. MPI_Finalize watchdog path verification ────────────────────────
 echo "--- FinalizeWatchdogPath (-np 2) ---"
