@@ -32,6 +32,11 @@ TEST(FaultTolerance, ShrinkAfterRankFailure) {
     const int self_rank = *ctx->rank();
     const int victim_rank = 1;  // rank to kill (if exists)
 
+    // Switch to FAULT_TOLERANT so barrier() throws instead of _exit(70)
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr) << "Expected MPIContext for ULFM test";
+    mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
+
     //----------------------------------------------------------------------
     // 1 · Simulate a hard failure on one rank
     //----------------------------------------------------------------------
@@ -87,6 +92,11 @@ TEST(FaultTolerance, DisableBrokenBlock) {
     }
 
     const int victim_rank = victim_block * ranks_per_block;  // first rank in that block
+
+    // Switch to FAULT_TOLERANT so barrier() throws instead of _exit(70)
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr) << "Expected MPIContext for ULFM test";
+    mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
 
     // ‑‑ 1 · Simulate a hard failure on one rank ---------------------------
     if (rank == victim_rank) {
