@@ -71,7 +71,12 @@ void kernel_main() {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
             const uint32_t scalar_c_bits = get_arg_val<uint32_t>(0);
             float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
-            dataflow_kernel_lib::prepare_reduce_scaler<cb_in_4>(scalar_c_f);
+            dataflow_kernel_lib::prepare_reduce_scaler<
+                cb_in_4,
+                ckernel::PoolType::AVG,
+                ckernel::ReduceDim::REDUCE_ROW,
+                tt::constants::TILE_WIDTH,
+                true>(scalar_c_f);
         }
     }
 
