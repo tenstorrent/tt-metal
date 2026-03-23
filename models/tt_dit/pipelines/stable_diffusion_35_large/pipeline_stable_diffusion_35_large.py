@@ -12,7 +12,6 @@ import tqdm
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from PIL import Image
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
@@ -28,6 +27,7 @@ from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver, schedules
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tracing import Tracer
@@ -127,7 +127,6 @@ class StableDiffusion3Pipeline:
         self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
         if enable_t5_text_encoder:
             torch_text_encoder_3 = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_3")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
         self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
 
         torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
@@ -142,7 +141,6 @@ class StableDiffusion3Pipeline:
         assert isinstance(self._tokenizer_3, T5TokenizerFast)
         assert isinstance(self._text_encoder_1, CLIPTextModelWithProjection)
         assert isinstance(self._text_encoder_2, CLIPTextModelWithProjection)
-        assert isinstance(self._scheduler, FlowMatchEulerDiscreteScheduler)
         assert isinstance(self._torch_vae, AutoencoderKL)
         assert isinstance(torch_transformer, TorchSD3Transformer2DModel)
 
@@ -195,6 +193,7 @@ class StableDiffusion3Pipeline:
         self._step_inner_tracers = [
             Tracer(self._step_inner, device=device, prep_run=False) for device in self.submesh_devices
         ]
+        self._solvers = [EulerSolver() for _ in self.submesh_devices]
 
         self._num_channels_latents = torch_transformer.config.in_channels
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
@@ -530,8 +529,12 @@ class StableDiffusion3Pipeline:
 
             logger.info("preparing timesteps...")
 
-            self._scheduler.set_timesteps(num_inference_steps)
-            timesteps = self._scheduler.timesteps
+            shift = 3.0
+            sigma_small = shift * 0.001 / (1 + (shift - 1) * 0.001)
+            sigmas, alphas = schedules.shifted_linear(num_inference_steps, shift=shift, sigma_small=sigma_small)
+            for solver in self._solvers:
+                solver.set_schedule(sigmas, alphas)
+            timesteps = [s * 1000 for s in sigmas[:-1]]
 
             logger.info("preparing latents...")
 
@@ -578,8 +581,6 @@ class StableDiffusion3Pipeline:
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
-                        sigma_difference = (self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]).item()
-
                         tt_timestep_list = []
                         for submesh_device in self.submesh_devices:
                             # Allocation on device is fine, because timesteps are not used after
@@ -597,12 +598,12 @@ class StableDiffusion3Pipeline:
 
                         tt_latents_step_list = self._step(
                             timestep=tt_timestep_list,
-                            latents=None if reuse_tensors else tt_latents_step_list,
+                            latents=tt_latents_step_list,
                             do_classifier_free_guidance=do_classifier_free_guidance,
                             prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
                             pooled_prompt_embeds=None if reuse_tensors else tt_pooled_prompt_embeds_list,
                             guidance_scale=guidance_scale,
-                            sigma_difference=sigma_difference,
+                            step_index=i,
                             prompt_sequence_length=333,
                             spatial_sequence_length=4096,
                             traced=traced,
@@ -671,11 +672,11 @@ class StableDiffusion3Pipeline:
         *,
         do_classifier_free_guidance: bool,
         guidance_scale: float,
-        latents: list[ttnn.Tensor] | None,
+        latents: list[ttnn.Tensor],
         timestep: list[ttnn.Tensor],
         pooled_prompt_embeds: list[ttnn.Tensor] | None,
         prompt_embeds: list[ttnn.Tensor] | None,
-        sigma_difference: float,
+        step_index: int,
         prompt_sequence_length: int,
         spatial_sequence_length: int,
         traced: bool,
@@ -688,7 +689,7 @@ class StableDiffusion3Pipeline:
 
             latent, noise_pred = inner(
                 cfg_enabled=do_classifier_free_guidance,
-                latent=latents[submesh_id] if latents is not None else None,
+                latent=latents[submesh_id],
                 prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
                 pooled=pooled_prompt_embeds[submesh_id] if pooled_prompt_embeds is not None else None,
                 timestep=timestep[submesh_id],
@@ -721,8 +722,9 @@ class StableDiffusion3Pipeline:
                 noise_pred_list[1] = uncond1 + guidance_scale * (cond1 - uncond1)
 
         for submesh_id in range(len(self.submesh_devices)):
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
-            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
+            latents_out[submesh_id] = self._solvers[submesh_id].step(
+                step=step_index, latent=latents_out[submesh_id], velocity_pred=noise_pred_list[submesh_id]
+            )
 
         return latents_out
 

@@ -41,11 +41,7 @@ class CLIPTokenizerEncoderPair:
 
         self._tokenizer = AutoTokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, use_torch=use_torch)
-        self._tracer = (
-            None
-            if use_torch
-            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
-        )
+        self._tracer = None if use_torch else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
 
         self._sequence_length = sequence_length if sequence_length is not None else self._tokenizer.model_max_length
         self._skip_norm = skip_norm

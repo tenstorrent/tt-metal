@@ -605,3 +605,8 @@ def triu(
         _triu_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def empty_like(x: ttnn.Tensor, /) -> ttnn.Tensor:
+    """Allocate an uninitialized tensor with the same specs as an existing tensor."""
+    return ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, x.device(), x.memory_config())

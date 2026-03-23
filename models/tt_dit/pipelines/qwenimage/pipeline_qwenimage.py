@@ -4,16 +4,15 @@
 
 from __future__ import annotations
 
+import math
 from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING
 
 import diffusers
-import numpy as np
 import torch
 import tqdm
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 
 import ttnn
@@ -29,6 +28,7 @@ from ...parallel.config import (
     VAEParallelConfig,
 )
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver, schedules
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tracing import Tracer
@@ -141,8 +141,6 @@ class QwenImagePipeline:
         # Store VAE state dict for loading/reloading
         self._vae_state_dict = self._torch_vae.state_dict()
 
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
-
         self._num_channels_latents = 16
         self._patch_size = torch_transformer.config.patch_size
         self._vae_scale_factor = 8
@@ -181,6 +179,7 @@ class QwenImagePipeline:
         self._step_inner_tracers = [
             Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
+        self._solvers = [EulerSolver() for _ in self._submesh_devices]
         self._transformers_loaded = False
 
         # initialize text encoder. This will load the weights
@@ -524,11 +523,15 @@ class QwenImagePipeline:
             self.prepare_transformers()
 
             logger.info("preparing timesteps...")
-            timesteps, sigmas = _schedule(
-                self._scheduler,
-                step_count=num_inference_steps,
-                spatial_sequence_length=spatial_sequence_length,
+
+            mu = _calculate_shift(spatial_sequence_length, 256, 8192, 0.5, 0.9)
+            sigmas, _ = schedules.shifted_linear(
+                num_inference_steps, shift=math.exp(mu), sigma_small=1 / num_inference_steps
             )
+            sigmas, alphas = _stretch_to_terminal(sigmas, terminal=0.02)
+            for solver in self._solvers:
+                solver.set_schedule(sigmas, alphas)
+            timesteps = [s * 1000 for s in sigmas[:-1]]
 
             logger.info("preparing latents...")
 
@@ -602,9 +605,9 @@ class QwenImagePipeline:
                         reuse_tensors = i > 0 and traced
 
                         tt_latents_step_list = self._step(
-                            sigma_difference=sigmas[i + 1] - sigmas[i],
+                            step_index=i,
                             timestep=tt_timestep_list,
-                            latents=None if reuse_tensors else tt_latents_step_list,
+                            latents=tt_latents_step_list,
                             prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
                             spatial_rope_cos=None if reuse_tensors else tt_spatial_rope_cos_list,
                             spatial_rope_sin=None if reuse_tensors else tt_spatial_rope_sin_list,
@@ -698,7 +701,7 @@ class QwenImagePipeline:
     def _step(
         self,
         *,
-        sigma_difference: float,
+        step_index: int,
         timestep: list[ttnn.Tensor],
         latents: list[ttnn.Tensor],
         prompt_embeds: list[ttnn.Tensor] | None,
@@ -723,7 +726,7 @@ class QwenImagePipeline:
             latent, noise_pred = inner(
                 cfg_enabled=cfg_enabled,
                 timestep=timestep[submesh_id],
-                latent=latents[submesh_id] if latents is not None else None,
+                latent=latents[submesh_id],
                 prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
                 spatial_rope_cos=spatial_rope_cos[submesh_id] if spatial_rope_cos is not None else None,
                 spatial_rope_sin=spatial_rope_sin[submesh_id] if spatial_rope_sin is not None else None,
@@ -764,8 +767,9 @@ class QwenImagePipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
-            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
+            latents_out[submesh_id] = self._solvers[submesh_id].step(
+                step=step_index, latent=latents_out[submesh_id], velocity_pred=noise_pred_list[submesh_id]
+            )
 
         return latents_out
 
@@ -806,26 +810,6 @@ class QwenImagePipeline:
             ttnn.synchronize_device(device)
 
 
-def _schedule(
-    scheduler: FlowMatchEulerDiscreteScheduler,
-    *,
-    step_count: int,
-    spatial_sequence_length: int,
-) -> tuple[list[float], list[float]]:
-    scheduler.set_timesteps(
-        sigmas=np.linspace(1.0, 1 / step_count, step_count),
-        mu=_calculate_shift(
-            spatial_sequence_length,
-            scheduler.config.get("base_image_seq_len", 256),
-            scheduler.config.get("max_image_seq_len", 4096),
-            scheduler.config.get("base_shift", 0.5),
-            scheduler.config.get("max_shift", 1.15),
-        ),
-    )
-
-    return scheduler.timesteps.tolist(), scheduler.sigmas.tolist()
-
-
 def _calculate_shift(
     image_seq_len: int,
     base_seq_len: int,
@@ -836,3 +820,13 @@ def _calculate_shift(
     m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
     b = base_shift - m * base_seq_len
     return image_seq_len * m + b
+
+
+def _stretch_to_terminal(sigmas: list[float], terminal: float) -> tuple[list[float], list[float]]:
+    inner = sigmas[:-1]
+    one_minus = [1 - s for s in inner]
+    scale = one_minus[-1] / (1 - terminal)
+    sigmas = [1 - om / scale for om in one_minus]
+    sigmas.append(0.0)
+    alphas = [1 - s for s in sigmas]
+    return sigmas, alphas

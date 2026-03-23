@@ -49,11 +49,7 @@ class Qwen25VlTokenizerEncoderPair:
         else:
             self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, encoder_subfolder, use_torch=use_torch)
-        self._tracer = (
-            None
-            if use_torch
-            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
-        )
+        self._tracer = None if use_torch else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
 
     def _load_encoder(
         self, checkpoint: str, subfolder: str | None, *, use_torch: bool

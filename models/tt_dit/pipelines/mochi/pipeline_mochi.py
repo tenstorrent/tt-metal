@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import numpy as np
 import torch
 from diffusers.models import AutoencoderKLMochi
 from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import T5EncoderModel, T5TokenizerFast
@@ -23,86 +20,9 @@ from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
 from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver, schedules
 from ...utils import cache
 from ...utils.tracing import Tracer
-
-
-# from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-def linear_quadratic_schedule(num_steps, threshold_noise, linear_steps=None):
-    if linear_steps is None:
-        linear_steps = num_steps // 2
-    linear_sigma_schedule = [i * threshold_noise / linear_steps for i in range(linear_steps)]
-    threshold_noise_step_diff = linear_steps - threshold_noise * num_steps
-    quadratic_steps = num_steps - linear_steps
-    quadratic_coef = threshold_noise_step_diff / (linear_steps * quadratic_steps**2)
-    linear_coef = threshold_noise / linear_steps - 2 * threshold_noise_step_diff / (quadratic_steps**2)
-    const = quadratic_coef * (linear_steps**2)
-    quadratic_sigma_schedule = [
-        quadratic_coef * (i**2) + linear_coef * i + const for i in range(linear_steps, num_steps)
-    ]
-    sigma_schedule = linear_sigma_schedule + quadratic_sigma_schedule
-    sigma_schedule = [1.0 - x for x in sigma_schedule]
-    return sigma_schedule
-
-
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[List[int]] = None,
-    sigmas: Optional[List[float]] = None,
-    **kwargs,
-):
-    r"""
-    Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
-    custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
-
-    Args:
-        scheduler (`SchedulerMixin`):
-            The scheduler to get timesteps from.
-        num_inference_steps (`int`):
-            The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
-            must be `None`.
-        device (`str` or `torch.device`, *optional*):
-            The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`List[int]`, *optional*):
-            Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
-            `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`List[float]`, *optional*):
-            Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
-            `num_inference_steps` and `timesteps` must be `None`.
-
-    Returns:
-        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
-        second element is the number of inference steps.
-    """
-    if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" sigmas schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
 
 
 class MochiPipeline(DiffusionPipeline):
@@ -114,8 +34,6 @@ class MochiPipeline(DiffusionPipeline):
     Args:
         transformer ([`MochiTransformer3DModel`]):
             Conditional Transformer architecture to denoise the encoded video latents.
-        scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
         vae ([`AutoencoderKLMochi`]):
             Variational Auto-Encoder (VAE) Model to encode and decode videos to and from latent representations.
         text_encoder ([`T5EncoderModel`]):
@@ -191,8 +109,7 @@ class MochiPipeline(DiffusionPipeline):
         if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
             self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
 
-        # Load scheduler (Torch)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name, subfolder="scheduler")
+        self._solver = EulerSolver()
 
         # Load pretrained T5 text encoder and tokenizer (Torch)
         self.text_encoder = T5EncoderModel.from_pretrained(
@@ -281,7 +198,6 @@ class MochiPipeline(DiffusionPipeline):
 
         # Register components for pipeline
         self.register_modules(
-            scheduler=self.scheduler,
             text_encoder=self.text_encoder,
             tokenizer=self.tokenizer,
             transformer=self.transformer,
@@ -819,24 +735,11 @@ class MochiPipeline(DiffusionPipeline):
 
         # 5. Prepare timestep
         # from https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-        threshold_noise = 0.025
-        sigmas = linear_quadratic_schedule(num_inference_steps, threshold_noise)
-        sigmas = np.array(sigmas)
+        sigmas, alphas = schedules.linear_quadratic(num_inference_steps, threshold_noise=0.025)
+        sigmas, alphas = alphas, sigmas  # equivalent to diffuser's invert_sigmas=True
+        self._solver.set_schedule(sigmas, alphas)
+        timesteps = [s * 1000 for s in sigmas[:-1]]
 
-        print(f"given num_inference_steps: {num_inference_steps} and threshold_noise: {threshold_noise}")
-        print(f"sigmas: {sigmas}")
-
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            timesteps,
-            sigmas,
-        )
-        print(f"timesteps: {timesteps}")
-        print(f"num_inference_steps: {num_inference_steps}")
-
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
 
         # 6. Denoising loop
@@ -852,7 +755,7 @@ class MochiPipeline(DiffusionPipeline):
                 self._current_timestep = 1000 - t
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
+                timestep = torch.tensor(t).expand(latent_model_input.shape[0]).to(latents.dtype)
 
                 print("Input to transformer:")
                 print(f"latent_model_input.shape: {latent_model_input.shape}")
@@ -886,7 +789,7 @@ class MochiPipeline(DiffusionPipeline):
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents.to(torch.float32), return_dict=False)[0]
+                latents = self._solver.step(step=i, latent=latents.to(torch.float32), velocity_pred=noise_pred)
                 latents = latents.to(latents_dtype)
 
                 if latents.dtype != latents_dtype:
@@ -903,9 +806,7 @@ class MochiPipeline(DiffusionPipeline):
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
 
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
+                progress_bar.update()
         if profiler:
             profiler.end("denoising", profiler_iteration)
 

@@ -23,6 +23,7 @@ from ...models.transformers.transformer_motif import MotifTransformer, convert_m
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
@@ -109,9 +110,9 @@ class MotifPipeline:
 
         self.encoder_device = self._submesh_devices[0]
         original_encoder_mesh_shape = list(self.encoder_device.shape)
-        original_encoder_mesh_shape[self._encoder_parallel_config.tensor_parallel.mesh_axis] = (
-            self._encoder_parallel_config.tensor_parallel.factor
-        )
+        original_encoder_mesh_shape[
+            self._encoder_parallel_config.tensor_parallel.mesh_axis
+        ] = self._encoder_parallel_config.tensor_parallel.factor
         original_encoder_mesh_shape[1 - self._encoder_parallel_config.tensor_parallel.mesh_axis] = (
             self.encoder_device.shape.mesh_size() // self._encoder_parallel_config.tensor_parallel.factor
         )
@@ -192,6 +193,7 @@ class MotifPipeline:
         self._step_inner_tracers = [
             Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
+        self._solvers = [EulerSolver() for _ in self._submesh_devices]
 
         self._latents_scaling = self._torch_vae.config.scaling_factor
         self._latents_shift = self._torch_vae.config.shift_factor
@@ -407,10 +409,13 @@ class MotifPipeline:
                     )
 
             logger.info("preparing timesteps...")
-            timesteps, sigmas = _schedule(
+            sigmas, alphas = _schedule(
                 step_count=num_inference_steps,
                 linear_quadratic_emulating_steps=linear_quadratic_emulating_steps,
             )
+            for solver in self._solvers:
+                solver.set_schedule(sigmas=sigmas, alphas=alphas)
+            timesteps = [s * 1000 for s in sigmas[:-1]]
 
             logger.info("preparing latents...")
 
@@ -474,8 +479,6 @@ class MotifPipeline:
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
-                        sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
-
                         tt_timestep_list = []
                         for submesh_nr, submesh_device in enumerate(self._submesh_devices):
                             # Allocation on device is fine, because timesteps are not used after
@@ -496,16 +499,14 @@ class MotifPipeline:
                             tt_prompt_embeds_list = tt_prompt_embeds2_list
                             tt_pooled_prompt_embeds_list = tt_pooled_prompt_embeds2_list
 
-                        reuse_tensors = i > 0 and traced
-
                         tt_latents_step_list = self._step(
                             timestep=tt_timestep_list,
-                            latents=None if reuse_tensors else tt_latents_step_list,
+                            latents=tt_latents_step_list,
                             cfg_enabled=cfg_enabled,
                             prompt_embeds=tt_prompt_embeds_list,
                             pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
                             cfg_scale=cfg_scale,
-                            sigma_difference=sigma_difference,
+                            step_index=i,
                             traced=traced,
                         )
 
@@ -579,11 +580,11 @@ class MotifPipeline:
         *,
         cfg_enabled: bool,
         cfg_scale: float,
-        latents: list[ttnn.Tensor] | None,
+        latents: list[ttnn.Tensor],
         timestep: list[ttnn.Tensor],
         pooled_prompt_embeds: list[ttnn.Tensor],
         prompt_embeds: list[ttnn.Tensor],
-        sigma_difference: float,
+        step_index: int,
         traced: bool,
     ) -> list[ttnn.Tensor]:
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -596,7 +597,7 @@ class MotifPipeline:
 
             latent, noise_pred = inner(
                 cfg_enabled=cfg_enabled,
-                latent=latents[submesh_id] if latents is not None else None,
+                latent=latents[submesh_id],
                 prompt=prompt_embeds[submesh_id],
                 pooled=pooled_prompt_embeds[submesh_id],
                 timestep=timestep[submesh_id],
@@ -629,8 +630,9 @@ class MotifPipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
-            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
+            latents_out[submesh_id] = self._solvers[submesh_id].step(
+                step=step_index, latent=latents_out[submesh_id], velocity_pred=noise_pred_list[submesh_id]
+            )
 
         return latents_out
 
@@ -778,7 +780,7 @@ class TextEncoder:
         return embeds, pooled_embeds
 
 
-def _schedule(*, step_count: int, linear_quadratic_emulating_steps: int) -> tuple[torch.Tensor, torch.Tensor]:
+def _schedule(*, step_count: int, linear_quadratic_emulating_steps: int) -> tuple[list[float], list[float]]:
     assert step_count % 2 == 0
 
     s = step_count
@@ -789,6 +791,6 @@ def _schedule(*, step_count: int, linear_quadratic_emulating_steps: int) -> tupl
     sigmas2 = torch.linspace(0, 1, s // 2 + 1).pow(2) * a - a
 
     sigmas = torch.concat([sigmas1, sigmas2])
-    timesteps = sigmas[:-1] * 1000
+    alphas = 1 - sigmas
 
-    return timesteps, sigmas
+    return sigmas.tolist(), alphas.tolist()

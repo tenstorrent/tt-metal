@@ -13,7 +13,6 @@ import ttnn
 
 from ..parallel.config import vae_all_gather
 from ..parallel.manager import CCLManager
-from ..utils import tensor
 from ..utils.tracing import Tracer
 from .module import Module, Parameter
 

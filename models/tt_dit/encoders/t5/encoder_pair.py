@@ -54,9 +54,7 @@ class T5TokenizerEncoderPair:
 
         self._encoder = self._load_encoder(checkpoint, use_torch=use_torch) if enabled else None
         self._tracer = (
-            None
-            if use_torch or not enabled
-            else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
+            None if use_torch or not enabled else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
         )
 
     def load_torch_model(self, checkpoint: str) -> T5EncoderModel:

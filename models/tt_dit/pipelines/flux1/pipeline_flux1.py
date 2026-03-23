@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
+import math
 import os
 from contextlib import nullcontext
 
-import numpy as np
 import torch
 import tqdm
-from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler, FluxTransformer2DModel
+from diffusers import AutoencoderKL, FluxTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
@@ -25,6 +25,7 @@ from ...models.transformers.transformer_flux1 import Flux1Transformer
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver, schedules
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tracing import Tracer
@@ -98,7 +99,6 @@ class Flux1Pipeline:
         torch_text_encoder_1.eval()
         if enable_t5_text_encoder:
             torch_t5_text_encoder = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
         self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
 
         torch_transformer = FluxTransformer2DModel.from_pretrained(
@@ -155,6 +155,7 @@ class Flux1Pipeline:
         self._step_inner_tracers = [
             Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
+        self._solvers = [EulerSolver() for _ in self._submesh_devices]
 
         self._pos_embed = torch_transformer.pos_embed
 
@@ -411,16 +412,16 @@ class Flux1Pipeline:
 
             logger.info("preparing timesteps...")
 
-            self._scheduler.set_timesteps(
-                sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
-                mu=_calculate_shift(
-                    spatial_sequence_length,
-                    self._scheduler.config.get("base_image_seq_len", 256),
-                    self._scheduler.config.get("max_image_seq_len", 4096),
-                    self._scheduler.config.get("base_shift", 0.5),
-                    self._scheduler.config.get("max_shift", 1.15),
-                ),
-            )
+            if self._with_guidance_embeds:  # FLUX.1 [dev]
+                mu = _calculate_shift(spatial_sequence_length, 256, 4096, 0.5, 1.15)
+                sigmas, alphas = schedules.shifted_linear(
+                    num_inference_steps, shift=math.exp(mu), sigma_small=1 / num_inference_steps
+                )
+            else:  # FLUX.1 [schnell]
+                sigmas, alphas = schedules.linear(num_inference_steps, sigma_small=1 / num_inference_steps)
+            for solver in self._solvers:
+                solver.set_schedule(sigmas, alphas)
+            timesteps = [s * 1000 for s in sigmas[:-1]]
 
             guidance = (
                 torch.full([prompt_count * num_images_per_prompt], fill_value=guidance_scale)
@@ -502,10 +503,8 @@ class Flux1Pipeline:
             logger.info("denoising...")
 
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
-                for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
+                for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
-                        sigma_difference = (self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]).item()
-
                         tt_timestep_list = []
                         for submesh_device in self._submesh_devices:
                             # Allocation on device is fine, because timesteps are not used after
@@ -522,9 +521,9 @@ class Flux1Pipeline:
                         reuse_tensors = i > 0 and traced
 
                         tt_latents_step_list = self._step(
-                            sigma_difference=sigma_difference,
+                            step_index=i,
                             timestep=tt_timestep_list,
-                            latents=None if reuse_tensors else tt_latents_step_list,
+                            latents=tt_latents_step_list,
                             cfg_enabled=cfg_enabled,
                             prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
                             pooled_prompt_embeds=None if reuse_tensors else tt_pooled_prompt_embeds_list,
@@ -622,8 +621,8 @@ class Flux1Pipeline:
         *,
         cfg_enabled: bool,
         cfg_scale: float,
-        sigma_difference: float,
-        latents: list[ttnn.Tensor] | None,
+        step_index: int,
+        latents: list[ttnn.Tensor],
         timestep: list[ttnn.Tensor],
         pooled_prompt_embeds: list[ttnn.Tensor] | None,
         prompt_embeds: list[ttnn.Tensor] | None,
@@ -644,7 +643,7 @@ class Flux1Pipeline:
 
             latent, noise_pred = inner(
                 cfg_enabled=cfg_enabled,
-                latent=latents[submesh_id] if latents is not None else None,
+                latent=latents[submesh_id],
                 prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
                 pooled=pooled_prompt_embeds[submesh_id] if pooled_prompt_embeds is not None else None,
                 timestep=timestep[submesh_id],
@@ -694,8 +693,9 @@ class Flux1Pipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
-            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
+            latents_out[submesh_id] = self._solvers[submesh_id].step(
+                step=step_index, latent=latents_out[submesh_id], velocity_pred=noise_pred_list[submesh_id]
+            )
 
         return latents_out
 
