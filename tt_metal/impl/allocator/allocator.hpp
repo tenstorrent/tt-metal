@@ -31,6 +31,9 @@ public:
     ~AllocatorImpl();
 
     DeviceAddr allocate_buffer(Buffer* buffer);
+    // Overload for mesh-level lockstep allocation: queries device allocators' per-bank ranges
+    // so the lockstep allocator avoids regions occupied on any device.
+    DeviceAddr allocate_buffer(Buffer* buffer, const std::vector<AllocatorImpl*>& device_allocators);
 
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
@@ -91,6 +94,16 @@ public:
 
     // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
+
+    // Get allocated ranges from this allocator's L1 per-bank sub-allocator.
+    // Used at mesh-level allocation time to query device per-bank state.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_allocated_ranges(
+        BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
+
+    // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
+    // This marks the region as occupied so per-bank allocators avoid it.
+    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
+    void unmirror_lockstep_allocation(DeviceAddr address);
 
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.

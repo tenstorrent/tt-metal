@@ -209,6 +209,82 @@ void AllocatorImpl::deallocate_buffers() {
     trace_buffer_manager_->deallocate_all();
 }
 
+DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer, const std::vector<AllocatorImpl*>& device_allocators) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DeviceAddr address = 0;
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
+    auto buffer_type = buffer->buffer_type();
+    auto bottom_up = buffer->bottom_up();
+    auto num_cores = buffer->num_cores();
+    this->verify_safe_allocation();
+    if (config_->disable_interleaved) {
+        TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
+    }
+
+    TT_FATAL(!buffer->per_core_allocation(), "Per-core allocation should not use the device_allocators overload");
+
+    // Gather per-bank ranges from all device allocators so lockstep avoids occupied regions.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    uint32_t num_banks = l1_manager_->num_banks();
+    for (auto* dev_alloc : device_allocators) {
+        for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+            auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+            additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+        }
+    }
+
+    switch (buffer_type) {
+        case BufferType::DRAM:
+            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        case BufferType::L1:
+            address = l1_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                num_cores,
+                BankManager::AllocatorDependencies::AllocatorID{0},
+                additional_ranges);
+            break;
+        case BufferType::L1_SMALL: {
+            TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
+            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        }
+        case BufferType::TRACE:
+            address =
+                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+    allocated_buffers_.insert(buffer);
+    return address;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto state = l1_manager_->extract_state(allocator_id);
+    return state.allocated_regions;
+}
+
+void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+}
+
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    l1_manager_->mark_deallocated(AllocatorID{0}, address);
+}
+
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocated_buffers_;

@@ -42,6 +42,8 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -753,6 +755,56 @@ void py_module(nb::module_& mod) {
        Returns:
            List[Tensor]: The shards of the tensor corresponding to the devices.
            )doc");
+    mod.def(
+        "to_single_device",
+        [](const tt::tt_metal::Tensor& host_tensor,
+           MeshDevice* mesh_device,
+           const MeshCoordinate& coord,
+           const tt::tt_metal::MemoryConfig& mem_config) -> tt::tt_metal::Tensor {
+            using namespace tt::tt_metal;
+            TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "to_single_device expects a host tensor");
+
+            auto tensor_spec = TensorSpec(
+                host_tensor.logical_shape(),
+                TensorLayout(host_tensor.dtype(), host_tensor.tensor_spec().page_config(), mem_config));
+
+            using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
+            using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig;
+            using DeviceLocalBufferConfig = tt::tt_metal::distributed::DeviceLocalBufferConfig;
+
+            auto mesh_buffer = MeshBuffer::create_on_single_device(
+                ReplicatedBufferConfig{.size = tensor_spec.compute_packed_buffer_size_bytes()},
+                DeviceLocalBufferConfig{
+                    .page_size = tensor_spec.compute_page_size_bytes(),
+                    .buffer_type = mem_config.buffer_type(),
+                    .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+                },
+                mesh_device,
+                coord);
+
+            // Write host data to the single device via shard transfer
+            const auto& host_storage = host_tensor.host_storage();
+            auto host_buffer = host_storage.buffer().get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            TT_FATAL(host_buffer.has_value(), "Host tensor has no data");
+
+            tt::tt_metal::distributed::ShardDataTransfer transfer{coord};
+            transfer.host_data(host_buffer->view_bytes().data());
+            transfer.region(tt::tt_metal::BufferRegion(0, host_buffer->view_bytes().size()));
+
+            mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
+
+            DeviceStorage device_storage(std::move(mesh_buffer), {coord});
+            return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+        },
+        nb::arg("host_tensor"),
+        nb::arg("mesh_device"),
+        nb::arg("coord"),
+        nb::arg("memory_config"),
+        R"doc(
+        Write a host tensor to a single device within a mesh.
+        Allocates on the target device's own allocator and writes data.
+        Per-core allocations are automatically mirrored into the mesh-level allocator.
+    )doc");
     mod.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> nbh::unique_ptr<TensorToMesh> {

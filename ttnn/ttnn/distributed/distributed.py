@@ -650,6 +650,7 @@ def open_mesh_device(
     offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    allocator_mode=ttnn.device.AllocatorMode.LOCKSTEP,
 ):
     """
     Open a mesh device with the specified configuration.
@@ -663,6 +664,7 @@ def open_mesh_device(
         offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
         worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+        allocator_mode: Allocator mode (LOCKSTEP or HYBRID). Defaults to LOCKSTEP.
 
     Returns:
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
@@ -677,6 +679,7 @@ def open_mesh_device(
         offset=offset,
         physical_device_ids=physical_device_ids,
         worker_l1_size=worker_l1_size,
+        allocator_mode=allocator_mode,
     )
 
 

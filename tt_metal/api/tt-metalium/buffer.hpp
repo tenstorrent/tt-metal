@@ -191,7 +191,8 @@ public:
         BufferType buffer_type,
         const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        const std::vector<AllocatorImpl*>& device_allocators = {});
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -293,7 +294,7 @@ private:
         DEALLOCATED,
     };
 
-    void allocate_impl();
+    void allocate_impl(const std::vector<AllocatorImpl*>& device_allocators = {});
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();

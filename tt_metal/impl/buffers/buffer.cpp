@@ -312,7 +312,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const BufferType buffer_type,
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::vector<AllocatorImpl*>& device_allocators) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(
@@ -323,7 +324,7 @@ std::shared_ptr<Buffer> Buffer::create(
         return buffer;
     }
 
-    buffer->allocate_impl();
+    buffer->allocate_impl(device_allocators);
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -415,14 +416,18 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
 Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
-void Buffer::allocate_impl() {
+void Buffer::allocate_impl(const std::vector<AllocatorImpl*>& device_allocators) {
     if (GraphTracker::instance().hook_allocate(this)) {
         address_ = 0;
         hooked_allocation_ = true;
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
-        address_ = allocator_->allocate_buffer(this);
+        if (device_allocators.empty()) {
+            address_ = allocator_->allocate_buffer(this);
+        } else {
+            address_ = allocator_->allocate_buffer(this, device_allocators);
+        }
 
         // Assertion here because buffer class returns a u32 when address is queried
         // Requires updating all use cases of buffer address to accept a u64 to remove

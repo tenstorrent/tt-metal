@@ -81,6 +81,14 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+
+    // Creates a MeshBuffer that only allocates on a single device within the mesh.
+    static std::shared_ptr<MeshBuffer> create_on_single_device(
+        const MeshBufferConfig& mesh_buffer_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        MeshDevice* mesh_device,
+        const MeshCoordinate& coord);
+
     ~MeshBuffer();
 
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
@@ -96,8 +104,11 @@ public:
     MeshDevice* device() const;
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
-    DeviceAddr address() const { return address_; };
+    DeviceAddr address() const;
     DeviceAddr per_core_address(const CoreCoord& core) const;
+    // Multi-device per-core address: get the address for a specific core on a specific device.
+    DeviceAddr per_core_address(const MeshCoordinate& device_coord, const CoreCoord& core) const;
+    bool is_per_core_allocation() const;
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }
@@ -165,15 +176,20 @@ private:
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
-    // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
-    // 3. Deallocated - the MeshBuffer is in the deallocated state.
+    // 2. PerCoreOwned - each device independently owns its buffer with per-core addresses.
+    // 3. Externally owned - the MeshBuffer was created as a view over an existing address.
+    // 4. Deallocated - the MeshBuffer is in the deallocated state.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
+    struct PerCoreOwnedState {};
     struct ExternallyOwnedState {};
     struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState = std::variant<OwnedBufferState, PerCoreOwnedState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    // Per-core multi-device: allocate independently on each device, mirror into mesh allocator
+    void initialize_device_buffers_per_core();
 };
 
 class AnyBuffer {
