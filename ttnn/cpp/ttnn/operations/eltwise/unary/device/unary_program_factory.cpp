@@ -161,7 +161,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     if (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) {
         log_warning(
             tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug."
             "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
 
@@ -403,7 +404,8 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     if (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         log_warning(
             tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
             "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
     const auto default_fp32_acc_math_fidelity_sub =

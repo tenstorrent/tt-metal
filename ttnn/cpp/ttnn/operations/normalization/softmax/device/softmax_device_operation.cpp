@@ -417,7 +417,8 @@ static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
         compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
         log_warning(
             tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
             "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
     return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);

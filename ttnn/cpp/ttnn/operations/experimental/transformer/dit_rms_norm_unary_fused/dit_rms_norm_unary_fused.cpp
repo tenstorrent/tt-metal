@@ -39,13 +39,14 @@ ttnn::Tensor dit_rms_norm_unary_fused(
     if (!compute_kernel_config.has_value()) {
         kernel_config_val.fp32_dest_acc_en = (input_tensor.dtype() == DataType::FLOAT32);
     }
-    
+
     // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hw bug #38306).
     if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
         compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
         log_warning(
             tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
             "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
 
