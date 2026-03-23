@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 if TYPE_CHECKING:
     from ttml.modules.lora import LoraConfig
 
+import time
+
 import numpy as np
 import ttnn
 from tqdm import tqdm
@@ -191,7 +193,7 @@ class SFTTrainer:
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         )
-        self._causal_mask = self._build_causal_mask()
+        self._causal_mask = None  # None = SDPA uses native causal mask (faster)
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func

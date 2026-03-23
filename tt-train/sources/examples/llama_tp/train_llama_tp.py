@@ -591,13 +591,23 @@ def main():
         text = f.read()
     seq_len = llama_config.max_position_embeddings
     dataset, tokenizer = create_dataset(text, seq_len)
+
+    # Vocab must be divisible by TILE_SIZE * TP_DEGREE for clean sharding
+    # Otherwise slice ops produce non-tile-aligned outputs causing TILE->ROW_MAJOR conversions
+    tp_degree = (
+        device_cfg.mesh_shape[device_cfg.tp_axis]
+        if device_cfg.tp_axis is not None
+        else 1
+    )
+    vocab_alignment = 32 * tp_degree  # TILE_SIZE * TP_DEGREE
+
     llama_config = LlamaConfig(
         hidden_size=llama_config.hidden_size,
         intermediate_size=llama_config.intermediate_size,
         num_hidden_layers=llama_config.num_hidden_layers,
         num_attention_heads=llama_config.num_attention_heads,
         num_key_value_heads=llama_config.num_key_value_heads,
-        vocab_size=round_up_to_tile(tokenizer.vocab_size, 32),
+        vocab_size=round_up_to_tile(tokenizer.vocab_size, vocab_alignment),
         max_position_embeddings=llama_config.max_position_embeddings,
         rope_theta=llama_config.rope_theta,
         attention_dropout=llama_config.attention_dropout,
@@ -664,6 +674,11 @@ def main():
     tp_size = device_cfg.mesh_shape[tp_axis] if tp_axis is not None else 1
     dp_size = device_cfg.mesh_shape[dp_axis] if dp_axis is not None else 1
     cp_size = device_cfg.mesh_shape[cp_axis] if cp_axis is not None else 1
+    if dp_axis is not None and batch_size % dp_size != 0:
+        raise ValueError(
+            f"batch_size ({batch_size}) must be divisible by DP size ({dp_size}) "
+            "so each data-parallel rank gets an equal batch shard (same check as C++ nano_gpt)."
+        )
     print(f"   Mesh shape: {device_cfg.mesh_shape}")
     print(
         f"   TP axis: {tp_axis} (size={tp_size}), DP axis: {dp_axis} (size={dp_size}), "
