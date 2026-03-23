@@ -78,18 +78,24 @@ These traced configurations provide real-world operation patterns from productio
 
 ## Quick Reference
 
+See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the database, managing the sweep manifest, and reconstructing configs for CI or branch testing.
+
 ### Common Commands
 
 | Task | Command |
 |------|---------|
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
-| **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
+| **Load into DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py load` |
+| **Reconstruct from manifest** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest` |
+| **List traces in DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py list-traces` |
 | **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name>` |
 | **Run single sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite-name model_traced --vector-source file --file-path <vector_file> --result-dest results_export` |
 
 ### Key Files
 
 - **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
+- **Guide**: `model_tracer/GUIDE.md` - Full workflow, manifest format, schema, CLI reference
+- **Sweep Manifest**: `model_tracer/sweep_manifest.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
@@ -369,5 +375,7 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ```
 
 ---
+
+For the full model tracer and database workflow, see [GUIDE.md](GUIDE.md).
 
 For complete documentation on running sweep tests, see [Sweep Framework README](tests/sweep_framework/README.md).
