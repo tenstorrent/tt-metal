@@ -245,6 +245,14 @@ def get_or_download_model(layer_idx: int = 0) -> Path:
             logger.info(f"Using model from default location: {default_path}")
             return default_path.resolve()
 
+    # Check shared weights location
+    shared_path = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
+    if shared_path.exists():
+        index_file = shared_path / "model.safetensors.index.json"
+        if index_file.exists():
+            logger.info(f"Using model from shared location: {shared_path}")
+            return shared_path.resolve()
+
     # Download from HuggingFace
     logger.info("Model not found locally. Downloading DeepSeek-R1-0528 from HuggingFace...")
 
@@ -319,6 +327,15 @@ def config_only():
         if config_file.exists():
             logger.info(f"Using config from default location: {default_path}")
             config = AutoConfig.from_pretrained(str(default_path), trust_remote_code=True)
+            return config
+
+    # Check shared weights location
+    shared_path = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
+    if shared_path.exists():
+        config_file = shared_path / "config.json"
+        if config_file.exists():
+            logger.info(f"Using config from shared location: {shared_path}")
+            config = AutoConfig.from_pretrained(str(shared_path), trust_remote_code=True)
             return config
 
     # Download only config files from HuggingFace (not weight shards)
