@@ -129,11 +129,6 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
     std::vector<std::reference_wrapper<const DeviceStorage>> device_storages;
     device_storages.reserve(tensor_shards.size());
     for (const auto& shard : tensor_shards) {
-        const auto& shard_storage = shard.device_storage();
-        TT_FATAL(
-            shard_storage.get_mesh_buffer_leak_ownership() == mesh_buffer,
-            "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
-            "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
         device_storages.push_back(std::cref(shard.device_storage()));
     }
 
