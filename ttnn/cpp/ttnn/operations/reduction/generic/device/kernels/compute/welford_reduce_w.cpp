@@ -48,11 +48,15 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
     // Scratch circular buffer used to hold the variance tile between
     // the two transpose steps (Welford produces row-oriented results;
-    // we transpose back to column orientation via this buffer).
+    // we transpose back to column orientation via this buffer,
+    // and transpose operation can't take data from the DST register).
     constexpr auto cb_var = tt::CBIndex::c_19;
     // 1-tile intermediate: holds the scaled input tile between the
     // mul_tiles_bcast_scalar (scale step) and transpose_wh_tile (Welford step).
     // Only used when do_scale is true.
+    // The reason this is needed is because mul_tiles_bcast_scalar writes data
+    // to the DST register, but transpose_wh_tile is an unpack operation, so
+    // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
     constexpr auto cb_scaled = tt::CBIndex::c_20;
     // Circular buffer holding a pre-computed 1/n look-up table (one entry
     // per column index 1..W) that Welford's online algorithm uses to avoid
