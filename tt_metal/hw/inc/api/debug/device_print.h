@@ -113,7 +113,7 @@ struct bf16_t {
 
 #define DEVICE_PRINT(format, ...)                                                                                     \
     {                                                                                                                 \
-        auto device_print_info_address = ([](auto&&... __device_print_args) __attribute__((always_inline)) {          \
+        auto device_print_info_address = ([](auto&&... _device_print_args_) __attribute__((always_inline)) {          \
             /* Validate format string syntax */                                                                       \
             static_assert(                                                                                            \
                 device_print_detail::checks::is_valid_format_string(format),                                          \
@@ -126,30 +126,30 @@ struct bf16_t {
             static_assert(                                                                                            \
                 !device_print_detail::checks::has_indexed_placeholders(format) ||                                     \
                     device_print_detail::checks::get_max_index(format) <                                              \
-                        device_print_detail::helpers::count_arguments(__device_print_args...),                        \
+                        device_print_detail::helpers::count_arguments(_device_print_args_...),                        \
                 "Placeholder index exceeds number of arguments");                                                     \
             /* For indexed placeholders, validate all arguments are referenced */                                     \
             static_assert(                                                                                            \
                 !device_print_detail::checks::has_indexed_placeholders(format) ||                                     \
-                    device_print_detail::checks::all_arguments_referenced(format, __device_print_args...),            \
+                    device_print_detail::checks::all_arguments_referenced(format, _device_print_args_...),            \
                 "All arguments must be referenced when using indexed placeholders");                                  \
             /* For non-indexed placeholders, count must match argument count */                                       \
             static_assert(                                                                                            \
                 device_print_detail::checks::has_indexed_placeholders(format) ||                                      \
                     device_print_detail::checks::count_placeholders(format) ==                                        \
-                        device_print_detail::helpers::count_arguments(__device_print_args...),                        \
+                        device_print_detail::helpers::count_arguments(_device_print_args_...),                        \
                 "Number of {} placeholders must match number of arguments");                                          \
             /* Update format to include all necessary data */                                                         \
             constexpr auto updated_format =                                                                           \
-                device_print_detail::formatting::update_format_string_from_args(format, __device_print_args...);      \
+                device_print_detail::formatting::update_format_string_from_args(format, _device_print_args_...);      \
             /* Store updated format string in a special section for device_print */                                   \
             DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, updated_format);                          \
             return device_print_info_address;                                                                         \
         }(__VA_ARGS__));                                                                                              \
-        auto header = ([](auto&&... __device_print_args) __attribute__((always_inline)) {                             \
+        auto header = ([](auto&&... _device_print_args_) __attribute__((always_inline)) {                             \
             /* Generate device_print message header */                                                                \
             constexpr auto message_size =                                                                             \
-                device_print_detail::serialization::get_total_message_size(__device_print_args...);                   \
+                device_print_detail::serialization::get_total_message_size(_device_print_args_...);                   \
             device_print_detail::structures::DevicePrintHeader header = {};                                           \
             header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                                \
             header.risc_id = PROCESSOR_INDEX;                                                                         \
