@@ -228,7 +228,11 @@ class VisionTransformer(LightweightModule):
 
         return x
 
-    def patch_embed_ttnn(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
+    def patch_embed_ttnn(
+        self,
+        pixel_values: torch.Tensor,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
         """
         Apply patch embedding with linear projection on TTNN.
 
@@ -268,11 +272,13 @@ class VisionTransformer(LightweightModule):
 
         # TTNN: linear projection -- x @ patch_embed_weight
         # x: [1, 1, B*N, 588],  patch_embed_weight: [1, 1, 588, 1152]
-        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        embedded = ttnn.linear(
+            x_ttnn,
+            self.patch_embed_weight,
+            bias=self.patch_embed_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(x_ttnn)
-
-        # Add bias
-        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Add positional embedding: [1, 1, num_patches, 1152]
         if batch_size == 1:
@@ -292,6 +298,7 @@ class VisionTransformer(LightweightModule):
         x: ttnn.Tensor,
         patch_grid: Tuple[int, int] = None,
         return_all_hidden_states: bool = True,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> List[ttnn.Tensor]:
         """
         Forward pass through the vision transformer.
@@ -313,7 +320,7 @@ class VisionTransformer(LightweightModule):
 
         # Process through transformer blocks
         for i, block in enumerate(self.blocks):
-            x = block(x)
+            x = block(x, matmul_output_memory_config=matmul_output_memory_config)
             if return_all_hidden_states:
                 # No clone needed - block() creates a new tensor, so old x is still valid
                 # This follows tt_transformers' pattern for traceable ViT
@@ -328,6 +335,7 @@ class VisionTransformer(LightweightModule):
         self,
         pixel_values: torch.Tensor,
         return_all_hidden_states: bool = True,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> List[ttnn.Tensor]:
         """
         Full forward pass including patch embedding (CPU) and transformer (TTNN).
@@ -380,7 +388,11 @@ class VisionTransformer(LightweightModule):
                 )
 
                 # Forward through transformer blocks
-                crop_hidden_states = self.forward(crop_x_ttnn, return_all_hidden_states=return_all_hidden_states)
+                crop_hidden_states = self.forward(
+                    crop_x_ttnn,
+                    return_all_hidden_states=return_all_hidden_states,
+                    matmul_output_memory_config=matmul_output_memory_config,
+                )
                 all_crop_hidden_states.append(crop_hidden_states)
 
             # Combine hidden states from all crops
@@ -416,4 +428,8 @@ class VisionTransformer(LightweightModule):
             )
 
             # Forward through transformer blocks
-            return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
+            return self.forward(
+                x_ttnn,
+                return_all_hidden_states=return_all_hidden_states,
+                matmul_output_memory_config=matmul_output_memory_config,
+            )

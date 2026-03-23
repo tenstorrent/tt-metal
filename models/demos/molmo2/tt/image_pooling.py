@@ -242,6 +242,7 @@ class ImagePooling(LightweightModule):
         query: ttnn.Tensor,
         key_value: ttnn.Tensor,
         attn_mask: ttnn.Tensor = None,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         """
         Forward pass through cross-attention pooling.
@@ -251,40 +252,63 @@ class ImagePooling(LightweightModule):
                    (typically mean of gathered features)
             key_value: Key/Value tensor of shape [1, 1, pool_size, input_dim]
                        (gathered patch features)
-            attn_mask: Optional attention mask [1, 1, 1, pool_size]
+            attn_mask: Optional additive mask (e.g. [1, 1, 1, pool_size]; batch may vary on dim 0).
+                When present and pool_size is not a multiple of 32, K/V and the mask are padded so
+                SDPA sees -inf on padded keys (matches default SDPA k-chunk alignment).
 
         Returns:
             Pooled features of shape [1, 1, num_queries, hidden_dim]
         """
         num_queries = query.shape[-2]
         pool_size = key_value.shape[-2]
+        padded_pool_size = math.ceil(pool_size / self.tile_size) * self.tile_size
+        pool_pad = padded_pool_size - pool_size
+
+        kv_for_linear = key_value
+        deallocate_kv_padded = False
+        if attn_mask is not None and pool_pad > 0:
+            kv_zeros = ttnn.zeros(
+                shape=(key_value.shape[0], key_value.shape[1], pool_pad, key_value.shape[-1]),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=key_value.device(),
+                memory_config=matmul_output_memory_config,
+            )
+            kv_for_linear = ttnn.concat([key_value, kv_zeros], dim=2)
+            ttnn.deallocate(kv_zeros)
+            deallocate_kv_padded = True
+
+        attn_kv_len = padded_pool_size if (attn_mask is not None and pool_pad > 0) else pool_size
 
         # Q projection
         q = ttnn.linear(
             query,
             self.wq,
+            bias=self.bq,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-        q = q + self.bq
 
         # K projection
         k = ttnn.linear(
-            key_value,
+            kv_for_linear,
             self.wk,
+            bias=self.bk,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-        k = k + self.bk
 
         # V projection
         v = ttnn.linear(
-            key_value,
+            kv_for_linear,
             self.wv,
+            bias=self.bv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-        v = v + self.bv
+
+        if deallocate_kv_padded:
+            ttnn.deallocate(kv_for_linear)
 
         # Reshape Q, K, V for multi-head attention
         # Note: Using ttnn ops for head splitting
@@ -295,30 +319,46 @@ class ImagePooling(LightweightModule):
         padded_hidden = self.num_heads * self.padded_head_dim
 
         # Q: [1, batch_seq, num_queries, padded_hidden] -> [batch_seq, num_heads, num_queries, head_dim]
-        # K: [1, batch_seq, pool_size, padded_hidden] -> [batch_seq, num_heads, pool_size, head_dim]
-        # V: [1, batch_seq, pool_size, padded_hidden] -> [batch_seq, num_heads, pool_size, head_dim]
+        # K/V: sequence length is attn_kv_len (padded to tile alignment when using attn_mask)
 
         q = ttnn.reshape(q, [batch_seq, num_queries, self.num_heads, self.padded_head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
         q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
 
-        k = ttnn.reshape(k, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
+        k = ttnn.reshape(k, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
         k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
 
-        v = ttnn.reshape(v, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
+        v = ttnn.reshape(v, [batch_seq, attn_kv_len, self.num_heads, self.padded_head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
         v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
 
         sdpa_mask = attn_mask
         if attn_mask is not None:
-            mask_shape = list(attn_mask.shape)
+            if pool_pad > 0:
+                inf_tail_shape = list(attn_mask.shape)
+                inf_tail_shape[-1] = pool_pad
+                mask_neg_inf = ttnn.full(
+                    shape=tuple(inf_tail_shape),
+                    fill_value=float("-inf"),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=attn_mask.device(),
+                    memory_config=matmul_output_memory_config,
+                )
+                sdpa_mask = ttnn.concat([attn_mask, mask_neg_inf], dim=3)
+                ttnn.deallocate(mask_neg_inf)
+
+            mask_shape = list(sdpa_mask.shape)
             if len(mask_shape) == 4 and mask_shape[2] == 1 and num_queries > 1:
+                prev_mask = sdpa_mask
                 sdpa_mask = ttnn.repeat(
-                    attn_mask,
+                    prev_mask,
                     (1, 1, num_queries, 1),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                if prev_mask is not attn_mask:
+                    ttnn.deallocate(prev_mask)
 
         # Scaled dot-product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
@@ -346,10 +386,10 @@ class ImagePooling(LightweightModule):
         output = ttnn.linear(
             attn_output,
             self.wo,
+            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-        output = output + self.bo
 
         ttnn.deallocate(attn_output)
 
