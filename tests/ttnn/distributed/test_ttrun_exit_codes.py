@@ -10,26 +10,40 @@ These run without MPI — they test pure Python logic used by tt-run for
 CI triage of mpirun exit codes.
 """
 
+import importlib
+import importlib.util
+import pathlib
 import signal
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ttrun.py lives at ttnn/ttnn/distributed/ttrun.py in the source tree but is
-# NOT installed into the ttnn site-package.  Load it directly by path and
-# register it in sys.modules so that 'from ttnn.distributed.ttrun import ...'
-# works regardless of which ttnn package (source vs installed) is active.
-import importlib.util
-import pathlib
+_MOD_NAME = "ttnn.distributed.ttrun"
+# Source-tree path used as fallback when the package is not installed.
+_SOURCE_PATH = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "ttrun.py"
 
-_ttrun_path = pathlib.Path(__file__).resolve().parents[3] / "ttnn" / "ttnn" / "distributed" / "ttrun.py"
-if "ttnn.distributed.ttrun" not in sys.modules:
-    _spec = importlib.util.spec_from_file_location("ttnn.distributed.ttrun", _ttrun_path)
-    _mod = importlib.util.module_from_spec(_spec)
-    sys.modules["ttnn.distributed.ttrun"] = _mod
-    _spec.loader.exec_module(_mod)
-ttrun_mod = sys.modules["ttnn.distributed.ttrun"]
+
+def _import_ttrun() -> object:
+    """Import ttnn.distributed.ttrun, falling back to the source tree.
+
+    ttrun.py is part of the ttnn.distributed package and is importable via
+    ``import ttnn.distributed.ttrun`` when the wheel is installed (CI) or in
+    an editable install.  When the package is not installed (local dev without
+    a wheel build) we load the source file directly so the tests still work
+    without extra setup.
+    """
+    try:
+        return importlib.import_module(_MOD_NAME)
+    except ModuleNotFoundError:
+        spec = importlib.util.spec_from_file_location(_MOD_NAME, _SOURCE_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[_MOD_NAME] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+
+_ttrun_mod = _import_ttrun()
 from ttnn.distributed.ttrun import (
     EXIT_APP_ERROR,
     EXIT_RANK_FAILURE,
@@ -305,7 +319,7 @@ class TestPRRTEDetection:
 
     def setup_method(self):
         """Reset cached version between tests."""
-        ttrun_mod._detect_openmpi_major_version.cache_clear()
+        _ttrun_mod._detect_openmpi_major_version.cache_clear()
 
     def test_detect_openmpi_5(self):
         """Standard OpenMPI 5.x output."""
@@ -371,7 +385,7 @@ class TestPRRTEDetection:
 
     def test_abort_param_openmpi_4(self):
         """OpenMPI 4 should use orte_ prefix."""
-        ttrun_mod._detect_openmpi_major_version.cache_clear()
+        _ttrun_mod._detect_openmpi_major_version.cache_clear()
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 4.1.6\n"
         with patch("subprocess.run", return_value=mock_result):
@@ -386,7 +400,7 @@ class TestPRRTEDetection:
 
     def test_cached_version_reused(self):
         """Second call should use cached value, not re-run subprocess."""
-        ttrun_mod._detect_openmpi_major_version.cache_clear()
+        _ttrun_mod._detect_openmpi_major_version.cache_clear()
         mock_result = MagicMock()
         mock_result.stdout = "mpirun (Open MPI) 5.0.0\n"
         with patch("subprocess.run", return_value=mock_result) as mock_run:
