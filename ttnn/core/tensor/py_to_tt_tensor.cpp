@@ -333,7 +333,8 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
-            output = ttnn::to_layout(output, target);
+            output =
+                ttnn::to_layout(output, target, std::nullopt, std::nullopt, std::nullopt, pad_value.value_or(0.0f));
         }
     };
 
