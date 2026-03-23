@@ -92,8 +92,8 @@ DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
     coords_(std::move(coords)), mesh_buffer(std::move(mesh_buffer)), root_mesh_buffer(std::move(root_mesh_buffer)) {
     if (!is_allocated()) {
-        mesh_buffer = nullptr;
-        root_mesh_buffer = nullptr;
+        this->mesh_buffer = nullptr;
+        this->root_mesh_buffer = nullptr;
         return;
     }
     CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, *get_device());

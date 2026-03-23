@@ -81,7 +81,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             DeviceStorage shard_storage(device_storage, {coord});
             tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
         }
-        return {tensor};
+        return tensors;
     }
     return {tensor};
 }
