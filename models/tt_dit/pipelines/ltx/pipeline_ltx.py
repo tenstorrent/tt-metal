@@ -296,12 +296,18 @@ class LTXPipeline:
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        # Build position grid
+        # Build position grid: center of each latent cell in pixel space
         t_ids = torch.arange(num_frames)
         h_ids = torch.arange(latent_height)
         w_ids = torch.arange(latent_width)
         grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-        indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
+        fps = 24.0
+        t_s = (grid_t.float() * 8 + 1 - 8).clamp(min=0) / fps
+        t_e = ((grid_t.float() + 1) * 8 + 1 - 8).clamp(min=0) / fps
+        t_mid = (t_s + t_e) / 2
+        h_mid = (grid_h.float() + 0.5) * 32
+        w_mid = (grid_w.float() + 0.5) * 32
+        indices_grid = torch.stack([t_mid.flatten(), h_mid.flatten(), w_mid.flatten()], dim=-1).float().unsqueeze(0)
 
         cos_freq, sin_freq = precompute_freqs_cis(
             indices_grid,
@@ -328,9 +334,15 @@ class LTXPipeline:
         return tt_cos, tt_sin, tt_trans_mat
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
-        """Push prompt embeddings to device."""
+        """Push prompt embeddings to device, padding to cross_attention_dim if needed."""
         # (B, L, D) -> (1, B, L, D)
         prompt = prompt_embeds.unsqueeze(0)
+        # Pad if encoder dim != cross_attention_dim (e.g., Gemma 3840 -> 4096)
+        if prompt.shape[-1] < self.cross_attention_dim:
+            pad_size = self.cross_attention_dim - prompt.shape[-1]
+            prompt = torch.nn.functional.pad(prompt, (0, pad_size))
+        elif prompt.shape[-1] > self.cross_attention_dim:
+            prompt = prompt[..., : self.cross_attention_dim]
         tt_prompt = bf16_tensor(prompt, device=self.mesh_device)
         return tt_prompt
 
@@ -444,7 +456,9 @@ class LTXPipeline:
                 N=num_tokens,
                 timestep_torch=timestep_torch,
             )
-            denoised = LTXTransformerModel.device_to_host(tt_denoised).squeeze(0)
+            # Model output is velocity; convert to x0: denoised = sample - velocity * sigma
+            velocity = LTXTransformerModel.device_to_host(tt_denoised).squeeze(0)
+            denoised = latent.float() - velocity.float() * sigma
 
             # CFG
             if do_cfg:
@@ -457,7 +471,8 @@ class LTXPipeline:
                     N=num_tokens,
                     timestep_torch=timestep_torch,
                 )
-                uncond = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)
+                uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)
+                uncond = latent.float() - uncond_velocity.float() * sigma
 
                 # guidance = uncond + scale * (cond - uncond)
                 denoised = uncond + guidance_scale * (denoised - uncond)
