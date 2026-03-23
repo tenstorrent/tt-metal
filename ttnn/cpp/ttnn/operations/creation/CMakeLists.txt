@@ -19,6 +19,7 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES creation.hpp
     PRIVATE
+        creation.cpp
 )
 
 target_include_directories(ttnn_op_creation PRIVATE ${FixmeOpIncDirs})

@@ -662,6 +662,7 @@ target_link_libraries(
         TTNN::Ops::CCL
         TTNN::Ops::Conv
         TTNN::Ops::Core
+        TTNN::Ops::Creation
         TTNN::Ops::DataMovement
         TTNN::Ops::Eltwise::Binary
         TTNN::Ops::Eltwise::Binary::Backward
@@ -905,6 +906,7 @@ set(FixmeOpIncDirs
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)
+add_subdirectory(cpp/ttnn/operations/creation)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
 add_subdirectory(cpp/ttnn/operations/debug)
