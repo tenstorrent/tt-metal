@@ -17,9 +17,9 @@ class MoEIntermediates:
 
     dispatched_buffer: (
         torch.Tensor
-    )  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, hidden_dim)
+    )  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
     metadata: torch.Tensor  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, metadata_len)
     expert_outputs: torch.Tensor  # Same shape as dispatched_buffer
-    shared_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, hidden_dim)
-    combined_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    routed_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, hidden_dim)
+    shared_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, emb_dim)
+    combined_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
+    routed_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, emb_dim)

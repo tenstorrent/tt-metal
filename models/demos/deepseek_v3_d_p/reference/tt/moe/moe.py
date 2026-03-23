@@ -92,6 +92,7 @@ class TorchMoe(nn.Module):
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
+        emb_dim: int,
         hidden_dim: int,
         expert_dispatch_table: torch.Tensor,
         model_id: str = None,
@@ -113,7 +114,8 @@ class TorchMoe(nn.Module):
             metadata_len: Length of metadata per token
             max_dispatched_tokens_per_expert: Max tokens per expert buffer
             seq_len_per_chip: Sequence length per chip
-            hidden_dim: Hidden dimension
+            emb_dim: Embedding dimension (input/output dimension)
+            hidden_dim: FFN intermediate dimension
             expert_dispatch_table: Expert to chip mapping table
             model_id: Optional HuggingFace model ID to load real weights from
             layer_idx: Optional layer index for weight loading (required if model_id is set)
@@ -136,7 +138,7 @@ class TorchMoe(nn.Module):
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_dispatch_groups=num_dispatch_groups,
             expert_dispatch_table=expert_dispatch_table,
         )
@@ -164,7 +166,7 @@ class TorchMoe(nn.Module):
         self.routed_experts = nn.ModuleList(
             [
                 TorchExpert(
-                    hidden_dim,
+                    emb_dim,
                     hidden_dim,
                     torch_weights=routed_weights[i] if routed_weights else None,
                     use_identity=use_identity,
@@ -172,12 +174,10 @@ class TorchMoe(nn.Module):
                 for i in range(num_routed_experts)
             ]
         )
-        self.shared_expert = TorchExpert(
-            hidden_dim, hidden_dim, torch_weights=shared_weights, use_identity=use_identity
-        )
+        self.shared_expert = TorchExpert(emb_dim, hidden_dim, torch_weights=shared_weights, use_identity=use_identity)
 
         # Create reduce module (sums over topk dimension)
-        # topk_dim=2 because combined_output shape is (dispatch_group_size, seq_len, topk, hidden)
+        # topk_dim=2 because combined_output shape is (dispatch_group_size, seq_len, topk, emb_dim)
         self.reduce_module = TorchReduceModule(topk_dim=2)
 
     def forward(
@@ -193,7 +193,7 @@ class TorchMoe(nn.Module):
         Forward pass through the full MoE pipeline.
 
         Args:
-            x: Input tensor (dispatch_group_size, seq_len_per_chip, hidden_dim)
+            x: Input tensor (dispatch_group_size, seq_len_per_chip, emb_dim)
             weights: Gate weights (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
             indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
             expert_offsets: Base offset for each expert from each chip
@@ -201,7 +201,7 @@ class TorchMoe(nn.Module):
             return_intermediates: If True, return intermediate values for debugging
 
         Returns:
-            final_output: MoE output (dispatch_group_size, seq_len_per_chip, hidden_dim)
+            final_output: MoE output (dispatch_group_size, seq_len_per_chip, emb_dim)
             intermediates: Optional MoEIntermediates if return_intermediates=True
         """
         # Step 1: Run shared expert on original input
@@ -240,8 +240,8 @@ class TorchMoe(nn.Module):
         combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts)
 
         # Step 5: Apply gate weights and sum over topk
-        # combined_output: (dispatch_group_size, seq_len, topk, hidden_dim)
-        # routed_output: (dispatch_group_size, seq_len, hidden_dim)
+        # combined_output: (dispatch_group_size, seq_len, topk, emb_dim)
+        # routed_output: (dispatch_group_size, seq_len, emb_dim)
         routed_output = self.reduce_module(combined_output, weights=weights)
 
         # Step 6: Final output = routed + shared

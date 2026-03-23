@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor",
     [
         (32, 64, 16, 4, 2, 2),
         (512, 32, 256, 8, 4, 2),
@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     ids=["xs", "small"],
 )
 def test_torch_dispatch_combine(
-    seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
+    seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
@@ -51,7 +51,7 @@ def test_torch_dispatch_combine(
     x, weights, indices = initialize_test_inputs(
         dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -78,7 +78,7 @@ def test_torch_dispatch_combine(
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         expert_dispatch_table=expert_dispatch_table,
     )
     combine_module = TorchCombineModule(

@@ -15,7 +15,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole, profiler
+from conftest import is_galaxy
+from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -106,30 +107,12 @@ def create_shared_expert_weights(
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
-        # Smaller config to fit in L1 memory
-        # emb_dim must be divisible by TP factor (4) and tile size (32)
-        # seq_len must fit in L1 with emb_dim after sharding
-        # (3200, 2048, DeepSeekV3Config.HIDDEN_SIZE, 64, 2, 2, False),  # Profiling mode
-        (
-            3200,
-            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
-            DeepSeekV3Config.HIDDEN_SIZE,
-            64,
-            2,
-            2,
-            False,
-        ),  # PCC validation mode
-        (
-            3200,
-            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
-            DeepSeekV3Config.HIDDEN_SIZE,
-            64,
-            2,
-            2,
-            True,
-        ),  # PCC validation mode
+        # fmt: off
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False), # skip PCC validation
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
+        # fmt: on
     ],
-    # ids=["small-config"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -138,7 +121,7 @@ def create_shared_expert_weights(
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.HIDDEN_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -150,7 +133,7 @@ def create_shared_expert_weights(
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.HIDDEN_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -161,7 +144,7 @@ def create_shared_expert_weights(
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.HIDDEN_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -172,7 +155,7 @@ def create_shared_expert_weights(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.HIDDEN_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -262,7 +245,7 @@ def test_ttnn_moe(
     x, weights, indices = initialize_test_inputs(
         dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=emb_dim,
+        emb_dim=emb_dim,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -306,7 +289,8 @@ def test_ttnn_moe(
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=emb_dim,
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
             expert_dispatch_table=expert_dispatch_table,
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
@@ -410,11 +394,9 @@ def test_ttnn_moe(
         topology=topology,
         routed_expert_weights=ttnn_routed_weights,
         shared_expert_weights=shared_expert_weights,
-        # activations_dtype=ttnn.bfloat8_b,
-        # weights_dtype=ttnn.bfloat4_b,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        combine_output_buffer_memory_config=ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG,
+        combine_output_buffer_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")

@@ -346,7 +346,7 @@ def compute_constants(
 def initialize_test_inputs(
     dispatch_group_size: int,
     seq_len_per_chip: int,
-    hidden_dim: int,
+    emb_dim: int,
     num_routed_experts: int,
     num_experts_per_tok: int,
     max_dispatched_tokens_per_expert: int,
@@ -361,7 +361,7 @@ def initialize_test_inputs(
     Args:
         dispatch_group_size: Number of chips in each dispatch group
         seq_len_per_chip: Sequence length per chip
-        hidden_dim: Hidden dimension
+        emb_dim: Embedding dimension
         num_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
         max_dispatched_tokens_per_expert: Maximum number of tokens per expert
@@ -370,13 +370,13 @@ def initialize_test_inputs(
         num_dispatch_groups: Number of parallel dispatch groups
 
     Returns:
-        x: Input tensor (dispatch_group_size, seq_len_per_chip, hidden_dim)
+        x: Input tensor (dispatch_group_size, seq_len_per_chip, emb_dim)
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
     torch.manual_seed(seed)
 
-    input_shape = (dispatch_group_size, seq_len_per_chip, hidden_dim)
+    input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None
 
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
@@ -412,7 +412,7 @@ def initialize_test_inputs(
 def initialize_predictable_test_inputs(
     dispatch_group_size: int,
     seq_len_per_chip: int,
-    hidden_dim: int,
+    emb_dim: int,
     num_routed_experts: int,
     num_experts_per_tok: int,
     max_dispatched_tokens_per_expert: int,
@@ -436,20 +436,20 @@ def initialize_predictable_test_inputs(
     Args:
         dispatch_group_size: Number of chips in each dispatch group
         seq_len_per_chip: Sequence length per chip
-        hidden_dim: Hidden dimension
+        emb_dim: Embedding dimension
         num_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
         max_dispatched_tokens_per_expert: Maximum number of tokens per expert (unused but kept for signature consistency)
         num_dispatch_groups: Number of parallel dispatch groups
 
     Returns:
-        x: Input tensor (dispatch_group_size, seq_len_per_chip, hidden_dim)
+        x: Input tensor (dispatch_group_size, seq_len_per_chip, emb_dim)
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
-    input_shape = (dispatch_group_size, seq_len_per_chip, hidden_dim)
+    input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     # Fill with sequential values: 0.0, 1.0, 2.0, ...
-    x = torch.arange(dispatch_group_size * seq_len_per_chip * hidden_dim, dtype=torch.float32).reshape(input_shape)
+    x = torch.arange(dispatch_group_size * seq_len_per_chip * emb_dim, dtype=torch.float32).reshape(input_shape)
     x = x.to(torch.bfloat16)
 
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
@@ -563,7 +563,7 @@ def create_sparse_combine_output(
     num_chips: int,
     seq_len: int,
     topk: int,
-    hidden_dim: int,
+    emb_dim: int,
     sparsity: float = 0.75,
     seed: int = 42,
 ) -> torch.Tensor:
@@ -577,17 +577,17 @@ def create_sparse_combine_output(
         num_chips: Number of chips in the reduction group
         seq_len: Sequence length per chip
         topk: Number of expert slots per token
-        hidden_dim: Hidden dimension
+        emb_dim: Embedding dimension
         sparsity: Fraction of positions that are zero (default 0.75)
         seed: Random seed for reproducibility
 
     Returns:
-        Sparse tensor of shape [num_chips, seq_len, topk, hidden_dim]
+        Sparse tensor of shape [num_chips, seq_len, topk, emb_dim]
     """
     torch.manual_seed(seed)
 
     # Create random data
-    data = torch.randn(num_chips, seq_len, topk, hidden_dim, dtype=torch.bfloat16)
+    data = torch.randn(num_chips, seq_len, topk, emb_dim, dtype=torch.bfloat16)
 
     # Apply sparsity mask (zero out random positions in topk dimension)
     mask = torch.rand(num_chips, seq_len, topk, 1) > sparsity

@@ -14,7 +14,7 @@ class DeepSeekV3Config:
     """DeepSeek V3/R1 671B model dimensions."""
 
     # Core dimensions
-    HIDDEN_SIZE = 7168  # embedding dimension (dim)
+    EMB_SIZE = 7168  # embedding dimension
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 

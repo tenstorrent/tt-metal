@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "isl_per_chip, hidden_dim, epsilon, num_links", [(3200, 7168, 1e-6, 1), (4096, 7168, 1e-6, 1)], ids=["3.2K", "4K"]
+    "isl_per_chip, emb_dim, epsilon, num_links", [(3200, 7168, 1e-6, 1), (4096, 7168, 1e-6, 1)], ids=["3.2K", "4K"]
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -43,11 +43,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, hidden_dim, epsilon, num_links):
+def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, epsilon, num_links):
     """
     Test distributed RMSNorm against PyTorch reference.
 
-    Input tensor is sharded across 4 chips along hidden dimension.
+    Input tensor is sharded across 4 chips along embedding dimension.
     Each chip computes local statistics, then all-gather combines them
     for global normalization.
 
@@ -60,10 +60,10 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, hidden_di
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    per_device_width = hidden_dim // num_devices
+    per_device_width = emb_dim // num_devices
 
     # 4D shapes for distributed RMSNorm
-    inp_shape_full = (1, 1, isl_per_chip, hidden_dim)
+    inp_shape_full = (1, 1, isl_per_chip, emb_dim)
     inp_shape_per_device = (1, 1, isl_per_chip, per_device_width)
 
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
@@ -74,14 +74,14 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, hidden_di
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
     logger.debug(f"Using topology: {topology}")
 
-    signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {hidden_dim=} {num_links=} {topology=}")
+    signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {emb_dim=} {num_links=} {topology=}")
 
     # Create random input tensor
     torch_input = torch.randn(inp_shape_full, dtype=torch.bfloat16).float()
     logger.debug(f"Created torch input: {torch_input.shape}")
 
     # Create PyTorch RMSNorm reference with random weights
-    rmsnorm = torch.nn.RMSNorm(hidden_dim, eps=epsilon)
+    rmsnorm = torch.nn.RMSNorm(emb_dim, eps=epsilon)
     rmsnorm.weight.data.uniform_(-1, 1)
     logger.debug(f"Created torch.nn.RMSNorm with weight: {rmsnorm.weight.shape}")
 
@@ -98,7 +98,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, hidden_di
     # Initialize TtDistributedRmsNorm module
     distributed_rmsnorm = TtDistributedRmsNorm(
         mesh_device=mesh_device,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         epsilon=epsilon,
         torch_weight=rmsnorm.weight,
         cluster_axis=1,
@@ -142,32 +142,30 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, hidden_di
     logger.debug("PCC test passed!")
 
 
-@pytest.mark.parametrize(
-    "isl_per_chip, hidden_dim, epsilon", [(3200, 7168, 1e-6), (4096, 7168, 1e-6)], ids=["3.2K", "4K"]
-)
-def test_rmsnorm_single_chip(device, isl_per_chip, hidden_dim, epsilon):
+@pytest.mark.parametrize("isl_per_chip, emb_dim, epsilon", [(3200, 7168, 1e-6), (4096, 7168, 1e-6)], ids=["3.2K", "4K"])
+def test_rmsnorm_single_chip(device, isl_per_chip, emb_dim, epsilon):
     """
     Test single-chip full dimension RMSNorm against PyTorch reference.
 
-    Input tensor runs on a single device with full hidden dimension.
+    Input tensor runs on a single device with full embedding dimension.
 
     Configuration:
-    - Input shape: (1, 1, isl_per_chip, hidden_dim) - 4D format
-    - Full hidden dimension on single chip
+    - Input shape: (1, 1, isl_per_chip, emb_dim) - 4D format
+    - Full embedding dimension on single chip
     """
     torch.manual_seed(1234)
 
-    inp_shape = (1, 1, isl_per_chip, hidden_dim)
+    inp_shape = (1, 1, isl_per_chip, emb_dim)
 
     logger.debug(f"Testing single-chip RMSNorm with shape={inp_shape}")
-    signpost(f"RMSNorm PCC test - single-chip {isl_per_chip=} {hidden_dim=}")
+    signpost(f"RMSNorm PCC test - single-chip {isl_per_chip=} {emb_dim=}")
 
     # Create random input tensor
     torch_input = torch.randn(inp_shape, dtype=torch.bfloat16).float()
     logger.debug(f"Created torch input: {torch_input.shape}")
 
     # Create PyTorch RMSNorm reference with random weights
-    rmsnorm = torch.nn.RMSNorm(hidden_dim, eps=epsilon)
+    rmsnorm = torch.nn.RMSNorm(emb_dim, eps=epsilon)
     rmsnorm.weight.data.uniform_(-1, 1)
     logger.debug(f"Created torch.nn.RMSNorm with weight: {rmsnorm.weight.shape}")
 

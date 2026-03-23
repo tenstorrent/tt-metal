@@ -62,7 +62,7 @@ class TtMoe(LightweightModule):
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
-        emb_dim: int = DeepSeekV3Config.HIDDEN_SIZE,
+        emb_dim: int = DeepSeekV3Config.EMB_SIZE,
         hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
         cluster_axis: int = 0,
         num_links: int = 1,
@@ -129,7 +129,7 @@ class TtMoe(LightweightModule):
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=emb_dim,  # dispatch uses emb_dim as hidden_dim
+            emb_dim=emb_dim,
             cluster_axis=cluster_axis,
             num_links=num_links,
             topology=topology,
@@ -335,7 +335,7 @@ class TtMoe(LightweightModule):
         # Step 6: Final output
         # ========================================
         # final_output = routed_output + shared_output
-        # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, hidden_dim)
+        # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
         final_output = ttnn.add(routed_output, shared_output)
         logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 

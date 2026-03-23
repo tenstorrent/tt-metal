@@ -11,7 +11,7 @@ The MoE dispatch/combine operations implement expert-parallel token routing acro
 
 ### Key Design Goals
 
-- **Expert-centric buffer organization**: `[chips, experts_per_chip, tokens, hidden]`
+- **Expert-centric buffer organization**: `[chips, experts_per_chip, tokens, emb_dim]`
 - **Dense expert matmuls**: No wasted compute (each expert only processes its routed tokens)
 - **Compact memory**: No sparse token arrays
 - **Load balancing**: Capacity factor (CF) handles imbalanced routing by allocating CF × expected_load per expert
@@ -104,7 +104,7 @@ The dispatch operation produces "dense" expert-centric buffers where each expert
 
 ```
 Shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip,
-        max_dispatched_tokens_per_expert, hidden_dim)
+        max_dispatched_tokens_per_expert, emb_dim)
 ```
 
 ### Metadata Buffer
@@ -125,7 +125,7 @@ metadata_len = 5 fields:
 
 | Tensor | Shape | Sharding Strategy |
 |--------|-------|-------------------|
-| `x` (input) | `(dispatch_group_size, seq_len, hidden_dim)` | Shard dim 0 on SP axis, replicate on EP axis |
+| `x` (input) | `(dispatch_group_size, seq_len, emb_dim)` | Shard dim 0 on SP axis, replicate on EP axis |
 | `weights` | `(dispatch_group_size, seq_len, num_experts_per_tok)` | Same as x |
 | `indices` | `(dispatch_group_size, seq_len, num_experts_per_tok)` | Same as x |
 | `expert_offsets` | `(dispatch_group_size, num_routed_experts)` | Shard dim 0 across mesh |
@@ -200,7 +200,7 @@ Test configuration from `test_prefill_dispatch.py`:
 # Configuration
 mesh_device = (2, 1)  # 2 chips, 1D mesh
 seq_len_per_chip = 32
-hidden_dim = 7168
+emb_dim = 7168
 num_routed_experts = 16
 num_experts_per_tok = 4
 capacity_factor = 2
@@ -224,7 +224,7 @@ metadata_len = 5
 
 | Tensor | Shape | Description |
 |--------|-------|-------------|
-| `x` | `(2, 32, 7168)` | Hidden states: 2 chips × 32 tokens × 7168 hidden |
+| `x` | `(2, 32, 7168)` | Hidden states: 2 chips × 32 tokens × 7168 emb_dim |
 | `weights` | `(2, 32, 4)` | Router weights: 2 chips × 32 tokens × 4 topk |
 | `indices` | `(2, 32, 4)` | Expert indices: 2 chips × 32 tokens × 4 topk |
 | `expert_offsets` | `(2, 16)` | Cumulative offsets: 2 chips × 16 experts |
@@ -234,9 +234,9 @@ metadata_len = 5
 
 | Tensor | Shape | Description |
 |--------|-------|-------------|
-| `dispatched_buffer` | `(1, 2, 8, 32, 7168)` | Dispatched tokens per expert |
+| `dispatched_buffer` | `(1, 2, 8, 32, 7168)` | Dispatched tokens per expert (emb_dim=7168) |
 | `dispatched_metadata` | `(1, 2, 8, 32, 5)` | Metadata per dispatched token |
-| `combined_output` | `(2, 32, 4, 7168)` | Recombined output |
+| `combined_output` | `(2, 32, 4, 7168)` | Recombined output (emb_dim=7168) |
 
 ## 8. Data Flow Diagram
 
@@ -295,7 +295,7 @@ metadata_len = 5
   ┌─────────────────────────────────────────────────────────────────────────┐
   │  output[chip, token, topk_idx, :] - Back to original token ordering     │
   │  Shape: (dispatch_group_size, seq_len_per_chip, num_experts_per_tok,    │
-  │          hidden_dim)                                                    │
+  │          emb_dim)                                                       │
   └─────────────────────────────────────────────────────────────────────────┘
 ```
 

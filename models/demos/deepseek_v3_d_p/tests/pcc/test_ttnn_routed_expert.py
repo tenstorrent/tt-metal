@@ -41,7 +41,7 @@ def run_torch_routed_experts(
     Run torch routed experts on dispatched buffer.
 
     Args:
-        dispatched_buffer: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+        dispatched_buffer: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
         experts: List of TorchExpert modules (total = num_dispatch_groups * dispatch_group_size * experts_per_chip)
         experts_per_chip: Number of experts per chip
         num_dispatch_groups: Number of dispatch groups (EP ranks, mesh_cols for 2D mesh)

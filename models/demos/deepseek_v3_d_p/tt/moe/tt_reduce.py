@@ -11,10 +11,10 @@ It performs:
 2. Local sum over topk dimension
 3. Reduce-scatter across chips to get TP-sharded output
 
-After MoE combine, each chip has sparse tensor [seq_len, topk, hidden_dim]
+After MoE combine, each chip has sparse tensor [seq_len, topk, emb_dim]
 where only positions for local experts have valid data.
 
-This module produces TP-sharded output [seq_len, hidden_dim / num_chips]
+This module produces TP-sharded output [seq_len, emb_dim / num_chips]
 ready for the next layer.
 """
 
@@ -43,8 +43,8 @@ class TtReduceModule(LightweightModule):
         Args:
             mesh_device: TTNN mesh device
             topk_dim: Dimension of the topk axis in TTNN tensor.
-                      NOTE: TTNN adds a batch dimension, so for logical [seq, topk, hidden],
-                      the actual tensor is [1, seq, topk, hidden] and topk is at dim=2.
+                      NOTE: TTNN adds a batch dimension, so for logical [seq, topk, emb_dim],
+                      the actual tensor is [1, seq, topk, emb_dim] and topk is at dim=2.
             cluster_axis: Mesh dimension to reduce across (0=rows, 1=columns)
             num_links: Number of ethernet links to use for collective
             topology: Ring or Linear topology for reduce_scatter
@@ -65,17 +65,17 @@ class TtReduceModule(LightweightModule):
         Reduce combine output by summing topk and reduce-scattering.
 
         Args:
-            combine_output: Per-chip tensor of shape [1, 1, seq_len, topk, hidden_dim]
+            combine_output: Per-chip tensor of shape [1, 1, seq_len, topk, emb_dim]
             weights: Optional gate weights of shape [1, 1, seq_len, topk]
                      If provided, applies weighted sum: weights * combine_output
 
         Returns:
-            output: Per-chip tensor of shape [seq_len, hidden_dim / num_chips_in_axis]
+            output: Per-chip tensor of shape [seq_len, emb_dim / num_chips_in_axis]
         """
-        # Apply weights if provided (broadcast [seq_len, topk] -> [seq_len, topk, hidden_dim])
+        # Apply weights if provided (broadcast [seq_len, topk] -> [seq_len, topk, emb_dim])
         if weights is not None:
             # Prepare weights: ensure shape and layout match combine_output
-            # combine_output is 5D: (1, dispatch_group_size, seq_len, topk, hidden_dim)
+            # combine_output is 5D: (1, dispatch_group_size, seq_len, topk, emb_dim)
             # weights may be 3D or 4D, need to match first 4 dims of combine_output
 
             # Add batch dimensions if needed to match combine_output rank - 1
@@ -95,12 +95,12 @@ class TtReduceModule(LightweightModule):
             logger.warning("TtReduceModule: weights not provided, using unweighted sum")
 
         # 1. Sum over topk dimension (local operation on each chip)
-        # [seq_len, topk, hidden_dim] -> [seq_len, hidden_dim]
+        # [seq_len, topk, emb_dim] -> [seq_len, emb_dim]
         summed = ttnn.sum(combine_output, dim=self.topk_dim)
 
         # 2. Reduce-scatter across chips (only if multiple devices in cluster_axis)
         # Reduces (sums) data across chips and scatters unique portions
-        # [seq_len, hidden_dim] -> [seq_len, hidden_dim / num_chips]
+        # [seq_len, emb_dim] -> [seq_len, emb_dim / num_chips]
         if self.mesh_device.shape[self.cluster_axis] > 1:
             output = ttnn.reduce_scatter(
                 summed,

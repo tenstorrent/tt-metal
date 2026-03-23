@@ -30,7 +30,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
-    "seq_len, hidden_dim, topk",
+    "seq_len, emb_dim, topk",
     [
         (32, 2048, 8),
         (3200, 7 * 1024, 8),  # DeepSeek values
@@ -57,7 +57,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 def test_ttnn_reduce(
     mesh_device,
     seq_len,
-    hidden_dim,
+    emb_dim,
     topk,
     use_weights,
 ):
@@ -83,7 +83,7 @@ def test_ttnn_reduce(
         num_chips=dispatch_group_size,
         seq_len=seq_len,
         topk=topk,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         sparsity=0.75,
         seed=42,
     )
@@ -95,7 +95,7 @@ def test_ttnn_reduce(
         _, torch_gate_weights, _ = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=64,
             num_experts_per_tok=topk,
             max_dispatched_tokens_per_expert=1000,

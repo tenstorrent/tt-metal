@@ -87,7 +87,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         (32, 7168, 16, 4, 2),
     ],
@@ -246,7 +246,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
-    hidden_dim,
+    emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
@@ -267,7 +267,7 @@ def test_ttnn_dispatch(
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
@@ -281,7 +281,7 @@ def test_ttnn_dispatch(
         x, weights, indices = initialize_predictable_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -292,7 +292,7 @@ def test_ttnn_dispatch(
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
@@ -344,7 +344,7 @@ def test_ttnn_dispatch(
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
         expert_dispatch_table=expert_dispatch_table,
     )
@@ -358,7 +358,7 @@ def test_ttnn_dispatch(
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
+        emb_dim=emb_dim,
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,

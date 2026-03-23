@@ -18,7 +18,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import GRID_SIZE, get_prefill_matmul_program_config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -91,41 +90,12 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
 
         # Build program configs for matmuls using optimal parameters from sweeps
-        if max_tokens in [1024, 1600, 2048] and emb_dim == 7168 and hidden_dim == 2048:
-            # w1 (gate_proj): M=max_tokens, K=emb_dim, N=hidden_dim
-            self.gate_program_config = get_prefill_matmul_program_config(
-                # max_tokens, emb_dim, hidden_dim, GRID_SIZE, OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w1")
-                max_tokens,
-                emb_dim,
-                hidden_dim,
-                GRID_SIZE,
-                (28, 1, 3),
-            )
-            # w3 (up_proj): M=max_tokens, K=emb_dim, N=hidden_dim
-            self.up_program_config = get_prefill_matmul_program_config(
-                # max_tokens, emb_dim, hidden_dim, GRID_SIZE,  OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w3")
-                max_tokens,
-                emb_dim,
-                hidden_dim,
-                GRID_SIZE,
-                (28, 1, 3),
-            )
-            # w2 (down_proj): M=max_tokens, K=hidden_dim, N=emb_dim
-            self.down_program_config = get_prefill_matmul_program_config(
-                # max_tokens, hidden_dim, emb_dim, GRID_SIZE, OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w2")
-                max_tokens,
-                hidden_dim,
-                emb_dim,
-                GRID_SIZE,
-                (32, 1, 3),
-            )
-        else:
-            logger.warning(
-                f"RoutedExpert: No optimal program config for given dimensions {max_tokens=}{emb_dim=}{hidden_dim=}, using defaults."
-            )
-            self.gate_program_config = None
-            self.up_program_config = None
-            self.down_program_config = None
+        logger.warning(
+            f"RoutedExpert: No optimal program config for given dimensions {max_tokens=}{emb_dim=}{hidden_dim=}, using defaults."
+        )
+        self.gate_program_config = None
+        self.up_program_config = None
+        self.down_program_config = None
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")

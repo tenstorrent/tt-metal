@@ -282,7 +282,7 @@ def test_moe_reference_pcc(seed: int):
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len,
-        hidden_dim=emb_dim,  # Note: TorchMoe uses hidden_dim for embedding dimension
+        emb_dim=emb_dim,
         expert_dispatch_table=expert_dispatch_table,
         routed_expert_weights=routed_weights,
         shared_expert_weights=shared_weights,
@@ -306,7 +306,7 @@ def test_moe_reference_pcc(seed: int):
     logger.info(f"ds_ref_moe output shape: {ds_output.shape}")
 
     # 7. Prepare inputs for tt_ref_moe
-    # tt_ref_moe expects shape (dispatch_group_size, seq_len, hidden_dim)
+    # tt_ref_moe expects shape (dispatch_group_size, seq_len, emb_dim)
     x_tt = x.squeeze(0).unsqueeze(0)  # (1, seq_len, emb_dim)
 
     # Reshape weights and indices for tt_ref_moe

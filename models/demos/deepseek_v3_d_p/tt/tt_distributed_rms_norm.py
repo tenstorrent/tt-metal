@@ -20,30 +20,30 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 # DeepSeek 671B RMSNorm dimensions
-HIDDEN_DIM = 7168
+EMB_DIM = 7168
 EPSILON = 1e-6
 
 
 class TtDistributedRmsNorm(LightweightModule):
     """
-    Distributed RMSNorm with hidden dimension sharded across chips.
+    Distributed RMSNorm with embedding dimension sharded across chips.
 
     Architecture:
-        Input: x [batch, seq_len, hidden_dim / num_devices]
+        Input: x [batch, seq_len, emb_dim / num_devices]
         1. Pre-all-gather: Each device computes local sum(x^2) statistics
         2. All-gather: Gather statistics across cluster_axis (mesh columns)
         3. Post-all-gather: Normalize using gathered global statistics
 
     Weight Sharding:
         - Weight gamma: Shard on dimension 2 across mesh columns
-          Shape: [1, 1, hidden_dim // 32, 32] (reshaped for optimal performance)
+          Shape: [1, 1, emb_dim // 32, 32] (reshaped for optimal performance)
           mesh_mapper dims=(None, 2)
     """
 
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
-        hidden_dim: int = HIDDEN_DIM,
+        emb_dim: int = EMB_DIM,
         epsilon: float = EPSILON,
         torch_weight: torch.Tensor = None,
         cluster_axis: int = 1,
@@ -58,9 +58,9 @@ class TtDistributedRmsNorm(LightweightModule):
 
         Args:
             mesh_device: TTNN mesh device
-            hidden_dim: Hidden dimension (default: 7168 for DeepSeek 671B)
+            emb_dim: Embedding dimension (default: 7168 for DeepSeek 671B)
             epsilon: Small value for numerical stability (default: 1e-6)
-            torch_weight: Optional torch tensor of shape [hidden_dim] for gamma weights
+            torch_weight: Optional torch tensor of shape [emb_dim] for gamma weights
             cluster_axis: Mesh dimension to gather along (default: 1 for columns)
             num_links: Number of ethernet links for CCL (default: 1)
             topology: CCL topology - Linear or Ring (default: Linear)
@@ -70,7 +70,7 @@ class TtDistributedRmsNorm(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
-        self.hidden_dim = hidden_dim
+        self.emb_dim = emb_dim
         self.epsilon = epsilon
         self.num_devices = mesh_device.get_num_devices()
         self.cluster_axis = cluster_axis
@@ -82,7 +82,7 @@ class TtDistributedRmsNorm(LightweightModule):
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
 
-        logger.debug(f"Initializing TtDistributedRmsNorm with hidden_dim={hidden_dim}, epsilon={epsilon}")
+        logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
         logger.debug(f"CCL config: cluster_axis={cluster_axis}, num_links={num_links}, topology={topology}")
 
@@ -99,17 +99,17 @@ class TtDistributedRmsNorm(LightweightModule):
         Convert torch weight to sharded ttnn tensor.
 
         Args:
-            torch_weight: PyTorch weight tensor of shape [hidden_dim]
+            torch_weight: PyTorch weight tensor of shape [emb_dim]
 
         Returns:
-            Sharded ttnn tensor with shape [1, 1, hidden_dim // 32, 32]
+            Sharded ttnn tensor with shape [1, 1, emb_dim // 32, 32]
         """
         assert (
-            torch_weight.shape[-1] == self.hidden_dim
-        ), f"Weight shape mismatch: expected hidden_dim={self.hidden_dim}, got {torch_weight.shape[-1]}"
+            torch_weight.shape[-1] == self.emb_dim
+        ), f"Weight shape mismatch: expected emb_dim={self.emb_dim}, got {torch_weight.shape[-1]}"
 
-        # Reshape weight to [1, 1, hidden_dim // 32, 32] for optimal performance
-        torch_weight_reshaped = torch_weight.reshape(1, 1, self.hidden_dim // 32, 32)
+        # Reshape weight to [1, 1, emb_dim // 32, 32] for optimal performance
+        torch_weight_reshaped = torch_weight.reshape(1, 1, self.emb_dim // 32, 32)
         logger.debug(f"Weight reshaped from {torch_weight.shape} to {torch_weight_reshaped.shape}")
 
         # Create mesh mapper: replicate across mesh rows (dim 0), shard along dim 2 across mesh cols
@@ -132,7 +132,7 @@ class TtDistributedRmsNorm(LightweightModule):
 
     def _create_random_sharded_weight(self) -> ttnn.Tensor:
         """Create random sharded weight."""
-        torch_weight = torch.rand(self.hidden_dim, dtype=torch.float32) * 2 - 1
+        torch_weight = torch.rand(self.emb_dim, dtype=torch.float32) * 2 - 1
         return self._create_sharded_weight_from_torch(torch_weight)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -140,11 +140,11 @@ class TtDistributedRmsNorm(LightweightModule):
         Forward pass with distributed RMSNorm.
 
         Args:
-            x: Input tensor [batch, seq_len, hidden_dim / num_devices]
+            x: Input tensor [batch, seq_len, emb_dim / num_devices]
                Expected to be sharded across mesh columns along last dimension.
 
         Returns:
-            Output tensor [batch, seq_len, hidden_dim / num_devices]
+            Output tensor [batch, seq_len, emb_dim / num_devices]
             Normalized with same sharding as input.
         """
         logger.debug(f"Forward pass: input shape={x.shape}")

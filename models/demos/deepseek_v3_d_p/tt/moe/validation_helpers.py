@@ -162,8 +162,8 @@ def validate_combine_output(
     Validate combine output against torch reference (EP-rank aware).
 
     Args:
-        torch_output: Reference output, shape [dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim]
-        ttnn_output: TTNN output, shape [num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim]
+        torch_output: Reference output, shape [dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim]
+        ttnn_output: TTNN output, shape [num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim]
         indices: Expert indices, shape [dispatch_group_size, seq_len_per_chip, num_experts_per_tok]
         num_dispatch_groups: Number of EP ranks
         num_routed_experts: Total number of routed experts
@@ -320,8 +320,8 @@ def validate_roundtrip_output(
     Validate dispatch→combine round-trip (EP-rank aware).
 
     Args:
-        input_tensor: Original input, shape [dispatch_group_size, seq_len_per_chip, hidden_dim]
-        output_tensor: Round-trip output, shape [num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim]
+        input_tensor: Original input, shape [dispatch_group_size, seq_len_per_chip, emb_dim]
+        output_tensor: Round-trip output, shape [num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim]
         indices: Expert indices, shape [dispatch_group_size, seq_len_per_chip, num_experts_per_tok]
         num_dispatch_groups: Number of EP ranks
         num_routed_experts: Total number of routed experts
