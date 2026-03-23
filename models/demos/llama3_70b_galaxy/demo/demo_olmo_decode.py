@@ -226,6 +226,13 @@ def run_olmo_demo(
                 for p in input_prompts
             ]
             encoded_prompts = [tokenizer.encode(fp, add_special_tokens=False) for fp in formatted_prompts]
+            # Clamp each prompt to the target ISL to prevent the chat-template overhead
+            # (~56 tokens) from pushing the length past a power-of-2 boundary, which
+            # would double padded_prefill_len and break support_seqlens CCL buffer lookups.
+            # max_generated_tokens is always (target_ISL + small_decode_budget), so
+            # the largest power-of-2 ≤ max_generated_tokens equals the target ISL exactly.
+            target_prefill_len = 1 << (max_generated_tokens.bit_length() - 1)
+            encoded_prompts = [ep[:target_prefill_len] for ep in encoded_prompts]
         else:
             encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
 
