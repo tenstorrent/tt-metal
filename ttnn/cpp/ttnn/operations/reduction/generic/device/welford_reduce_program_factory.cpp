@@ -149,6 +149,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
     bool do_scale = (operation_attributes.scalar != 1.0f);
+    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
 
     std::vector<uint32_t> compute_compile_args = {
         Wt,
@@ -156,6 +157,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tile_width,
         static_cast<uint32_t>(do_scale),
         static_cast<uint32_t>(operation_attributes.correction),
+        static_cast<uint32_t>(is_std),
     };
 
     const std::string compute_kernel =

@@ -7,6 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/welford.h"
 #include "api/compute/transpose_wh.h"
+#include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -32,6 +33,8 @@ void kernel_main() {
     constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
     // Whether to apply Bessel's correction (divide by N-1 instead of N).
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
+    // Whether to compute standard deviation (sqrt of variance) instead of variance.
+    constexpr bool is_std = get_compile_time_arg_val(5) != 0;
 
     constexpr uint32_t onetile = 1;
 
@@ -166,6 +169,10 @@ void kernel_main() {
         transpose_wh_init_short(cb_var);
         tile_regs_acquire();
         transpose_wh_tile(cb_var, 0, var_dst);
+        if constexpr (is_std) {
+            sqrt_tile_init();
+            sqrt_tile(var_dst);
+        }
         tile_regs_commit();
         cb_var_obj.pop_front(onetile);
 
