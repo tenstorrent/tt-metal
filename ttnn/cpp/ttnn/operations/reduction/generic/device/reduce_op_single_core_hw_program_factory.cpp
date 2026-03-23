@@ -36,8 +36,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     const auto& logical_shape = a.logical_shape();
     uint32_t logical_W = logical_shape[3];
     uint32_t logical_H = logical_shape[2];
-    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
-    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
+    uint32_t last_w = logical_W % tt::constants::TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % tt::constants::TILE_HEIGHT; // 0 means no padding needed
 
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
 

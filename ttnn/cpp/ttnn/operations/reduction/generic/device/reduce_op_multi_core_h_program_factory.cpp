@@ -33,13 +33,17 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     const auto& logical_shape = a.logical_shape();
     uint32_t logical_W = logical_shape[3];
     uint32_t logical_H = logical_shape[2];
-    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
-    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
+    uint32_t last_w = logical_W % tt::constants::TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % tt::constants::TILE_HEIGHT; // 0 means no padding needed
     // If last_w or last_h is 0, it means the dimension is already tile-aligned
     // In that case, we don't need to pad, so we set to TILE_WIDTH/TILE_HEIGHT respectively
     // which will result in no padding being applied
-    if (last_w == 0) last_w = TILE_WIDTH;
-    if (last_h == 0) last_h = TILE_HEIGHT;
+    if (last_w == 0) {
+        last_w = tt::constants::TILE_WIDTH;
+    }
+    if (last_h == 0) {
+        last_h = tt::constants::TILE_HEIGHT;
+    }
     uint32_t neutral_policy = get_neutral_policy(operation_attributes.math_op);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -280,8 +284,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
         // Check if padding is needed (logical size is not tile-aligned)
-        uint32_t is_last_w_padded = (logical_W % TILE_WIDTH != 0) ? 1 : 0;
-        uint32_t is_last_h_padded = (logical_H % TILE_HEIGHT != 0) ? 1 : 0;
+        uint32_t is_last_w_padded = (logical_W % tt::constants::TILE_WIDTH != 0) ? 1 : 0;
+        uint32_t is_last_h_padded = (logical_H % tt::constants::TILE_HEIGHT != 0) ? 1 : 0;
         std::vector<uint32_t> reader_rt_args = {
             num_cols_per_core_group_1 * Ht,
             shard_Wt,

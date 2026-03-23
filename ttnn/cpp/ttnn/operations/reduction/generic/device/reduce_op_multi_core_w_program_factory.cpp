@@ -31,8 +31,8 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     const auto& logical_shape = a.logical_shape();
     uint32_t logical_W = logical_shape[3];
     uint32_t logical_H = logical_shape[2];
-    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
-    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
+    uint32_t last_w = logical_W % tt::constants::TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % tt::constants::TILE_HEIGHT; // 0 means no padding needed
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
