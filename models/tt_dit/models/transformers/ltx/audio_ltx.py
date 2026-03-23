@@ -336,32 +336,39 @@ class LTXAudioVideoTransformerBlock(Module):
         v_ca_shift, v_ca_scale, a_ca_shift_v, a_ca_scale_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
         v_ca_gate = ttnn.typecast(v_ca_gate, dtype=ttnn.bfloat16)
 
-        # Gather cross-attention contexts (TP-sharded → full dim for to_kv)
-        if self.parallel_config.tensor_parallel.factor > 1:
-            audio_context = self.ccl_manager.all_gather_persistent_buffer(
-                audio_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-            video_context = self.ccl_manager.all_gather_persistent_buffer(
-                video_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-        else:
-            audio_context = audio_1BND
-            video_context = video_1BND
-
-        # A→V: audio provides context for video
-        video_scaled = self.norm1(video_1BND) * (1.0 + v_ca_scale) + v_ca_shift
-        a2v_output = self.audio_to_video_attn(spatial_1BND=video_scaled, N=video_N, prompt_1BLP=audio_context)
-        video_1BND = video_1BND + a2v_output * v_ca_gate
-
-        # Audio-side cross-attention modulation
+        # Audio-side cross-attention modulation (5 params: a2v_shift, a2v_scale, v2a_shift, v2a_scale, gate)
         _av_ca_audio_temb = av_ca_audio_temb if av_ca_audio_temb is not None else av_ca_temb[:, :, :5, : self.audio_dim]
         shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + _av_ca_audio_temb
-        a_ca_shift, a_ca_scale, v_ca_shift_a, v_ca_scale_a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
+        a_shift_a2v, a_scale_a2v, a_shift_v2a, a_scale_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
         a_ca_gate = ttnn.typecast(a_ca_gate, dtype=ttnn.bfloat16)
 
+        # Norm both modalities for cross-attention
+        video_normed_xattn = self.norm1(video_1BND)
+        audio_normed_xattn = self.audio_norm1(audio_1BND)
+
+        # A→V: audio provides context for video
+        # Q = video_normed * (1 + v_scale[0:2]) + v_shift[0:2]
+        # KV = audio_normed * (1 + a_scale[0:2]) + a_shift[0:2]
+        video_q_a2v = video_normed_xattn * (1.0 + v_ca_scale) + v_ca_shift
+        audio_kv_a2v = audio_normed_xattn * (1.0 + a_scale_a2v) + a_shift_a2v
+        if self.parallel_config.tensor_parallel.factor > 1:
+            audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
+                audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+        a2v_output = self.audio_to_video_attn(spatial_1BND=video_q_a2v, N=video_N, prompt_1BLP=audio_kv_a2v)
+        video_1BND = video_1BND + a2v_output * v_ca_gate
+
         # V→A: video provides context for audio
-        audio_scaled = self.audio_norm1(audio_1BND) * (1.0 + a_ca_scale) + a_ca_shift
-        v2a_output = self.video_to_audio_attn(spatial_1BND=audio_scaled, N=audio_N, prompt_1BLP=video_context)
+        # Q = audio_normed * (1 + a_scale[2:4]) + a_shift[2:4]
+        # KV = video_normed * (1 + v_scale[2:4]) + v_shift[2:4]
+        # v_scale[2:4] = a_ca_shift_v (index 2), a_ca_scale_v (index 3) from video-side table
+        audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
+        video_kv_v2a = video_normed_xattn * (1.0 + a_ca_scale_v) + a_ca_shift_v
+        if self.parallel_config.tensor_parallel.factor > 1:
+            video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
+                video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+        v2a_output = self.video_to_audio_attn(spatial_1BND=audio_q_v2a, N=audio_N, prompt_1BLP=video_kv_v2a)
         audio_1BND = audio_1BND + v2a_output * a_ca_gate
 
         # === VIDEO FEEDFORWARD ===
