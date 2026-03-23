@@ -421,8 +421,11 @@ class SamplingOp:
         gather_cb = 1
         semaphore_id = 0
         l1_alignment = 16
-        topk_entry_bytes = 8
-        winner_page_bytes = _round_up(k * topk_entry_bytes, l1_alignment)
+        # Globally-split gather layout: all scores contiguous, then all indices contiguous.
+        # Each per-core region is independently aligned for NOC transfers.
+        topk_scores_stride = _round_up(k * 2, l1_alignment)
+        topk_indices_stride = _round_up(k * 4, l1_alignment)
+        winner_page_bytes = topk_scores_stride + topk_indices_stride
 
         ncrisc_named_compile_time_args = [
             ("sampling_num_values", num_values),
