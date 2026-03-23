@@ -354,6 +354,9 @@ def main():
 
     denoise_time = time.time() - denoise_start
     logger.info(f"AV denoising: {denoise_time:.1f}s ({denoise_time/args.steps:.2f}s/step)")
+    # Save raw latent for debugging
+    torch.save(video_latent, args.output.replace(".mp4", "_video_latent.pt"))
+    torch.save(audio_latent, args.output.replace(".mp4", "_audio_latent.pt"))
 
     # Close TT
     ttnn.close_mesh_device(mesh)
