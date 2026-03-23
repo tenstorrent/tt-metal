@@ -22,8 +22,9 @@ class SmartTTNNLinear(TTNNLinear):
 
         input_tensor_shape = list(input_tensor.shape)
         input_shape = list(input_tensor_shape)
-
-        while len(input_shape) < 4:
+        if len(input_shape) == 2:
+            input_shape.insert(0, 1)
+        if len(input_shape) == 3:
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
 
