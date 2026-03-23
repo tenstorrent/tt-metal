@@ -39,7 +39,7 @@ Review one CI ticket and decide whether to close it, update it, or leave it unch
 
 6. **If updating**
    - Edit the issue body so it reflects current evidence.
-   - Add a clear update note in the issue description with today's date (for example, `Last updated: YYYY-MM-DD`).
+   - Add a clear update note (or modify a pre-existing one) in the issue description with today's date (for example, `Last updated: YYYY-MM-DD`).
    - Improve clarity/readability (strong headings, concise bullets, concrete error excerpt).
    - Include concrete failure details from logs and refresh job links so "most recent failing job URL" and "last 3 failing instance URLs" point to the newest relevant runs from this review.
    - If still a CI maintenance issue, ensure label `glean CI maintenance` is present.

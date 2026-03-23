@@ -56,7 +56,7 @@ Keep the ticket accurate and useful by using current evidence from logs. For the
 
 If you update the issue, improve quality even if core failure remains unchanged:
 
-- Add an explicit update note in the issue description with the current date (for example, `Last updated: YYYY-MM-DD`).
+- Add an explicit update note in the issue description (or modify a pre-existing one) with the current date (for example, `Last updated: YYYY-MM-DD`).
 - Replace vague statements with concrete error excerpt(s) from logs.
 - Prefer terminal/root failure text over earlier TT_FATAL/assert lines.
 - Refresh "most recent failing job URL" and "last 3 failing instance URLs" so they point to the newest relevant runs used in this review.
