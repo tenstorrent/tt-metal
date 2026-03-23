@@ -91,9 +91,9 @@ Run the full AV pipeline and compare against CPU reference at PSNR > 20 dB.
 - [x] (2026-03-23) Tested HiFi4 for attention matmuls — no improvement (0.998449 vs 0.998451). Error not from matmul fidelity.
 - [x] (2026-03-23) Fixed AV pipeline: added CFG, bf16 noise dtype, negative prompt encoding, CUDA patch.
 - [x] (2026-03-23) Generated CPU AV reference: step ranges match TT within 5%.
-- [ ] Milestone 2: Identify which specific TT op contributes most to 0.998 PCC gap
-- [ ] Milestone 3: Fix the dominant precision bottleneck
-- [ ] Milestone 4: End-to-end AV PSNR > 20 dB vs CPU AV ref
+- [x] (2026-03-23) Milestone 2: Found root cause — missing cross-attention context modulation in A↔V block
+- [x] (2026-03-23) Milestone 3: Fixed context modulation for both A→V and V→A cross-attention
+- [x] (2026-03-23) Milestone 4: AV PSNR 21-24 dB vs CPU AV ref — ACCEPTANCE CRITERIA MET
 
 ## Surprises & Discoveries
 
