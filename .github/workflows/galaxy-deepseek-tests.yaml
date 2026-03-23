@@ -59,20 +59,6 @@ on:
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
-env:
-  # Module tests migrated to T3K for fast feedback. These use a 1x8 submesh
-  # and are data-parallel across rows, so T3K exercises the same shapes and
-  # memory configs as Galaxy. Galaxy confirmation re-runs them after T3K passes.
-  # Keep in sync with galaxy-deepseek-tests-impl.yaml (--ignore flags)
-  # and t3k_integration_tests.yaml.
-  T3K_MIGRATED_TESTS: >-
-    models/demos/deepseek_v3/tests/test_rms_norm.py
-    models/demos/deepseek_v3/tests/test_mlp.py
-    models/demos/deepseek_v3/tests/test_get_weight_config.py
-    models/demos/deepseek_v3/tests/test_lazy_state_dict.py
-    models/demos/deepseek_v3/tests/test_cache_specs_harness.py
-    models/demos/deepseek_v3/tests/test_hf_model_utils.py
-
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -134,7 +120,7 @@ jobs:
         timeout-minutes: 10
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest $T3K_MIGRATED_TESTS --timeout 120 --durations=0
+          pytest models/demos/deepseek_v3/tests/t3k_compat --timeout 120 --durations=0
 
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
@@ -199,4 +185,4 @@ jobs:
         timeout-minutes: 10
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest $T3K_MIGRATED_TESTS --timeout 120 --durations=0
+          pytest models/demos/deepseek_v3/tests/t3k_compat --timeout 120 --durations=0

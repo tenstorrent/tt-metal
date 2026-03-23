@@ -173,15 +173,9 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -x \
-          pytest models/demos/deepseek_v3/tests -x \
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
-            --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
-            --ignore=models/demos/deepseek_v3/tests/test_mlp.py \
-            --ignore=models/demos/deepseek_v3/tests/test_get_weight_config.py \
-            --ignore=models/demos/deepseek_v3/tests/test_lazy_state_dict.py \
-            --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py \
-            --ignore=models/demos/deepseek_v3/tests/test_hf_model_utils.py \
+            --ignore=models/demos/deepseek_v3/tests/t3k_compat \
             --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
