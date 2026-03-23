@@ -22,9 +22,12 @@ Achieve exact match (PCC > 0.999 per layer) between TTNN LTX-2 transformer and t
 - PyTorch bf16 × bf16 → bf16 (stays bf16, no implicit promotion)
 - The reference applies gate BEFORE `to_out` (not after): `sdpa → concat_heads → view(B,T,H,D) * gates → view(B,T,H*D) → to_out`
 
+## Current Status
+**Visually matching the official pipeline.** PSNR 23-24 dB, MAE 13-14 between TTNN and CPU reference videos. Both show the same scene with the same content, colors, and composition. Step-by-step latent ranges match within ~5%.
+
 ## Open Questions
-- [ ] Step 1 denoised differs by ~25% in range (TT [-1.16, 1.46] vs CPU [-1.63, 1.55]). Root cause?
-- [ ] Does the TTNN model handle `caption_projection` the same as the reference?
+- [ ] Remaining ~5% latent range difference — likely TP/SP precision on 2x4 mesh vs single-device
+- [ ] Replace manual split rope with fused kernel (currently 6 ops per Q/K, could be 1 fused op)
 - [ ] Performance impact of host-side gate computation (device→host readback per attention layer)
 - [ ] Is there a way to batch the host gate computation to hide latency (async readback)?
 
@@ -33,6 +36,8 @@ Achieve exact match (PCC > 0.999 per layer) between TTNN LTX-2 transformer and t
 2. **RoPE was in wrong format** — Used SPLIT layout where each head has independent frequencies. LTX-2 needs INTERLEAVED where heads share frequency structure across flat 4096-dim space. Fix: use reference `precompute_freqs_cis(rope_type=INTERLEAVED)` and reshape to per-head. RoPE PCC improved from 0.09 to 1.0.
 3. **CPU reference used wrong positions** — Simple latent indices instead of official pixel-space coordinates with causal fix. Fix: use `get_pixel_coords` from official patchifier.
 4. **Denoised dtype mismatch** — TTNN kept denoised in float32 while reference returns bf16. Fix: cast to bf16 to match reference `to_denoised` behavior.
+5. **RoPE rotation type wrong** — Used `rotary_embedding_llama + trans_mat` which implements INTERLEAVED rotation, but model was trained with SPLIT rotation. Fix: replace with manual elementwise split rotation. PSNR improved from 11-13 dB to 23-24 dB.
+6. **RoPE frequency precision** — Reference uses `double_precision_rope=True` (numpy float64 frequency grid). Our code used float32. Fix: use `generate_freq_grid_np` for double-precision.
 
 ## State
 - [x] Identified gate weights in LTX-2.3 checkpoint (`to_gate_logits.weight/bias` per attention layer)
