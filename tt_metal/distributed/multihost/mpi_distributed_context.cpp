@@ -209,8 +209,8 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
 }
         try {
             result.push_back(Rank{std::stoi(std::string(token))});
-        } catch (...) {
-            // skip unparseable tokens
+        } catch (...) {  // NOLINT(bugprone-empty-catch)
+            // skip unparseable tokens — stoi throws on non-numeric input which is expected here
         }
     }
     return result;
@@ -589,6 +589,10 @@ inline void init_env(int& argc, char**& argv) {
             struct AlarmGuard {
                 explicit AlarmGuard(unsigned secs) { alarm(secs); }
                 ~AlarmGuard() { alarm(0); }
+                AlarmGuard(const AlarmGuard&) = delete;
+                AlarmGuard& operator=(const AlarmGuard&) = delete;
+                AlarmGuard(AlarmGuard&&) = delete;
+                AlarmGuard& operator=(AlarmGuard&&) = delete;
             } guard(MPI_FINALIZE_TIMEOUT_SECS);
             MPI_Finalize();
             // alarm(0) is called by ~AlarmGuard above.
@@ -976,6 +980,10 @@ void MPIContext::revoke_and_shrink() {
     struct ShrinkGuard {
         std::atomic_flag& flag;
         ~ShrinkGuard() { flag.clear(std::memory_order_release); }
+        ShrinkGuard(const ShrinkGuard&) = delete;
+        ShrinkGuard& operator=(const ShrinkGuard&) = delete;
+        ShrinkGuard(ShrinkGuard&&) = delete;
+        ShrinkGuard& operator=(ShrinkGuard&&) = delete;
     } shrink_guard{shrink_in_progress_};
 
     const auto old_state = snapshot_state();

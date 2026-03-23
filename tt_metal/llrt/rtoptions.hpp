@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>

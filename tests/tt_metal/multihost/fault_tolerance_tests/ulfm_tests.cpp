@@ -606,7 +606,7 @@ TEST(FaultTolerance, MPIRankFailureExceptionCarriesContext) {
         EXPECT_NE(e.what(), nullptr)
             << "Exception what() should not be null";
 
-        std::string msg = e.message();
+        const std::string& msg = e.message();
         EXPECT_FALSE(msg.empty())
             << "Rank " << rank << ": exception message should not be empty";
 
@@ -619,7 +619,7 @@ TEST(FaultTolerance, MPIRankFailureExceptionCarriesContext) {
             << "Rank " << rank << ": error_code should be non-zero for rank failure";
 
         // error_string() should be populated from MPI_Error_string
-        std::string err_str = e.error_string();
+        const std::string& err_str = e.error_string();
         EXPECT_FALSE(err_str.empty())
             << "Rank " << rank << ": error_string() should be populated by MPI_Error_string";
 
