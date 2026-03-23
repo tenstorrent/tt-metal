@@ -392,7 +392,7 @@ class Model:
                 logits = logits_sliced
             hidden_states = logits
 
-        if skip_lm_head or (self.users_row_sharded and not is_decode):
+        if skip_lm_head or (self.users_row_sharded and not is_decode and self._prefill_sampling_active):
             return hidden_states
 
         # Final norm and lm_head
