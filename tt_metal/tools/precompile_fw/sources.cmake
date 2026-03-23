@@ -1,0 +1,1 @@
+set(PRECOMPILE_FW_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/precompile_fw.cpp)

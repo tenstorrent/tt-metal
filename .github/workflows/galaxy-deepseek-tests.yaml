@@ -12,6 +12,7 @@ on:
           - unit
           - module
           - long-seq-module
+          - final-op-unit
         default: 'all'
       platform:
         required: false
@@ -50,6 +51,11 @@ on:
         required: false
         type: string
         default: ''
+      enable-tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy-based device perf for final-op-unit tests"
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
@@ -64,6 +70,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      tracy: ${{ inputs.enable-tracy || false }}
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
@@ -76,3 +83,4 @@ jobs:
       test-type: ${{ inputs.test-type || 'all' }}
       recreate_weights_cache: ${{ inputs.recreate_weights_cache || 'No' }}
       new_cache_dir: ${{ inputs.new_cache_dir || '' }}
+      enable-tracy: ${{ inputs.enable-tracy || false }}

@@ -9,6 +9,7 @@ target_link_libraries(
     mem_bench
     PRIVATE
         Metalium::Metal
+        Metalium::Metal::Hardware
         numa
         benchmark::benchmark
 )
@@ -28,4 +29,4 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(mem_bench REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(mem_bench TT::CommonPCH)

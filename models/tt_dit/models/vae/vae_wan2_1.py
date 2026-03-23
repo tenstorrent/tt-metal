@@ -17,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -155,6 +155,18 @@ class WanAttentionBlock(Module):
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
+
+        # Split T (batch) across all devices to reduce redundant SDPA compute.
+        # SDPA batch elements are independent, so they can be trivially partitioned.
+        total_devices = self.mesh_device.get_num_devices()
+        BT = B * T
+        split_t = total_devices > 1 and T > 1
+        if split_t:
+            padded_BT = ((BT + total_devices - 1) // total_devices) * total_devices
+            if padded_BT > BT:
+                x_TNC = ttnn.pad(x_TNC, [(0, padded_BT - BT), (0, 0), (0, 0)], value=0.0)
+            x_TNC = ttnn.mesh_partition(x_TNC, dim=0)
+
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
         default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.float32 else (8, 8, 8)
@@ -177,6 +189,14 @@ class WanAttentionBlock(Module):
         out_TND = self.proj(
             out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
+
+        # Gather T back before layout conversion (all-gather requires TILE)
+        if split_t:
+            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=1)
+            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=0)
+            if padded_BT > BT:
+                out_TND = out_TND[:BT, :, :]
+
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if padded_h > logical_h:
@@ -223,14 +243,10 @@ class WanCausalConv3d(Module):
         super().__init__()
 
         self.unpadded_in_channels = in_channels
-        self.unpadded_out_channels = out_channels
-        self.TILE_WIDTH = 32
         self.in_channels = aligned_channels(in_channels)
         if self.in_channels != self.unpadded_in_channels:
             logger.warning(f"Padding in_channels from {self.unpadded_in_channels} to {self.in_channels}")
-        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        self.out_channels = out_channels
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -274,23 +290,25 @@ class WanCausalConv3d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.weight = Parameter(
+            total_shape=[d, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        def maybe_pad_out_channels(weight, bias):
-            if self.out_channels != self.unpadded_out_channels:
-                weight = torch.nn.functional.pad(
-                    weight, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels - self.unpadded_out_channels)
-                )
-                bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
-            return weight, bias
-
-        if "weight" in state and "bias" in state:
-            weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
-            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
+        if "weight" in state:
+            weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            )
+            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -340,6 +358,18 @@ class WanCausalConv3d(Module):
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -385,6 +415,7 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -395,12 +426,6 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
@@ -428,6 +453,7 @@ class WanResidualBlock(Module):
             bias=False,
             mesh_device=mesh_device,
             dtype=dtype,
+            fused_activation=ttnn.UnaryOpType.SILU,
         )
         self.conv1 = WanCausalConv3d(
             in_channels=in_dim,
@@ -446,6 +472,7 @@ class WanResidualBlock(Module):
             bias=False,
             mesh_device=mesh_device,
             dtype=dtype,
+            fused_activation=ttnn.UnaryOpType.SILU,
         )
         self.conv2 = WanCausalConv3d(
             in_channels=out_dim,
@@ -516,9 +543,8 @@ class WanResidualBlock(Module):
             if self.conv_shortcut is not None
             else x_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_norm_silu_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
+        x_BTHWC = ttnn.to_layout(x_norm_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
         if feat_cache is not None:
@@ -537,10 +563,7 @@ class WanResidualBlock(Module):
         else:
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
 
-        x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_BTHWC = self.norm2(x_conv_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
 
         # Cached conv
         if feat_cache is not None:
@@ -655,11 +678,7 @@ class WanConv2d(Module):
         super().__init__()
 
         self.in_channels = in_channels
-        self.unpadded_out_channels = out_channels
-        self.TILE_WIDTH = 32
-        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        self.out_channels = out_channels
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -704,16 +723,30 @@ class WanConv2d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.weight = Parameter(
+            total_shape=[d, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+        self.bias = Parameter(
+            total_shape=[1, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state and "bias" in state:
-            state["weight"], state["bias"] = prepare_conv3d_weights(
-                state["weight"].unsqueeze(2), state["bias"], self.conv_config
+        if "weight" in state:
+            weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
+            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -736,9 +769,22 @@ class WanConv2d(Module):
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -784,6 +830,7 @@ class WanConv2d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -794,12 +841,6 @@ class WanConv2d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
@@ -1100,6 +1141,7 @@ class WanDecoder3d(Module):
             bias=False,
             mesh_device=mesh_device,
             dtype=dtype,
+            fused_activation=ttnn.UnaryOpType.SILU,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1150,8 +1192,7 @@ class WanDecoder3d(Module):
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if feat_cache is not None:
             idx = feat_idx[0]
@@ -1289,10 +1330,7 @@ class WanDecoder(Module):
             out_BTHWC, new_logical_h = self.decoder(
                 x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
-            # Channels first
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            # Trim padding on output channels
-            out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
             if output_BCTHW is None:
                 output_BCTHW = out_BCTHW
             else:
@@ -1409,6 +1447,7 @@ class WanEncoder3D(Module):
             bias=False,
             mesh_device=mesh_device,
             dtype=dtype,
+            fused_activation=ttnn.UnaryOpType.SILU,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1465,8 +1504,7 @@ class WanEncoder3D(Module):
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
+        x_silu_tile_BTHWC = self.norm_out(x_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if feat_cache is not None:

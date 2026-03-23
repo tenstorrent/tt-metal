@@ -8,11 +8,14 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include "context/context_types.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <experimental/host_api.hpp>
+#include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -30,7 +33,6 @@
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
-#include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -403,6 +405,51 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+}  // namespace detail
+
+namespace experimental {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+
+    const auto devices = ctx.device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+}  // namespace experimental
+
+namespace detail {
+
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
@@ -412,7 +459,10 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
-void ReleaseOwnership() { MetalContext::destroy_instance(); }
+void ReleaseOwnership() {
+    experimental::DispatchContext::get().reset();
+    MetalContext::destroy_all_instances();
+}
 
 void print_page(
     uint32_t dev_page_id,
@@ -768,6 +818,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                 auto runtime_id = program.get_runtime_id();
@@ -785,7 +838,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    hal.get_dev_addr(
+                        programmable_core_type, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -1047,10 +1101,13 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 
@@ -1576,6 +1633,11 @@ uint8_t PopCurrentCommandQueueIdForThread() {
 }
 
 uint8_t GetCurrentCommandQueueIdForThread() {
+    // TODO: Make GetCurrentCommandQueueIdForThread work for non-default contexts
+    // https://github.com/tenstorrent/tt-metal/issues/39819
+    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return 0;
+    }
     const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     if (cq_stack.empty()) {
         return 0;

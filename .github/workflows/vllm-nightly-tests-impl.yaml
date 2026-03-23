@@ -34,6 +34,7 @@ jobs:
         run: |
           # Owner mapping:
           # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
+          # Djordje Ivanovic (U053W15B6JF) - Qwen3-32B models
           # Gongyu Wang (U07RY6B5FLJ) - Qwen 2.5 VL models
           # Sarva Sanjay (U08H31YMN4Q) - Qwen 3 VL models
           # Ambrose Ling (U08GELBB1AP) - BH tests
@@ -197,7 +198,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -205,15 +206,16 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 216580672}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+              "additional-benchmark-args": "--random-prefix-len 256",
               "sampling-tests": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -221,12 +223,28 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 216580672}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+              "additional-benchmark-args": "--random-prefix-len 256",
               "structured-output": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
+            },
+            {
+              "name": "[WH-GLX] Qwen3-32B device with sampling-tests",
+              "model": "Qwen/Qwen3-32B",
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "TG",
+              "tt-qwen3-text-ver": "qwen3_32b_galaxy",
+              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
+              "sampling-tests": true,
+              "multimodal": false,
+              "co-owner-1-id": "U053W15B6JF"
             },
             {
               "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
@@ -389,6 +407,9 @@ jobs:
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
+          fi
+          if [ -n "${{ matrix.test-group.tt-qwen3-text-ver }}" ]; then
+            export TT_QWEN3_TEXT_VER="${{ matrix.test-group.tt-qwen3-text-ver }}"
           fi
 
           # Keep TT cache separate from HF hub
@@ -592,18 +613,6 @@ jobs:
         continue-on-error: true
         run: |
           cat output/vllm_result_structured.json
-
-      - uses: ./.github/actions/slack-report
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.co-owner-1-id }}
-
-      - uses: ./.github/actions/slack-report
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.co-owner-2-id }}
 
       - name: Set artifact prefix
         if: ${{ !cancelled() }}

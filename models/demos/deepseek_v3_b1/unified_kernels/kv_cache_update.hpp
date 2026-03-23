@@ -87,6 +87,7 @@ struct KVCacheUpdate {
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
+                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t MCAST_NOC = 0;
                 uint64_t sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
                     args.full_grid_mcast_start_x,
@@ -95,6 +96,9 @@ struct KVCacheUpdate {
                     args.full_grid_mcast_end_y,
                     args.kv_cache_cur_pos_ready_semaphore_addr);
                 noc_semaphore_inc_multicast(sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
+                volatile tt_l1_ptr uint32_t* sem_addr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+                __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
                 noc_async_atomic_barrier(MCAST_NOC);
             }
 #endif
@@ -104,7 +108,6 @@ struct KVCacheUpdate {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
@@ -136,7 +139,7 @@ struct KVCacheUpdate {
                 uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
                 noc_async_read_barrier();
 
@@ -168,7 +171,7 @@ struct KVCacheUpdate {
                 cb_addr = get_read_ptr(kv_cache_output_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
                 noc_async_write_barrier();
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);

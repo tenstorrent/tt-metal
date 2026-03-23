@@ -9,27 +9,17 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Literal
 
-import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
-from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pipeline import (
-    create_fabric_router_config,
-    create_pipeline_configuration_from_num_procs,
-)
-from models.demos.deepseek_v3_b1.demo.weight_provider import (
-    CacheWeightProvider,
-    SyntheticWeightProvider,
-    WeightProvider,
-)
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
+from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
-DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
+DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -82,15 +72,21 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the weight cache directory (required for --weights real)",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
-        choices=("synthetic", "real"),
-        default="synthetic",
-        help="Use synthetic or real (cached) weights (default: synthetic)",
+        choices=("synthetic", "real", "state_dict"),
+        default="real",
+        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
     )
     parser.add_argument(
         "--fp32",
@@ -130,96 +126,51 @@ def run_demo(
     prompt: str,
     max_new_tokens: int,
     tokenizer_name_or_path: str,
-    cache_path: Path,
-    use_real_weights: bool = False,
+    weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
+    cache_path: Path | None = None,
+    model_path: Path | None = None,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
-    output_stream: TextIO,
 ) -> None:
-    """Run the pod pipeline. Requires 4 or 16 distributed processes."""
+    """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
-    logger.info(
-        "Starting DeepSeek V3 B1 demo pod pipeline (iterations={}, weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
-        iterations,
-        "real" if use_real_weights else "synthetic",
-        lm_head_fp32_dest_acc_en,
-        lm_head_persistent_mode,
-    )
-    if not is_slow_dispatch():
-        raise RuntimeError(
-            "DeepSeek V3 B1 demo requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
-        )
+    logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        num_procs = int(ttnn.distributed_context_get_size())
-        if num_procs not in (4, 16, 64):
-            raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
-        ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-
-        # Each host loads/creates only the weights for its stage via the provider.
-        provider: WeightProvider = CacheWeightProvider(cache_path) if use_real_weights else SyntheticWeightProvider()
-        config = create_pipeline_configuration_from_num_procs(
-            num_procs,
-            provider,
+        # Initialize model pipeline
+        model_pipeline = ModelPipeline(
+            mesh_device=mesh_device,
+            weights_mode=weights_mode,
+            cache_path=cache_path,
+            model_path=model_path,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
-        assert (
-            config.num_stages == num_procs
-        ), f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes"
 
-        logger.info(f"Building pipeline")
-        pipeline = config.build_pipeline(mesh_device)
-
-        logger.info(f"Setting up and running pipeline")
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
+        my_mesh_id = mesh_device.get_system_mesh_id()
+        if my_mesh_id == 0:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
             logger.debug(f"Encoded prompt: {prompt_ids}")
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
-            page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
-            prompt_token_tensors = [
-                to_padded_input(
-                    torch.tensor([[tid]], dtype=torch.int32),
-                    batch_size=1,
-                    page_size_datums=page_size_datums,
-                )
-                for tid in prompt_ids
-            ]
-            model = DeepSeekV3(
-                write_fn=pipeline.write_token,
-                read_fn=pipeline.read_output,
-                batch_size=1,
-            )
-            # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
-            logger.debug(f"Prefilling...")
-            last_output = model.prefill(prompt_token_tensors)
-            next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
-            generated = [next_token_id]
-            logger.info(
-                "Prefill done ({} prompt tokens); sampled y0: {}",
-                len(prompt_ids),
-                next_token_id,
-            )
-            # Generation loop: feed y[t], get output, sample y[t+1].
-            for step in range(iterations - 1):
-                output = model.decode_step(
-                    torch.tensor([[next_token_id]], dtype=torch.int32),
-                )
-                next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
-                generated.append(next_token_id)
-                logger.info("Decode step {} output token: {}", step + 1, next_token_id)
-            logger.info("Generated {} tokens total", len(generated))
 
-        pipeline.barrier()
+            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+            generated_tokens = model_pipeline.run_inference(
+                prompt_token_ids=prompt_ids,
+                max_new_tokens=iterations,
+                eos_token_id=tokenizer.eos_token_id,
+                return_generated_tokens=True,
+            )
+            assert generated_tokens is not None
+            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+
+        model_pipeline.barrier()
     logger.info("Pod pipeline complete")
 
 
@@ -228,17 +179,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.weights == "real" and args.cache_path is None:
+        parser.error("--cache-path is required when --weights real")
+    if args.weights == "state_dict":
+        if args.model_path is None:
+            parser.error("--model-path is required when --weights state_dict")
+        index_path = args.model_path / "model.safetensors.index.json"
+        if not index_path.is_file():
+            parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
+
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
+        weights_mode=args.weights,
         cache_path=args.cache_path,
-        use_real_weights=(args.weights == "real"),
+        model_path=args.model_path,
         lm_head_fp32_dest_acc_en=args.fp32,
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
-        output_stream=sys.stdout,
     )
     print(file=sys.stdout, flush=True)
     return 0
