@@ -228,10 +228,11 @@ def collect_and_dump_numeric_metrics(
     else:
         allclose_passed = True
         allclose_message = "Both tensors are empty"
-        max_atol = 0
-        mean_atol = 0
-        max_rtol = 0
-        mean_rtol = 0
+        max_abs_dif = 0
+        mean_abs_dif = 0
+        max_rel_dif = 0
+        mean_rel_dif = 0
+        max_abs_idx = 0
 
     # Relative Frobenius
     frob_val, frob_expected_zero = comp_relative_frobenius(expected, actual)
@@ -294,6 +295,7 @@ def collect_and_dump_numeric_metrics(
         max_ulp = 0
         ulp_passed = True
         ulp_max_str = None
+        ulp_message_index = None
 
     # Prepare metrics dict
     metrics = {
