@@ -81,6 +81,7 @@ class TextBlock(LightweightModule):
             eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
             state_dict_prefix=f"{prefix}.attn_norm",
+            dtype=dtype,
         )
 
         # Self-attention with GQA and QK-norm
@@ -107,6 +108,7 @@ class TextBlock(LightweightModule):
             eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
             state_dict_prefix=f"{prefix}.ff_norm",
+            dtype=dtype,
         )
 
         # Feed-forward network (SwiGLU)
