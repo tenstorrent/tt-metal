@@ -76,7 +76,7 @@ def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
     return page_size, num_pages
 
 
-class DRAMStreamingMatmul:
+class DRAMStreamingExpertsMatmul:
     """
     Simplified DRAM streaming matmul using ttnn.generic_op.
 
@@ -134,6 +134,7 @@ class DRAMStreamingMatmul:
         scalar_tensor: ttnn.Tensor = None,  # Optional scalar tensor (16x16 tile) to multiply after mul
         num_loop_iters: int = 1,  # Number of inner kernel loop iterations (for testing CB wrapping)
         working_buf_tensor: ttnn.Tensor = None,  # Tensor-backed working buffer for CB1 (required when num_loop_iters > 1)
+        selected_experts_k: int = 1,  # Number of selected experts to use
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -161,7 +162,8 @@ class DRAMStreamingMatmul:
                 f"(got num_loop_iters={num_loop_iters}, working_buf_tensor=None). "
                 f"The kernel uses the working buffer address for CB1 boundary wrapping."
             )
-
+        if selected_experts_k > 16:
+            raise ValueError(f"selected_experts_k must be <= 16 (index tile width), got {selected_experts_k}")
         # Get tiles
         in0_tile = input_a.get_tile()
         in1_tile = input_b.get_tile()
@@ -200,7 +202,10 @@ class DRAMStreamingMatmul:
 
         logger.debug(f"Kt={Kt}, subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}")
 
-        # Determine subblock_w based on fp32_dest_acc_en and per_core_N
+        # TRISC sees the total output tiles across all experts
+        trisc_per_core_n = per_core_N * selected_experts_k
+
+        # Determine subblock_w based on fp32_dest_acc_en and trisc_per_core_n
         # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
         # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
         dst_full_sync_en = False
@@ -212,11 +217,11 @@ class DRAMStreamingMatmul:
             max_dest = 4
         elif not dst_full_sync_en and not fp32_dest_acc_en:
             max_dest = 8
-        max_subblock_w = min(max_dest, per_core_N)
+        max_subblock_w = min(max_dest, trisc_per_core_n)
 
-        # Find largest subblock_w that evenly divides per_core_N
+        # Find largest subblock_w that evenly divides trisc_per_core_n
         subblock_w = max_subblock_w
-        while subblock_w > 1 and per_core_N % subblock_w != 0:
+        while subblock_w > 1 and trisc_per_core_n % subblock_w != 0:
             subblock_w -= 1
 
         logger.debug(f"subblock_w={subblock_w}, max_subblock_w={max_subblock_w}")
@@ -250,8 +255,8 @@ class DRAMStreamingMatmul:
         in1_CB_tiles = subblock_k * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
-        # Output: per_core_N tiles (tensor-backed - size determined by tensor)
-        out_num_tiles = per_core_N
+        # Output: total tiles across all experts (tensor-backed - size determined by tensor)
+        out_num_tiles = trisc_per_core_n
 
         # Core ranges - use specific compute cores
         compute_cores = ttnn.CoreRangeSet(
@@ -455,6 +460,7 @@ class DRAMStreamingMatmul:
             # Loop parameters (for testing CB-boundary wrapping)
             ("dram_mm_num_loop_iters", num_loop_iters),
             ("dram_mm_cb_in1_buf_addr", cb_in1_buf_addr),
+            ("dram_mm_selected_experts_k", selected_experts_k),
         ]
 
         # Named compile-time args for BRISC (no-op for DRAM streaming, handles mul)
@@ -474,16 +480,18 @@ class DRAMStreamingMatmul:
         ]
 
         # Named compile-time args for TRISC (compute)
+        # TRISC per_core_n is the total across all experts (NCRISC per_core_n stays per-expert)
         trisc_named_compile_time_args = [
             ("dram_mm_cb_in0", cb_id_in0),
             ("dram_mm_cb_in1", cb_id_in1),
             ("dram_mm_cb_out", cb_id_mm_out),  # matmul output CB (4 or 8)
             ("dram_mm_subblock_k", subblock_k),
-            ("dram_mm_per_core_n", per_core_N),
+            ("dram_mm_per_core_n", trisc_per_core_n),
             ("dram_mm_subblock_w", subblock_w),
             ("dram_mm_num_subblocks_k", num_subblocks_k),
             ("dram_mm_tile_r_dim", in0_tile_shape[0]),
             ("dram_mm_fuse_silu", fuse_silu),
+            ("dram_mm_fp32_dest_acc_en", 1 if fp32_dest_acc_en else 0),
             # Mul parameters (16x16 tiles)
             ("dram_mm_enable_mul", 1 if enable_mul else 0),
             ("dram_mm_cb_mul_in0", cb_id_mul_in0),

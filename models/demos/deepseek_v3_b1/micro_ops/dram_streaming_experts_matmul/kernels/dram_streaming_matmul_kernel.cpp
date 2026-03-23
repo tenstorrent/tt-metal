@@ -39,7 +39,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_vc"),
         get_named_compile_time_arg_val("dram_mm_enable_indexing"),
         get_named_compile_time_arg_val("dram_mm_cb_index"),
-        get_named_compile_time_arg_val("dram_mm_index_offset")>;
+        get_named_compile_time_arg_val("dram_mm_index_offset"),
+        0,  // use_hardcoded_expert_index (not used in micro-op test)
+        get_named_compile_time_arg_val("dram_mm_selected_experts_k")>;
 
     // Named compile-time args for sharded buffer setup
     constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("dram_mm_cb_in0");
@@ -93,7 +95,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_subblock_w"),
         get_named_compile_time_arg_val("dram_mm_num_subblocks_k"),
         get_named_compile_time_arg_val("dram_mm_tile_r_dim"),
-        get_named_compile_time_arg_val("dram_mm_fuse_silu")>;
+        get_named_compile_time_arg_val("dram_mm_fuse_silu"),
+        get_named_compile_time_arg_val("dram_mm_fp32_dest_acc_en")>;
 
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
 
