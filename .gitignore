@@ -155,3 +155,4 @@ models/experimental/petr/resources/*.pth
 .worktree_building
 .worktree_ready
 .worktree_setup.log
+.claude/
