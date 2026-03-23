@@ -57,7 +57,8 @@ def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM
     torch_result = torch_ops[op](torch_a)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_result = op(tt_a, memory_config=memory_config)
+    with device.cache_entries_counter.measure():
+        tt_result = op(tt_a, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -81,7 +82,7 @@ def test_unary_cache_reuse_same_config(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
 
 
@@ -95,7 +96,7 @@ def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 32], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -108,7 +109,7 @@ def test_unary_cache_miss_different_volumes(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
@@ -127,7 +128,7 @@ def test_unary_cache_miss_different_op_types(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -141,7 +142,7 @@ def test_unary_cache_miss_different_input_dtypes(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -159,7 +160,7 @@ def test_unary_cache_miss_different_memory_configs(device, isolate_program_cache
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -173,17 +174,19 @@ def test_unary_cache_miss_different_sub_core_grids(device, isolate_program_cache
     torch_ref1 = torch.floor(torch_a1)
     grid_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out1 = ttnn.floor(tt_a1, sub_core_grids=grid_a)
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.floor(tt_a1, sub_core_grids=grid_a)
     assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
 
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
     torch_ref2 = torch.floor(torch_a2)
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid_b)
+    with device.cache_entries_counter.measure():
+        tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid_b)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -199,13 +202,16 @@ def test_unary_cache_miss_different_factories(device, isolate_program_cache):
 
     # Explicit sub_core_grids: UnarySubCoreGridProgramFactory
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
-    torch_ref2 = torch.floor(torch_a2)
+    with device.cache_entries_counter.measure():
+        torch_ref2 = torch.floor(torch_a2)
+
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid)
+    with device.cache_entries_counter.measure():
+        tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid)
     assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
@@ -221,7 +227,7 @@ def test_unary_cache_correctness_repeated_runs(device, isolate_program_cache):
         torch_ref, tt_out = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
         assert_with_pcc(torch_ref, tt_out, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
@@ -232,7 +238,7 @@ def test_unary_cache_correctness_same_volume_different_shapes(device, isolate_pr
         torch_ref, tt_out = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
         assert_with_pcc(torch_ref, tt_out, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 # =============================================================================
