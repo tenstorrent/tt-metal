@@ -10,7 +10,7 @@ from typing import Callable, List, Optional, Tuple
 import torch
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 
 def trace_token_source(
@@ -203,14 +203,12 @@ def validate_combine_output(
                     _, pcc = comp_pcc(torch_data.float(), ttnn_data.float())
                     is_match = pcc >= pcc_threshold
                     metric_value = pcc
-                    metric_name = "PCC"
                     metric_detail = f"PCC={pcc:.6f} (threshold={pcc_threshold})"
                 else:
                     # Use allclose for comparison
                     is_match = torch.allclose(torch_data, ttnn_data, atol=atol, rtol=rtol)
                     max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
                     metric_value = max_diff
-                    metric_name = "max_diff"
                     metric_detail = f"max_diff={max_diff:.6f}"
 
                 if is_match:
@@ -745,7 +743,7 @@ def validate_dispatch_metadata(
                                 )
                             if not gate_weight_match:
                                 logger.error(
-                                    f"    Slot {slot}: Weight mismatch ppc{gate_pcc:.3f}: "
+                                    f"    Slot {slot}: Weight mismatch gate pcc={gate_pcc:.3f}: "
                                     f"ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
                                 )
 

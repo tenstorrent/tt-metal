@@ -110,8 +110,24 @@ def create_shared_expert_weights(
         # emb_dim must be divisible by TP factor (4) and tile size (32)
         # seq_len must fit in L1 with emb_dim after sharding
         # (3200, 2048, DeepSeekV3Config.HIDDEN_SIZE, 64, 2, 2, False),  # Profiling mode
-        (3200, 2048, DeepSeekV3Config.HIDDEN_SIZE, 64, 2, 2, False),  # PCC validation mode
-        (3200, 2048, DeepSeekV3Config.HIDDEN_SIZE, 64, 2, 2, True),  # PCC validation mode
+        (
+            3200,
+            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+            DeepSeekV3Config.HIDDEN_SIZE,
+            64,
+            2,
+            2,
+            False,
+        ),  # PCC validation mode
+        (
+            3200,
+            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+            DeepSeekV3Config.HIDDEN_SIZE,
+            64,
+            2,
+            2,
+            True,
+        ),  # PCC validation mode
     ],
     # ids=["small-config"],
 )

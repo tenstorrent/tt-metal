@@ -23,6 +23,12 @@ class TtMoEIntermediates:
     dispatched_buffer: Optional[ttnn.Tensor]  # (1, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
     metadata: Optional[ttnn.Tensor]  # (1, dispatch_group_size, experts_per_chip, max_tokens, metadata_len)
     expert_outputs: Optional[ttnn.Tensor]  # Same shape as dispatched_buffer
-    shared_output: Optional[ttnn.Tensor]  # (dispatch_group_size, seq_len_per_chip, emb_dim)
-    combined_output: Optional[ttnn.Tensor]  # (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
-    routed_output: Optional[ttnn.Tensor]  # (dispatch_group_size, seq_len_per_chip, emb_dim)
+    shared_output: Optional[
+        ttnn.Tensor
+    ]  # Per-device TP-sharded: (dispatch_group_size_per_device, seq_len_per_chip, emb_dim_per_tp)
+    combined_output: Optional[
+        ttnn.Tensor
+    ]  # Per-device 5D: (1, dispatch_group_size_per_device, seq_len_per_chip, num_experts_per_tok, emb_dim)
+    routed_output: Optional[
+        ttnn.Tensor
+    ]  # Per-device TP-sharded: (dispatch_group_size_per_device, seq_len_per_chip, emb_dim_per_tp)

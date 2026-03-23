@@ -5,7 +5,7 @@
 """
 TTNN implementation of FFN (Feed-Forward Network) module for DeepSeek V3 dense layers.
 
-TtFPN (TP=4) module uses the shared expert architecture with DeepSeek 671B config dimensions.
+TtFFN (TP=4) module uses the shared expert architecture with DeepSeek 671B config dimensions.
 """
 
 import ttnn

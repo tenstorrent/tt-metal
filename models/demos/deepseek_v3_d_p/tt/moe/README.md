@@ -308,8 +308,8 @@ metadata_len = 5
 | `tt/moe/tt_dispatch.py` | `TtDispatchModule` - TTNN wrapper for dispatch |
 | `tt/moe/tt_combine.py` | `TtCombineModule` - TTNN wrapper for combine |
 | `tt/moe/init_helpers.py` | `MeshConfig`, `ExpertMapping`, `get_gate_outputs` |
-| `reference/moe/dispatch.py` | `TorchDispatchModule` - PyTorch reference |
-| `reference/moe/combine.py` | `TorchCombineModule` - PyTorch reference |
+| `reference/tt/moe/dispatch.py` | `TorchDispatchModule` - PyTorch reference |
+| `reference/tt/moe/combine.py` | `TorchCombineModule` - PyTorch reference |
 
 ### TTNN Operations (`ttnn/cpp/ttnn/operations/experimental/deepseek/`)
 
