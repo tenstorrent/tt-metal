@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <reflect>
+#include <set>
 #include <stack>
 
 #include <enchantum/enchantum.hpp>
@@ -251,18 +252,31 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
-        json kernelObj;
-        kernelObj["source"] = kernel.source;
-        kernelObj["name"] = kernel.name;
+    // Fused ops (e.g. DeepSeek decoder block) can have hundreds of kernels compiled
+    // from the same source with different compile-time args.  Deduplicate by
+    // (source, math_fidelity) for compute and by source for datamovement to keep the
+    // profiler JSON well within Tracy's 64 KiB message limit.
+    std::set<std::pair<std::string_view, std::string>> seenCompute;
+    std::set<std::string_view> seenDatamovement;
 
+    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
         auto processor_class = kernel.processor_class;
         if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = kernel.math_fidelity.value();
-            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
-            computeKernels.push_back(std::move(kernelObj));
+            auto fidelityStr = enchantum::to_string(kernel.math_fidelity.value());
+            if (seenCompute.emplace(kernel.source, fidelityStr).second) {
+                json kernelObj;
+                kernelObj["source"] = kernel.source;
+                kernelObj["name"] = kernel.name;
+                kernelObj["math_fidelity"] = fidelityStr;
+                computeKernels.push_back(std::move(kernelObj));
+            }
         } else {
-            datamovementKernels.push_back(std::move(kernelObj));
+            if (seenDatamovement.emplace(kernel.source).second) {
+                json kernelObj;
+                kernelObj["source"] = kernel.source;
+                kernelObj["name"] = kernel.name;
+                datamovementKernels.push_back(std::move(kernelObj));
+            }
         }
 
         auto core_type = kernel.programmable_core_type;

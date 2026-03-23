@@ -322,7 +322,14 @@ def import_tracy_op_logs(
                     opData = {}
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
-                        opData = json.loads(jsonStr)
+                        try:
+                            opData = json.loads(jsonStr)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Skipping op with malformed JSON (likely truncated by Tracy's 64 KiB message limit): "
+                                f"{tmpStrs[0]}"
+                            )
+                            continue
                         opData["metal_trace_id"] = None
                         if "op_hash" in opData:
                             assert "device_id" in opData
@@ -343,8 +350,12 @@ def import_tracy_op_logs(
                         programCacheHitStr = opDataList[3].strip()
                         programCacheHit = programCacheHitStr in ("1", "true", "True")
                         opID = int(opDataList[4])
-                        assert deviceID in cached_ops, "Expected hashed op info is not found"
-                        assert opHash in cached_ops[deviceID], "Expected hashed op info is not found"
+                        if deviceID not in cached_ops or opHash not in cached_ops[deviceID]:
+                            logger.warning(
+                                f"Skipping cached op reference with no prior data "
+                                f"(device_id={deviceID}, op_hash={opHash})"
+                            )
+                            continue
                         opData = cached_ops[deviceID][opHash].copy()
                         opData["global_call_count"] = opID
                         opData["program_cache_hit"] = programCacheHit
