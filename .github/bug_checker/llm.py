@@ -157,7 +157,7 @@ class LLMSession:
                     break
             else:
                 if current_key:
-                    current_lines.append(stripped)
+                    current_lines.append(line.rstrip("\n"))
 
         if current_key:
             fields[current_key] = "\n".join(current_lines).strip()

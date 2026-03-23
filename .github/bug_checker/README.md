@@ -5,7 +5,7 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 ## How It Works
 
 1. A PR is targeted (via `/bug-check` comment or local CLI invocation).
-2. The tool loads all rules from `.github/bug-rules/manifest.yaml`.
+2. The tool loads all rules from `.github/bug_checker/rules/manifest.yaml`.
 3. Rules are filtered to only those matching the PR's changed files (path globs) or labels.
 4. Each matching rule is sent to Claude along with the PR diff. Claude analyzes the diff against the bug pattern described in the rule's markdown file.
 5. Findings are reported in three formats: CLI stdout, inline PR comments, and SARIF for GitHub Code Scanning.
@@ -41,7 +41,7 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 
 ## Adding a New Rule
 
-1. **Write the rule markdown** in `.github/bug-rules/your-rule-name.md`:
+1. **Write the rule markdown** in `.github/bug_checker/rules/your-rule-name.md`:
 
    ```markdown
    # Rule Title
@@ -68,7 +68,7 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 
    See `template-rule.md` for a starting point.
 
-2. **Add an entry to `.github/bug-rules/manifest.yaml`**:
+2. **Add an entry to `.github/bug_checker/rules/manifest.yaml`**:
 
    ```yaml
    rules:
@@ -94,7 +94,7 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `file` | string | Markdown filename in `.github/bug-rules/` |
+| `file` | string | Markdown filename in `.github/bug_checker/rules/` |
 | `severity` | `"blocking"` \| `"warning"` | Blocking findings fail the check and are marked prominently |
 | `suggest_fix` | bool | Whether the LLM should include suggested code fixes |
 | `model` | string \| null | Claude model override; null uses the global default |
@@ -103,6 +103,10 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 | `labels` | list of strings | Rule runs if any PR label matches |
 
 A rule is selected if **either** a path or a label matches.
+
+## Data Handling
+
+This tool sends PR diffs to the Anthropic Claude API for analysis. Do not run it on PRs containing secrets or sensitive data without appropriate review.
 
 ## Running Tests
 

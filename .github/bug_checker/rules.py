@@ -10,7 +10,7 @@ from typing import Optional
 import yaml
 
 
-RULES_DIR = Path(__file__).resolve().parent.parent / "bug-rules"
+RULES_DIR = Path(__file__).resolve().parent / "rules"
 MANIFEST_PATH = RULES_DIR / "manifest.yaml"
 
 

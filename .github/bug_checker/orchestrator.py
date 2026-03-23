@@ -83,7 +83,7 @@ def run_bug_check(
         logger.info(f"SARIF output written to {sarif_path}")
 
     # Output: PR comments
-    if post_comments and all_findings:
+    if post_comments:
         _post_findings_as_comments(pr_info, all_findings)
 
     return all_findings
@@ -93,7 +93,7 @@ def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None
     """Post findings as inline PR comments plus a summary comment."""
     inline_posted = 0
     inline_failed = 0
-    for finding in findings:
+    for finding in findings or []:
         try:
             body = format_pr_comment(finding)
             post_pr_comment(
