@@ -958,11 +958,8 @@ void TestDevice::create_sender_kernels() {
                  sender_memory_map_->get_mux_termination_sync_size()});
         }
 
-        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default;
         // Each sender will have the same NOC used for every pattern when parsing, take the one defined in the first config
-        if (sender.configs_[0].first.noc_id.has_value()) {
-            noc_id = sender.configs_[0].first.noc_id.value();
-        }
+        tt::tt_metal::NOC noc_id = sender.configs_[0].first.noc_id.value_or(DEFAULT_SENDER_NOC);
 
         sender.create_kernel(
             coord_,
