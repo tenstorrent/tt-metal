@@ -53,11 +53,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     bool use_bias = bias_tensor.has_value();
 
     // Extract compute kernel config early (needed for CB format decisions)
-    auto* device = input_tensor.device();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc_, dst_full_sync_en_] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    (void)packer_l1_acc_;
-    (void)dst_full_sync_en_;
+    [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
 
     /* Shapes/sizes needed in the kernel
         Reader does volume2column to convert some `T_block x H_block x W_block` of activation
@@ -560,6 +557,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     std::vector<std::vector<uint32_t>> worker_core_physical_ys(total_output_parallel);
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+    auto* device = input_tensor.device();
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
