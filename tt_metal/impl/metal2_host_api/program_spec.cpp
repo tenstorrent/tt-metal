@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/metal2_host_api/test_utils.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
@@ -86,10 +87,24 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 
 // ============================================================================
+// Test Hook: Architecture Override (Implementation)
+// ============================================================================
+// See test_utils.hpp for documentation and usage.
+
+std::optional<tt::ARCH>& arch_override() {
+    thread_local std::optional<tt::ARCH> override_value = std::nullopt;
+    return override_value;
+}
+
+ArchOverrideGuard::ArchOverrideGuard(tt::ARCH arch) { arch_override() = arch; }
+ArchOverrideGuard::~ArchOverrideGuard() { arch_override() = std::nullopt; }
+
+// ============================================================================
 // Helper Function Forward Declarations
 // ============================================================================
 
 // Utilities
+inline tt::ARCH get_arch();  // Returns override if set, otherwise HAL
 inline bool is_gen2_arch();
 inline bool is_gen1_arch();
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes);
@@ -200,13 +215,17 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
 // IMPLEMENTATION: Utilities
 // ============================================================================
 
-inline bool is_gen2_arch() {
-    tt::ARCH arch = tt::tt_metal::hal::get_arch();
-    return arch == tt::ARCH::QUASAR;
+inline tt::ARCH get_arch() {
+    if (auto& override = arch_override(); override.has_value()) {
+        return *override;
+    }
+    return tt::tt_metal::hal::get_arch();
 }
 
+inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
+
 inline bool is_gen1_arch() {
-    tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    tt::ARCH arch = get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
