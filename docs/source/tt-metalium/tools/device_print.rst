@@ -52,7 +52,7 @@ Data from Circular Buffers can be printed using the ``TileSlice`` object. It can
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Argument        | Type                | Description                                                                                                                                                  |
 +=================+=====================+==============================================================================================================================================================+
-| cb_id           | uint8_t             | Id of the Circular Buffer to print data form.                                                                                                                |
+| cb_id           | uint8_t             | Id of the Circular Buffer to print data from.                                                                                                                |
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | tile_idx        | int                 | Index of tile inside the CB to print data from.                                                                                                              |
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -74,7 +74,7 @@ to the current CB read or write pointer. This means that for printing a tile rea
 ``DEVICE_PRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
 back of the CB, the ``DEVICE_PRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Currently supported data
 formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, ``DataFormat::Bfp4_b``,
-``DataFormat::Int8``, ``DataFormat::UInt8``, ``DataFormat::UInt16``, ``DataFormat::Int32``, and ``DataFormat::UInt832``.
+``DataFormat::Int8``, ``DataFormat::UInt8``, ``DataFormat::UInt16``, ``DataFormat::Int32``, and ``DataFormat::UInt32``.
 
 .. code-block:: c++
 
