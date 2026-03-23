@@ -199,7 +199,7 @@ class TextAttention(LightweightModule):
 
         self.q_norm_weight = ttnn.as_tensor(
             q_norm.reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             device=mesh_device,
             mesh_mapper=norm_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
@@ -209,7 +209,7 @@ class TextAttention(LightweightModule):
 
         self.k_norm_weight = ttnn.as_tensor(
             k_norm.reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             device=mesh_device,
             mesh_mapper=norm_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
