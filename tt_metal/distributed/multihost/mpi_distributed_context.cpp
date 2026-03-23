@@ -7,6 +7,7 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <charconv>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +15,9 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <string_view>
 #include <unistd.h>
 #include <vector>
@@ -193,25 +196,45 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
     if (s.empty() || s.find("unknown") != std::string_view::npos) {
         return result;
     }
-    while (!s.empty()) {
-        // Split on comma
-        auto comma = s.find(',');
-        auto token = s.substr(0, comma);
-        s = (comma == std::string_view::npos) ? std::string_view{} : s.substr(comma + 1);
 
-        // Trim whitespace
-        auto start = token.find_first_not_of(" \t");
-        if (start == std::string_view::npos) { continue;
-}
-        auto end = token.find_last_not_of(" \t");
-        token = token.substr(start, end - start + 1);
-        if (token == "?") { continue;
-}
-        try {
-            result.push_back(Rank{std::stoi(std::string(token))});
-        } catch (...) {  // NOLINT(bugprone-empty-catch)
-            // skip unparseable tokens — stoi throws on non-numeric input which is expected here
+    auto take_next_comma_separated_field = [](std::string_view& remainder) -> std::string_view {
+        const auto comma = remainder.find(',');
+        const auto field = remainder.substr(0, comma);
+        remainder = (comma == std::string_view::npos) ? std::string_view{} : remainder.substr(comma + 1);
+        return field;
+    };
+
+    auto trim_whitespace = [](std::string_view tok) -> std::string_view {
+        const auto start = tok.find_first_not_of(" \t");
+        if (start == std::string_view::npos) {
+            return {};
         }
+        const auto end = tok.find_last_not_of(" \t");
+        return tok.substr(start, end - start + 1);
+    };
+
+    auto parse_whole_token_as_rank_int = [](std::string_view tok) -> std::optional<int> {
+        int value = 0;
+        const char* const first = tok.data();
+        const char* const last = first + tok.size();
+        const auto [ptr, ec] = std::from_chars(first, last, value);
+        if (ec != std::errc{} || ptr != last) {
+            return std::nullopt;
+        }
+        return value;
+    };
+
+    while (!s.empty()) {
+        const std::string_view raw_field = take_next_comma_separated_field(s);
+        const std::string_view token = trim_whitespace(raw_field);
+        if (token.empty() || token == "?") {
+            continue;
+        }
+        const std::optional<int> rank_value = parse_whole_token_as_rank_int(token);
+        if (!rank_value) {
+            continue;
+        }
+        result.push_back(Rank{*rank_value});
     }
     return result;
 }
