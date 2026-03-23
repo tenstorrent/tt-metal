@@ -119,6 +119,15 @@ void kernel_main() {
                 // --- Scale step: multiply input tile by scalar ---
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
+                // Explicit srca reconfig is required because the output packing
+                // phase (below) calls reconfig_data_format_srca(cb_var) which
+                // sets the unpacker to cb_var's format (Float32 when fp32 dest
+                // accumulation is enabled).  mul_tiles_bcast_scalar_init_short
+                // does not fully reconfigure the data format, so without this
+                // call the unpacker would read cb_in (Float16_b) data using the
+                // stale Float32 format, producing garbage on the 2nd+ NCHt
+                // iterations.
+                reconfig_data_format_srca(cb_in);
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
                 mul_tiles_bcast_scalar(cb_in, cb_scaler, 0, 0, input_dst);
                 tile_regs_commit();

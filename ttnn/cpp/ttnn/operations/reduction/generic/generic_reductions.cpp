@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -292,30 +293,8 @@ static Tensor std_var_impl(
         return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    // For now, only support reduction on a single H or W dimension.
-    TT_FATAL(
-        dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2),
-        "Welford STD/VAR currently supports single-dimension reduction on W (dim={}) or H (dim={}), got dim={}",
-        rank - 1,
-        rank - 2,
-        dim[0]);
-
-    auto reduce_dim = (dim[0] == rank - 1) ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
-
     // For now support only interleaved tensors.
     TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
-
-    // If tensor is 1D, reshape to 2D because the reduction kernel only supports 2D tensors.
-    // Use the W dimension for Welford reduce.
-    ttnn::Tensor input_tensor =
-        (rank == 1) ? ttnn::reshape(input_tensor_arg, ttnn::Shape{1, input_shape[0]}) : input_tensor_arg;
-
-    if (input_tensor.layout() != Layout::TILE) {
-        ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        // Fill value doesn't matter for Std/Var reduction, because paddeed values are ignored by the reduction kernel.
-        input_tensor = ttnn::tilize_with_val_padding(
-            input_tensor, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
-    }
 
     int reduced_volume = 1;
     for (int axis : dim) {
@@ -326,59 +305,69 @@ static Tensor std_var_impl(
     int divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
-    /*
-        auto mean_tensor = reduce_impl<ReduceType::Sum>(
-            input_tensor_arg,
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            sub_core_grids);
+    bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
+    bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 
-        auto mean_square_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
-            ttnn::pow(input_tensor_arg, 2.0f, memory_config),
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            sub_core_grids);
-        Tensor output_tensor =
-            ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt,
-       memory_config); if constexpr (reduce_type == reduction_common::ReduceType::Std) { output_tensor =
-       ttnn::sqrt(output_tensor, false, memory_config);
+    // Determine the reduce dimension and prepare the input tensor.
+    // Single H or W: use the optimized direct kernel path.
+    // All other cases (multi-dim, non-H/W dim): permute + reshape to 2D, then W-reduce.
+    tt::tt_metal::ReduceOpDim reduce_dim;
+    ttnn::Tensor input_tensor = input_tensor_arg;
+
+    if (single_h || single_w) {
+        reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
+        // 1D tensors need reshaping to 2D because the kernel requires at least 2 dimensions.
+        if (rank == 1) {
+            input_tensor = ttnn::reshape(input_tensor, ttnn::Shape{1, input_shape[0]});
+        }
+    } else {
+        // Multi-dim path: permute reduction dims to the end, flatten into W.
+        reduce_dim = tt::tt_metal::ReduceOpDim::W;
+
+        // Build permutation: kept dims first (in original order), reduce dims last.
+        ttnn::SmallVector<int64_t> perm;
+        perm.reserve(rank);
+        uint32_t product_of_kept = 1;
+        for (uint32_t i = 0; i < rank; ++i) {
+            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
+                perm.push_back(static_cast<int64_t>(i));
+                product_of_kept *= input_shape[i];
+            }
+        }
+        for (int d : dim) {
+            perm.push_back(static_cast<int64_t>(d));
         }
 
-    */
-    ttnn::Tensor output_tensor;
-    if constexpr (reduce_type == reduction_common::ReduceType::Std) {
-        output_tensor = ttnn::prim::welford_reduce(
-            input_tensor,
-            tt::tt_metal::ReduceOpMath::STD,
-            reduce_dim,
-            scalar,
-            memory_config,
-            std::nullopt,
-            compute_kernel_config,
-            correction,
-            sub_core_grids);
-    } else if constexpr (reduce_type == reduction_common::ReduceType::Var) {
-        output_tensor = ttnn::prim::welford_reduce(
-            input_tensor,
-            tt::tt_metal::ReduceOpMath::VAR,
-            reduce_dim,
-            scalar,
-            memory_config,
-            std::nullopt,
-            compute_kernel_config,
-            correction,
-            sub_core_grids);
-    } else {
-        TT_THROW("Unsupported reduction type: {} for Welford reduce. Expected Std or Var.", reduce_type);
+        // ttnn::permute checks for identity internally and skips data movement if not needed.
+        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
+
+        // Flatten to 2D: [product_of_kept, product_of_reduce].
+        // product_of_kept may be 1 when reducing all dims (e.g. dim=None).
+        if (product_of_kept == 0) {
+            product_of_kept = 1;
+        }
+        input_tensor = ttnn::reshape(
+            input_tensor, ttnn::Shape{static_cast<uint32_t>(product_of_kept), static_cast<uint32_t>(reduced_volume)});
     }
+
+    if (input_tensor.layout() != Layout::TILE) {
+        ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        input_tensor = ttnn::tilize_with_val_padding(
+            input_tensor, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+    }
+
+    auto reduce_math = (reduce_type == reduction_common::ReduceType::Std) ? tt::tt_metal::ReduceOpMath::STD
+                                                                          : tt::tt_metal::ReduceOpMath::VAR;
+    ttnn::Tensor output_tensor = ttnn::prim::welford_reduce(
+        input_tensor,
+        reduce_math,
+        reduce_dim,
+        scalar,
+        memory_config,
+        std::nullopt,
+        compute_kernel_config,
+        correction,
+        sub_core_grids);
 
     // Compensate for any shape adjustments applied to the input tensor.
     return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
