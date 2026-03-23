@@ -11,7 +11,11 @@ Quick start
 -----------
 ::
 
-    from ttnn.distributed.mpi_fault import install_ulfm_handler, ulfm_guard
+    from ttnn.distributed.mpi_fault import (
+        UlfmFailurePolicy,
+        install_ulfm_handler,
+        ulfm_guard,
+    )
 
     install_ulfm_handler()          # once, at program start
 
@@ -20,13 +24,13 @@ Quick start
 
 Two failure policies
 --------------------
-``fast_fail`` (default)
+``UlfmFailurePolicy.FAST_FAIL`` (default)
     On rank failure the process prints a structured diagnostic to stderr,
     revokes the communicator (if ULFM bindings are available), and exits
     with code 70 (``EX_SOFTWARE``).  This mirrors the C++ ULFM handler in
     ``tt_metal/distributed/multihost/mpi_distributed_context.cpp``.
 
-``fault_tolerant``
+``UlfmFailurePolicy.FAULT_TOLERANT``
     Instead of exiting, raises ``MPIRankFailureError``.  The caller should
     catch the exception, call ``comm.Shrink()`` to get a new communicator
     without the dead rank, and continue work on the new communicator.
@@ -45,7 +49,8 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 if TYPE_CHECKING:
     from typing import Generator
@@ -72,25 +77,37 @@ if _MPI_AVAILABLE:
 
 
 # ---------------------------------------------------------------------------
+# Public types
+# ---------------------------------------------------------------------------
+
+
+class UlfmFailurePolicy(Enum):
+    """How :func:`ulfm_guard` reacts to ULFM rank-failure error codes."""
+
+    FAST_FAIL = "fast_fail"
+    FAULT_TOLERANT = "fault_tolerant"
+
+
+# ---------------------------------------------------------------------------
 # Public exception
 # ---------------------------------------------------------------------------
 
 
 class MPIRankFailureError(RuntimeError):
     """Raised by ``ulfm_guard`` when a rank failure is detected and
-    ``policy == 'fault_tolerant'``.
+    ``policy`` is :attr:`UlfmFailurePolicy.FAULT_TOLERANT`.
 
     The caller should revoke and shrink the communicator before continuing.
 
     To switch from fast-fail to fault-tolerant mode::
 
-        with ulfm_guard(comm, "allreduce", policy="fault_tolerant"):
+        with ulfm_guard(comm, "allreduce", policy=UlfmFailurePolicy.FAULT_TOLERANT):
             comm.Allreduce(sendbuf, recvbuf, op=MPI.SUM)
 
     Then catch this exception::
 
         try:
-            with ulfm_guard(comm, "allreduce", policy="fault_tolerant"):
+            with ulfm_guard(comm, "allreduce", policy=UlfmFailurePolicy.FAULT_TOLERANT):
                 comm.Allreduce(...)
         except MPIRankFailureError:
             new_comm = comm.Shrink()
@@ -140,7 +157,7 @@ def install_ulfm_handler(comm=None) -> None:
 def ulfm_guard(
     comm: Any,
     operation_name: str = "collective",
-    policy: str = "fast_fail",
+    policy: UlfmFailurePolicy = UlfmFailurePolicy.FAST_FAIL,
 ) -> Generator[None, None, None]:
     """Context manager that catches ULFM rank-failure errors from mpi4py.
 
@@ -150,9 +167,9 @@ def ulfm_guard(
             comm.Allreduce(sendbuf, recvbuf, op=MPI.SUM)
 
     If a ULFM error is detected:
-    - ``policy="fast_fail"`` (default): prints a diagnostic and exits with
+    - :attr:`UlfmFailurePolicy.FAST_FAIL` (default): prints a diagnostic and exits with
       code 70, mirroring the C++ handler.
-    - ``policy="fault_tolerant"``: raises ``MPIRankFailureError`` so the
+    - :attr:`UlfmFailurePolicy.FAULT_TOLERANT`: raises ``MPIRankFailureError`` so the
       caller can shrink the communicator and continue.
 
     Non-ULFM MPI exceptions propagate normally.
@@ -160,7 +177,7 @@ def ulfm_guard(
     Args:
         comm: The mpi4py communicator to guard.
         operation_name: Human-readable name for the operation (for diagnostics).
-        policy: ``"fast_fail"`` or ``"fault_tolerant"``.
+        policy: :class:`UlfmFailurePolicy` value.
     """
     if not _MPI_AVAILABLE:
         # No mpi4py — just run the body with no protection
@@ -177,13 +194,12 @@ def ulfm_guard(
         # empty and we fall through to re-raise.
         if _ULFM_ERROR_CODES and error_code in _ULFM_ERROR_CODES:
             rank = comm.Get_rank()
-            if policy == "fault_tolerant":
+            if policy is UlfmFailurePolicy.FAULT_TOLERANT:
                 # Let the caller handle recovery (shrink communicator, etc.)
                 failed = _try_get_failed_ranks(comm)
                 raise MPIRankFailureError(rank, error_code, operation_name, failed) from exc
-            else:
-                # fast_fail: mirror the C++ handle_rank_failure behavior
-                _ulfm_fast_fail(comm, rank, error_code, operation_name)
+            # FAST_FAIL: mirror the C++ handle_rank_failure behavior
+            _ulfm_fast_fail(comm, rank, error_code, operation_name)
         else:
             # Not a ULFM error — propagate normally
             raise
@@ -285,4 +301,6 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
     # Use os._exit() rather than sys.exit() to bypass Python atexit handlers
     # (including any that call MPI_Finalize), which would deadlock on a revoked
     # communicator — mirroring _exit(70) in the C++ handle_rank_failure().
-    os._exit(70)
+    # Cast: os._exit is typed as NoReturn; tests patch it and need follow-on
+    # assertions to be considered reachable by static analysis.
+    cast(Callable[[int], None], os._exit)(70)

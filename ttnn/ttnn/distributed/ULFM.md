@@ -193,9 +193,9 @@ For Python-level MPI usage:
   aborting the process.
 - `ulfm_guard(comm, operation_name, policy)` catches ULFM error codes when the
   linked `mpi4py` build exposes them.
-- `policy="fast_fail"` prints a structured diagnostic, best-effort revokes the
+- `UlfmFailurePolicy.FAST_FAIL` prints a structured diagnostic, best-effort revokes the
   communicator if `Revoke()` exists, and `os._exit(70)`.
-- `policy="fault_tolerant"` raises `MPIRankFailureError` and leaves revoke /
+- `UlfmFailurePolicy.FAULT_TOLERANT` raises `MPIRankFailureError` and leaves revoke /
   shrink coordination to the caller.
 
 Degradation behavior is intentionally narrow:
@@ -285,6 +285,7 @@ The example below assumes a ULFM-enabled `mpi4py` build that exposes
 from mpi4py import MPI
 from ttnn.distributed.mpi_fault import (
     MPIRankFailureError,
+    UlfmFailurePolicy,
     install_ulfm_handler,
     ulfm_guard,
 )
@@ -293,7 +294,7 @@ comm = MPI.COMM_WORLD
 install_ulfm_handler(comm)
 
 try:
-    with ulfm_guard(comm, "allreduce", policy="fault_tolerant"):
+    with ulfm_guard(comm, "allreduce", policy=UlfmFailurePolicy.FAULT_TOLERANT):
         comm.Allreduce(sendbuf, recvbuf, op=MPI.SUM)
 except MPIRankFailureError as e:
     # e.failed_ranks -> list[int] when rank discovery succeeded
@@ -307,12 +308,12 @@ except MPIRankFailureError as e:
 
 ### Key points
 
-- `set_failure_policy(FAULT_TOLERANT)` or `policy="fault_tolerant"` must be
+- `set_failure_policy(FAULT_TOLERANT)` or `UlfmFailurePolicy.FAULT_TOLERANT` must be
   selected before the collective that may fail.
 - In C++, `handle_rank_failure()` revokes before it throws. After catching
   `MPIRankFailureException`, you must call `revoke_and_shrink()` before using
   that communicator again.
-- In Python, `ulfm_guard(..., policy="fault_tolerant")` raises
+- In Python, `ulfm_guard(..., policy=UlfmFailurePolicy.FAULT_TOLERANT)` raises
   `MPIRankFailureError` but does **not** revoke for you. Recovery coordination
   stays with caller code.
 - Shrink creates a new communicator with new rank numbers. Update any

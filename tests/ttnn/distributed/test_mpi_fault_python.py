@@ -135,6 +135,15 @@ def _fresh_mpi_fault_import(mpi_available=True, ulfm_available=True):
 # =====================================================================
 
 
+class TestUlfmFailurePolicy:
+    """Test :class:`UlfmFailurePolicy` enum."""
+
+    def test_members_match_expected_values(self):
+        with _fresh_mpi_fault_import() as mf:
+            assert mf.UlfmFailurePolicy.FAST_FAIL.value == "fast_fail"
+            assert mf.UlfmFailurePolicy.FAULT_TOLERANT.value == "fault_tolerant"
+
+
 class TestMPIRankFailureError:
     """Test the MPIRankFailureError exception class."""
 
@@ -296,7 +305,7 @@ class TestUlfmGuardFaultTolerant:
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
             with pytest.raises(mf.MPIRankFailureError) as exc_info:
-                with mf.ulfm_guard(comm, "Scatter", policy="fault_tolerant"):
+                with mf.ulfm_guard(comm, "Scatter", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
             err = exc_info.value
@@ -323,7 +332,7 @@ class TestUlfmGuardFaultTolerant:
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
             with pytest.raises(mf.MPIRankFailureError) as exc_info:
-                with mf.ulfm_guard(comm, "Allreduce", policy="fault_tolerant"):
+                with mf.ulfm_guard(comm, "Allreduce", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
             assert exc_info.value.failed_ranks == [0, 1]
@@ -333,7 +342,7 @@ class TestUlfmGuardFaultTolerant:
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             result = None
-            with mf.ulfm_guard(comm, "test", policy="fault_tolerant"):
+            with mf.ulfm_guard(comm, "test", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                 result = 42
             assert result == 42
 

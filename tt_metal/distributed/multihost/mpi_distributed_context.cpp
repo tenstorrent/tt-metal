@@ -1002,6 +1002,7 @@ void MPIContext::revoke_and_shrink() {
     }
     struct ShrinkGuard {
         std::atomic_flag& flag;
+        explicit ShrinkGuard(std::atomic_flag& f) noexcept : flag(f) {}
         ~ShrinkGuard() { flag.clear(std::memory_order_release); }
         ShrinkGuard(const ShrinkGuard&) = delete;
         ShrinkGuard& operator=(const ShrinkGuard&) = delete;

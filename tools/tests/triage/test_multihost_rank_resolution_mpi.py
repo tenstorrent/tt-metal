@@ -17,7 +17,6 @@
 #   - mpi4py (available in the CI venv)
 #   - No Tenstorrent hardware needed (pure Python log-directory logic)
 
-import json
 import os
 import socket
 import sys
