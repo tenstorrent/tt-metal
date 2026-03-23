@@ -313,7 +313,8 @@ class SFTTrainer:
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
-            if abs(actual - expected) > 1e-3:
+            # use relative tolerance to avoid BF16 precision issues
+            if abs(actual - expected) / expected > 0.01:
                 logger.warning(
                     "loss_mask sum (%.2f) differs from expected B*T (%d). "
                     "If you are using a custom collate function, make sure "

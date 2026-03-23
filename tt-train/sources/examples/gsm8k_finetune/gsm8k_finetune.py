@@ -449,6 +449,9 @@ def train():
     trainer.train()
     print("Training completed!")
 
+    # Cleanup
+    ttml.autograd.AutoContext.get_instance().close_device()
+
 
 if __name__ == "__main__":
     train()
