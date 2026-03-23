@@ -194,6 +194,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
