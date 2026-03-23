@@ -47,15 +47,13 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
-    // input and weight must both be interleaved, bfloat16 or float32
-    TT_FATAL(!input_tensor_a.memory_config().is_sharded(), "Activation tensor must be interleaved.");
+    // Validate data types. Memory layout can be interleaved or sharded.
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32,
         "Activation tensor must be bfloat16 or float32. got {}",
         input_tensor_a.dtype());
 
     const auto& weight_tensor = tensor_args.weight_tensor;
-    TT_FATAL(!weight_tensor.memory_config().is_sharded(), "Weight tensor must be interleaved.");
     TT_FATAL(
         weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32,
         "Weight tensor must be bfloat16 or float32. got {}",
@@ -69,7 +67,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.bias_tensor.has_value()) {
         const auto& bias_tensor = tensor_args.bias_tensor.value();
-        TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.layout() == Layout::TILE, "Bias tensor must be tiled.");
         TT_FATAL(
             bias_tensor.dtype() == input_tensor_a.dtype(),
