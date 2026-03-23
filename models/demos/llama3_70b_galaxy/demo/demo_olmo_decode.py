@@ -213,7 +213,21 @@ def run_olmo_demo(
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
     else:
-        encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
+        # Apply ChatML template required by OLMo 3.1-32B-Think.
+        # Raw text encoding produces incoherent output because the model expects:
+        #   <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>
+        if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template is not None:
+            formatted_prompts = [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for p in input_prompts
+            ]
+            encoded_prompts = [tokenizer.encode(fp, add_special_tokens=False) for fp in formatted_prompts]
+        else:
+            encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
 
     eos_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 50256
     user_done = [False] * batch_size
@@ -831,7 +845,7 @@ def run_olmo_demo(
         ),
         # ── ISL sweep: batch=1, 10 decode tokens, 64 layers ──────────────────────────────
         # paged_cache_max_seq_len = 8 × max_num_blocks  (batch_size_per_device_group=8 on TG)
-        (  # isl-128-b1: ~128-token prefill + 10 decode
+        (  # isl-128-b1: ~128-token prefill + 200 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
@@ -839,7 +853,7 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            138,  # ~128 prefill + 10 decode
+            328,  # ~128 prefill + 200 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},

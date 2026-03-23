@@ -624,17 +624,13 @@ class TtOlmoModelArgs(TtModelArgs):
             num_global_cb_receivers=1,  # no prefetcher
             untilize_out=False,
         )
-        # Output cores must NOT include column x=3 (used by intermediate/AllGather receiver cores).
-        # Use sub_core_grids excluding col 3 (cols 1-2 + cols 5-6) so there is no kernel overlap.
-        # 10 cores row-wise: (1,0),(2,0),(5,0),(6,0),(1,1),(2,1),(5,1),(6,1),(1,2),(2,2)
-        _agmm_out_sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 9)),  # cols 1-2
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),  # cols 5-6
-            ]
-        )
+        # Use sub_core_grids (cols 1-3 + 5-6) for FF2 output ring. Col 3 is only reserved
+        # when USE_AGMM_FF2=True (for AGMM intermediate buffer). Since USE_AGMM_FF2=False for
+        # OLMo (no prefetcher, no AGMM), col 3 is free.  Using the restricted _agmm_out_sub_core_grids
+        # (cols 1-2 + 5-6) puts the FF2 output on different cores than the persistent all_reduce
+        # buffer expects, causing NaN in the all-reduce result.
         olmo_out_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            self.start_core, OLMO_OUT_RING_SIZE, _agmm_out_sub_core_grids, row_wise=True
+            self.start_core, OLMO_OUT_RING_SIZE, self.sub_core_grids, row_wise=True
         )
         self.model_config["FF2_OUT_RING_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
             shape=(32, self.dim_per_tp // OLMO_OUT_RING_SIZE),  # (32, 128)

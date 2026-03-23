@@ -1157,25 +1157,18 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            # OLMo decode: Use reduce_scatter_minimal_async (like tt_transformers)
-            # This avoids shard constraints of llama_reduce_scatter
+            # OLMo decode: Use synchronous reduce_scatter to avoid Inf corruption from
+            # reduce_scatter_minimal_async (which produces garbage with DRAM bfloat8_b input).
+            # The async path was added to avoid llama_reduce_scatter L1 constraints, but the
+            # async op itself is broken here. Sync reduce_scatter is safe and correct.
             if self.is_olmo:
-                ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
-                    input_tensor=input_tensor_mesh,
-                    persistent_output_buffers=None,
-                    dim=dim,
-                    multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][
-                        self.gather_idx[cluster_axis]
-                    ],
-                    barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=num_links,
+                ttnn_tensor_out = ttnn.reduce_scatter(
+                    input_tensor_mesh,
+                    dim,
                     cluster_axis=cluster_axis,
                     memory_config=memory_config,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
+                    num_links=num_links,
                     subdevice_id=self.worker_sub_device_id,
                 )
                 self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs

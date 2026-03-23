@@ -704,8 +704,10 @@ class TtLlamaAttention(LightweightModule):
             q_real = ttnn.slice(q_heads_pre_rot_1BQD, [0, 0, 0, 0], [1, q_batch, self.n_local_heads, self.head_dim])
             ttnn.deallocate(q_heads_pre_rot_1BQD)
 
-            # Reshape [1, batch, 5, 128] → [1, 1, batch, 640]: flatten heads into last dim
-            q_flat = ttnn.reshape(q_real, [1, 1, q_batch, self.n_local_heads * self.head_dim])
+            # Reshape [1, batch, 5, 128] → [1, batch, 1, 640]: flatten heads into last dim,
+            # batch in dim=1 matching K's [1, batch, 1, 128] pattern so rms_norm_pre_all_gather
+            # produces compatible per-row stats (one row per batch element).
+            q_flat = ttnn.reshape(q_real, [1, q_batch, 1, self.n_local_heads * self.head_dim])
             ttnn.deallocate(q_real)
             q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT, memory_config=self.model_config["OLMO_Q_NORM_L1_MEMCFG"])
 
@@ -729,7 +731,7 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(q_stats_gathered)
             q_flat = ttnn.to_layout(q_flat, ttnn.ROW_MAJOR_LAYOUT)
 
-            # Undo reshape [1, 1, batch, 640] → [1, batch, 5, 128]
+            # Undo reshape [1, batch, 1, 640] → [1, batch, 5, 128]
             q_real_normed = ttnn.reshape(q_flat, [1, q_batch, self.n_local_heads, self.head_dim])
             ttnn.deallocate(q_flat)
 

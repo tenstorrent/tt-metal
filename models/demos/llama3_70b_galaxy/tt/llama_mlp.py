@@ -178,6 +178,7 @@ class TtLlamaMLP(LightweightModule):
                 )
                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w1_out)
+                self._debug_check_mlp("w1_out_dram", w1_out_dram)
                 w1_out_unpadded = ttnn.slice(w1_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
                 w1_out_reduced = self.tt_ccl.line_reduce_scatter(
                     w1_out_unpadded,
@@ -188,6 +189,7 @@ class TtLlamaMLP(LightweightModule):
                 )
                 ttnn.deallocate(w1_out_dram)
                 ttnn.deallocate(w1_out_unpadded)
+                self._debug_check_mlp("w1_out_reduced", w1_out_reduced)
 
                 w3_out = ttnn.linear(
                     x,
@@ -202,6 +204,7 @@ class TtLlamaMLP(LightweightModule):
                 ttnn.deallocate(x)
                 w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w3_out)
+                self._debug_check_mlp("w3_out_dram", w3_out_dram)
                 w3_out_unpadded = ttnn.slice(w3_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
                 w3_out_reduced = self.tt_ccl.line_reduce_scatter(
                     w3_out_unpadded,
@@ -212,6 +215,7 @@ class TtLlamaMLP(LightweightModule):
                 )
                 ttnn.deallocate(w3_out_dram)
                 ttnn.deallocate(w3_out_unpadded)
+                self._debug_check_mlp("w3_out_reduced", w3_out_reduced)
             else:
                 w1_out = ttnn.linear(
                     x,
