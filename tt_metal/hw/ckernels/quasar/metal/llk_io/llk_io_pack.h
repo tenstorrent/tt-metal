@@ -8,7 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_trisc_common.h"
 #include "internal/circular_buffer_interface.h"
-#include "internal/dataflow_buffer_init.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 
 /**
  * @brief  Wait for num_tiles of free space in the dataflow buffer
@@ -16,8 +16,8 @@
  * @param num_tiles: Number of tiles of free space to wait for in dataflow buffer
  */
 inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
-    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
-    uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
+    uint32_t tc_id = dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
 }
 
@@ -29,8 +29,8 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
 // Push N tiles to stream buffer (increment write pointer)
 template <std::uint8_t PACK_SEL = 0x1>
 inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_tiles) {
-    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
-    uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_id];
+    uint32_t tc_id = dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
     // Update the tile counters values
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
 
