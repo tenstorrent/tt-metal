@@ -384,8 +384,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             (std::uint32_t)in0_block_w,
             (std::uint32_t)in0_block_h,
             // batch args
-            (std::uint32_t)B,  // batch
-            (std::uint32_t)B,  // batch
+            (std::uint32_t)B  // batch
         };
     } else {
         in0_sender_compile_time_args = {
