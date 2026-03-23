@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -80,6 +81,106 @@ xt::xarray<float> polynorm_reference(
            w2 * rms_norm_last_dim(x, epsilon) + b;
 }
 
+std::pair<xt::xarray<float>, xt::xarray<float>> rms_norm_with_inv_rms_last_dim(
+    const xt::xarray<float>& x, float epsilon) {
+    auto shape = x.shape();
+    auto out = xt::xarray<float>::from_shape(shape);
+    auto inv_rms = xt::xarray<float>::from_shape({shape[0], shape[1], shape[2], 1});
+    std::fill(out.begin(), out.end(), 0.0F);
+    std::fill(inv_rms.begin(), inv_rms.end(), 0.0F);
+
+    const auto b_dim = shape[0];
+    const auto n_dim = shape[1];
+    const auto s_dim = shape[2];
+    const auto c_dim = shape[3];
+
+    for (std::size_t b = 0; b < b_dim; ++b) {
+        for (std::size_t n = 0; n < n_dim; ++n) {
+            for (std::size_t s = 0; s < s_dim; ++s) {
+                float mean_sq = 0.0F;
+                for (std::size_t c = 0; c < c_dim; ++c) {
+                    const float v = x(b, n, s, c);
+                    mean_sq += v * v;
+                }
+                mean_sq /= static_cast<float>(c_dim);
+                const float inv = 1.0F / std::sqrt(mean_sq + epsilon);
+                inv_rms(b, n, s, 0) = inv;
+                for (std::size_t c = 0; c < c_dim; ++c) {
+                    out(b, n, s, c) = x(b, n, s, c) * inv;
+                }
+            }
+        }
+    }
+    return {out, inv_rms};
+}
+
+xt::xarray<float> grad_wrt_rmsnorm_input_reference(
+    const xt::xarray<float>& term,
+    const xt::xarray<float>& grad_normed_term,
+    const xt::xarray<float>& inv_rms,
+    float inv_channel_count) {
+    auto shape = term.shape();
+    auto out = xt::xarray<float>::from_shape(shape);
+    std::fill(out.begin(), out.end(), 0.0F);
+
+    const auto b_dim = shape[0];
+    const auto n_dim = shape[1];
+    const auto s_dim = shape[2];
+    const auto c_dim = shape[3];
+
+    for (std::size_t b = 0; b < b_dim; ++b) {
+        for (std::size_t n = 0; n < n_dim; ++n) {
+            for (std::size_t s = 0; s < s_dim; ++s) {
+                float scale = 0.0F;
+                for (std::size_t c = 0; c < c_dim; ++c) {
+                    scale += term(b, n, s, c) * grad_normed_term(b, n, s, c);
+                }
+                const float inv = inv_rms(b, n, s, 0);
+                const float inv3 = inv * inv * inv;
+                for (std::size_t c = 0; c < c_dim; ++c) {
+                    const float lhs = grad_normed_term(b, n, s, c) * inv;
+                    const float rhs = term(b, n, s, c) * scale * inv3 * inv_channel_count;
+                    out(b, n, s, c) = lhs - rhs;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> polynorm_reference_backward(
+    const xt::xarray<float>& x, const xt::xarray<float>& weight, const xt::xarray<float>& dL_dout, float epsilon) {
+    const float w0 = weight(0, 0, 0, 0);
+    const float w1 = weight(0, 0, 0, 1);
+    const float w2 = weight(0, 0, 0, 2);
+
+    const auto x2 = xt::square(x);
+    const auto x3 = x * x2;
+
+    const auto [x_norm, x_inv_rms] = rms_norm_with_inv_rms_last_dim(x, epsilon);
+    const auto [x2_norm, x2_inv_rms] = rms_norm_with_inv_rms_last_dim(x2, epsilon);
+    const auto [x3_norm, x3_inv_rms] = rms_norm_with_inv_rms_last_dim(x3, epsilon);
+
+    const float inv_channels = 1.0F / static_cast<float>(x.shape()[3]);
+
+    const auto dL_dx_term1 = grad_wrt_rmsnorm_input_reference(x, dL_dout * w2, x_inv_rms, inv_channels);
+    const auto dL_dx2 = grad_wrt_rmsnorm_input_reference(x2, dL_dout * w1, x2_inv_rms, inv_channels);
+    const auto dL_dx_term2 = dL_dx2 * (2.0F * x);
+    const auto dL_dx3 = grad_wrt_rmsnorm_input_reference(x3, dL_dout * w0, x3_inv_rms, inv_channels);
+    const auto dL_dx_term3 = dL_dx3 * (3.0F * x2);
+    const auto dL_dx = dL_dx_term1 + dL_dx_term2 + dL_dx_term3;
+
+    xt::xarray<float> dL_dw = xt::xarray<float>::from_shape({1, 1, 1, 3});
+    dL_dw(0, 0, 0, 0) = xt::sum(dL_dout * x3_norm)();
+    dL_dw(0, 0, 0, 1) = xt::sum(dL_dout * x2_norm)();
+    dL_dw(0, 0, 0, 2) = xt::sum(dL_dout * x_norm)();
+
+    xt::xarray<float> dL_db = xt::xarray<float>::from_shape({1, 1, 1, 1});
+    dL_db(0, 0, 0, 0) = xt::sum(dL_dout)();
+
+    return {dL_dx, dL_dw, dL_db};
+}
+
 xt::xarray<float> make_random_xtensor(const std::vector<uint32_t>& shape, float low, float high) {
     auto& rng = ttml::autograd::ctx().get_generator();
     xt::xarray<float> x = xt::empty<float>(shape);
@@ -142,6 +243,9 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     const auto grad_x = core::to_xtensor(x->get_grad());
     const auto grad_w = core::to_xtensor(w->get_grad());
     const auto grad_b = core::to_xtensor(b->get_grad());
+    const auto dL_dout = core::to_xtensor(out->get_grad());
+    const auto [grad_x_ref, grad_w_ref, grad_b_ref] =
+        polynorm_reference_backward(data.input, data.weight, dL_dout, epsilon);
 
     EXPECT_EQ(grad_x.shape(), data.input.shape());
     EXPECT_EQ(grad_w.shape(), data.weight.shape());
@@ -150,6 +254,9 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     EXPECT_TRUE(xt::all(xt::isfinite(grad_x)));
     EXPECT_TRUE(xt::all(xt::isfinite(grad_w)));
     EXPECT_TRUE(xt::all(xt::isfinite(grad_b)));
+    expect_allclose_with_metrics(grad_x, grad_x_ref, 1.0e-1F, 1.0e-1F, "backward_grad_x_vs_xt_reference");
+    expect_allclose_with_metrics(grad_w, grad_w_ref, 1.0e-1F, 1.0e-1F, "backward_grad_w_vs_xt_reference");
+    expect_allclose_with_metrics(grad_b, grad_b_ref, 1.0e-1F, 1.0e-1F, "backward_grad_b_vs_xt_reference");
 
     autograd::ctx().reset_graph();
 }
@@ -200,17 +307,12 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
     autograd::ctx().reset_graph();
 }
 
-// ============================================================================
-// Section 2: Nightly Larger Shape Coverage
-// ============================================================================
-TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveSmall) {
-    CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F);
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_NanoLlama3LikeChannelShape) {
+    // NanoLlama3 embedding_dim is 384 with max_sequence_length 256.
+    CompareKernelVsReferenceWithShape({1, 1, 256, 384}, 1e-5F);
 }
 
-TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveMedium) {
-    CompareKernelVsReferenceWithShape({2, 1, 64, 512}, 1e-5F);
-}
-
-TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveLarge) {
-    CompareKernelVsReferenceWithShape({4, 1, 128, 768}, 1e-5F);
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeChannelShape) {
+    // TinyLlama/Llama1B-like shape: embedding_dim 2048 and max sequence length 2048.
+    CompareKernelVsReferenceWithShape({1, 1, 2048, 2048}, 1e-5F);
 }
