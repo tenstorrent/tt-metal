@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from bug_checker.logger import logger
 
 REPO = "tenstorrent/tt-metal"
 MAX_DIFF_LINES = 8000
@@ -74,6 +73,59 @@ def fetch_pr_info(pr_number: int) -> PRInfo:
         diff=diff,
         changed_files=changed_files,
         labels=labels,
+    )
+
+
+def fetch_branch_diff(base: str = "main") -> PRInfo:
+    """Generate a PRInfo from the local branch diff against a base branch."""
+    merge_base = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    diff = subprocess.run(
+        ["git", "diff", merge_base],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+    changed_files = (
+        subprocess.run(
+            ["git", "diff", "--name-only", merge_base],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        .stdout.strip()
+        .splitlines()
+    )
+
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    diff_lines = diff.splitlines()
+    if len(diff_lines) > MAX_DIFF_LINES:
+        logger.warning(
+            f"Branch diff is {len(diff_lines)} lines; truncating to {MAX_DIFF_LINES}. "
+            "Findings may be incomplete for files beyond the truncation point."
+        )
+        diff = "\n".join(diff_lines[:MAX_DIFF_LINES]) + "\n\n# [diff truncated — too large for full analysis]"
+
+    return PRInfo(
+        number=0,
+        title=f"Local branch: {branch}",
+        base_sha=merge_base,
+        head_sha="HEAD",
+        diff=diff,
+        changed_files=changed_files,
+        labels=[],
     )
 
 

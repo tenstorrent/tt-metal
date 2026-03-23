@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import logging
+import re
 from pathlib import Path
 from typing import Optional
 
 from .github_client import PRInfo, post_pr_comment
 from .llm import Finding, LLMSession
+from .logger import logger
 from .output import (
     format_pr_comment,
     format_summary_comment,
@@ -15,8 +16,6 @@ from .output import (
     write_sarif,
 )
 from .rules import group_rules, load_rules, select_rules
-
-logger = logging.getLogger(__name__)
 
 
 def run_bug_check(
@@ -61,12 +60,13 @@ def run_bug_check(
         for rule in group:
             rules_used.append(rule.id)
             try:
+                filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
                 findings = session.analyze_rule(
                     rule_content=rule.content,
                     rule_id=rule.id,
                     severity=rule.severity,
                     suggest_fix=rule.suggest_fix,
-                    diff=pr_info.diff,
+                    diff=filtered_diff,
                 )
                 all_findings.extend(findings)
                 logger.info(f"Rule {rule.id}: {len(findings)} finding(s)")
@@ -87,6 +87,21 @@ def run_bug_check(
         _post_findings_as_comments(pr_info, all_findings)
 
     return all_findings
+
+
+def _filter_diff_for_rule(diff: str, changed_files: list[str], rule) -> str:
+    """Return only the diff sections for files that match this rule's path patterns."""
+    matched = {f for f in changed_files if rule.matches_pr([f], [])}
+    sections = re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE)
+    kept = []
+    for section in sections:
+        if not section.startswith("diff --git "):
+            kept.append(section)
+            continue
+        m = re.match(r"^diff --git a/\S+ b/(\S+)", section)
+        if m and m.group(1) in matched:
+            kept.append(section)
+    return "".join(kept)
 
 
 def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None:

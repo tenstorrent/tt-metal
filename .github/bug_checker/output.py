@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .llm import Finding
+from .logger import logger
 
 
 # --- SARIF ---
@@ -91,25 +92,52 @@ def write_sarif(findings: list[Finding], rules_used: list[str], path: Path) -> N
 
 
 def print_findings(findings: list[Finding], file: TextIO = sys.stdout) -> None:
-    """Print findings in human-readable CLI format."""
+    """Print findings in human-readable CLI format with color."""
     if not findings:
-        print("No findings.", file=file)
+        logger.opt(colors=True).info("<green>No findings.</green>")
         return
 
     blocking = [f for f in findings if f.severity == "blocking"]
     warnings = [f for f in findings if f.severity == "warning"]
 
     for f in findings:
-        severity_tag = "BLOCKING" if f.severity == "blocking" else "WARNING"
-        print(f"\n[{severity_tag}] {f.rule_id}", file=file)
-        print(f"  {f.file}:{f.line}", file=file)
-        print(f"  {f.message}", file=file)
+        if f.severity == "blocking":
+            logger.opt(colors=True).error(
+                "<red><bold>[BLOCKING]</bold></red> <cyan>{rule}</cyan>\n"
+                "  <white>{path}:{line}</white>\n"
+                "  {message}",
+                rule=f.rule_id,
+                path=f.file,
+                line=f.line,
+                message=f.message,
+            )
+        else:
+            logger.opt(colors=True).warning(
+                "<yellow><bold>[WARNING]</bold></yellow> <cyan>{rule}</cyan>\n"
+                "  <white>{path}:{line}</white>\n"
+                "  {message}",
+                rule=f.rule_id,
+                path=f.file,
+                line=f.line,
+                message=f.message,
+            )
         if f.suggested_fix:
-            print(f"  Suggested fix:", file=file)
-            for line in f.suggested_fix.splitlines():
-                print(f"    {line}", file=file)
+            logger.opt(colors=True).info("<green>  Suggested fix:</green>")
+            for fix_line in f.suggested_fix.splitlines():
+                logger.opt(colors=True).info("<green>    {fix_line}</green>", fix_line=fix_line)
 
-    print(f"\nSummary: {len(blocking)} blocking, {len(warnings)} warning(s)", file=file)
+    if blocking:
+        logger.opt(colors=True).info(
+            "\n<bold>Summary:</bold> <red>{b} blocking</red>, <yellow>{w} warning(s)</yellow>",
+            b=len(blocking),
+            w=len(warnings),
+        )
+    else:
+        logger.opt(colors=True).info(
+            "\n<bold>Summary:</bold> <green>{b} blocking</green>, <yellow>{w} warning(s)</yellow>",
+            b=len(blocking),
+            w=len(warnings),
+        )
 
 
 # --- PR Comments ---

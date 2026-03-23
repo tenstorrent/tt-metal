@@ -11,7 +11,7 @@ import yaml
 
 
 RULES_DIR = Path(__file__).resolve().parent / "rules"
-MANIFEST_PATH = RULES_DIR / "manifest.yaml"
+MANIFEST_PATH = Path(__file__).resolve().parent / "manifest.yaml"
 
 
 @dataclass

@@ -5,7 +5,7 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 ## How It Works
 
 1. A PR is targeted (via `/bug-check` comment or local CLI invocation).
-2. The tool loads all rules from `.github/bug_checker/rules/manifest.yaml`.
+2. The tool loads all rules from `.github/bug_checker/manifest.yaml`.
 3. Rules are filtered to only those matching the PR's changed files (path globs) or labels.
 4. Each matching rule is sent to Claude along with the PR diff. Claude analyzes the diff against the bug pattern described in the rule's markdown file.
 5. Findings are reported in three formats: CLI stdout, inline PR comments, and SARIF for GitHub Code Scanning.
@@ -23,17 +23,17 @@ Comment `/bug-check` on any PR. The workflow at `.github/workflows/bug-check.yam
 ### Local CLI
 
 ```bash
-# Analyze a PR by number (requires gh CLI auth + ANTHROPIC_API_KEY or BUG_CHECKER_API_KEY)
-python .github/run_bug_checker.py --pr 39432 --verbose
+# Analyze current branch diff against main
+python .github/bug_checker/run_bug_checker.py --branch --verbose
 
-# Analyze a local diff file
-python .github/run_bug_checker.py --diff my_changes.diff --labels "area:ccl"
+# Analyze against a different base branch
+python .github/bug_checker/run_bug_checker.py --branch origin/release-1.0
 
-# Generate SARIF output
-python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
+# Analyze a PR by number (requires gh CLI auth)
+python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 ```
 
-**Requirements**: `pip install anthropic pyyaml`
+**Requirements**: `pip install anthropic pyyaml loguru`
 
 **Environment variables**:
 - `BUG_CHECKER_API_KEY` or `ANTHROPIC_API_KEY` — Claude API key
@@ -41,34 +41,32 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 
 ## Adding a New Rule
 
-1. **Write the rule markdown** in `.github/bug_checker/rules/your-rule-name.md`:
+1. **Write the rule markdown** in `.github/bug_checker/rules/your-rule-name.md`. Copy `rules/template-rule.md` and fill in each section:
 
-   ```markdown
-   # Rule Title
+````markdown
+# Rule Title
 
-   ## Description
-   What the bug is, why it happens, what to look for.
+## Description
+What the bug is, why it happens, what to look for.
 
-   ## What to Look For
-   1. **Pattern 1**: Specific code pattern that indicates this bug.
-   2. **Pattern 2**: Another variant.
+## What to Look For
+1. **Pattern 1**: Specific code pattern that indicates this bug.
+2. **Pattern 2**: Another variant.
 
-   ## Bad Code Examples
-   ```cpp
-   // BUG: explain why
-   bad_code();
-   ```
+## Bad Code Examples
+```cpp
+// BUG: explain why
+bad_code();
+```
 
-   ## Good Code Examples
-   ```cpp
-   // GOOD: explain why
-   good_code();
-   ```
-   ```
+## Good Code Examples
+```cpp
+// GOOD: explain why
+good_code();
+```
+````
 
-   See `template-rule.md` for a starting point.
-
-2. **Add an entry to `.github/bug_checker/rules/manifest.yaml`**:
+2. **Add an entry to `.github/bug_checker/manifest.yaml`**:
 
    ```yaml
    rules:
@@ -87,7 +85,7 @@ python .github/run_bug_checker.py --pr 39432 --sarif results.sarif
 3. **Test locally** against a PR that should trigger the rule:
 
    ```bash
-   python .github/run_bug_checker.py --pr <number> --verbose
+   python .github/bug_checker/run_bug_checker.py --pr <number> --verbose
    ```
 
 ## Manifest Options Reference

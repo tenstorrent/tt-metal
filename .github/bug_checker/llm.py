@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional
@@ -12,9 +11,9 @@ try:
 except ImportError:
     anthropic = None  # type: ignore[assignment]
 
-logger = logging.getLogger(__name__)
+from bug_checker.logger import logger
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 4096
 
 
@@ -65,6 +64,7 @@ class LLMSession:
         response = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
+            temperature=0,
             system=system_prompt,
             messages=self.messages,
         )
