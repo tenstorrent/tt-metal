@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -18,25 +21,27 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<2, 0>();
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
-    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(cb_id_in0));
-    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(cb_id_in1));
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
+    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes_0);
+    const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes_1);
 
     constexpr uint32_t onetile = 1;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
+
     for (uint32_t tile_id = start_id; tile_id < start_id + num_tiles; tile_id++) {
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_page(tile_id, s0, l1_write_addr_in0);
+        cb0.reserve_back(onetile);
+        noc.async_read(s0, cb0, tile_bytes_0, {.page_id = tile_id}, {.offset_bytes = 0});
 
-        cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_page(tile_id, s1, l1_write_addr_in1);
+        cb1.reserve_back(onetile);
+        noc.async_read(s1, cb1, tile_bytes_1, {.page_id = tile_id}, {.offset_bytes = 0});
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        cb_push_back(cb_id_in0, onetile);
-        cb_push_back(cb_id_in1, onetile);
+        cb0.push_back(onetile);
+        cb1.push_back(onetile);
     }
 }

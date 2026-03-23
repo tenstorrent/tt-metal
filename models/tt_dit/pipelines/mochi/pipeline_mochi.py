@@ -299,13 +299,17 @@ class MochiPipeline(DiffusionPipeline):
         reload_dit_model=None,
     ):
         if ttnn.device.is_blackhole():
-            assert tuple(mesh_device.shape) in [(2, 4), (4, 8)], "Mochi has only been successfully tested on 2x2"
+            if tuple(mesh_device.shape) != (2, 2):
+                logger.warning(
+                    f"Mochi has only been successfully tested on 2x2 configuration for Blackhole. Proceeding with the requested {tuple(mesh_device.shape)} configuration."
+                )
+
             default_config = {
                 (2, 2): {
                     "sp_axis": 0,
                     "tp_axis": 1,
                     "num_links": 2,
-                    "vae_mesh_shape": (2, 2),
+                    "vae_mesh_shape": (1, 4),
                     "vae_sp_axis": 0,
                     "vae_tp_axis": 1,
                     "reload_dit_model": True,
@@ -330,6 +334,10 @@ class MochiPipeline(DiffusionPipeline):
                 },
             }
         else:
+            assert tuple(mesh_device.shape) != (
+                2,
+                2,
+            ), "Mochi 2x2 is only supported on Blackhole. Wormhole does not have enough memory for this configuration."
             default_config = {
                 (2, 4): {
                     "sp_axis": 0,

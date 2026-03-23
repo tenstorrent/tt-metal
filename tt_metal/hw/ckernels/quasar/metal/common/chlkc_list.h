@@ -8,6 +8,8 @@
 #include "ckernel_gpr_map.h"
 #include "internal/debug/fw_debug.h"
 
+using namespace ckernel;
+
 #ifdef UCK_CHLKC_MATH
 #include "chlkc_descriptors.h"
 #include "chlkc_math.cpp"
@@ -23,20 +25,21 @@
 #include "chlkc_unpack.cpp"
 #endif
 
+#ifdef UCK_CHLKC_ISOLATE_SFPU
+#include "chlkc_descriptors.h"
+#include "chlkc_isolate_sfpu.cpp"
+#endif
+
 std::uint32_t run_kernel() {
 #ifdef UCK_CHLKC_MATH
     ckernel::zeroacc();
-    chlkc_math::math_main();
-#endif
-
-#ifdef UCK_CHLKC_PACK
-    chlkc_pack::pack_main();
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     ckernel::zerosrc();
-    chlkc_unpack::unpack_main();
 #endif
+
+    kernel_main();
 
     return 0;
 }

@@ -9,6 +9,7 @@ from loguru import logger
 import pytest
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
+    run_ring_joint_sdpa_model_config,
     run_test_ring_joint_sdpa,
     create_ring_joint_sdpa_submesh,
     wh_t3k_unit_test_params,
@@ -288,3 +289,94 @@ def test_ring_joint_sdpa_program_cache(
         )
 
     assert submesh.num_program_cache_entries() == 1
+
+
+# ===========================================================================
+# Model-config regression tests — reproduce code-size failures with exact
+# model shapes, chunk sizes, grid layouts, and default device_params.
+# ===========================================================================
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_ring_joint_sdpa_sd35_model_config(mesh_device, reset_seeds):
+    """SD3.5: heads=38, d=64, seq=4096, joint=333, sp4×tp2, chunks=(256,512)."""
+    run_ring_joint_sdpa_model_config(
+        mesh_device,
+        b=1,
+        nh=38,
+        base_seq_len=4096,
+        joint_seq_len=333,
+        d=64,
+        q_chunk_size=256,
+        k_chunk_size=512,
+        rp_axis=1,
+        rp_factor=4,
+        up_axis=0,
+        up_factor=2,
+        num_links=1,
+        ccl_reserve_last_column=False,
+        use_column_major_ccl=False,
+        use_wormhole_compute_kernel_config=True,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_ring_joint_sdpa_wan_14b_720p_model_config(mesh_device, reset_seeds):
+    """Wan2.2 14B-720p: heads=40, d=128, seq=75600, joint=0, sp2×tp4, chunks=(256,256)."""
+    run_ring_joint_sdpa_model_config(
+        mesh_device,
+        b=1,
+        nh=40,
+        base_seq_len=75600,
+        joint_seq_len=0,
+        d=128,
+        q_chunk_size=256,
+        k_chunk_size=256,
+        rp_axis=0,
+        rp_factor=2,
+        up_axis=1,
+        up_factor=4,
+        num_links=1,
+        ccl_reserve_last_column=True,
+        use_column_major_ccl=True,
+        use_wormhole_compute_kernel_config=False,
+        pcc_threshold=0.9994,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds):
+    """Mochi: heads=24, d=128, seq=4000, joint=118, sp2×tp2, chunks=(256,256)."""
+    run_ring_joint_sdpa_model_config(
+        mesh_device,
+        b=1,
+        nh=24,
+        base_seq_len=4000,
+        joint_seq_len=118,
+        d=128,
+        q_chunk_size=256,
+        k_chunk_size=256,
+        rp_axis=0,
+        rp_factor=2,
+        up_axis=1,
+        up_factor=2,
+        num_links=1,
+        ccl_reserve_last_column=False,
+        use_column_major_ccl=False,
+        use_wormhole_compute_kernel_config=False,
+    )

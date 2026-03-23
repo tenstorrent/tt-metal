@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/to_string.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 
 namespace ttnn {
 
@@ -26,9 +27,8 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
     }
 
     if (is_device_tensor(tensor)) {
-        const auto& storage = tensor.device_storage();
-        if (storage.mesh_buffer != nullptr) {
-            auto* mesh_device = storage.mesh_buffer->device();
+        if (tensor.is_allocated()) {
+            auto* mesh_device = tensor.device();
 
             if (mesh_device->num_devices() == 1) {
                 auto cpu_tensor = tensor.cpu();

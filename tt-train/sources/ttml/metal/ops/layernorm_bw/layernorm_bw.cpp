@@ -31,7 +31,7 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
                     ttnn::Shape(
                         {tensor.logical_shape()[0] * tensor.logical_shape()[1] * tensor.logical_shape()[2],
                          tensor.logical_shape()[3]})),  // dgamma_components
-                /* dim_arg */ ttnn::SmallVector<int>{0},
+                /* dim_arg */ ttsl::SmallVector<int>{0},
                 /* keep_dim */ true,
                 /* output_mem_config */ std::nullopt,
                 /*compute_kernel_config */ core::ComputeKernelConfig::precise()),

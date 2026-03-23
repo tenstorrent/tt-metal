@@ -130,6 +130,8 @@ enum class UnaryOpType {
     CBRT,
     LOGSIGMOID,
     LOGIT,
+    XIELU,
+    LGAMMA,
 };
 
 enum class VecMode {

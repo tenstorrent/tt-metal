@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -48,6 +48,7 @@ target_sources(
             all_gather_async/device/all_gather_async_device_operation.hpp
             all_gather_async/device/all_gather_async_default_program_factory.hpp
             all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
+            all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
@@ -80,6 +81,7 @@ target_sources(
         all_gather_async/device/all_gather_async_device_operation.cpp
         all_gather_async/device/all_gather_async_default_program_factory.cpp
         all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
+        all_gather_async/device/all_gather_via_broadcast_factory.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp

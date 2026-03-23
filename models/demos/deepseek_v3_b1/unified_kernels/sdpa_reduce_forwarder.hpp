@@ -61,6 +61,7 @@ struct SdpaReduceForwarder {
         uint32_t buffer_offset;
         uint32_t r1_sem_addr;
         uint32_t r2_sem_addr;
+        uint32_t rta_offset;
     };
 
     // ========================================================================
@@ -116,7 +117,7 @@ struct SdpaReduceForwarder {
 
             const uint32_t my_buffer_base = args.buffer_base + args.buffer_offset;
 
-            size_t arg_idx = sizeof(ForwarderArgs) / sizeof(uint32_t);
+            size_t arg_idx = args.rta_offset;
             auto fabric_connection =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             fabric_connection.open();
@@ -138,7 +139,8 @@ struct SdpaReduceForwarder {
                 r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection);
 
             } while (r1_sent_mask != CT::all_sent_mask || r2_sent_mask != CT::all_sent_mask);
-
+            noc_semaphore_set(r1_sem_ptr, 0);
+            noc_semaphore_set(r2_sem_ptr, 0);
             fabric_connection.close();
 
             noc_async_full_barrier();

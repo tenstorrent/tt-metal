@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -39,17 +39,23 @@ Example usage:
 from .function import Function, FunctionContext, get_links
 
 # Import C++ bindings from _ttml.autograd
+# Note: _ttml is a top-level module, not a subpackage of ttml
 try:
-    from ttml._ttml import autograd as _cpp_autograd
+    import _ttml
 
-    # Re-export C++ classes
+    _cpp_autograd = _ttml.autograd
+
+    # Re-export C++ classes and enums
     AutoContext = _cpp_autograd.AutoContext
-    Tensor = _cpp_autograd.Tensor
+    AutocastTensor = _cpp_autograd.AutocastTensor
+    DistributedConfig = _cpp_autograd.DistributedConfig
     GradMode = _cpp_autograd.GradMode
     Graph = _cpp_autograd.Graph
     GraphNode = _cpp_autograd.GraphNode
-    AutocastTensor = _cpp_autograd.AutocastTensor
+    NodeId = _cpp_autograd.NodeId
+    ParallelismContext = _cpp_autograd.ParallelismContext
     PreferredPrecision = _cpp_autograd.PreferredPrecision
+    Tensor = _cpp_autograd.Tensor
     create_tensor = _cpp_autograd.create_tensor
 
 except ImportError:
@@ -61,13 +67,16 @@ __all__ = [
     "Function",
     "FunctionContext",
     "get_links",
-    # C++ classes (will be available after build)
+    # C++ classes and enums (available after build)
     "AutoContext",
-    "Tensor",
+    "AutocastTensor",
+    "DistributedConfig",
     "GradMode",
     "Graph",
     "GraphNode",
-    "AutocastTensor",
+    "NodeId",
+    "ParallelismContext",
     "PreferredPrecision",
+    "Tensor",
     "create_tensor",
 ]
