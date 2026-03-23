@@ -271,7 +271,6 @@ def main():
     from ltx_core.components.patchifiers import VideoLatentPatchifier, get_pixel_coords
     from ltx_core.types import VideoLatentShape
 
-    from models.tt_dit.utils.mochi import get_rot_transformation_mat
     from models.tt_dit.utils.tensor import bf16_tensor_2dshard
 
     fps = 24.0
@@ -281,13 +280,13 @@ def main():
     positions = get_pixel_coords(latent_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
     positions[:, 0, ...] = positions[:, 0, ...] / fps
 
-    # Use reference interleaved RoPE (each head has unique frequency structure).
-    # rotary_embedding_llama + trans_mat implements interleaved rotation natively:
-    #   output = x * cos + rot(x) * sin  where rot creates (-x1,x0,-x3,x2,...)
+    # Use reference SPLIT RoPE with double-precision frequency grid (matching official pipeline).
+    # The model was trained with SPLIT rotation: out[:D/2] = x[:D/2]*cos - x[D/2:]*sin
     from ltx_core.model.transformer.rope import LTXRopeType as RefLTXRopeType
+    from ltx_core.model.transformer.rope import generate_freq_grid_np
     from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute_freqs_cis
 
-    cos_freq, sin_freq = ref_precompute_freqs_cis(
+    cos_heads, sin_heads = ref_precompute_freqs_cis(
         positions.bfloat16(),
         dim=4096,
         out_dtype=torch.float32,
@@ -295,16 +294,15 @@ def main():
         max_pos=[20, 2048, 2048],
         use_middle_indices_grid=True,
         num_attention_heads=32,
-        rope_type=RefLTXRopeType.INTERLEAVED,
+        rope_type=RefLTXRopeType.SPLIT,
+        freq_grid_generator=generate_freq_grid_np,  # double precision
     )
-    # Reshape (1, N, 4096) -> (1, 32, N, 128) for per-head device placement
-    head_dim = 128
-    cos_heads = cos_freq.reshape(1, num_tokens, 32, head_dim).permute(0, 2, 1, 3)
-    sin_heads = sin_freq.reshape(1, num_tokens, 32, head_dim).permute(0, 2, 1, 3)
+    # cos_heads shape: (1, 32, N, D_half) where D_half = head_dim/2 = 64
 
     tt_cos = bf16_tensor_2dshard(cos_heads, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
     tt_sin = bf16_tensor_2dshard(sin_heads, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
-    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh)
+    # No trans_mat for split RoPE (None triggers elementwise rotation in attention)
+    tt_trans_mat = None
 
     # Push prompt to device (1, B, L, D)
     tt_prompt = bf16_tensor(prompt_embeds.unsqueeze(0), device=mesh)

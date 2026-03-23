@@ -172,7 +172,7 @@ class LTXTransformerBlock(Module):
         N: int,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
+        trans_mat: ttnn.Tensor | None,
         prompt_temb: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
@@ -360,7 +360,7 @@ class LTXTransformerModel(Module):
         N: int,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
+        trans_mat: ttnn.Tensor | None,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -432,7 +432,7 @@ class LTXTransformerModel(Module):
         prompt_1BLP: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
+        trans_mat: ttnn.Tensor | None,
         N: int,
         timestep_torch: torch.Tensor,
     ) -> ttnn.Tensor:

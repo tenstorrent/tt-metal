@@ -301,6 +301,15 @@ class LTXAttention(Module):
                 dtype=ttnn.bfloat16,
             )
 
+    @staticmethod
+    def _apply_split_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:
+        """Apply split-style rotary embedding: pairs (x[i], x[i+D/2]) are rotated."""
+        x1 = x[:, :, :, :d_half]
+        x2 = x[:, :, :, d_half:]
+        out1 = ttnn.subtract(ttnn.multiply(x1, cos), ttnn.multiply(x2, sin))
+        out2 = ttnn.add(ttnn.multiply(x2, cos), ttnn.multiply(x1, sin))
+        return ttnn.concat([out1, out2], dim=-1)
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -317,7 +326,6 @@ class LTXAttention(Module):
         """
         if rope_cos is not None:
             assert rope_sin is not None
-            assert trans_mat is not None
             assert prompt_1BLP is None
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -352,13 +360,22 @@ class LTXAttention(Module):
         v_BHNE = create_heads(v_1BNF)
 
         if rope_cos is not None:
-            # LTX-2 uses INTERLEAVED RoPE; cos/sin must be pre-converted to SPLIT layout.
-            q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
-            k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
+            if trans_mat is not None:
+                # Interleaved RoPE: rotary_embedding_llama with trans_mat
+                q_BHNE = ttnn.experimental.rotary_embedding_llama(
+                    q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                )
+                k_BHNE = ttnn.experimental.rotary_embedding_llama(
+                    k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                )
+            else:
+                # Split RoPE: manual elementwise rotation
+                # out[:D/2] = x[:D/2]*cos - x[D/2:]*sin
+                # out[D/2:] = x[D/2:]*cos + x[:D/2]*sin
+                # cos/sin shape: (B, H, N, D/2) — half head_dim
+                D_half = self.head_dim // 2
+                q_BHNE = self._apply_split_rope(q_BHNE, rope_cos, rope_sin, D_half)
+                k_BHNE = self._apply_split_rope(k_BHNE, rope_cos, rope_sin, D_half)
 
         if prompt_1BLP is None:
             if self.parallel_config.sequence_parallel.factor > 1:
