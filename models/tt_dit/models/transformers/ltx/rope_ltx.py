@@ -108,9 +108,13 @@ def interleaved_freqs_cis(freqs: torch.Tensor, pad_size: int) -> tuple[torch.Ten
 
 def split_freqs_cis(freqs: torch.Tensor, pad_size: int, num_attention_heads: int) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute cos/sin with split layout: first-half cos, second-half sin.
+    Compute cos/sin with split layout for rotary_embedding_llama.
 
-    Output shape: (B, num_heads, T, D//2) after reshape and transpose.
+    The llama kernel expects (B, H, N, head_dim) and applies rotation to pairs (x[i], x[i+D/2]).
+    We repeat the unique frequencies: [f0,f1,...,f_{d/2}, f0,f1,...,f_{d/2}] so both halves
+    are rotated correctly.
+
+    Output shape: (B, num_heads, T, head_dim) where head_dim = 2 * D_half.
     """
     cos_freq = freqs.cos()
     sin_freq = freqs.sin()
@@ -122,8 +126,12 @@ def split_freqs_cis(freqs: torch.Tensor, pad_size: int, num_attention_heads: int
         sin_freq = torch.concatenate([sin_padding, sin_freq], axis=-1)
 
     b, t = cos_freq.shape[0], cos_freq.shape[1]
+    # Reshape to per-head: (B, T, H, D_half) -> (B, H, T, D_half)
     cos_freq = cos_freq.reshape(b, t, num_attention_heads, -1).swapaxes(1, 2)
     sin_freq = sin_freq.reshape(b, t, num_attention_heads, -1).swapaxes(1, 2)
+    # Repeat to full head_dim: (B, H, T, D_half) -> (B, H, T, 2*D_half)
+    cos_freq = cos_freq.repeat(1, 1, 1, 2)
+    sin_freq = sin_freq.repeat(1, 1, 1, 2)
     return cos_freq, sin_freq
 
 

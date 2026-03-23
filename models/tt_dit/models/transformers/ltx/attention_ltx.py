@@ -37,6 +37,7 @@ class LTXAttention(Module):
     - Cross-attention with Q + fused KV, RMSNorm on Q/K
     - Ring attention for sequence parallelism
     - Fused to_out + addcmul for gated residual connections
+    - Per-head gating: 2 * sigmoid(linear(x)) applied to SDPA output
     """
 
     sdpa_chunk_size_map = {
@@ -60,6 +61,8 @@ class LTXAttention(Module):
         is_fsdp: bool = False,
         is_self: bool = True,
         context_dim: int | None = None,
+        query_input_dim: int | None = None,
+        output_dim: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -70,6 +73,8 @@ class LTXAttention(Module):
         self.qk_norm = qk_norm
         self.eps = eps
         self.is_self = is_self
+        self.query_input_dim = query_input_dim or dim
+        self.output_dim = output_dim or dim
 
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -105,18 +110,24 @@ class LTXAttention(Module):
         if is_self:
             self.to_qkv = ColParallelLinear(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
         else:
-            self.to_q = ColParallelLinear(dim, dim, **col_parallel_kwargs)
+            self.to_q = ColParallelLinear(self.query_input_dim, dim, **col_parallel_kwargs)
             self.to_kv = ColParallelLinear(kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
 
         self.to_out = ColParallelLinear(
             dim,
-            dim,
+            self.output_dim,
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
+
+        # Per-head gate weights stored on host for exact fp32 gate computation.
+        # Gate logits are small (32 outputs), so host F.linear is fast and avoids
+        # TT bf16 matmul precision issues on the K=4096 reduction.
+        self._gate_weight_host = None  # (num_heads, query_input_dim)
+        self._gate_bias_host = None  # (num_heads,)
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
@@ -175,6 +186,15 @@ class LTXAttention(Module):
         rename_substate(state, "to_out.0", "to_out")
         rename_substate(state, "q_norm", "norm_q")
         rename_substate(state, "k_norm", "norm_k")
+
+        # Extract gate weights to host and remove from device loading.
+        # Gate logits are computed on host (tiny matmul: N×32 vs N×4096 for QKV)
+        # to get exact fp32 precision. The gate values are then pushed to device
+        # as bf16 for the per-head multiply on the SDPA output.
+        gate_state = pop_substate(state, "to_gate_logits")
+        if gate_state:
+            self._gate_weight_host = gate_state["weight"].float()  # (num_heads, query_input_dim)
+            self._gate_bias_host = gate_state.get("bias", torch.zeros(self.num_heads)).float()
 
         def _interleave_heads(tensors: list[torch.Tensor]):
             n_dev = self.parallel_config.tensor_parallel.factor
@@ -239,6 +259,48 @@ class LTXAttention(Module):
         )
         return output
 
+    def _compute_gate_on_host(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor | None:
+        """Compute per-head gate on host for exact fp32 precision.
+
+        Gate logits = linear(x, W_gate, b_gate) → 2*sigmoid(logits)
+        Returns gate tensor on device with shape (B, H_local, N, 1) for BHNE broadcast multiply.
+        Returns None if no gate weights are loaded.
+        """
+        if self._gate_weight_host is None:
+            return None
+
+        # Read spatial from device for host-side gate computation
+        spatial_host = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).float()
+        gate_logits = torch.nn.functional.linear(spatial_host, self._gate_weight_host, self._gate_bias_host)
+        gate_values = 2.0 * torch.sigmoid(gate_logits)  # (1, B, N, H_total) in fp32
+
+        # Permute to BHNE format: (B, H_total, N, 1)
+        gate_bhne = gate_values.permute(1, 3, 2, 0).contiguous().bfloat16()
+
+        # Shard across TP devices if needed
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        if tp_factor > 1:
+            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+            mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                mesh_shape=tuple(self.mesh_device.shape),
+                dims=[None if i != tp_axis else 1 for i in range(2)],
+            )
+            return ttnn.from_torch(
+                gate_bhne,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=mapper,
+            )
+        else:
+            return ttnn.from_torch(
+                gate_bhne,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -263,6 +325,11 @@ class LTXAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
+        # Compute per-head gate on host (exact fp32) before QKV projections modify spatial_1BND.
+        # Reference: gate_logits = to_gate_logits(x), then applied after SDPA as:
+        #   out = out.view(B,T,H,D) * (2*sigmoid(gate_logits)).unsqueeze(-1)
+        gate_bhne = self._compute_gate_on_host(spatial_1BND)
+
         if self.is_self:
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         else:
@@ -270,8 +337,7 @@ class LTXAttention(Module):
             q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # LTX-2: RMSNorm WITHOUT RoPE (RoPE is per-head, applied after head split)
-        # Don't pass num_heads_per_device — we split heads manually after norm
+        # RMSNorm on Q/K (RoPE applied per-head after head split)
         q_normed = self.norm_q(q_1BNF)
         k_normed = self.norm_k(k_1BNF)
 
@@ -281,12 +347,12 @@ class LTXAttention(Module):
             )
             return out
 
-        # Split into heads, then apply per-head RoPE
         q_BHNE = create_heads(q_normed)
         k_BHNE = create_heads(k_normed)
         v_BHNE = create_heads(v_1BNF)
 
         if rope_cos is not None:
+            # LTX-2 uses INTERLEAVED RoPE; cos/sin must be pre-converted to SPLIT layout.
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
                 q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
             )
@@ -343,6 +409,12 @@ class LTXAttention(Module):
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
+
+        # Apply per-head gate in BHNE space (before concatenate_heads).
+        # Mathematically equivalent to the reference which applies gate after concat_heads
+        # in (B,T,H,D) format — both multiply each head's output by its scalar gate.
+        if gate_bhne is not None:
+            spatial_BHNE = ttnn.multiply(spatial_BHNE, gate_bhne)
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
