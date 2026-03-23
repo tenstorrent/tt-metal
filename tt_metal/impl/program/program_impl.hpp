@@ -329,6 +329,22 @@ public:
         return get_kernel(get_kernel_handle(name));
     }
 
+    // Metal 2.0: Runtime argument schema for validation
+    struct KernelRTASchema {
+        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
+        size_t num_common_runtime_args = 0;
+    };
+
+    // Metal 2.0: Runtime argument schema registration and lookup
+    void register_kernel_rta_schema(
+        const KernelSpecName& name,
+        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+        size_t num_common_runtime_args);
+    const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
+
+    // Metal 2.0: Get all registered kernel names (for completeness validation)
+    std::vector<KernelSpecName> get_registered_kernel_names() const;
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -406,6 +422,7 @@ private:
         std::unordered_map<KernelSpecName, KernelHandle> kernel_handles;
         std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
+        std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
