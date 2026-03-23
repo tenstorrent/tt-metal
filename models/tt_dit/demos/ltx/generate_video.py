@@ -350,8 +350,9 @@ def main():
             timestep_torch=timestep_torch,
         )
         # Model output is velocity; convert to x0: denoised = sample - velocity * sigma
+        # Match reference X0Model: to_denoised returns bf16 (sample.dtype)
         velocity = LTXTransformerModel.device_to_host(tt_denoised).squeeze(0)
-        denoised = latent.float() - velocity.float() * sigma
+        denoised = (latent.bfloat16().float() - velocity.float() * sigma).bfloat16()
 
         # CFG with variance rescaling (matching reference MultiModalGuider.calculate)
         if do_cfg:
@@ -365,17 +366,25 @@ def main():
                 timestep_torch=timestep_torch,
             )
             uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)
-            uncond = latent.float() - uncond_velocity.float() * sigma
+            uncond = (latent.bfloat16().float() - uncond_velocity.float() * sigma).bfloat16()
             # Reference formula: pred = cond + (scale - 1) * (cond - uncond)
-            pred = denoised + (args.guidance_scale - 1) * (denoised - uncond)
+            # Match reference precision: denoised and uncond are bf16
+            pred = denoised.float() + (args.guidance_scale - 1) * (denoised.float() - uncond.float())
             # Variance rescaling to prevent oversaturation
             rescale = 0.7
-            factor = rescale * (denoised.std() / pred.std()) + (1 - rescale)
-            denoised = pred * factor
+            factor = rescale * (denoised.float().std() / pred.std()) + (1 - rescale)
+            denoised = (pred * factor).bfloat16()
 
-        latent = euler_step(latent, denoised, sigma, sigma_next)
+        if do_cfg:
+            logger.info(
+                f"  DBG: vel=[{velocity.min():.3f},{velocity.max():.3f}] "
+                f"den=[{(latent.float()-velocity.float()*sigma).min():.3f},{(latent.float()-velocity.float()*sigma).max():.3f}] "
+                f"unc=[{uncond.min():.3f},{uncond.max():.3f}] "
+                f"factor={factor:.4f}"
+            )
+        latent = euler_step(latent, denoised, sigma, sigma_next).bfloat16().float()
 
-        if (step_idx + 1) % 5 == 0 or step_idx == 0 or step_idx == args.steps - 1:
+        if True:  # Log every step for debugging
             elapsed = time.time() - denoise_start
             logger.info(
                 f"Step {step_idx+1}/{args.steps}: sigma {sigma:.4f} -> {sigma_next:.4f}, "
