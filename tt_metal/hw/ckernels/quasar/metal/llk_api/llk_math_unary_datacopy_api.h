@@ -15,7 +15,7 @@
  *
  * @brief Initialize eltwise unary datacopy operations
  *
- * @tparam DATA_COPY_TYPE sets which src register to copy from, values = <A2D, B2D>
+ * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam IS_32b_DEST_EN set if math destination register is set to Float32/Int32 mode
  * @param operand: The input operand circular buffer
  * This function prepares the math hardware to copy a specified number of rows
@@ -31,8 +31,10 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 }
 
 /**
+ * @brief Performs an eltwise unary datacopy for a single tile.
  *
- * @brief Perform an eltwise unary datacopy operation
+ * @param dst_index Tile index into the destination register.
+ * @param operand The input operand logical dataflow buffer id.
  *
  * @param dst_index: Tile index into the destination register
  * @param operand: The input operand circular buffer
@@ -45,4 +47,27 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
+}
+
+/**
+ * @brief Performs an eltwise unary datacopy for a block of tiles.
+ *
+ * @param start_dst_index Starting tile index in the destination register.
+ * @param ntiles Number of tiles to copy to the destination register.
+ * @param operand The input operand logical dataflow buffer id.
+ *
+ * This function copies a contiguous block of tiles
+ * from the srcA or srcB register to the destination register.
+ */
+inline void llk_math_eltwise_unary_datacopy_block(
+    const std::uint32_t start_dst_index, const std::uint32_t ntiles, const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+
+    for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
+        LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+
+        _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
+    }
 }
