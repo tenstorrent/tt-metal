@@ -563,11 +563,19 @@ class WanTransformer3DModel(Module):
             del state["patch_embedding.bias"]
 
     def get_rope_features(self, grid_id: torch.Tensor):
-        """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L)."""
-        if tuple(grid_id.shape) not in self.cached_rope_features:
+        """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L).
+
+        Cache key must include grid *values*, not only shape: multi-chunk generate passes the same
+        token layout with different ``frame_st_id`` (temporal offset in ``get_mesh_id``). Shape-only
+        keys incorrectly reuse chunk-0 RoPE for all chunks → static-looking decoded video while
+        single-chunk PCC vs torch stays high.
+        """
+        gid_cpu = grid_id.detach().contiguous().cpu()
+        cache_key = (tuple(grid_id.shape), gid_cpu.numpy().tobytes())
+        if cache_key not in self.cached_rope_features:
             rope_features = self.prepare_rope_features(grid_id)
-            self.cached_rope_features[tuple(grid_id.shape)] = rope_features
-        return self.cached_rope_features[tuple(grid_id.shape)]
+            self.cached_rope_features[cache_key] = rope_features
+        return self.cached_rope_features[cache_key]
 
     def prepare_rope_features(self, grid_id: torch.Tensor):
         """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L). Pads for sequence parallel."""
