@@ -500,6 +500,44 @@ TEST(FaultTolerance, IsRevokedFalseBeforeFailure) {
     ctx->barrier();
 }
 
+TEST(FaultTolerance, IsRevokedTrueAfterDetectionBeforeShrink) {
+    //----------------------------------------------------------------------
+    // Verify that is_revoked() becomes true after a rank failure is detected
+    // and stays true until revoke_and_shrink() installs a healthy communicator.
+    //----------------------------------------------------------------------
+    const auto& ctx = DistributedContext::get_current_world();
+    SKIP_IF_NO_ULFM(ctx);
+
+    const int world = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world < 2) {
+        GTEST_SKIP() << "Need at least 2 ranks";
+    }
+
+    auto* mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    ASSERT_NE(mpi_ctx, nullptr);
+    mpi_ctx->set_failure_policy(FailurePolicy::FAULT_TOLERANT);
+
+    if (rank == 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        raise(SIGKILL);
+    }
+
+    bool detected = false;
+    try {
+        ctx->barrier();
+    } catch (const DistributedException&) {
+        detected = true;
+        EXPECT_TRUE(ctx->is_revoked()) << "Rank " << rank << ": communicator should be marked revoked before shrink";
+        ctx->revoke_and_shrink();
+        EXPECT_FALSE(ctx->is_revoked()) << "Rank " << rank << ": communicator should be healthy again after shrink";
+    }
+
+    EXPECT_TRUE(detected) << "Rank " << rank << ": should have detected rank 1 failure";
+
+    ctx->barrier();
+}
+
 TEST(FaultTolerance, SupportsFaultToleranceReported) {
     //----------------------------------------------------------------------
     // Verify supports_fault_tolerance() returns a consistent value across

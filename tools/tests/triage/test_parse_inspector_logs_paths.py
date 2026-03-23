@@ -80,9 +80,37 @@ def test_get_log_directory_falls_back_to_rank_zero_without_rank_env(monkeypatch,
 
 def test_get_log_directory_falls_back_to_tt_metal_home_when_logs_path_unset(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
+    monkeypatch.delenv("TT_RUN_ORIGINAL_CWD", raising=False)
+    (tmp_path / "cwd").mkdir()
+    monkeypatch.chdir(tmp_path / "cwd")
     monkeypatch.setenv("TT_METAL_HOME", str(tmp_path))
 
     assert get_log_directory() == str(tmp_path / "generated" / "inspector")
+
+
+def test_get_log_directory_falls_back_to_tt_run_original_cwd_when_logs_path_unset(monkeypatch, tmp_path: Path):
+    launch_root = tmp_path / "launch-root"
+    rank_dir = launch_root / "host-a_rank_3" / "generated" / "inspector"
+    rank_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
+    monkeypatch.delenv("TT_METAL_HOME", raising=False)
+    monkeypatch.setenv("TT_RUN_ORIGINAL_CWD", str(launch_root))
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "3")
+
+    assert get_log_directory() == str(rank_dir)
+
+
+def test_get_log_directory_falls_back_to_existing_cwd_when_logs_path_unset(monkeypatch, tmp_path: Path):
+    rank_dir = tmp_path / "host-a_rank_0" / "generated" / "inspector"
+    rank_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
+    monkeypatch.delenv("TT_RUN_ORIGINAL_CWD", raising=False)
+    monkeypatch.delenv("TT_METAL_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert get_log_directory() == str(rank_dir)
 
 
 @pytest.mark.parametrize("rank_var", ["PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"])

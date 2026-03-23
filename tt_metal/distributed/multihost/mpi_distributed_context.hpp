@@ -191,16 +191,26 @@ public:
     /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);
     explicit MPIContext(MPI_Comm comm, MPI_Group group);
-    const MPI_Comm& comm() const { return comm_; }
-    const MPI_Group& group() const { return group_; }
+    MPI_Comm comm() const;
+    MPI_Group group() const;
 
     static void set_current_world(const ContextPtr& ctx);
 
 private:
-    MPI_Comm comm_{MPI_COMM_NULL};
-    MPI_Group group_{MPI_GROUP_NULL};
-    int rank_{0};
-    int size_{0};
+    struct CommunicatorState {
+        MPI_Comm comm{MPI_COMM_NULL};
+        MPI_Group group{MPI_GROUP_NULL};
+        int rank{0};
+        int size{0};
+
+        ~CommunicatorState();
+    };
+
+    [[nodiscard]] static std::shared_ptr<CommunicatorState> build_state(
+        MPI_Comm comm, MPI_Group group = MPI_GROUP_NULL);
+    [[nodiscard]] std::shared_ptr<CommunicatorState> snapshot_state() const;
+
+    std::shared_ptr<CommunicatorState> state_;
     std::atomic_flag revoked_{};  // set when MPIX_Comm_revoke() is called; cleared after shrink
     // Atomic so that set_failure_policy() on one thread and MPI_CHECK_CTX reads
     // on another thread do not race.  Use memory_order_release on write,
@@ -237,15 +247,17 @@ private:
     mutable std::mutex failed_ranks_cache_mutex_;
     mutable std::vector<Rank> cached_failed_ranks_;
 
-    // Protects comm_, group_, rank_, size_ mutations in revoke_and_shrink()
-    // against concurrent reads in other member functions (e.g. send/recv threads
-    // reading comm_ without holding this mutex).
+    // Protects state_ replacement and snapshot acquisition.
     //
-    // INVARIANT: revoke_and_shrink() MUST be called from a single designated
-    // thread.  No concurrent MPI calls should be in flight while shrink is in
-    // progress.  The design does not support concurrent shrink+MPI; attempts to
-    // do so produce a data race on comm_ between the shrink comm_ update and
-    // concurrent MPI_CHECK_CTX reads of comm_.
+    // Individual MPI entry points take a shared_ptr snapshot under this mutex,
+    // then release the mutex before entering MPI. This avoids use-after-free on
+    // MPI_Comm / MPI_Group when revoke_and_shrink() swaps in a new communicator.
+    //
+    // Concurrent shrink+MPI still requires caller-level coordination for
+    // semantics: in-flight operations may continue against the pre-shrink
+    // communicator and legitimately observe MPI_ERR_REVOKED / rank-failure
+    // exceptions. What this mutex guarantees is safe handle lifetime, not
+    // transparent multi-threaded recovery.
     mutable std::mutex comm_mutex_;
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD

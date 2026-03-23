@@ -173,16 +173,36 @@ except MPIRankFailureError as e:
 - **mpirun flags**: `--with-ft ulfm` must be passed to `mpirun` — `ttrun.py` does this automatically
 - **Compile-time define**: `OMPI_HAS_ULFM` controls whether C++ ULFM code paths are compiled in; without it, ULFM detection is a no-op and `FAULT_TOLERANT` policy is rejected at runtime
 
+## Automated Test Coverage
+
+There is now an automated ULFM / launcher / triage harness in physical multihost CI:
+
+- **Workflow/job**: `.github/workflows/multi-host-physical.yaml` → `tooling-and-mpi-t3k`
+- **Entry script**: `tests/scripts/multihost/run_dual_t3k_tooling_tests.sh`
+
+Current automated coverage includes:
+
+- **Real multihost ULFM recovery tests** via `tests/tt_metal/multihost/run_fault_tolerance_tests.sh`
+- **Single-node ULFM gap tests** via `tests/tt_metal/multihost/run_single_node_ulfm_tests.sh` for fast-fail exit 70, `MPI_Finalize` watchdog, terminate handler, `agree()`, `failed_ranks()`, and `is_revoked()`
+- **Pure-Python launcher / mpi4py tests** via `tests/ttnn/distributed/test_ttrun_exit_codes.py` and `tests/ttnn/distributed/test_mpi_fault_python.py`
+- **Triage path / rank-resolution tests** via `tools/tests/triage/test_parse_inspector_logs_paths.py` and `tools/tests/triage/test_multihost_rank_resolution*.py`
+
+What is still not continuously covered:
+
+- **Manual-dispatch CI only**: `tooling-and-mpi-t3k` exists today, but it is not on the scheduled multihost cadence yet
+- **Topology scope**: automated ULFM coverage is currently T3K-focused plus single-node synthetic tests, not every multihost platform or application recovery loop
+- **Debugging new failure modes**: local crash-injection / timeout experiments are still useful when validating behavior outside the scripted test matrix
+
 
 ## Known Limitations
 
 - **mpi4py ULFM bindings**: `comm.Revoke()`, `comm.Get_failed()`, `comm.Shrink()` may not exist if mpi4py was linked against a non-ULFM OpenMPI. `mpi_fault.py` degrades gracefully — `install_ulfm_handler` becomes a no-op, and `ulfm_guard` falls back to standard error handling.
 - **PRRTE watchdog gap**: `prte_abort_on_non_zero_status` only fires when the rank's process actually exits. A rank stuck in an infinite loop (no crash, no exit) will **not** trigger it. Use `TT_RUN_TIMEOUT` as the backstop.
-- **No automated ULFM tests**: there is no CI test harness for ULFM paths yet. Manual test plan is tracked in PR #40457.
+- **Continuous CI gap**: the current ULFM tooling job is manual-dispatch only, so failures are not yet surfaced on every scheduled multihost run.
 - **Shrink overhead**: `revoke_and_shrink` creates a new communicator, which is an expensive collective across all surviving ranks. Do not call it in a hot loop.
 
 
-## Testing ULFM Locally (Manual)
+## Additional Manual Validation
 
 ### Verify ULFM is enabled in the mpirun command
 

@@ -357,7 +357,9 @@ public:
     const std::string& get_jit_scratch_dir() const;
 
     // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
-    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
+    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to the current working directory.
+    // `tt-run` now sets TT_METAL_LOGS_PATH explicitly to the launch directory so distributed
+    // jobs and post-run triage agree on the same logs root.
     const std::string& get_logs_dir() const;
 
     bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }

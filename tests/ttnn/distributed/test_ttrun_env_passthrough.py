@@ -616,6 +616,20 @@ def test_rank_environment_keeps_cache_shared_but_scopes_logs_path_per_rank(monke
 
 
 @pytest.mark.unit
+def test_rank_environment_provides_default_logs_path_from_launch_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
+    monkeypatch.setenv("TT_METAL_HOME", "/opt/tt-metal-install")
+
+    binding = RankBinding(rank=6, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_6"
+
+    assert env["TT_METAL_LOGS_PATH"] == str(ttrun.ORIGINAL_CWD / rank_suffix)
+
+
+@pytest.mark.unit
 def test_rank_environment_does_not_double_append_rank_scoped_suffix(monkeypatch, tmp_path):
     rank_suffix = f"{socket.gethostname()}_rank_2"
     monkeypatch.setenv("TT_METAL_CACHE", f"/nfs/shared/tt-metal-cache/{rank_suffix}")

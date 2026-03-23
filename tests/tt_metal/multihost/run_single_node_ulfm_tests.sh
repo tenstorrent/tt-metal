@@ -63,35 +63,39 @@ echo "--- FailedRanksBeforeAnyFailure (-np 4) ---"
 echo "--- IsRevokedFalseBeforeFailure (-np 2) ---"
 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.IsRevokedFalseBeforeFailure || fail=$((fail + 1))
 
-# ── 8. supports_fault_tolerance() consistency ────────────────────────
+# ── 8. is_revoked() after failure detection (before shrink) ──────────
+echo "--- IsRevokedTrueAfterDetectionBeforeShrink (-np 4) ---"
+"$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.IsRevokedTrueAfterDetectionBeforeShrink || fail=$((fail + 1))
+
+# ── 9. supports_fault_tolerance() consistency ────────────────────────
 echo "--- SupportsFaultToleranceReported (-np 2) ---"
 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.SupportsFaultToleranceReported || fail=$((fail + 1))
 
-# ── 9. set_failure_policy idempotency ────────────────────────────────
+# ── 10. set_failure_policy idempotency ───────────────────────────────
 echo "--- SetFailurePolicyIsIdempotent (-np 2) ---"
 "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.SetFailurePolicyIsIdempotent || fail=$((fail + 1))
 
-# ── 10. Success path no error output ─────────────────────────────────
+# ── 11. Success path no error output ─────────────────────────────────
 echo "--- SuccessPathNoErrorOutput (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.SuccessPathNoErrorOutput || fail=$((fail + 1))
 
-# ── 11. agree() on single-rank sub-communicator ──────────────────────
+# ── 12. agree() on single-rank sub-communicator ──────────────────────
 echo "--- AgreeMixedVotesSingleRank (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeMixedVotesSingleRank || fail=$((fail + 1))
 
-# ── 12. Double revoke guard (rank kill + recovery) ───────────────────
+# ── 13. Double revoke guard (rank kill + recovery) ───────────────────
 echo "--- DoubleRevokeGuard (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.DoubleRevokeGuard || fail=$((fail + 1))
 
-# ── 13. agree() after revoke_and_shrink (rank kill + recovery) ───────
+# ── 14. agree() after revoke_and_shrink (rank kill + recovery) ───────
 echo "--- AgreeAfterRevokeAndShrink (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.AgreeAfterRevokeAndShrink || fail=$((fail + 1))
 
-# ── 14. MPIRankFailureException diagnostic context ───────────────────
+# ── 15. MPIRankFailureException diagnostic context ───────────────────
 echo "--- MPIRankFailureExceptionCarriesContext (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.MPIRankFailureExceptionCarriesContext || fail=$((fail + 1))
 
-# ── 15. failed_ranks() after detection (rank kill + recovery) ────────
+# ── 16. failed_ranks() after detection (rank kill + recovery) ────────
 echo "--- FailedRanksAfterDetection (-np 4) ---"
 "$MPIRUN" --with-ft ulfm -np 4 "$TEST_BIN" --gtest_filter=FaultTolerance.FailedRanksAfterDetection || fail=$((fail + 1))
 

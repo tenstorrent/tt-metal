@@ -212,7 +212,8 @@ static void handle_rank_failure(
     std::string_view operation,
     FailurePolicy policy,
     std::vector<Rank>* failed_ranks_cache,
-    std::mutex* failed_ranks_cache_mutex) {
+    std::mutex* failed_ranks_cache_mutex,
+    std::atomic_flag* revoked_flag) {
     // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
     // Always attempt identify_failed_ranks() regardless of error code — even for
     // MPIX_ERR_REVOKED.  On a revoked comm, MPIX_Comm_failure_ack() may still succeed
@@ -234,6 +235,12 @@ static void handle_rank_failure(
             std::lock_guard lock(*failed_ranks_cache_mutex);
             *failed_ranks_cache = std::move(parsed);
         }
+    }
+
+    // Mark the communicator revoked before throwing or shrinking so callers can
+    // observe that the current communicator is no longer healthy.
+    if (revoked_flag) {
+        revoked_flag->test_and_set(std::memory_order_release);
     }
 
     // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
@@ -292,15 +299,22 @@ inline void mpi_check_ctx(
     int cached_rank,
     [[maybe_unused]] FailurePolicy policy,
     [[maybe_unused]] std::vector<Rank>* failed_ranks_cache = nullptr,
-    [[maybe_unused]] std::mutex* failed_ranks_cache_mutex = nullptr) {
+    [[maybe_unused]] std::mutex* failed_ranks_cache_mutex = nullptr,
+    [[maybe_unused]] std::atomic_flag* revoked_flag = nullptr) {
     if (error_code == MPI_SUCCESS) {
         return;
     }
 #if OMPI_HAS_ULFM
     if (is_ulfm_failure(error_code)) {
         handle_rank_failure(
-            comm, cached_rank, error_code, call_text, policy,
-            failed_ranks_cache, failed_ranks_cache_mutex);
+            comm,
+            cached_rank,
+            error_code,
+            call_text,
+            policy,
+            failed_ranks_cache,
+            failed_ranks_cache_mutex,
+            revoked_flag);
         // In FAST_FAIL mode this is [[noreturn]].
         // In FAULT_TOLERANT mode handle_rank_failure throws, so we also never reach here.
         return;  // unreachable, but silences compiler warnings
@@ -316,18 +330,52 @@ inline void mpi_check_ctx(
     return flag != 0;
 }
 
+MPIContext::CommunicatorState::~CommunicatorState() {
+    if (was_mpi_finalized()) {
+        return;
+    }
+    if (comm != MPI_COMM_WORLD && comm != MPI_COMM_NULL) {
+        if (group != MPI_GROUP_NULL) {
+            MPI_Group_free(&group);
+        }
+        MPI_Comm_free(&comm);
+    }
+}
+
+std::shared_ptr<MPIContext::CommunicatorState> MPIContext::build_state(MPI_Comm comm, MPI_Group group) {
+    MPI_CHECK(MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN));
+
+    auto state = std::make_shared<CommunicatorState>();
+    state->comm = comm;
+    if (group == MPI_GROUP_NULL) {
+        MPI_CHECK(MPI_Comm_group(comm, &state->group));
+    } else {
+        state->group = group;
+    }
+    MPI_CHECK(MPI_Comm_rank(comm, &state->rank));
+    MPI_CHECK(MPI_Comm_size(comm, &state->size));
+    return state;
+}
+
+std::shared_ptr<MPIContext::CommunicatorState> MPIContext::snapshot_state() const {
+    std::lock_guard lock(comm_mutex_);
+    TT_FATAL(state_ != nullptr, "MPIContext has no active communicator state");
+    return state_;
+}
+
 // MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
 // MPI_CHECK_CTX -- ULFM-aware, for MPIContext member functions
 #define MPI_CHECK(call) mpi_check((call), #call)
-#define MPI_CHECK_CTX(call)                              \
+#define MPI_CHECK_STATE(state, call)                     \
     mpi_check_ctx(                                       \
         (call),                                          \
         #call,                                           \
-        comm_,                                           \
-        rank_,                                           \
+        (state)->comm,                                   \
+        (state)->rank,                                   \
         failure_policy_.load(std::memory_order_acquire), \
         &cached_failed_ranks_,                           \
-        &failed_ranks_cache_mutex_)
+        &failed_ranks_cache_mutex_,                      \
+        &revoked_)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
@@ -557,55 +605,70 @@ bool MPIContext::is_initialized() {
     return is_mpi_initialized != 0;
 }
 
-MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
-    MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
-    MPI_CHECK_CTX(MPI_Comm_group(comm_, &group_));
-    MPI_CHECK_CTX(MPI_Comm_rank(comm_, &rank_));
-    MPI_CHECK_CTX(MPI_Comm_size(comm_, &size_));
+MPIContext::MPIContext(MPI_Comm comm) : state_(build_state(comm)) { id_ = DistributedContext::generate_unique_id(); }
+
+MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : state_(build_state(comm, group)) {
     id_ = DistributedContext::generate_unique_id();
 }
 
-MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(group) {
-    MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
-    MPI_CHECK_CTX(MPI_Comm_rank(comm_, &rank_));
-    MPI_CHECK_CTX(MPI_Comm_size(comm_, &size_));
-    id_ = DistributedContext::generate_unique_id();
-}
+MPI_Comm MPIContext::comm() const { return snapshot_state()->comm; }
 
-Rank MPIContext::rank() const { return Rank(rank_); }
-Size MPIContext::size() const { return Size(size_); }
+MPI_Group MPIContext::group() const { return snapshot_state()->group; }
+
+Rank MPIContext::rank() const { return Rank(snapshot_state()->rank); }
+Size MPIContext::size() const { return Size(snapshot_state()->size); }
 bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
-void MPIContext::barrier() const { MPI_CHECK_CTX(MPI_Barrier(comm_)); }
+
+void MPIContext::barrier() const {
+    const auto state = snapshot_state();
+    MPI_CHECK_STATE(state, MPI_Barrier(state->comm));
+}
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
 void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK_CTX(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+    const auto state = snapshot_state();
+    MPI_CHECK_STATE(state, MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, state->comm));
 }
 
 void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK_CTX(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+    const auto state = snapshot_state();
+    MPI_CHECK_STATE(state, MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, state->comm));
 }
 
 void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK_CTX(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
+    const auto state = snapshot_state();
+    MPI_CHECK_STATE(
+        state,
+        MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, state->comm, MPI_STATUS_IGNORE));
 }
 
 RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
+    const auto state = snapshot_state();
     MPI_Request req{};
-    MPI_CHECK_CTX(MPI_Isend(
-        const_cast<std::byte*>(buf.data()), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_, &req));
+    MPI_CHECK_STATE(
+        state,
+        MPI_Isend(
+            const_cast<std::byte*>(buf.data()),
+            static_cast<int>(buf.size()),
+            MPI_CHAR,
+            *dest,
+            *tag,
+            state->comm,
+            &req));
     return std::make_shared<MPIRequest>(req);
 }
 
 RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
+    const auto state = snapshot_state();
     MPI_Request req{};
-    MPI_CHECK_CTX(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
+    MPI_CHECK_STATE(
+        state, MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, state->comm, &req));
     return std::make_shared<MPIRequest>(req);
 }
 
@@ -613,12 +676,14 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK_CTX(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
+    const auto state = snapshot_state();
+    MPI_CHECK_STATE(state, MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, state->comm));
 }
 
 void MPIContext::all_reduce(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     check_size_fits_int(send_buf.size());
+    const auto state = snapshot_state();
 
     TT_FATAL(
         send_buf.size() == recv_buf.size(),
@@ -638,11 +703,13 @@ void MPIContext::all_reduce(
     // allow in‑place (send == recv) by switching to MPI_IN_PLACE
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : static_cast<void*>(send_buf.data());
 
-    MPI_CHECK_CTX(MPI_Allreduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
+    MPI_CHECK_STATE(
+        state, MPI_Allreduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), state->comm));
 }
 
 void MPIContext::reduce(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
+    const auto state = snapshot_state();
     const int elem_sz = mpi_dtype_size(dtype);
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
@@ -654,7 +721,7 @@ void MPIContext::reduce(
     check_size_fits_int(count);
 
     // On non‑root ranks 'recv_buf' can be any pointer (or even nullptr).  On root it must fit.
-    if (rank() == root) {
+    if (state->rank == *root) {
         TT_FATAL(
             recv_buf.size() == send_buf.size(),
             "reduce: on root rank, recv size {} != send size {}",
@@ -664,41 +731,50 @@ void MPIContext::reduce(
 
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK_CTX(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
+    MPI_CHECK_STATE(
+        state,
+        MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, state->comm));
 }
 
 void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    const auto state = snapshot_state();
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
     // Root must have room for 'size()' times the per‑rank payload.
-    if (rank() == root) {
-        const std::size_t expected = static_cast<std::size_t>(send_count) * (*size());
+    if (state->rank == *root) {
+        const std::size_t expected = static_cast<std::size_t>(send_count) * state->size;
         TT_FATAL(
             recv_buf.size() == expected, "gather: root recv buffer {} bytes, expected {}", recv_buf.size(), expected);
     }
 
-    MPI_CHECK_CTX(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
+    MPI_CHECK_STATE(
+        state,
+        MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, state->comm));
 }
 
 void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    const auto state = snapshot_state();
     const int recv_count = static_cast<int>(recv_buf.size());
     check_size_fits_int(recv_count);
 
-    if (rank() == root) {
-        const std::size_t expected = static_cast<std::size_t>(recv_count) * (*size());
+    if (state->rank == *root) {
+        const std::size_t expected = static_cast<std::size_t>(recv_count) * state->size;
         TT_FATAL(
             send_buf.size() == expected, "scatter: root send buffer {} bytes, expected {}", send_buf.size(), expected);
     }
 
-    MPI_CHECK_CTX(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
+    MPI_CHECK_STATE(
+        state,
+        MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, state->comm));
 }
 
 void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+    const auto state = snapshot_state();
     const int send_count = static_cast<int>(send_buf.size());
     check_size_fits_int(send_count);
 
-    const std::size_t expected_recv = static_cast<std::size_t>(send_count) * (*size());
+    const std::size_t expected_recv = static_cast<std::size_t>(send_count) * state->size;
 
     TT_FATAL(
         recv_buf.size() == expected_recv,
@@ -709,11 +785,13 @@ void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     // allow MPI_IN_PLACE if caller wants to receive in the same buffer
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK_CTX(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
+    MPI_CHECK_STATE(
+        state, MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, state->comm));
 }
 
 void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
-    const int world = *size();
+    const auto state = snapshot_state();
+    const int world = state->size;
 
     TT_FATAL(
         send_buf.size() % world == 0 && recv_buf.size() % world == 0,
@@ -731,12 +809,14 @@ void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     const int block = static_cast<int>(send_buf.size() / world);
     check_size_fits_int(block);
 
-    MPI_CHECK_CTX(MPI_Alltoall(send_buf.data(), block, MPI_CHAR, recv_buf.data(), block, MPI_CHAR, comm_));
+    MPI_CHECK_STATE(
+        state, MPI_Alltoall(send_buf.data(), block, MPI_CHAR, recv_buf.data(), block, MPI_CHAR, state->comm));
 }
 
 void MPIContext::reduce_scatter(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
-    const int world = *size();
+    const auto state = snapshot_state();
+    const int world = state->size;
     const int elem_sz = mpi_dtype_size(dtype);
 
     TT_FATAL(
@@ -765,17 +845,20 @@ void MPIContext::reduce_scatter(
     check_size_fits_int(recv_count);
 
     // --- fixed call -------------------------------------------------------
-    MPI_CHECK_CTX(MPI_Reduce_scatter_block(
-        send_buf.data(),      // sendbuf
-        recv_buf.data(),      // recvbuf
-        recv_count,           // elements per rank
-        dtype_to_mpi(dtype),  // element datatype
-        reduce_to_mpi(op),    // operation (SUM, MAX, …)
-        comm_));              // communicator
+    MPI_CHECK_STATE(
+        state,
+        MPI_Reduce_scatter_block(
+            send_buf.data(),      // sendbuf
+            recv_buf.data(),      // recvbuf
+            recv_count,           // elements per rank
+            dtype_to_mpi(dtype),  // element datatype
+            reduce_to_mpi(op),    // operation (SUM, MAX, …)
+            state->comm));        // communicator
 }
 
 void MPIContext::scan(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    const auto state = snapshot_state();
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
@@ -791,39 +874,44 @@ void MPIContext::scan(
 
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK_CTX(MPI_Scan(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
+    MPI_CHECK_STATE(
+        state, MPI_Scan(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), state->comm));
 }
 /* ---- communicator management ------------------------------------------ */
 
 ContextPtr MPIContext::duplicate() const {
+    const auto state = snapshot_state();
     MPI_Comm dup = MPI_COMM_NULL;
-    MPI_CHECK_CTX(MPI_Comm_dup(comm_, &dup));
+    MPI_CHECK_STATE(state, MPI_Comm_dup(state->comm, &dup));
     return std::make_shared<MPIContext>(dup);
 }
 
 ContextPtr MPIContext::split(Color color, Key key) const {
+    const auto state = snapshot_state();
     MPI_Comm split_comm;
     if (*color == SPLIT_COLOR_UNDEFINED) {
         color = Color(MPI_UNDEFINED);
     }
-    MPI_CHECK_CTX(MPI_Comm_split(comm_, *color, *key, &split_comm));
+    MPI_CHECK_STATE(state, MPI_Comm_split(state->comm, *color, *key, &split_comm));
     return std::make_shared<MPIContext>(split_comm);
 }
 
 ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
+    const auto state = snapshot_state();
     MPI_Group sub_grp = MPI_GROUP_NULL;
     MPI_Comm sub_comm = MPI_COMM_NULL;
 
-    MPI_CHECK_CTX(MPI_Group_incl(group_, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
-    if (MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm) != MPI_SUCCESS) {
+    MPI_CHECK_STATE(state, MPI_Group_incl(state->group, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
+    if (MPI_Comm_create_group(state->comm, sub_grp, 0 /*tag*/, &sub_comm) != MPI_SUCCESS) {
         // sub_comm is not valid, we are not in the group
         MPI_Group_free(&sub_grp);
-        throw MPIDistributedException(rank(), MPI_ERR_GROUP, "MPI_Comm_create_group failed: not in the group");
+        throw MPIDistributedException(
+            Rank{state->rank}, MPI_ERR_GROUP, "MPI_Comm_create_group failed: not in the group");
     }
     if (sub_comm == MPI_COMM_NULL) {
         // we are not in the group
         MPI_Group_free(&sub_grp);
-        throw MPIDistributedException(rank(), MPI_ERR_GROUP, "MPI_Comm_create_group returned empty comm");
+        throw MPIDistributedException(Rank{state->rank}, MPI_ERR_GROUP, "MPI_Comm_create_group returned empty comm");
     }
     MPI_Group_free(&sub_grp);
     return std::make_shared<MPIContext>(sub_comm);
@@ -831,6 +919,7 @@ ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
 
 void MPIContext::translate_ranks_to_other_ctx(
     tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const {
+    const auto state = snapshot_state();
     TT_FATAL(
         ranks.size() == translated_ranks.size(),
         "translate_ranks_to_other_ctx: ranks size {} != translated_ranks size {}",
@@ -839,11 +928,16 @@ void MPIContext::translate_ranks_to_other_ctx(
     auto mpi_context = std::dynamic_pointer_cast<MPIContext>(other_ctx);
     TT_FATAL(mpi_context != nullptr, "translate_ranks_to_other_ctx: other_ctx is not a MPIContext");
 
-    MPI_CHECK_CTX(MPI_Group_translate_ranks(
-        group_, static_cast<int>(ranks.size()), ranks.data(), mpi_context->group(), translated_ranks.data()));
+    MPI_CHECK_STATE(
+        state,
+        MPI_Group_translate_ranks(
+            state->group, static_cast<int>(ranks.size()), ranks.data(), mpi_context->group(), translated_ranks.data()));
 }
 
-void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
+void MPIContext::abort(int error_code) const {
+    const auto state = snapshot_state();
+    MPI_Abort(state->comm, error_code);
+}
 
 void MPIContext::revoke_and_shrink() {
 #if (!OMPI_HAS_ULFM)
@@ -862,7 +956,9 @@ void MPIContext::revoke_and_shrink() {
         ~ShrinkGuard() { flag.clear(std::memory_order_release); }
     } shrink_guard{shrink_in_progress_};
 
-    int rc = MPIX_Comm_revoke(comm_);
+    const auto old_state = snapshot_state();
+
+    int rc = MPIX_Comm_revoke(old_state->comm);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
     }
@@ -870,33 +966,15 @@ void MPIContext::revoke_and_shrink() {
 
     MPI_Comm new_comm = MPI_COMM_NULL;
     MPI_Group new_group = MPI_GROUP_NULL;
-    MPI_CHECK_CTX(MPIX_Comm_shrink(comm_, &new_comm));
+    MPI_CHECK_STATE(old_state, MPIX_Comm_shrink(old_state->comm, &new_comm));
     MPI_Comm_group(new_comm, &new_group);
+    auto new_state = build_state(new_comm, new_group);
 
-    MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
-
-    // Shrink succeeded: update internal state. If any step fails we abort rather
-    // than throw to avoid leaving the context in a partially updated state.
-    int new_rank = 0;
-    int new_size = 0;
-    MPI_Comm_rank(new_comm, &new_rank);
-    MPI_Comm_size(new_comm, &new_size);
-
-    // Free the old communicator *after* shrink completes.
-    // Hold comm_mutex_ to prevent concurrent reads of comm_/group_/rank_/size_
-    // from racing with this update (e.g. a send/recv on another thread).
+    // Swap the current communicator snapshot atomically. Old readers keep the
+    // pre-shrink communicator alive through their shared_ptr snapshots.
     {
         std::lock_guard lock(comm_mutex_);
-
-        MPI_Comm old_comm = this->comm_;
-        if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
-            MPI_Comm_free(&old_comm);
-            MPI_Group_free(&group_);
-        }
-        this->comm_ = new_comm;
-        this->group_ = new_group;
-        this->rank_ = new_rank;
-        this->size_ = new_size;
+        state_ = std::move(new_state);
     }
 
     revoked_.clear(std::memory_order_release);  // cleared: new communicator is healthy
@@ -908,7 +986,8 @@ void MPIContext::revoke_and_shrink() {
 }
 
 bool MPIContext::is_revoked() {
-    // revoked_ is set in revoke_and_shrink() and cleared after a successful shrink.
+    // revoked_ is set by both failure detection (handle_rank_failure) and
+    // explicit revoke_and_shrink(), then cleared after a successful shrink.
     // This is correct for both ULFM and non-ULFM builds: without ULFM, revocation
     // never happens so the flag is always clear.
     // NOTE: This is a snapshot read; the communicator may become revoked between
@@ -928,10 +1007,19 @@ void MPIContext::set_failure_policy(FailurePolicy policy) {
 
 std::optional<bool> MPIContext::agree([[maybe_unused]] bool local_value) const {
 #if OMPI_HAS_ULFM
+    const auto state = snapshot_state();
     int flag = local_value ? 1 : 0;
-    int rc = MPIX_Comm_agree(comm_, &flag);
+    int rc = MPIX_Comm_agree(state->comm, &flag);
     if (rc != MPI_SUCCESS) {
-        mpi_check_ctx(rc, "MPIX_Comm_agree", comm_, rank_, failure_policy_.load(std::memory_order_acquire));
+        mpi_check_ctx(
+            rc,
+            "MPIX_Comm_agree",
+            state->comm,
+            state->rank,
+            failure_policy_.load(std::memory_order_acquire),
+            &cached_failed_ranks_,
+            &failed_ranks_cache_mutex_,
+            &revoked_);
     }
     return flag != 0;
 #else
@@ -944,6 +1032,7 @@ std::optional<bool> MPIContext::agree([[maybe_unused]] bool local_value) const {
 
 std::vector<Rank> MPIContext::failed_ranks() const {
 #if OMPI_HAS_ULFM
+    const auto state = snapshot_state();
     // Query ULFM for currently-acked failed ranks on this communicator.
     //
     // Attempt MPIX_Comm_failure_ack() first (best-effort, ignore return code).
@@ -967,9 +1056,9 @@ std::vector<Rank> MPIContext::failed_ranks() const {
     //
     //   When reliable failed-rank identification is required, compare communicator
     //   size before vs. after revoke_and_shrink() — the delta is always accurate.
-    MPIX_Comm_failure_ack(comm_);  // best-effort; ignore return code
+    MPIX_Comm_failure_ack(state->comm);  // best-effort; ignore return code
     MPI_Group failed_group = MPI_GROUP_NULL;
-    if (MPIX_Comm_failure_get_acked(comm_, &failed_group) != MPI_SUCCESS) {
+    if (MPIX_Comm_failure_get_acked(state->comm, &failed_group) != MPI_SUCCESS) {
         std::lock_guard cache_lock(failed_ranks_cache_mutex_);
         return cached_failed_ranks_;
     }
@@ -981,7 +1070,7 @@ std::vector<Rank> MPIContext::failed_ranks() const {
         return cached_failed_ranks_;
     }
     MPI_Group world_group = MPI_GROUP_NULL;
-    MPI_Comm_group(comm_, &world_group);
+    MPI_Comm_group(state->comm, &world_group);
     std::vector<int> local_indices(failed_size);
     std::iota(local_indices.begin(), local_indices.end(), 0);
     std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);
@@ -1006,20 +1095,16 @@ std::vector<Rank> MPIContext::failed_ranks() const {
 }
 
 std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    const auto state = snapshot_state();
     int size_bytes = 0;
     MPI_Status status;
-    MPI_CHECK_CTX(MPI_Probe(*source, *tag, comm_, &status));
-    MPI_CHECK_CTX(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    MPI_CHECK_STATE(state, MPI_Probe(*source, *tag, state->comm, &status));
+    MPI_CHECK_STATE(state, MPI_Get_count(&status, MPI_CHAR, &size_bytes));
     return static_cast<std::size_t>(size_bytes);
 }
 
 MPIContext::~MPIContext() {
-    if (was_mpi_finalized()) {
-        return;  // MPI_Finalize() already called
-    }
-    if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
-        MPI_Group_free(&group_);
-        MPI_Comm_free(&comm_);
-    }
+    std::lock_guard lock(comm_mutex_);
+    state_.reset();
 }
 }  // namespace tt::tt_metal::distributed::multihost

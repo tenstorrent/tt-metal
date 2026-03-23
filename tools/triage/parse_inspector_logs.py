@@ -11,7 +11,8 @@ Usage:
 
 Arguments:
     <log-directory>  Path to inspector log directory. Defaults to inspector logs derived from
-                     TT_METAL_LOGS_PATH when set, otherwise $TT_METAL_HOME/generated/inspector.
+                     TT_METAL_LOGS_PATH when set, otherwise tt-run's launch directory /
+                     current working directory, then $TT_METAL_HOME/generated/inspector.
 
 Description:
     This script parses inspector logs and transfers them into a structured format.
@@ -494,23 +495,38 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
     return str(existing_candidates[0])
 
 
+def _resolve_inspector_directory_from_logs_root(logs_root: str | Path, *, require_exists: bool = False) -> str | None:
+    logs_root_path = Path(logs_root)
+    rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root_path)
+    if rank_scoped_directory is not None:
+        return rank_scoped_directory
+
+    default_directory = logs_root_path / "generated" / "inspector"
+    if require_exists and not default_directory.exists():
+        return None
+    return str(default_directory)
+
+
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
-    elif "TT_METAL_LOGS_PATH" in os.environ:
-        logs_root = Path(os.environ.get("TT_METAL_LOGS_PATH"))
-        default_directory = logs_root / "generated" / "inspector"
-        rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root)
-        if rank_scoped_directory is not None:
-            return rank_scoped_directory
 
-        return str(default_directory)
-    elif "TT_METAL_HOME" in os.environ:
-        return str(Path(os.environ.get("TT_METAL_HOME")) / "generated" / "inspector")
-    else:
-        import tempfile
+    if os.environ.get("TT_METAL_LOGS_PATH"):
+        return _resolve_inspector_directory_from_logs_root(os.environ["TT_METAL_LOGS_PATH"])
 
-        return str(Path(tempfile.gettempdir()) / "tt-metal" / "inspector")
+    if os.environ.get("TT_RUN_ORIGINAL_CWD"):
+        return _resolve_inspector_directory_from_logs_root(os.environ["TT_RUN_ORIGINAL_CWD"])
+
+    cwd_candidate = _resolve_inspector_directory_from_logs_root(Path.cwd(), require_exists=True)
+    if cwd_candidate is not None:
+        return cwd_candidate
+
+    if os.environ.get("TT_METAL_HOME"):
+        return _resolve_inspector_directory_from_logs_root(os.environ["TT_METAL_HOME"])
+
+    import tempfile
+
+    return _resolve_inspector_directory_from_logs_root(Path(tempfile.gettempdir()) / "tt-metal")
 
 
 class InspectorLogsData:

@@ -880,6 +880,12 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         else:
             env["TT_METAL_CACHE"] = str(DEFAULT_CACHE_FALLBACK)
 
+    # Make the runtime's implicit "current working directory" logs default
+    # explicit at the launcher boundary so post-run triage can rediscover the
+    # same root even after rank-local environments are gone.
+    if "TT_METAL_LOGS_PATH" not in env and "TT_METAL_LOGS_PATH" not in explicit_rank_scoped_keys:
+        env["TT_METAL_LOGS_PATH"] = str(ORIGINAL_CWD)
+
     # Provide a default TT_METAL_JIT_SCRATCH so SFPI compilation writes to
     # local disk instead of NFS.  Rank scoping (below) appends a unique
     # per-rank suffix, eliminating cross-rank contention entirely.
@@ -1191,6 +1197,7 @@ def main(
         Default values for the following environment variables will be used if not set when calling tt-run:
         - TT_METAL_HOME: Launch directory (where tt-run was invoked)
         - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
+        - TT_METAL_LOGS_PATH: Launch directory (then rank-scoped per rank as `<host>_rank_<N>`)
         - PYTHONPATH: Launch directory
         - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
 
