@@ -31,6 +31,11 @@
 
 namespace tt::tt_metal::distributed::multihost {
 
+// Exit code used by all ULFM fast-fail paths.  Matches EX_SOFTWARE (70) from
+// <sysexits.h> and is recognised by ttrun.py to emit a targeted diagnostic
+// rather than a generic "non-zero exit" message.
+static constexpr int kUlfmExitCode = 70;
+
 /* ----------------------------- helpers ---------------------------------- */
 
 [[nodiscard]] constexpr MPI_Op reduce_to_mpi(ReduceOp op) noexcept {
@@ -162,7 +167,7 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
 
 // Handle a detected rank failure according to the active FailurePolicy.
 //
-// FAST_FAIL mode: revoke communicator, print diagnostic, call _exit(70).
+// FAST_FAIL mode: revoke communicator, print diagnostic, call _exit(kUlfmExitCode).
 //   _exit() is used instead of exit()/throw to avoid MPI_Finalize() deadlock:
 //   once a communicator is revoked, MPI_Finalize() blocks indefinitely because
 //   it tries to synchronise with ranks that no longer exist.  _exit() bypasses
@@ -257,9 +262,9 @@ static void handle_rank_failure(
         throw MPIRankFailureException(Rank{cached_rank}, error_code, failed);
     }
 
-    // FAST_FAIL: exit code 70 (EX_SOFTWARE) flags ULFM-initiated shutdown so
+    // FAST_FAIL: exit code kUlfmExitCode (EX_SOFTWARE) flags ULFM-initiated shutdown so
     // ttrun.py can emit a targeted diagnostic.
-    _exit(70);
+    _exit(kUlfmExitCode);
 }
 
 #endif  // OMPI_HAS_ULFM
@@ -408,13 +413,13 @@ bool MPIRequest::active() const { return !done_; }
 //
 //  1. std::set_terminate — fires for any uncaught C++ exception or explicit
 //     std::terminate() call.  Revokes MPI_COMM_WORLD so blocked ranks receive
-//     ERR_REVOKED, then calls _exit(70) to bypass all atexit handlers.
+//     ERR_REVOKED, then calls _exit(kUlfmExitCode) to bypass all atexit handlers.
 //
 //  2. MPI_Finalize watchdog — the atexit handler that calls MPI_Finalize is
 //     collective: if one rank crashed or was killed without calling it, every
 //     other rank hangs there forever.  We arm a SIGALRM before calling
 //     MPI_Finalize; if it doesn't return within MPI_FINALIZE_TIMEOUT_SECS the
-//     alarm fires, we log, and _exit(70).
+//     alarm fires, we log, and _exit(kUlfmExitCode).
 //
 // Together these cover the cases ULFM can't: a rank that is alive-but-stuck
 // (e.g. blocked in Python teardown while holding an MPI_Finalize call).
@@ -430,18 +435,18 @@ static constexpr unsigned MPI_FINALIZE_TIMEOUT_SECS = 30;
 static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
     static const char msg[] =
         "[ULFM] MPI_Finalize watchdog: another rank appears dead or stuck. "
-        "Exiting 70 to unblock the job.\n";
+        "Exiting kUlfmExitCode (70) to unblock the job.\n";
     [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
     // Note: MPIX_Comm_revoke is NOT async-signal-safe; skip it here.
     // _exit skips all atexit handlers (including the MPI_Finalize atexit),
     // avoiding a second hang.
-    _exit(70);
+    _exit(kUlfmExitCode);
 }
 
 // std::terminate handler: catches uncaught C++ exceptions and explicit
 // std::terminate() calls (e.g. exceptions thrown in thread-pool workers).
 // Revokes MPI_COMM_WORLD so surviving ranks detect the failure via ULFM,
-// then calls _exit(70) to bypass MPI_Finalize.
+// then calls _exit(kUlfmExitCode) to bypass MPI_Finalize.
 //
 // To switch to fault-tolerant mode: remove this handler and instead set
 // FailurePolicy::FAULT_TOLERANT on your MPIContext, then catch
@@ -458,10 +463,10 @@ static void mpi_terminate_handler() noexcept {
         "================================================================\n"
         "FATAL: std::terminate called in MPI context\n"
         "  Cause  : uncaught exception or explicit std::terminate()\n"
-        "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting 70\n"
+        "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
         "================================================================\n";
     [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
-    _exit(70);
+    _exit(kUlfmExitCode);
 }
 
 inline void init_env(int& argc, char**& argv) {
@@ -475,7 +480,7 @@ inline void init_env(int& argc, char**& argv) {
 
         // Install the terminate handler so that any uncaught exception
         // (including those thrown in thread-pool workers via std::async)
-        // revokes the world communicator and calls _exit(70) rather than
+        // revokes the world communicator and calls _exit(kUlfmExitCode) rather than
         // letting the process hang in teardown.
         std::set_terminate(mpi_terminate_handler);
 
