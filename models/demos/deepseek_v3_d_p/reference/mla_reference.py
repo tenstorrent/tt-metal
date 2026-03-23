@@ -10,9 +10,14 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention, DeepseekV3RMSNorm
+from models.demos.deepseek_v3.reference.modeling_deepseek import (
+    DeepseekV3Attention,
+    DeepseekV3RMSNorm,
+    apply_rotary_pos_emb,
+)
 
 
 class MLAReference(nn.Module):
@@ -34,7 +39,8 @@ class MLAReference(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
 
-        # Initialize the attention module
+        # Initialize the attention module for its weights and sub-modules (projections, rope, layernorms).
+        # forward() is overridden below to use memory-efficient F.scaled_dot_product_attention.
         self.attention = DeepseekV3Attention(config, layer_idx=layer_idx)
 
     def forward(
@@ -47,7 +53,10 @@ class MLAReference(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[any]]:
         """
-        Forward pass of MLA module.
+        Memory-efficient forward pass using F.scaled_dot_product_attention.
+
+        Uses flash attention under the hood to avoid materializing the full [seq, seq]
+        attention matrix, enabling runs at full 128k sequence length on CPU.
 
         Args:
             hidden_states: Input tensor of shape [batch_size, seq_len, hidden_size]
@@ -60,14 +69,73 @@ class MLAReference(nn.Module):
         Returns:
             Tuple of (output_tensor, attention_weights, updated_cache)
         """
-        return self.attention(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
+        attn = self.attention
+        bsz, q_len, _ = hidden_states.size()
+
+        # Q projection
+        if attn.q_lora_rank is None:
+            q = attn.q_proj(hidden_states)
+        else:
+            q = attn.q_b_proj(attn.q_a_layernorm(attn.q_a_proj(hidden_states)))
+        q = q.view(bsz, q_len, attn.num_heads, attn.q_head_dim).transpose(1, 2)
+        q_nope, q_pe = torch.split(q, [attn.qk_nope_head_dim, attn.qk_rope_head_dim], dim=-1)
+
+        # Absorbed Q: q_nope projected into latent space
+        kv_b1_proj = attn.kv_b_proj.weight.view(attn.num_heads, -1, attn.kv_lora_rank)[:, : attn.qk_nope_head_dim]
+        q_nope = torch.matmul(q_nope, kv_b1_proj)
+
+        # KV projection
+        compressed_kv = attn.kv_a_proj_with_mqa(hidden_states)
+        compressed_kv, k_pe = torch.split(compressed_kv, [attn.kv_lora_rank, attn.qk_rope_head_dim], dim=-1)
+        k_pe = k_pe.view(bsz, 1, q_len, attn.qk_rope_head_dim)
+        k_nope = attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, attn.kv_lora_rank)
+
+        # RoPE
+        kv_seq_len = k_nope.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value.get_seq_length(attn.layer_idx)
+        cos, sin = attn.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
+        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
+
+        # Assemble query_states and key_states (KVPE)
+        query_states = k_pe.new_empty(bsz, attn.num_heads, q_len, attn.kv_lora_rank + attn.qk_rope_head_dim)
+        query_states[:, :, :, : attn.kv_lora_rank] = q_nope
+        query_states[:, :, :, attn.kv_lora_rank :] = q_pe
+
+        key_states = k_pe.new_empty(bsz, 1, q_len, attn.kv_lora_rank + attn.qk_rope_head_dim)
+        key_states[:, :, :, : attn.kv_lora_rank] = k_nope
+        key_states[:, :, :, attn.kv_lora_rank :] = k_pe
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos}
+            key_states, _ = past_key_value.update(
+                key_states, torch.empty((*key_states.shape[:-1], 0)), attn.layer_idx, cache_kwargs
+            )
+
+        # V is just the latent part of K
+        value_states = key_states[:, :, :, : attn.kv_lora_rank]
+
+        # Memory-efficient attention via F.scaled_dot_product_attention
+        # This avoids materializing the full [heads, seq, seq] attention matrix
+        attn_output = F.scaled_dot_product_attention(
+            query_states,
+            key_states.expand(bsz, attn.num_heads, -1, -1),
+            value_states.expand(bsz, attn.num_heads, -1, -1),
+            is_causal=True,
+            scale=attn.softmax_scale,
         )
+
+        # KV b2 projection (V head expansion)
+        kv_b2_proj = attn.kv_b_proj.weight.view(attn.num_heads, -1, attn.kv_lora_rank)[:, -attn.v_head_dim :].transpose(
+            1, 2
+        )
+        attn_output = torch.matmul(attn_output, kv_b2_proj)
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, attn.num_heads * attn.v_head_dim)
+        attn_output = attn.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
 
     @classmethod
     def from_pretrained(
