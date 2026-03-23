@@ -80,9 +80,12 @@ void kernel_main() {
 
     // Zero-fill the zero CB for FPU accumulate reduction (DST += tile + 0).
     // The zero tile stays resident for the lifetime of the kernel.
+    // Clamp index to avoid constexpr OOB when cb_zero_tiled==32 (fp32 reduction disabled).
+    // The if constexpr discards this branch, but WH's compiler still evaluates get_tile_size.
+    constexpr uint32_t cb_zero_safe = cb_zero_tiled < 32 ? cb_zero_tiled : 0;
     if constexpr (cb_zero_tiled < 32) {
         cb_reserve_back(cb_zero_tiled, 1);
-        uint32_t zero_tile_bytes = get_tile_size(cb_zero_tiled);
+        constexpr uint32_t zero_tile_bytes = get_tile_size(cb_zero_safe);
         uint32_t zero_addr = get_write_ptr(cb_zero_tiled);
         uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
         uint32_t remaining = zero_tile_bytes;
