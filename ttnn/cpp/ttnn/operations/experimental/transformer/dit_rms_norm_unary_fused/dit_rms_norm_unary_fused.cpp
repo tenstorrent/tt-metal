@@ -7,9 +7,9 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
+ttnn::Tensor dit_rms_norm_unary_fused(
     const ttnn::Tensor& input_tensor,
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
@@ -52,4 +52,4 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
         activation);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental
