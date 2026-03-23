@@ -20,7 +20,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Initializes the only the unpacker for the tilize operation.
+ * Initializes only the unpacker for the tilize operation.
  *
  * Return value: None
  *
