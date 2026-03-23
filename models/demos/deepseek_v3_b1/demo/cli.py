@@ -73,7 +73,8 @@ def create_parser() -> argparse.ArgumentParser:
         "--cache-path",
         type=Path,
         default=None,
-        help="Path to the weight cache directory (required for --weights real)",
+        help="Weight cache directory. Required for --weights real (load). "
+        "Optional for --weights state_dict (save prepared weights; path must not exist yet to avoid overwrites).",
     )
     parser.add_argument(
         "--model-path",

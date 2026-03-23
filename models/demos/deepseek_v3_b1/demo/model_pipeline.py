@@ -16,6 +16,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
+    CachingStateDictWeightProvider,
     StateDictWeightProvider,
     SyntheticWeightProvider,
     WeightProvider,
@@ -60,7 +61,11 @@ class ModelPipeline:
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
-            provider = StateDictWeightProvider(model_path)
+            inner = StateDictWeightProvider(model_path)
+            if cache_path is not None:
+                provider = CachingStateDictWeightProvider(inner, cache_path)
+            else:
+                provider = inner
         elif weights_mode == "synthetic":
             provider = SyntheticWeightProvider()
         else:

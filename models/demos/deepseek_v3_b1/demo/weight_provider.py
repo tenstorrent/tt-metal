@@ -5,7 +5,8 @@
 """
 Weight providers for the DeepSeek V3 B1 demo pipeline.
 CacheWeightProvider loads from disk; SyntheticWeightProvider builds deterministic synthetic weights;
-StateDictWeightProvider loads HuggingFace safetensors and runs the same prepare_* path as synthetic.
+StateDictWeightProvider loads HuggingFace safetensors and runs the same prepare_* path as synthetic;
+CachingStateDictWeightProvider wraps StateDictWeightProvider to persist prepared weights to disk.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    save_decoder_layer,
+    save_embedding_weights,
+    save_lm_head_weights,
 )
 
 
@@ -299,3 +303,57 @@ class StateDictWeightProvider:
 
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
+
+
+class CachingStateDictWeightProvider:
+    """Wraps StateDictWeightProvider: loads via prepare path, then saves to cache."""
+
+    def __init__(self, inner: StateDictWeightProvider, cache_path: Path) -> None:
+        self._inner = inner
+        self._cache_path = Path(cache_path)
+        _exists_err = FileExistsError(f"Cache path already exists (refusing to overwrite): {self._cache_path}.")
+        if ttnn.distributed_context_is_initialized():
+            rank = int(ttnn.distributed_context_get_rank())
+            if rank == 0:
+                if self._cache_path.exists():
+                    raise _exists_err
+                self._cache_path.mkdir(parents=True, exist_ok=False)
+            ttnn.distributed_context_barrier()
+            if not self._cache_path.is_dir():
+                raise RuntimeError(f"Cache directory missing after distributed setup: {self._cache_path}")
+        else:
+            if self._cache_path.exists():
+                raise _exists_err
+            self._cache_path.mkdir(parents=True, exist_ok=False)
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        weights = self._inner.load_embedding(device)
+        save_embedding_weights(weights, self._cache_path)
+        return weights
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        weights = self._inner.load_lm_head(device)
+        save_lm_head_weights(weights, self._cache_path)
+        return weights
+
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        weights = self._inner.load_dense_layer(layer_id, device)
+        save_decoder_layer(
+            weights,
+            self._cache_path,
+            layer_id,
+            hf_model_name="",
+            hf_state_dict_name="",
+        )
+        return weights
+
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        weights = self._inner.load_moe_layer(layer_id, device)
+        save_decoder_layer(
+            weights,
+            self._cache_path,
+            layer_id,
+            hf_model_name="",
+            hf_state_dict_name="",
+        )
+        return weights
