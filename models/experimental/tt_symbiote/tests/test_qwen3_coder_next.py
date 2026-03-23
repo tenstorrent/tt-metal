@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for Qwen3-Coder-Next with TTNN backend (MoE + attention + DeltaNet + sharded linears).
-
-**Attention:** ``TTNNQwen3NextGatedAttention`` calls ``past_key_values.update`` after RoPE (host
-torch round-trip for K/V) and uses Llama-style query padding for SDPA when query length < KV length.
-"""
 
 import os
 from pathlib import Path
@@ -33,20 +28,36 @@ from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
-# Use non-FP8 model: FP8 weights (Float8_e4m3fn) cause dtype mismatch with bfloat16
-# activations in transformers MoE (torch.mm expects same dtype).
+
 QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next"
 
-# Generation / stability (hybrid TTNN logits drift vs full torch — greedy + penalties + early stop).
-QWEN3_MAX_NEW_TOKENS = 256
-QWEN3_REPETITION_PENALTY = 1.28
-QWEN3_DO_SAMPLE = False
-QWEN3_SAMPLE_TEMPERATURE = 0.68
-QWEN3_SAMPLE_TOP_P = 0.88
-QWEN3_SAMPLE_TOP_K: int | None = None  # if set, passed to generate()
-QWEN3_NO_REPEAT_NGRAM_SIZE: int | None = None  # e.g. 3 to ban repeating trigrams (hurts code/markdown)
-QWEN3_SAME_TOKEN_STREAK_STOP = 4  # stop after N identical token ids in a row
+# When > 0, stop after N identical generated token ids in a row (can truncate answers). Default off.
+QWEN3_SAME_TOKEN_STREAK_STOP = 0
 QWEN3_RNG_SEED = 42
+
+
+def _model_max_context_length(model, tokenizer) -> int:
+    """Best-effort maximum total sequence length for this checkpoint."""
+    for attr in ("max_position_embeddings", "model_max_length"):
+        v = getattr(model.config, attr, None)
+        if isinstance(v, int) and v > 0:
+            return v
+    if tokenizer is not None:
+        tml = getattr(tokenizer, "model_max_length", None)
+        if isinstance(tml, int) and tml > 0 and tml < 10**9:
+            return tml
+    return 32768
+
+
+def _compute_max_new_tokens(model, tokenizer, prompt_len: int) -> int:
+    """Allow generation until EOS within remaining context (no fixed short cap)."""
+    max_ctx = _model_max_context_length(model, tokenizer)
+    reserve = 8
+    available = max_ctx - int(prompt_len) - reserve
+    if available < 1:
+        pytest.fail(f"Prompt length {prompt_len} meets or exceeds model context {max_ctx}; cannot generate.")
+    return available
+
 
 # Run only on T3K (symbiote DeviceArch). Uses MESH_DEVICE env if set, else T3K.
 MESH_DEVICE = (os.environ.get("MESH_DEVICE") or "T3K").upper()
@@ -68,7 +79,7 @@ class StopOnConsecutiveSameToken(StoppingCriteria):
 
 
 def _stopping_criteria_list() -> StoppingCriteriaList:
-    """Cut off ``this this…`` tails when same token repeats (see ``QWEN3_SAME_TOKEN_STREAK_STOP``)."""
+    """Optional degenerate-tail stop; disabled when ``QWEN3_SAME_TOKEN_STREAK_STOP <= 0``."""
     if QWEN3_SAME_TOKEN_STREAK_STOP <= 0:
         return StoppingCriteriaList([])
     return StoppingCriteriaList([StopOnConsecutiveSameToken(QWEN3_SAME_TOKEN_STREAK_STOP)])
@@ -100,9 +111,10 @@ def _seed_torch_for_generate() -> None:
 
 
 def _generate_extra_kw(model, tokenizer) -> Dict[str, Any]:
-    """Kwargs for ``generate`` — tune module constants above (greedy default for TTNN stability)."""
-    kw = {}
-    # Explicit ids avoid chat-template / config mismatches stopping or padding oddly.
+    """Kwargs for ``generate`` from ``model.generation_config`` / tokenizer (no env overrides)."""
+    kw: Dict[str, Any] = {}
+    gc = model.generation_config
+
     eos = getattr(model.config, "eos_token_id", None)
     if eos is None and tokenizer is not None:
         eos = tokenizer.eos_token_id
@@ -114,19 +126,25 @@ def _generate_extra_kw(model, tokenizer) -> Dict[str, Any]:
     if pad is not None:
         kw["pad_token_id"] = pad
 
-    kw["repetition_penalty"] = QWEN3_REPETITION_PENALTY
+    rp = getattr(gc, "repetition_penalty", None)
+    if rp is not None and float(rp) != 1.0:
+        kw["repetition_penalty"] = float(rp)
 
-    if QWEN3_NO_REPEAT_NGRAM_SIZE is not None and QWEN3_NO_REPEAT_NGRAM_SIZE > 0:
-        kw["no_repeat_ngram_size"] = QWEN3_NO_REPEAT_NGRAM_SIZE
+    ngram = getattr(gc, "no_repeat_ngram_size", None)
+    if ngram is not None and int(ngram) > 0:
+        kw["no_repeat_ngram_size"] = int(ngram)
 
-    if QWEN3_DO_SAMPLE:
-        kw["do_sample"] = True
-        kw["temperature"] = QWEN3_SAMPLE_TEMPERATURE
-        kw["top_p"] = QWEN3_SAMPLE_TOP_P
-        if QWEN3_SAMPLE_TOP_K is not None:
-            kw["top_k"] = int(QWEN3_SAMPLE_TOP_K)
-    else:
-        kw["do_sample"] = False
+    do_sample = bool(getattr(gc, "do_sample", False))
+    kw["do_sample"] = do_sample
+    if do_sample:
+        for name, key in (
+            ("temperature", "temperature"),
+            ("top_p", "top_p"),
+            ("top_k", "top_k"),
+        ):
+            val = getattr(gc, key, None)
+            if val is not None:
+                kw[name] = val
 
     return kw
 
@@ -252,16 +270,14 @@ def test_qwen3_coder_next(mesh_device):
     model.generate(**warm_in, max_new_tokens=2, use_cache=True, **wk)
 
     DispatchManager.clear_timings()
-    # Use enough tokens for a short code answer; very small limits stop mid-sentence and can show U+FFFD ()
-    # at UTF-8 boundaries when the last token is incomplete.
-    max_new = QWEN3_MAX_NEW_TOKENS
+    prompt_len = int(inputs["input_ids"].shape[-1])
+    max_new = _compute_max_new_tokens(model, tokenizer, prompt_len)
     main_in = _clone_model_inputs(inputs)
     mk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
     if mk.get("do_sample", False):
         _seed_torch_for_generate()
     outputs = model.generate(**main_in, max_new_tokens=max_new, use_cache=True, **mk)
 
-    prompt_len = int(inputs["input_ids"].shape[-1])
     output_ids = outputs[0][prompt_len:].tolist()
     content = tokenizer.decode(output_ids, skip_special_tokens=True)
     print(f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{content}")
