@@ -118,7 +118,9 @@ def extract_hash_answer(text: str) -> float | None:
     return float(s.replace(",", ""))
 
 
-def get_gsm8k(ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train") -> Tuple[List[str], List[str]]:
+def get_gsm8k(
+    ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train"
+) -> Tuple[List[str], List[float]]:
     data = load_dataset("openai/gsm8k", "main")[split]
     dataset = data.map(
         lambda x: {
