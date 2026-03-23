@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole, torch_random, skip_with_llk_assert
+from models.common.utility_functions import is_blackhole, torch_random, skip_with_llk_assert, comp_allclose_and_pcc
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -665,3 +665,60 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
+@pytest.mark.parametrize("scalar", [-2.0, 2.0, -2.43, 2.43])
+def test_vs_scalar_applied_to_input(device, op, scalar):
+    torch.manual_seed(42)
+    shape = (1, 1, 3, 4)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    print(f"torch input: {torch_input}")
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    print(f"ttnn input: {ttnn_input}")
+    ttnn_result = ttnn.to_torch(getattr(ttnn, op)(ttnn_input, dim=-1, scalar=scalar))
+    print(f"scalar = {scalar}, ttnn result: {ttnn_result}")
+
+    torch_op = getattr(torch, op)
+    torch_result = torch_op(scalar * torch_input, dim=-1)
+    if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
+        torch_result = torch_result.values
+    print(f"scalar = {scalar}, torch result: {torch_result}")
+
+    #    assert_with_pcc(torch_result, ttnn_result, 0.99)
+    atol = rtol = 0.1
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
+
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+# @pytest.mark.parametrize("op", ["sum", "mean", "max", "min"])
+@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
+@pytest.mark.parametrize("scalar", [-2.0, 2.0, -2.43, 2.43])
+def test_vs_scalar_applied_to_result(device, op, scalar):
+    torch.manual_seed(42)
+    shape = (1, 1, 3, 4)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    print(f"torch input: {torch_input}")
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    print(f"ttnn input: {ttnn_input}")
+    ttnn_result = ttnn.to_torch(getattr(ttnn, op)(ttnn_input, dim=-1, scalar=scalar))
+    print(f"scalar = {scalar}, ttnn result: {ttnn_result}")
+
+    torch_op = getattr(torch, op)
+    torch_result = torch_op(torch_input, dim=-1)
+    print(f"scalar = {scalar}, torch result: {torch_result}")
+    if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
+        torch_result = torch_result.values
+    torch_result = scalar * torch_result
+    print(f"scalar = {scalar}, torch result after scalar: {torch_result}")
+
+    #    assert_with_pcc(torch_result, ttnn_result, 0.99)
+
+    atol = rtol = 0.1
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
+
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"

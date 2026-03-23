@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -275,13 +276,27 @@ static Tensor std_var_impl(
     // If the input tensor is a rank 0 tensor, return NaN
     if (rank == 0) {
         // Create an output tensor with same shape and attributes as input tensor
-        auto output_tensor = ttnn::full_like(
-            input_tensor_arg,
+        // auto output_tensor = ttnn::full_like(
+        //     input_tensor_arg,
+        //     std::numeric_limits<float>::quiet_NaN(),
+        //     /*dtype=*/input_tensor_arg.dtype(),
+        //     /*layout=*/input_tensor_arg.layout(),
+        //     /*device=*/std::ref(*(input_tensor_arg.device())),
+        //     memory_config);
+
+        // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
+        auto output_tensor = operations::creation::full_impl(
+            input_tensor_arg.logical_shape(),
             std::numeric_limits<float>::quiet_NaN(),
-            /*dtype=*/std::nullopt,
-            /*layout=*/std::nullopt,
-            /*device=*/std::nullopt,
+            input_tensor_arg.dtype(),
+            input_tensor_arg.layout(),
+            input_tensor_arg.device(),
             memory_config);
+
+        std::cout << output_tensor << std::endl;
+        std::cout << output_tensor.logical_shape() << std::endl;
+
+        std::cout << ttnn::to_string(output_tensor) << std::endl;
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
@@ -318,8 +333,6 @@ static Tensor std_var_impl(
         reduced_volume -= 1;
     }
     TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
-
-    scalar /= reduced_volume;
 
     /*
         auto mean_tensor = reduce_impl<ReduceType::Sum>(

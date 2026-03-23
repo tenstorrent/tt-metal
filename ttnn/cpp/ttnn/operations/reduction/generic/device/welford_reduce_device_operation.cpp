@@ -84,7 +84,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<WelfordReduceDeviceOperation>(
         operation_attributes.math_op,
-        operation_attributes.scaler,
+        operation_attributes.scalar,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         operation_attributes.compute_kernel_config,
@@ -98,7 +98,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
 ttnn::Tensor welford_reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
-    float scaler,
+    float scalar,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
@@ -113,7 +113,7 @@ ttnn::Tensor welford_reduce(
     return ttnn::device_operation::launch<WelfordReduceDeviceOperation>(
         WelfordReduceParams{
             reduce_math,
-            scaler,
+            scalar,
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
