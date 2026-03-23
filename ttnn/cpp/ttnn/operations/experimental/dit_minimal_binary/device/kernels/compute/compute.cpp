@@ -44,6 +44,118 @@ constexpr auto CB_B_TILED = tt::CBIndex::c_3;
 constexpr auto CB_OUT_TILED = tt::CBIndex::c_4;
 constexpr auto CB_OUT_RM = tt::CBIndex::c_16;
 
+template <typename To>
+ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
+    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
+}
+
+void print_cb_data(uint32_t cb_id, uint32_t tile_index) {
+    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
+    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
+        // Iterate through 16 rows within each subtile row
+        for (int local_row = 0; local_row < 16; local_row++) {
+            // Calculate the actual row in original matrix
+            int row = subtile_i * 16 + local_row;
+            // Iterate through 2x2 subtiles horizontally
+            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+                // Iterate through 16 columns within each subtile
+                for (int local_col = 0; local_col < 16; local_col++) {
+                    // Calculate the actual column in original matrix
+                    int col = subtile_j * 16 + local_col;
+                    // Calculate index using only multiplication and addition
+                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+                    // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
+                    // /*element_offset=*/index);ptr
+                    UNPACK(DPRINT << BF16(ptr[index]) << ", ");
+                }
+            }
+            UNPACK(DPRINT << ENDL());
+        }
+    }  // subtile_i
+}
+
+void print_cb_row_data_bf16(uint32_t cb_id, uint32_t tile_index, uint32_t row_index) {
+    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
+
+    int subtile_i = 0;  // only print top faces
+    if (row_index >= 16) {
+        subtile_i = 1;
+    }
+
+    // Iterate through 16 rows within each subtile row
+    int local_row = row_index % 16;
+    // Calculate the actual row in original matrix
+    int row = subtile_i * 16 + local_row;
+    // Iterate through 2x2 subtiles horizontally
+    for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+        // Iterate through 16 columns within each subtile
+        for (int local_col = 0; local_col < 16; local_col++) {
+            // Calculate the actual column in original matrix
+            int col = subtile_j * 16 + local_col;
+            // Calculate index using only multiplication and addition
+            auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+            // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
+            // /*element_offset=*/index);ptr
+            UNPACK(DPRINT << BF16(ptr[index]) << ", ");
+        }
+    }
+    UNPACK(DPRINT << ENDL());
+}
+
+void print_cb_row_data_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index) {
+    volatile float* ptr = get_pointer_to_cb_data<float>(cb_id, tile_index);
+
+    int subtile_i = 0;  // only print top faces
+    if (row_index >= 16) {
+        subtile_i = 1;
+    }
+
+    // Iterate through 16 rows within each subtile row
+    int local_row = row_index % 16;
+    // Calculate the actual row in original matrix
+    int row = subtile_i * 16 + local_row;
+    // Iterate through 2x2 subtiles horizontally
+    for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+        // Iterate through 16 columns within each subtile
+        for (int local_col = 0; local_col < 16; local_col++) {
+            // Calculate the actual column in original matrix
+            int col = subtile_j * 16 + local_col;
+            // Calculate index using only multiplication and addition
+            auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+            // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
+            // /*element_offset=*/index);ptr
+            UNPACK(DPRINT << ptr[index] << ", ");
+        }
+    }
+    UNPACK(DPRINT << ENDL());
+}
+
+void print_cb_rm_row_bf16(uint32_t cb_id, uint32_t tile_index, uint32_t row_index, uint32_t stick_len) {
+    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
+
+    const uint32_t TILE_WIDTH = 32;
+    const uint32_t TILE_HEIGHT = 32;
+    uint32_t offset = tile_index * TILE_WIDTH * TILE_HEIGHT + row_index * stick_len;
+
+    for (uint32_t i = 0; i < stick_len; i++) {
+        UNPACK(DPRINT << BF16(ptr[offset + i]) << ", ");
+    }
+    UNPACK(DPRINT << ENDL(););
+}
+
+void print_cb_rm_row_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index, uint32_t stick_len) {
+    volatile float* ptr = get_pointer_to_cb_data<float>(cb_id, tile_index);
+
+    const uint32_t TILE_WIDTH = 32;
+    const uint32_t TILE_HEIGHT = 32;
+    uint32_t offset = tile_index * TILE_WIDTH * TILE_HEIGHT + row_index * stick_len;
+
+    for (uint32_t i = 0; i < stick_len; i++) {
+        UNPACK(DPRINT << ptr[offset + i] << ", ");
+    }
+    UNPACK(DPRINT << ENDL(););
+}
+
 void kernel_main() {
     const uint32_t num_sticks = get_arg_val<uint32_t>(0);
     const uint32_t ntiles_per_row = get_arg_val<uint32_t>(1);
@@ -53,7 +165,6 @@ void kernel_main() {
     binary_op_init_common(CB_A_RM, CB_B_RM, CB_OUT_TILED);
 
     // ---- Initial hardware setup: enter tilize-A mode ----
-    tilize_init(CB_A_RM, tiles_per_block, CB_A_TILED);
 
     constexpr uint32_t TILE_HEIGHT = 32;
     for (uint32_t blk = 0; blk < num_sticks; blk += TILE_HEIGHT) {
@@ -62,6 +173,10 @@ void kernel_main() {
         // ============================================================
         cb_wait_front(CB_A_RM, tiles_per_block);
         cb_reserve_back(CB_A_TILED, tiles_per_block);
+
+        reconfig_data_format(CB_A_RM, CB_A_RM);
+        pack_reconfig_data_format(CB_A_TILED, CB_A_TILED);
+        tilize_init(CB_A_RM, tiles_per_block, CB_A_TILED);
 
         tilize_block(CB_A_RM, tiles_per_block, CB_A_TILED);
 
@@ -106,6 +221,7 @@ void kernel_main() {
             copy_tile_to_dst_init_short(CB_B_TILED);
             copy_tile(CB_B_TILED, 0, 1);
             BINARY_OP(0, 1, 0);
+            static_assert(DST_ACCUM_MODE > 0, "DST_ACCUM_MODE must be enabled for fp32");
 #else
             BINARY_OP(CB_A_TILED, CB_B_TILED, 0, 0, 0);
 #endif
