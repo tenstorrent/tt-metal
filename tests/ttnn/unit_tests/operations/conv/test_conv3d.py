@@ -477,3 +477,113 @@ def test_conv3d_float32(device):
         grid_size=grid_size,
         dtype=ttnn.DataType.FLOAT32,
     )
+
+
+@pytest.mark.parametrize(
+    "C_in_block",
+    [32, 64],
+    ids=["block32_8x_reduction", "block64_4x_reduction"],
+)
+def test_conv3d_fp32_reduction_c_in_blocking(device, C_in_block):
+    """Test that fp32 intermediate CB prevents bf16 truncation in multi-block reduction.
+
+    Uses C_in=256 with kernel_size=(3,3,3) to maximize the accumulation range.
+    The baseline (C_in_block=256, single block, no reduction) establishes the
+    "correct" output. Then runs the same conv with smaller C_in_block using both
+    fp32 partials and bf16 partials, comparing mean absolute error vs baseline.
+
+    The fp32 path should have significantly lower error than bf16 (typically 5-10x),
+    confirming that fp32 intermediate CBs prevent truncation between partial sums.
+    """
+    input_shape = (1, 256, 4, 5, 5)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    padding_mode = "zeros"
+
+    tt_input, conv3d_module, gt_output, _, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+
+    results = {}
+    for label, c_in_blk, fp32_acc in [
+        ("baseline", C, True),
+        ("fp32", C_in_block, True),
+        ("bf16", C_in_block, False),
+    ]:
+        tt_input = prepare_input_tensor(
+            torch.randn(input_shape, dtype=torch.float32, generator=torch.manual_seed(42)), C, device
+        )
+
+        kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_acc,
+            packer_l1_acc=False,
+        )
+        config = create_conv3d_config(
+            C_in_block=c_in_blk,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        )
+
+        w = conv3d_module.weight.data
+        tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+        tt_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+        )
+        tt_bias = ttnn.from_torch(
+            conv3d_module.bias.data.reshape(1, -1),
+            device=device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            pad_value=0,
+        )
+
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            bias_tensor=tt_bias,
+            dtype=ttnn.bfloat16,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            padding_mode=padding_mode,
+            groups=1,
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
+
+        results[label] = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    baseline_output = results["baseline"]
+    _, baseline_pcc_msg = check_with_pcc(gt_output, baseline_output, pcc=0.999)
+    logger.info(f"Baseline (C_in_block={C}, no reduction) vs torch: {baseline_pcc_msg}")
+
+    fp32_match, fp32_vs_baseline = check_with_pcc(baseline_output, results["fp32"], pcc=0.9999)
+    fp32_mean_err = (results["fp32"] - baseline_output).abs().mean().item()
+    logger.info(
+        f"fp32 partials (C_in_block={C_in_block}) vs baseline: {fp32_vs_baseline}, mean_err={fp32_mean_err:.6f}"
+    )
+
+    _, bf16_vs_baseline = check_with_pcc(baseline_output, results["bf16"], pcc=0.99)
+    bf16_mean_err = (results["bf16"] - baseline_output).abs().mean().item()
+    logger.info(
+        f"bf16 partials (C_in_block={C_in_block}) vs baseline: {bf16_vs_baseline}, mean_err={bf16_mean_err:.6f}"
+    )
+
+    assert fp32_match, f"fp32 partials (C_in_block={C_in_block}) diverged from baseline: {fp32_vs_baseline}"
+
+    error_ratio = bf16_mean_err / fp32_mean_err
+    logger.info(
+        f"Error ratio bf16/fp32: {error_ratio:.1f}x (bf16 mean_err={bf16_mean_err:.6f}, fp32 mean_err={fp32_mean_err:.6f})"
+    )
+    assert error_ratio > 3.0, (
+        f"fp32 reduction should have significantly lower error than bf16, "
+        f"but ratio is only {error_ratio:.1f}x (fp32={fp32_mean_err:.6f}, bf16={bf16_mean_err:.6f})"
+    )

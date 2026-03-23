@@ -313,27 +313,20 @@ void kernel_main() {
                                     add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
 
-                                // Untilize result
-                                if constexpr (use_fp32_partials) {
-                                    // Reconfigure unpacker/packer for fp32 → bf16 conversion
-                                    compute_kernel_lib::untilize<
-                                        matmul_N_t,
-                                        cb_matmul_interm_tiled,
-                                        cb_matmul_result_rm,
-                                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::
-                                            UnpackAndPackReconfigure>(matmul_M_t);
-                                } else {
-                                    compute_kernel_lib::untilize<
-                                        matmul_N_t,
-                                        cb_matmul_interm_tiled,
-                                        cb_matmul_result_rm,
-                                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::
-                                            NoReconfigure>(matmul_M_t);
-                                }
+                                // Untilize result — reconfigure unpacker when fp32 partials need
+                                // format conversion back to bf16
+                                constexpr auto untilize_reconfig_mode =
+                                    use_fp32_partials ? compute_kernel_lib::untilize_config::
+                                                            ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                                                      : compute_kernel_lib::untilize_config::
+                                                            ReconfigureRegisterDatatypeMode::NoReconfigure;
+                                compute_kernel_lib::untilize<
+                                    matmul_N_t,
+                                    cb_matmul_interm_tiled,
+                                    cb_matmul_result_rm,
+                                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                                    untilize_reconfig_mode>(matmul_M_t);
                             }
                         }
                     }
