@@ -2,7 +2,7 @@ import sys, os, torch, time
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-os.environ["HF_TOKEN"] = "REDACTED"
+os.environ.setdefault("HF_TOKEN", os.environ.get("HF_TOKEN", ""))
 
 # Monkey-patch torch.cuda for CPU-only execution
 import types
