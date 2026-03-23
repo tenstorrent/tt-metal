@@ -201,10 +201,12 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
 
         // Trim whitespace
         auto start = token.find_first_not_of(" \t");
-        if (start == std::string_view::npos) continue;
+        if (start == std::string_view::npos) { continue;
+}
         auto end = token.find_last_not_of(" \t");
         token = token.substr(start, end - start + 1);
-        if (token == "?") continue;
+        if (token == "?") { continue;
+}
         try {
             result.push_back(Rank{std::stoi(std::string(token))});
         } catch (...) {
