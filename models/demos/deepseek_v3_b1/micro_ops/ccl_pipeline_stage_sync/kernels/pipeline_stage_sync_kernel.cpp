@@ -5,15 +5,15 @@
 /**
  * Unified PipelineStageSync Kernel.
  *
- * Uses the unified PipelineStageSyncB1 op from unified_kernels/pipeline_stage_sync.hpp
+ * Uses the unified PipelineStageSync op from unified_kernels/pipeline_stage_sync.hpp
  */
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#include "../../../unified_kernels/pipeline_stage_sync_b1.hpp"
+#include "../../../unified_kernels/pipeline_stage_sync.hpp"
 
 void kernel_main() {
-    using PipelineStageSync = deepseek_b1_ops::PipelineStageSyncB1;
+    using PipelineStageSync = deepseek_b1_ops::PipelineStageSync;
 
 #if defined(COMPILE_FOR_NCRISC)
     // Reader CTArgs

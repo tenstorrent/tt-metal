@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PipelineStageSync B1 Operation using ttnn.generic_op
+PipelineStageSync Operation using ttnn.generic_op
 
 This module implements a multi-device synchronization on an arbitrary mesh.
 
@@ -17,7 +17,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
 
 
-class PipelineStageSyncB1:
+class PipelineStageSync:
     """
     Multi-device PipelineStageSync implementation using ttnn.generic_op.
     """

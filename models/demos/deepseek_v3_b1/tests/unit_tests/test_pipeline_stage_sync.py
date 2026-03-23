@@ -11,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import PipelineStageSyncB1
+from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import PipelineStageSync
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -48,7 +48,7 @@ def test_reduce_to_one_2d(
     logger.info(f"\n=== Testing pipeline_stage_sync (num_iterations={num_iterations}) ===")
 
     # Run pipeline_stage_sync with looping inside the kernel
-    PipelineStageSyncB1.op(
+    PipelineStageSync.op(
         mesh_device=submesh_device,
         stalling_device_mesh_coord=stalling_device_mesh_coord,
         stalling_core=stalling_core,
