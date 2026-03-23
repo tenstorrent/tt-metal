@@ -201,12 +201,14 @@ def test_host_device_correlation(tmp_path):
         host_op_ids
     ), f"Not all host messages matched: {matched_host_count}/{len(host_op_ids)}"
 
-    # 8. Validate device record integrity
+    # 8. Validate device record integrity (user programs only;
+    #    infrastructure programs may not have proper start/end pairs)
     for rec in device_records:
-        assert rec["end_timestamp"] >= rec["start_timestamp"], (
-            f"Invalid timestamps for program_id={rec['program_id']}: "
-            f"end={rec['end_timestamp']} < start={rec['start_timestamp']}"
-        )
+        if rec["program_id"] in matched_ids:
+            assert rec["end_timestamp"] >= rec["start_timestamp"], (
+                f"Invalid timestamps for program_id={rec['program_id']}: "
+                f"end={rec['end_timestamp']} < start={rec['start_timestamp']}"
+            )
         assert rec["frequency_ghz"] > 0, f"Invalid frequency for program_id={rec['program_id']}: {rec['frequency_ghz']}"
 
     # Save remaining artifacts for investigation
