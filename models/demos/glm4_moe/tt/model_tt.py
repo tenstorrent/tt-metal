@@ -849,7 +849,7 @@ class Glm4MoeTT:
         mtp_hidden = None
         if self.mtp_enabled:
             if active <= self.mtp_max_batch:
-                mtp_hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                mtp_hidden = ttnn.typecast(x, dtype=x.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             elif not self._mtp_batch_skip_logged:
                 logger.info("MTP skipped: active batch {} > mtp_max_batch {} (GLM4_MOE_MTP_MAX_BATCH)", active, self.mtp_max_batch)
                 object.__setattr__(self, '_mtp_batch_skip_logged', True)
@@ -935,7 +935,7 @@ class Glm4MoeTT:
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
-            logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            logits_rm_tight = ttnn.typecast(logits_rm_view, dtype=logits_rm_view.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
             if isinstance(max_out, tuple):
                 local_max_tt, next_ids_tt = max_out
@@ -1058,7 +1058,7 @@ class Glm4MoeTT:
             # Non-sharded: single argmax
             logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
-            logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            logits_rm_tight = ttnn.typecast(logits_rm_view, dtype=logits_rm_view.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
             if isinstance(max_out, tuple):
                 _, next_ids_tt = max_out
@@ -1924,7 +1924,8 @@ class Glm4MoeTT:
 
         rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"], sin_neg_batch)
 
-        # Prefetcher shorthand variables — None during compile warmup, set before trace capture.
+        # Prefetcher shorthand variables — set before compile warmup so warmup
+        # matches trace exactly (same SubDevice configs, same buffer shapes).
         _gcb = None   # global circular buffer
         _sdid = None  # worker sub_device_id
         _pf_qkv_pc = None
@@ -1933,12 +1934,34 @@ class Glm4MoeTT:
         _pf_qkv_out_mc = None
         _pf_oproj_in_mc = None
         _pf_oproj_out_mc = None
+        _worker_scg = None
+
+        # Load SubDevice manager BEFORE compile warmup so that warmup ops
+        # create buffers with the same configuration as trace capture.
+        # (Matches Llama Galaxy pattern: SubDevice loaded at model init.)
+        if self.prefetcher:
+            logger.info("=== PREFETCH: calling ensure_ready() ===")
+            self.prefetcher.ensure_ready()
+            logger.info("=== PREFETCH: ensure_ready() done, compiling prefetcher program ===")
+            self.prefetcher.compile_prefetch()
+            logger.info("=== PREFETCH: compile_prefetch() done, reading configs ===")
+            _gcb = self.prefetcher.global_circular_buffer
+            _sdid = self.prefetcher.worker_sub_device_id
+            _pf_qkv_pc = self.prefetcher.qkv_program_config
+            _pf_oproj_pc = self.prefetcher.oproj_program_config
+            _pf_qkv_in_mc = self.prefetcher.qkv_input_mem_cfg
+            _pf_qkv_out_mc = self.prefetcher.qkv_output_mem_cfg
+            _pf_oproj_in_mc = self.prefetcher.oproj_input_mem_cfg
+            _pf_oproj_out_mc = self.prefetcher.oproj_output_mem_cfg
+            # Worker sub_core_grids: cols 0-5 (avoid sender cols 6-7)
+            _worker_scg = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
+            ])
+            logger.info("=== PREFETCH: configs read, gcb={}, sdid={} ===", _gcb, _sdid)
 
         # Run forward once (compile warm-up).
-        # Compile warmup runs WITHOUT the prefetcher SubDevice manager to avoid
-        # the constraint that every op must specify sub_device_id. The prefetcher
-        # is loaded after compile warmup, and compile_prefetch() pre-compiles the
-        # dram_prefetcher program before trace capture.
+        # With prefetcher: runs WITH SubDevice active so buffer configs match trace.
+        # Without prefetcher: runs without SubDevice (original path).
         logger.info("=== _capture_decode_trace: starting compile warmup ===")
         if use_intrace_main_embed:
             # In-trace embedding: ttnn.embedding(tokens_tt, embed_w) — same as trace capture.
@@ -1953,21 +1976,32 @@ class Glm4MoeTT:
             x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
             x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
         else:
-            x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Use embed_tt directly (no copy). Skip dealloc of layer 0 input in loop below.
+            x = embed_tt
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active)
-            ttnn.deallocate(x, force=False)
+                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid,
+                                prefetch_qkv_pc=_pf_qkv_pc, prefetch_oproj_pc=_pf_oproj_pc,
+                                prefetch_qkv_in_mc=_pf_qkv_in_mc, prefetch_qkv_out_mc=_pf_qkv_out_mc,
+                                prefetch_oproj_in_mc=_pf_oproj_in_mc, prefetch_oproj_out_mc=_pf_oproj_out_mc)
+            if x is not embed_tt:
+                ttnn.deallocate(x, force=False)
             x = x_next
 
         # MTP compile warm-up: clone hidden state and run MTP in SAME sequence as trace
         mtp_hidden_warmup = None
         if self.mtp_enabled:
-            mtp_hidden_warmup = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mtp_hidden_warmup = ttnn.typecast(x, dtype=x.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
+        # Final norm: use worker core range when prefetcher is active (matches trace path)
+        _warmup_norm_cr = None
+        if _gcb is not None:
+            _warmup_norm_cr = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))
+            ])
+        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size), worker_core_range=_warmup_norm_cr)
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
         # In-trace argmax compile warm-up: include sampling ops for ALL devices (including TG mesh).
@@ -1994,7 +2028,7 @@ class Glm4MoeTT:
             else:
                 logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
                 logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
-                logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                logits_rm_tight = ttnn.typecast(logits_rm_view, dtype=logits_rm_view.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
                 if isinstance(max_out, tuple):
                     top1_values_tt, top1_indices_tt = max_out
@@ -2090,16 +2124,18 @@ class Glm4MoeTT:
         x = logits_tt = top1_values_tt = top1_indices_tt = None
         ttnn.synchronize_device(self.device)
 
-        # Re-copy persistent inputs before trace capture (like GLM4-Flash)
-        # to ensure no inadvertent in-place mutation broke them.
+        # Re-create persistent inputs before trace capture.
+        # embed_tt may have been deallocated during compile warmup (typecast same-dtype
+        # can alias), so we always re-create from scratch.
         if not use_intrace_main_embed:
-            host_embed = ttnn.from_torch(
+            embed_tt = ttnn.from_torch(
                 embed_torch.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+                device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
             )
-            ttnn.copy_host_to_device_tensor(host_embed, embed_tt)
         # For in-trace embedding, tokens_tt is the persistent input — re-copy it.
         host_tokens_recopy = ttnn.from_torch(
             tokens.contiguous().clone().to(torch.int32),
@@ -2113,25 +2149,7 @@ class Glm4MoeTT:
         logger.info("=== _capture_decode_trace: starting trace capture ===")
         logger.info("Capturing decode trace for batch={}", active)
 
-        # Prefetcher one-time setup: load SubDevice manager + create GlobalCB BEFORE trace.
-        # Then compile_prefetch() runs dram_prefetcher once (without sync) to pre-compile
-        # the program.  This avoids SetRuntimeArgs writes inside trace capture.
-        if self.prefetcher:
-            logger.info("=== PREFETCH: calling ensure_ready() ===")
-            self.prefetcher.ensure_ready()
-            logger.info("=== PREFETCH: ensure_ready() done, compiling prefetcher program ===")
-            self.prefetcher.compile_prefetch()
-            logger.info("=== PREFETCH: compile_prefetch() done, reading configs ===")
-            _gcb = self.prefetcher.global_circular_buffer
-            _sdid = self.prefetcher.worker_sub_device_id
-            _pf_qkv_pc = self.prefetcher.qkv_program_config
-            _pf_oproj_pc = self.prefetcher.oproj_program_config
-            _pf_qkv_in_mc = self.prefetcher.qkv_input_mem_cfg
-            _pf_qkv_out_mc = self.prefetcher.qkv_output_mem_cfg
-            _pf_oproj_in_mc = self.prefetcher.oproj_input_mem_cfg
-            _pf_oproj_out_mc = self.prefetcher.oproj_output_mem_cfg
-            logger.info("=== PREFETCH: configs read, gcb={}, sdid={} ===", _gcb, _sdid)
-
+        # SubDevice manager already loaded before compile warmup (above).
         if self.tt_ccl is not None:
             logger.info("=== PREFETCH: resetting CCL sem counters ===")
             self.tt_ccl.reset_sem_counters()
@@ -2161,8 +2179,9 @@ class Glm4MoeTT:
             x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
             x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
         else:
-            # Clone embed_tt into a transient working tensor for the trace.
-            x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Use embed_tt directly — no copy needed. The embed buffer is dedicated
+            # to this trace and overwritten (via write_tensor) before each execution.
+            x = embed_tt
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
@@ -2171,19 +2190,22 @@ class Glm4MoeTT:
                                 prefetch_qkv_pc=_pf_qkv_pc, prefetch_oproj_pc=_pf_oproj_pc,
                                 prefetch_qkv_in_mc=_pf_qkv_in_mc, prefetch_qkv_out_mc=_pf_qkv_out_mc,
                                 prefetch_oproj_in_mc=_pf_oproj_in_mc, prefetch_oproj_out_mc=_pf_oproj_out_mc)
-            ttnn.deallocate(x, force=False)
+            # Don't deallocate embed_tt — it's the persistent trace input buffer.
+            if x is not embed_tt:
+                ttnn.deallocate(x, force=False)
             x = x_next
 
-        # MTP: clone hidden state INSIDE trace for trace-owned buffer
+        # MTP: multiply by 1.0 to create trace-owned copy (clone/typecast don't support sub_core_grids in trace)
         if self.mtp_enabled:
-            mtp_hidden_tt = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mtp_hidden_tt = ttnn.multiply(x, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                          sub_core_grids=_worker_scg if self.prefetcher else None)
 
         # Final norm: use worker core range when prefetcher is active
-        # Must be within worker SubDevice (cols 1-6), avoiding sender cols 0,7.
+        # Must be within worker SubDevice (cols 0-5), avoiding sender cols 6,7.
         _final_norm_cr = None
         if _gcb is not None:
             _final_norm_cr = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, 0))
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))
             ])
         x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size), worker_core_range=_final_norm_cr)
         logits_tt = ttnn.linear(x, self.lm_head_w)
@@ -2209,7 +2231,8 @@ class Glm4MoeTT:
             else:
                 logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
                 logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, active, vocab])
-                logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                logits_rm_tight = ttnn.multiply(logits_rm_view, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                               sub_core_grids=_worker_scg if self.prefetcher else None)
                 max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
                 if isinstance(max_out, tuple):
                     top1_values_tt, top1_indices_tt = max_out

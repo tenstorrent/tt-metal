@@ -365,13 +365,18 @@ class Glm4MoeDecoderLayer:
 
         # ---- Pre-attention norm ----
         # When prefetcher is active (global_cb set), use worker core range to avoid
-        # overlapping sender/receiver columns (cols 0-2).
+        # overlapping with sender columns (cols 6-7).
         _norm_worker_cr = None
+        _worker_scg = None  # sub_core_grids for eltwise ops (full worker grid)
         if global_cb is not None:
-            # 5 cores for hidden=5120 (1024 elems/core), placed at cols 1-5 row 0
-            # Must be within worker SubDevice (cols 1-6), avoiding sender cols 0,7.
+            # 5 cores for hidden=5120 (1024 elems/core), placed at cols 0-4 row 0
+            # Must be within worker SubDevice (cols 0-5), avoiding sender cols 6,7.
             _norm_worker_cr = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, 0))
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))
+            ])
+            # Full worker grid for eltwise ops (add, multiply, etc.)
+            _worker_scg = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
             ])
         t0 = _cs()
         h = _sharded_rms_norm(x, w.input_layernorm, hparams.hidden_size, worker_core_range=_norm_worker_cr)
@@ -389,7 +394,7 @@ class Glm4MoeDecoderLayer:
         _ce(t0, "attention")
 
         # ---- Residual ----
-        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=_worker_scg)
         ttnn.deallocate(attn_out, force=False)
 
         # ---- Pre-MLP norm ----
@@ -419,6 +424,7 @@ class Glm4MoeDecoderLayer:
                 h, compute_kernel_config=mlp_compute_kernel_config,
                 tp_axis=tp_axis, tp_enabled=tp_enabled,
                 sub_device_id=sub_device_id,
+                worker_scg=_worker_scg,
             )
             _ce(t0, "moe")
 
@@ -437,7 +443,7 @@ class Glm4MoeDecoderLayer:
             else:
                 mlp_out = ttnn.slice(mlp_out, starts=[0] * len(res_shape), ends=res_shape)
 
-        x = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=_worker_scg)
         ttnn.deallocate(mlp_out, force=False)
         ttnn.deallocate(residual, force=False)
         return x
@@ -644,6 +650,7 @@ class Glm4MoeDecoderLayer:
         tp_enabled: bool = False,
         sub_device_id: Any = None,
         is_tg_prefill: bool = False,
+        worker_scg: Any = None,
     ) -> ttnn.Tensor:
         """MoE forward: shared expert + routed experts -> sum.
 
@@ -740,10 +747,10 @@ class Glm4MoeDecoderLayer:
             num_dp = mesh_shape[1]  # DP = cols = 4 for Galaxy TG
             if num_dp > 1:
                 shared_out_partial = ttnn.mul(shared_out_partial, 1.0 / num_dp,
-                                              memory_config=moe_decode_mc)
+                                              memory_config=moe_decode_mc, sub_core_grids=worker_scg)
 
             combined = ttnn.add(shared_out_partial, routed_out_partial,
-                                memory_config=moe_decode_mc)
+                                memory_config=moe_decode_mc, sub_core_grids=worker_scg)
             ttnn.deallocate(shared_out_partial, force=False)
             ttnn.deallocate(routed_out_partial, force=False)
 
@@ -838,7 +845,7 @@ class Glm4MoeDecoderLayer:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                     )
             mlp_out = ttnn.add(shared_out_partial, routed_out_partial,
-                               memory_config=moe_decode_mc)
+                               memory_config=moe_decode_mc, sub_core_grids=worker_scg)
             ttnn.deallocate(shared_out_partial, force=False)
             ttnn.deallocate(routed_out_partial, force=False)
 

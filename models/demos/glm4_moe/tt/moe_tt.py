@@ -535,8 +535,8 @@ def moe_sparse_experts_forward_tt(
 
         gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
         up_view = ttnn.slice(w1w3_out, begin_up, end_up)
-        w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
-        w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
+        w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
+        w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
         ttnn.deallocate(w1w3_out, force=False)
     else:
         # Separate gate (w1) and up (w3) projections.
@@ -775,8 +775,8 @@ def moe_a2a_experts_forward_tt(
 
         gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
         up_view = ttnn.slice(w1w3_out, begin_up, end_up)
-        w1_out = ttnn.clone(gate_view, memory_config=sparse_mc)
-        w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
+        w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
+        w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
         ttnn.deallocate(w1w3_out, force=False)
     else:
         # Separate gate (w1) and up (w3) projections.

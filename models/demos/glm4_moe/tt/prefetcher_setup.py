@@ -7,11 +7,13 @@ Uses SubDevice + GlobalCB infrastructure to overlap DRAM weight reads
 with compute across layers.
 
 Architecture (8x9 grid, x=0..7, y=0..8):
-  - Prefetcher SubDevice: 12 sender cores (6 in col 0, 6 in col 7)
-  - Worker SubDevice: columns 1-6 (54 cores, includes 24 receivers)
-  - Unassigned: 6 cores in cols 0,7 (rows 2,5,8) — OK per Llama pattern
-  - Receivers: 2 per sender in cols 1-2 (for col-0), cols 5-6 (for col-7)
+  - Prefetcher SubDevice: 12 sender cores (6 in col 6, 6 in col 7)
+  - Worker SubDevice: columns 0-5 (54 cores, includes 24 receivers)
+  - Unassigned: 6 cores in cols 6,7 (rows 2,5,8) — OK per Llama pattern
+  - Receivers: 2 per sender in cols 4-5 (for col-6), cols 2-3 (for col-7)
   - Prefetcher runs on dedicated SubDevice, overlapping with worker compute
+  - Worker includes origin (0,0) so matmul grids starting from (0,0) stay
+    within worker SubDevice — no sub_device_id needed for matmul/linear ops.
 
 Usage in model_tt.py decode:
   1. prefetcher.create_global_cb()
@@ -30,15 +32,17 @@ from loguru import logger
 def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = 2):
     """Core ranges for GLM-4.7 prefetcher on WH Galaxy (8x9 compute grid).
 
-    Uses columns 0 and 7 as sender columns (edge columns), giving workers a
-    contiguous block of columns 1-6 (6 cols x 9 rows = 54 cores).
+    Uses columns 6 and 7 as sender columns, giving workers a contiguous
+    block of columns 0-5 (6 cols x 9 rows = 54 cores) that includes
+    origin (0,0). This allows matmul grids starting from (0,0) to stay
+    within the worker SubDevice without needing sub_device_id.
 
     Layout (8x9 grid, x=0..7, y=0..8):
-      - Prefetcher SubDevice: 12 active sender cores (6 in col 0, 6 in col 7)
-      - Worker SubDevice: columns 1-6 (54 cores, includes 24 receiver cores)
-      - Unassigned: 3 cores in col 0 + 3 in col 7 (not in any SubDevice, OK per Llama pattern)
-      - 24 receiver cores: 2 per sender, in cols 1-2 (for col-0 senders)
-        and cols 5-6 (for col-7 senders)
+      - Prefetcher SubDevice: 12 active sender cores (6 in col 6, 6 in col 7)
+      - Worker SubDevice: columns 0-5 (54 cores, includes 24 receiver cores)
+      - Unassigned: 3 cores in col 6 + 3 in col 7 (not in any SubDevice, OK per Llama pattern)
+      - 24 receiver cores: 2 per sender, in cols 4-5 (for col-6 senders)
+        and cols 2-3 (for col-7 senders)
     """
     grid = mesh_device.compute_with_storage_grid_size()
     grid_x, grid_y = grid.x, grid.y
@@ -47,35 +51,35 @@ def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = 2):
     # 12 DRAM banks on WH — address tensor is replicated across these cores
     dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(12)]
 
-    # 12 active sender cores: 6 in column 0, 6 in column 7.
+    # 12 active sender cores: 6 in column 6, 6 in column 7.
     # Spread across rows 0-8 with gaps (rows 2,5,8 unassigned in each column).
     # The sender->DRAM bank mapping is handled by the address tensor sharding,
     # not by physical core position.
     all_sender_cores = [
-        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1),
-        ttnn.CoreCoord(0, 3), ttnn.CoreCoord(0, 4),
-        ttnn.CoreCoord(0, 6), ttnn.CoreCoord(0, 7),
+        ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 1),
+        ttnn.CoreCoord(6, 3), ttnn.CoreCoord(6, 4),
+        ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 7),
         ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 1),
         ttnn.CoreCoord(7, 3), ttnn.CoreCoord(7, 4),
         ttnn.CoreCoord(7, 6), ttnn.CoreCoord(7, 7),
     ]
 
     # Receiver cores: 2 per sender, adjacent in the worker SubDevice.
-    # Col-0 senders -> receivers in cols 1,2 (same row).
-    # Col-7 senders -> receivers in cols 5,6 (same row).
+    # Col-6 senders -> receivers in cols 4,5 (same row, nearest worker cols).
+    # Col-7 senders -> receivers in cols 2,3 (same row, non-overlapping).
     all_receiver_pairs = [
-        (1, 0), (2, 0),   # for sender (0,0)
-        (1, 1), (2, 1),   # for sender (0,1)
-        (1, 3), (2, 3),   # for sender (0,3)
-        (1, 4), (2, 4),   # for sender (0,4)
-        (1, 6), (2, 6),   # for sender (0,6)
-        (1, 7), (2, 7),   # for sender (0,7)
-        (5, 0), (6, 0),   # for sender (7,0)
-        (5, 1), (6, 1),   # for sender (7,1)
-        (5, 3), (6, 3),   # for sender (7,3)
-        (5, 4), (6, 4),   # for sender (7,4)
-        (5, 6), (6, 6),   # for sender (7,6)
-        (5, 7), (6, 7),   # for sender (7,7)
+        (4, 0), (5, 0),   # for sender (6,0)
+        (4, 1), (5, 1),   # for sender (6,1)
+        (4, 3), (5, 3),   # for sender (6,3)
+        (4, 4), (5, 4),   # for sender (6,4)
+        (4, 6), (5, 6),   # for sender (6,6)
+        (4, 7), (5, 7),   # for sender (6,7)
+        (2, 0), (3, 0),   # for sender (7,0)
+        (2, 1), (3, 1),   # for sender (7,1)
+        (2, 3), (3, 3),   # for sender (7,3)
+        (2, 4), (3, 4),   # for sender (7,4)
+        (2, 6), (3, 6),   # for sender (7,6)
+        (2, 7), (3, 7),   # for sender (7,7)
     ]
 
     # Build sender->receiver mapping: each sender -> CoreRangeSet with 1 CoreRange of 2 cores.
@@ -94,54 +98,37 @@ def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = 2):
     # the global CB covers ALL cores in the matmul bounding box.
     # Following Llama's pattern (dummy_sender_cores + dummy_receiver_cores).
     #
-    # Real pattern: col-0 sender at (0,y) → receivers at (1,y),(2,y)
-    #               col-7 sender at (7,y) → receivers at (5,y),(6,y)
+    # Real pattern: col-6 sender at (6,y) → receivers at (4,y),(5,y)
+    #               col-7 sender at (7,y) → receivers at (2,y),(3,y)
     # Dummies follow the same pattern for rows 2,5,8:
     dummy_sender_cores = [
-        ttnn.CoreCoord(0, 2),
-        ttnn.CoreCoord(0, 5),
-        ttnn.CoreCoord(0, 8),
+        ttnn.CoreCoord(6, 2),
+        ttnn.CoreCoord(6, 5),
+        ttnn.CoreCoord(6, 8),
         ttnn.CoreCoord(7, 2),
         ttnn.CoreCoord(7, 5),
         ttnn.CoreCoord(7, 8),
     ]
     dummy_receiver_mapping = [
-        # (0,2) → (1,2),(2,2)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2))]),
-        # (0,5) → (1,5),(2,5)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(2, 5))]),
-        # (0,8) → (1,8),(2,8)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 8), ttnn.CoreCoord(2, 8))]),
-        # (7,2) → (5,2),(6,2)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(6, 2))]),
-        # (7,5) → (5,5),(6,5)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(6, 5))]),
-        # (7,8) → (5,8),(6,8)
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(5, 8), ttnn.CoreCoord(6, 8))]),
+        # (6,2) → (4,2),(5,2)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(5, 2))]),
+        # (6,5) → (4,5),(5,5)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 5), ttnn.CoreCoord(5, 5))]),
+        # (6,8) → (4,8),(5,8)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 8), ttnn.CoreCoord(5, 8))]),
+        # (7,2) → (2,2),(3,2)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 2))]),
+        # (7,5) → (2,5),(3,5)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(3, 5))]),
+        # (7,8) → (2,8),(3,8)
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(3, 8))]),
     ]
     for ds, dr in zip(dummy_sender_cores, dummy_receiver_mapping):
         sender_receiver_mapping.append((ds, dr))
 
-    # Hop core (3,6) also needs to be in the global CB. Add a dummy sender for it.
-    hop_dummy_sender = ttnn.CoreCoord(0, 2)  # already added above, reuse
-    # We need (3,6) in the CB — add another dummy mapping with unique sender.
-    # Use a core in col 7 row 8 as dummy (already added), map to extra receiver (3,6).
-    # Actually: simpler to add (3,6) as an additional receiver of an existing dummy.
-    # But API requires each mapping entry to be a fresh sender.
-    # Instead: re-map dummy (0,2) to include (3,6) as well:
-    # Remove the (0,2) mapping we just added and replace with expanded version.
-    sender_receiver_mapping = [
-        e for e in sender_receiver_mapping if not (
-            hasattr(e[0], 'x') and e[0].x == 0 and e[0].y == 2
-        )
-    ]
-    sender_receiver_mapping.append((
-        ttnn.CoreCoord(0, 2),
-        ttnn.CoreRangeSet([
-            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-            ttnn.CoreRange(ttnn.CoreCoord(3, 6), ttnn.CoreCoord(3, 6)),
-        ]),
-    ))
+    # Hop core (3,6) is used for NOC1 ring routing. In this layout, (3,6) is
+    # already a receiver core (for sender (7,6)), so it's automatically in the
+    # global CB — no special dummy mapping needed.
 
     # Sender core range set: active + dummy senders.
     all_senders_with_dummies = list(all_sender_cores) + dummy_sender_cores
@@ -149,15 +136,16 @@ def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = 2):
         [ttnn.CoreRange(c, c) for c in all_senders_with_dummies]
     )
 
-    # Worker core range set: columns 1-6, rows 0-(grid_y-1).
-    # Contiguous block — includes receiver cores (receivers are in worker SubDevice).
+    # Worker core range set: columns 0-5, rows 0-(grid_y-1).
+    # Contiguous block including origin (0,0) — matmul grids from (0,0) stay
+    # within worker SubDevice. Includes receiver cores.
     worker_core_range_set = ttnn.CoreRangeSet([
-        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, grid_y - 1)),
+        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, grid_y - 1)),
     ])
 
     logger.info(
         "GLM prefetcher core layout: {} senders, {} receiver pairs, "
-        "worker cols 1-6 rows 0-{}, sender cols 0,7",
+        "worker cols 0-5 rows 0-{}, sender cols 6,7",
         len(all_sender_cores), len(sender_receiver_mapping), grid_y - 1,
     )
 
@@ -216,14 +204,14 @@ class Glm4MoePrefetcherSetup:
         self.tensor_addrs = []
 
         # Ring matmul configs for prefetcher-aware decode.
-        # Uses hop_cores=(3,6) for NOC1 ring routing (within worker cols 1-6).
+        # Uses hop_cores=(3,6) for NOC1 ring routing (within worker cols 0-5).
         # Ring size must divide both K_tiles and N_tiles:
         # QKV: K=5120(160t), N=1792(56t), gcd=8 → num_cores=8
         # O-proj: K=1536(48t), N=5120(160t), gcd=16 → num_cores=16
         #
         # Ring cores are selected from the 24 receiver cores to ensure ALL
         # cores in the matmul's CB are within global_cb.all_cores().
-        # Receiver layout: cols 1-2 (for col-0 senders), cols 5-6 (for col-7).
+        # Receiver layout: cols 4-5 (for col-6 senders), cols 2-3 (for col-7).
         qkv_ring_cores = list(self.receiver_cores[:8])  # first 4 pairs = 8 cores
         oproj_ring_cores = list(self.receiver_cores[:16])  # first 8 pairs = 16 cores
         self.qkv_ring_cores = qkv_ring_cores

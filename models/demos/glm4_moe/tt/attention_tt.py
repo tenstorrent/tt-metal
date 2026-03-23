@@ -320,7 +320,7 @@ class Glm4MoeAttention(LightweightModule):
         )
 
         # Prefetcher-compatible SDPA config: uses sub_core_grids to restrict to worker
-        # cores (cols 1-6). Created lazily by _get_prefetch_sdpa_config().
+        # cores (cols 0-5). Created lazily by _get_prefetch_sdpa_config().
         self._prefetch_sdpa_config = None
 
         # Sequence length limits
@@ -417,14 +417,14 @@ class Glm4MoeAttention(LightweightModule):
         )
 
     def _get_prefetch_sdpa_config(self):
-        """Lazily create SDPA program config restricted to worker cores (cols 1-6)."""
+        """Lazily create SDPA program config restricted to worker cores (cols 0-5)."""
         if self._prefetch_sdpa_config is not None:
             return self._prefetch_sdpa_config
-        # Worker grid: cols 1-6, rows 0-8 = 6x9 = 54 cores
+        # Worker grid: cols 0-5, rows 0-8 = 6x9 = 54 cores
         worker_core_range_set = ttnn.CoreRangeSet([
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 8))
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
         ])
-        start_core = ttnn.CoreCoord(1, 0)
+        start_core = ttnn.CoreCoord(0, 0)
         num_sdpa_cores = 54  # all worker cores
         self._prefetch_sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(6, 9),
@@ -483,8 +483,8 @@ class Glm4MoeAttention(LightweightModule):
         """Return per-batch shard configs (lazily created and cached).
 
         When prefetch=True, uses sub_core_grids to place shards within the worker
-        grid (cols 1-6) instead of the full grid. This avoids overlapping with
-        prefetcher sender cores (cols 0 and 7).
+        grid (cols 0-5) instead of the full grid. This avoids overlapping with
+        prefetcher sender cores (cols 6 and 7).
         """
         cache_key = (batch, prefetch)
         cached = self._shard_cfg_cache.get(cache_key)
@@ -492,11 +492,11 @@ class Glm4MoeAttention(LightweightModule):
             return cached
         b = max(batch, 1)
         if prefetch:
-            # Map b cores within worker grid (cols 1-6, rows 0-8)
+            # Map b cores within worker grid (cols 0-5, rows 0-8)
             worker_crs = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 8))
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
             ])
-            start_core = ttnn.CoreCoord(1, 0)
+            start_core = ttnn.CoreCoord(0, 0)
             user_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 start_core, b, worker_crs, row_wise=True,
             )
@@ -777,7 +777,7 @@ class Glm4MoeAttention(LightweightModule):
             _slice_kw = dict(dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             if sub_device_id is not None:
                 _slice_kw["sub_device_id"] = sub_device_id
-                # Restrict to worker sub-device cores (cols 1-6, rows 0-8 = 6x9)
+                # Restrict to worker sub-device cores (cols 0-5, rows 0-8 = 6x9)
                 _slice_kw["core_grid"] = ttnn.CoreGrid(y=6, x=4)
             xqkv = ttnn.matmul(
                 self._slice_mats[active_batch],
@@ -848,7 +848,7 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(v)
 
         # 7. SDPA (paged) — limit cores for Galaxy Wormhole tree reduction.
-        # When prefetcher is active, use sub_core_grids to restrict to worker cores (cols 1-6).
+        # When prefetcher is active, use sub_core_grids to restrict to worker cores (cols 0-5).
         _sdpa_pc = self._get_prefetch_sdpa_config() if sub_device_id is not None else self.sdpa_decode_program_config
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
@@ -890,7 +890,7 @@ class Glm4MoeAttention(LightweightModule):
             )
 
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-            # Worker grid: cols 1-6 when prefetcher active, else full 8 cols
+            # Worker grid: cols 0-5 when prefetcher active, else full 8 cols
             _usel_grid = ttnn.CoreGrid(y=4, x=6) if sub_device_id is not None else ttnn.CoreGrid(y=4, x=8)
             _usel_kw = dict(
                 core_grid=_usel_grid,
@@ -1264,7 +1264,7 @@ class Glm4MoeAttention(LightweightModule):
 
     def _prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         """For TG: select tensors from the correct column chips for KV cache fill."""
-        tensor_copy = ttnn.clone(key_or_value_layer)
+        tensor_copy = ttnn.typecast(key_or_value_layer, dtype=key_or_value_layer.dtype)
         tensors = ttnn.get_device_tensors(tensor_copy)
         single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: 4]
         multi_device_tensor = ttnn.combine_device_tensors(tensors=single_column_tensors)
