@@ -119,3 +119,6 @@ Run the full AV pipeline and compare against CPU reference at PSNR > 20 dB.
 | AV per-layer audio | PCC | 0.999 | 1-layer, 1x1 mesh |
 | Video-only e2e | PSNR | 23-24 dB | 5 steps, 256x256, 2x4 mesh |
 | AV e2e video | PSNR | 14-15 dB | 5 steps, 256x256, 2x4 mesh |
+| AV 0-layer | PCC | 0.999989 | patchify+adaln+output only, 1x1 mesh |
+| AV 1-layer HiFi4 | PCC | 0.998449 | 1x1 mesh, HiFi4 matmuls |
+| V-only 1-layer HiFi4 | PCC | 0.998484 | 1x1 mesh, same test conditions |
