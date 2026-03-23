@@ -1212,6 +1212,7 @@ std::optional<bool> MPIContext::agree([[maybe_unused]] bool local_value) const {
             state->comm,
             state->rank,
             failure_policy_.load(std::memory_order_acquire),
+            &state->rank_hostnames,
             &cached_failed_ranks_,
             &failed_ranks_cache_mutex_,
             &revoked_);
