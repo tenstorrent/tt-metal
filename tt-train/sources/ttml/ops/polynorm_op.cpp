@@ -25,6 +25,12 @@ namespace ttml::ops {
 namespace {
 
 constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
+enum class PolyNorm3ForwardVariant : uint8_t {
+    Fused,
+    CompositeComparisonOnly,
+};
+// Keep fused as the production default.
+constexpr PolyNorm3ForwardVariant kPolyNorm3ForwardVariant = PolyNorm3ForwardVariant::Fused;
 
 void validate_input_shapes(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
@@ -117,6 +123,48 @@ ttnn::Tensor scalar_sum(const ttnn::Tensor& x) {
         /* compute_kernel_config */ core::ComputeKernelConfig::precise());
 }
 
+ttnn::Tensor polynorm3_composite_forward(
+    const ttnn::Tensor& x, const ttnn::Tensor& weight_tensor, const ttnn::Tensor& bias_tensor, float epsilon) {
+    const auto [w0, w1, w2] = split_weight_scalars(weight_tensor);
+    const auto x2 = ttnn::square(x);
+    const auto x3 = ttnn::multiply(x, x2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+
+    const auto [x_norm, _x_inv_rms] = rms_normalize_last_dim(x, epsilon);
+    const auto [x2_norm, _x2_inv_rms] = rms_normalize_last_dim(x2, epsilon);
+    const auto [x3_norm, _x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
+    (void)_x_inv_rms;
+    (void)_x2_inv_rms;
+    (void)_x3_inv_rms;
+
+    const auto y3 = ttnn::multiply(x3_norm, w0, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    const auto y2 = ttnn::multiply(x2_norm, w1, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    const auto y1 = ttnn::multiply(x_norm, w2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    const auto sum = ttnn::add(
+        ttnn::add(y3, y2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+        y1,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        none,
+        none,
+        none,
+        false);
+    return ttnn::add(sum, bias_tensor, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+}
+
+ttnn::Tensor polynorm3_forward(
+    const ttnn::Tensor& x, const ttnn::Tensor& weight_tensor, const ttnn::Tensor& bias_tensor, float epsilon) {
+    if (kPolyNorm3ForwardVariant == PolyNorm3ForwardVariant::Fused) {
+        if (x.logical_shape()[-1] % 32U != 0U) {
+            throw std::runtime_error(
+                "polynorm3 fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
+        }
+        return metal::polynorm3_fw(x, weight_tensor, bias_tensor, epsilon);
+    }
+    // Comparison-only path for fused-vs-composite validation; do not use in production runs.
+    return polynorm3_composite_forward(x, weight_tensor, bias_tensor, epsilon);
+}
+
 }  // namespace
 
 autograd::TensorPtr polynorm3(
@@ -129,11 +177,7 @@ autograd::TensorPtr polynorm3(
     const auto x = tensor->get_value();
     const auto weight_tensor = weight->get_value();
     const auto bias_tensor = bias->get_value();
-    if (x.logical_shape()[-1] % 32U != 0U) {
-        throw std::runtime_error(
-            "polynorm3 fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
-    }
-    const auto out_value = metal::polynorm3_fw(x, weight_tensor, bias_tensor, epsilon);
+    const auto out_value = polynorm3_forward(x, weight_tensor, bias_tensor, epsilon);
 
     auto out = autograd::create_tensor(out_value);
 
