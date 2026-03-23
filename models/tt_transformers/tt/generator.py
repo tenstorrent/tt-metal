@@ -587,6 +587,8 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_len = prefill_seq_lens[idx]
                 logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+            if getattr(self.model[model_id], "users_row_sharded", False) and sampling_on_device_requested:
+                local_kwargs["skip_lm_head"] = True
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
