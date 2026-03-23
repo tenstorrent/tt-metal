@@ -157,6 +157,7 @@ class TextModel(LightweightModule):
             eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
             state_dict_prefix=f"{state_dict_prefix}.ln_f",
+            dtype=dtype,
         )
 
         # Language model head
