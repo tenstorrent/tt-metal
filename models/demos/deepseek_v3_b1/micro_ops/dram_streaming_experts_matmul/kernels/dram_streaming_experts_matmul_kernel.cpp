@@ -10,7 +10,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#include "../../../unified_kernels/dram_streaming_matmul.hpp"
+#include "../../../unified_kernels/dram_streaming_experts_matmul.hpp"
 #include "../../../unified_kernels/eltwise_mul.hpp"
 
 // Compile-time role flag for dead code elimination via if constexpr
@@ -24,7 +24,7 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // NCRISC: DRAM streaming (uses NOC_0 via ReaderConfigDescriptor)
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingExpertsMatmul::ReaderCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_in1"),
         get_named_compile_time_arg_val("dram_mm_cb_out"),
         get_named_compile_time_arg_val("dram_mm_in1_tensor_addr"),
@@ -70,7 +70,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
     // BRISC: No-op for DRAM streaming (handled by NCRISC)
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingExpertsMatmul::WriterCTArgs;
 
     // Mul parameters for BRISC
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
@@ -86,7 +86,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // Matmul writes to dram_mm_cb_out (CB 4 when mul disabled, CB 8 when mul enabled)
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingExpertsMatmul::ComputeCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_in0"),
         get_named_compile_time_arg_val("dram_mm_cb_in1"),
         get_named_compile_time_arg_val("dram_mm_cb_out"),
@@ -124,7 +124,7 @@ void kernel_main() {
     constexpr uint32_t cb_in1_buf_addr = get_named_compile_time_arg_val("dram_mm_cb_in1_buf_addr");
 
     for (uint32_t iter = 0; iter < num_loop_iters; ++iter) {
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<
+        deepseek_b1_ops::DRAMStreamingExpertsMatmul::Op<
             DRAMMMCTArgs,
             Core::is_active_core,
             true,                  // PopIn0 = true first, re-setup below

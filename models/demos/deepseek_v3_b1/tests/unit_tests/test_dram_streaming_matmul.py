@@ -287,8 +287,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
         expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
     logger.info(output)
-    logger.info(f"tt_out: {tt_out}")
-    logger.info(f"pt_out: {pt_out}")
     assert passing, f"PCC check failed: {output}"
     logger.info(f"DRAM streaming matmul{activation_str} test passed!")
 
@@ -908,8 +906,6 @@ def test_dram_streaming_matmul_with_all_experts(
 
     expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
-    logger.debug(f"tt_out: {tt_out}")
-    logger.debug(f"pt_out: {pt_out}")
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"Multi-expert DRAM streaming matmul{activation_str} test passed!")

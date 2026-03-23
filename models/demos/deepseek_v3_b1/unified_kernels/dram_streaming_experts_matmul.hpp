@@ -27,7 +27,7 @@
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// DRAMStreamingMatmul micro-op
+// DRAMStreamingExpertsMatmul micro-op
 //
 // Computes: output[1,N] = in0[1,K] @ in1[K,N] with in1 streamed from DRAM
 //
@@ -39,7 +39,7 @@ namespace deepseek_b1_ops {
 //     - Reserves/Pushes: out (subblock_w tiles at a time)
 //     - Optional fused SiLU activation
 // ============================================================================
-struct DRAMStreamingMatmul {
+struct DRAMStreamingExpertsMatmul {
     // ========================================================================
     // Compile-time args structs
     // ========================================================================
@@ -387,6 +387,6 @@ struct DRAMStreamingMatmul {
         }
     };  // class Op
 
-};  // struct DRAMStreamingMatmul
+};  // struct DRAMStreamingExpertsMatmul
 
 }  // namespace deepseek_b1_ops
