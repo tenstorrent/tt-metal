@@ -867,7 +867,7 @@ enum class PackerProgramType
  * @return true if all packer configurations match the expected values, false otherwise
  */
 template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
-inline bool are_packers_configured_correctly(
+__attribute__((noinline)) bool are_packers_configured_correctly(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
@@ -877,20 +877,36 @@ inline bool are_packers_configured_correctly(
         asm volatile("nop");
     }
 
-    const std::array<pack_config_t, NUM_PACKERS> config_vec     = read_pack_config();
-    const std::array<pack_counters_t, NUM_PACKERS> counters_vec = read_pack_counters();
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+
+    // Only read config word 2 per packer (contains in_data_format and out_data_format)
+    static constexpr std::uint32_t config_word2_addrs[NUM_PACKERS] = {
+        THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2,
+        THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2,
+        THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2,
+        THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2,
+    };
+
+    const std::uint32_t expected_src = masked_data_format(pack_src_format);
+    const std::uint32_t expected_dst = masked_data_format(pack_dst_format);
 
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
-        const std::uint32_t pack_src_format_i         = config_vec[i].in_data_format;
-        const std::uint32_t pack_dst_format_i         = config_vec[i].out_data_format;
-        const std::uint32_t pack_reads_per_xy_plane_i = counters_vec[i].pack_reads_per_xy_plane;
-        const bool isDataFormatCorrect =
-            (pack_src_format_i == masked_data_format(pack_src_format)) && (pack_dst_format_i == masked_data_format(pack_dst_format));
-        const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (pack_reads_per_xy_plane_i == face_r_dim);
-        if (!isDataFormatCorrect || !isFaceRDimCorrect)
+        pack_config_u config = {.val = {0}};
+        config.val[2]        = cfg[config_word2_addrs[i]];
+        if (config.f.in_data_format != expected_src || config.f.out_data_format != expected_dst)
         {
             return false;
+        }
+
+        if constexpr (program_type == PackerProgramType::ProgramByFace)
+        {
+            pack_counters_u counters = {.val = 0};
+            counters.val             = cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i];
+            if (counters.f.pack_reads_per_xy_plane != face_r_dim)
+            {
+                return false;
+            }
         }
     }
     return true;
