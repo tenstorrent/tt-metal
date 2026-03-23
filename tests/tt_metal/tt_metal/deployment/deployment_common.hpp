@@ -24,8 +24,8 @@ static inline struct l1_allocator new_tensix_allocator() {
                                HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     return (struct l1_allocator){
-        .start = ROUND_UP(start, ALIGNMENT),
-        .end = ROUND_DOWN(end, ALIGNMENT),
+        .start = start,
+        .end = end,
     };
 }
 
@@ -39,20 +39,19 @@ static inline struct l1_allocator new_erisc_allocator() {
                                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     return (struct l1_allocator){
-        .start = ROUND_UP(start, ALIGNMENT),
-        .end = ROUND_DOWN(end, ALIGNMENT),
+        .start = start,
+        .end = end,
     };
 }
 
-static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size) {
-    size = ROUND_UP(size, ALIGNMENT);
+static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size, uint32_t alignment = ALIGNMENT) {
+    uint32_t start = ROUND_UP(alloc->start, alignment);
 
-    TT_FATAL(alloc->start + size <= alloc->end, "Couldn't allocate in L1");
+    TT_FATAL(start + size <= alloc->end, "Couldn't allocate in L1");
 
-    uint32_t ret = alloc->start;
-    alloc->start += size;
+    alloc->start = start + size;
 
-    return ret;
+    return start;
 }
 
 uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core, uint64_t l1_addr) {
@@ -61,5 +60,23 @@ uint64_t read_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& core,
 
     return (uint64_t)delta_vec[0] | ((uint64_t)delta_vec[1] << 32);
 }
+
+extern std::atomic_bool g_stop_requested;
+extern std::atomic_bool g_stop_message_printed;
+
+void handle_sigint(int);
+
+class SignalGuard {
+private:
+    sighandler_t prev;
+    int signum;
+
+public:
+    SignalGuard(int sig, sighandler_t handler) {
+        signum = sig;
+        prev = signal(sig, handler);
+    }
+    ~SignalGuard() { signal(signum, prev); }
+};
 
 #endif /* _DEPLOYMENT_COMMON_H */
