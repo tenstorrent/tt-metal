@@ -304,7 +304,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         bool is_worker = (pos_in_group == 2);
         bool is_collector = (bank_id == collector_bank_id);
 
-        uint32_t worker_ring_pos = group_id * cores_per_group + 2;
+        uint32_t worker_ring_pos = (group_id * cores_per_group) + 2;
         uint32_t worker_bank_id_val = ring_pos2bank_id[worker_ring_pos];
         const auto worker_physical = device->worker_core_from_logical_core(dram_bank2core_coords[worker_bank_id_val]);
 
