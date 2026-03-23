@@ -147,8 +147,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
-        this->channel_offset = this->get_dram_region_base_addr();  // change this to 0 and instead modify individual
-                                                                   // functions to subtract buf addr
+        this->channel_offset = 0;
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -396,7 +395,6 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     }
-    // log_info(tt::LogMetal, "issue_queue_write_ptr: {}", this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4);
     return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
@@ -415,12 +413,15 @@ void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
         MetalContext::instance().get_cluster().read_dram_vec(
-            this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset),
+            this->cq_sysmem_start +
+                (this->get_issue_queue_limit(cq_id) - this->get_dram_region_base_addr() - this->channel_offset),
             this->get_completion_queue_size(cq_id),
             this->device_id,
             dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
                 cq_interfaces[cq_id].cq_start + cq_interfaces[cq_id].command_issue_region_size);
+        return (void*)(this->cq_sysmem_start +
+                       (this->get_issue_queue_limit(cq_id) - this->get_dram_region_base_addr() - this->channel_offset));
     }
     // The completion queue follows issue queue in contiguous memory
     // get_issue_queue_limit() returns absolute device address where the issue queue ends.
@@ -484,7 +485,13 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     //  so channel offset needs to be subtracted to get address relative to channel
     // TODO: Reconsider offset sysmem offset calculations based on
     // https://github.com/tenstorrent/tt-metal/issues/4757
-    void* issue_q_region = this->cq_sysmem_start + (issue_q_write_ptr - this->channel_offset);
+    void* issue_q_region = nullptr;
+    if (is_dram_backed()) {
+        issue_q_region =
+            this->cq_sysmem_start + (issue_q_write_ptr - this->get_dram_region_base_addr() - this->channel_offset);
+    } else {
+        issue_q_region = this->cq_sysmem_start + (issue_q_write_ptr - this->channel_offset);
+    }
 
     return issue_q_region;
 }
@@ -503,13 +510,15 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
     //  so channel offset needs to be subtracted to get address relative to channel
     // TODO: Reconsider offset sysmem offset calculations based on
     // https://github.com/tenstorrent/tt-metal/issues/4757
-    void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
 
     if (this->bypass_enable) {
         std::copy((uint8_t*)data, (uint8_t*)data + size_in_bytes, (uint8_t*)this->bypass_buffer.data() + write_ptr);
     } else if (is_dram_backed()) {
+        void* user_scratchspace =
+            this->cq_sysmem_start + (write_ptr - this->get_dram_region_base_addr() - this->channel_offset);
         memcpy(user_scratchspace, data, size_in_bytes);
     } else {
+        void* user_scratchspace = this->cq_sysmem_start + (write_ptr - this->channel_offset);
         memcpy_to_device(user_scratchspace, data, size_in_bytes);
     }
 }
@@ -545,7 +554,8 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
         MetalContext::instance().get_cluster().write_dram_vec(
-            this->cq_sysmem_start + (cq_interface.offset - this->channel_offset) + cq_interface.cq_start,
+            this->cq_sysmem_start + (cq_interface.offset - this->get_dram_region_base_addr() - this->channel_offset) +
+                cq_interface.cq_start,
             this->get_issue_queue_size(cq_id),
             this->device_id,
             dram_channel,
