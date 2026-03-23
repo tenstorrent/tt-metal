@@ -94,8 +94,7 @@ build_and_push() {
     fi
 
     docker buildx build \
-        --push \
-        --output type=image,compression=zstd,oci-mediatypes=true \
+        --output type=image,compression=zstd,oci-mediatypes=true,push=true \
         --build-arg FROM_TAG=$DOCKER_TAG \
         $tags \
         -f $dockerfile \
