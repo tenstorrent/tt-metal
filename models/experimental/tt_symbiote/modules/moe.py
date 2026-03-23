@@ -1900,7 +1900,21 @@ class TTNNQwen3MoE(TTNNMoE):
 
 
 def _consolidate_talker_experts_from_module_list(experts_module_list, config):
-    """Build gate_up_proj and down_proj from HF ModuleList of Qwen3OmniMoeTalkerTextMLP."""
+    """Build gate_up_proj and down_proj from HF talker experts.
+
+    Older HF: ``experts`` is a ``ModuleList`` of per-expert ``Qwen3OmniMoeTalkerTextMLP``.
+    Newer HF: ``experts`` is ``Qwen3OmniMoeTalkerTextExperts`` with stacked
+    ``gate_up_proj`` / ``down_proj`` parameters (no ``len()`` / no per-expert modules).
+    """
+    if hasattr(experts_module_list, "gate_up_proj") and hasattr(experts_module_list, "down_proj"):
+        consolidated = type("ConsolidatedExperts", (), {})()
+        gu = experts_module_list.gate_up_proj
+        dp = experts_module_list.down_proj
+        consolidated.gate_up_proj = gu.data if isinstance(gu, torch.nn.Parameter) else gu
+        consolidated.down_proj = dp.data if isinstance(dp, torch.nn.Parameter) else dp
+        consolidated.config = config
+        return consolidated
+
     num_experts = len(experts_module_list)
     interm = config.moe_intermediate_size
     hidden = config.hidden_size
@@ -2066,11 +2080,19 @@ class TTNNQwen3TalkerMoE(TTNNQwen3MoE):
             cfg.hidden_act = getattr(qwen_config, "hidden_act", "silu")
         else:
             cfg.hidden_size = talker_block.gate.weight.shape[1]
-            cfg.moe_intermediate_size = getattr(talker_block.experts[0], "intermediate_size", None) or (
-                talker_block.experts[0].gate_proj.weight.shape[0] if talker_block.experts else 0
-            )
+            ex = talker_block.experts
+            if hasattr(ex, "gate_up_proj") and hasattr(ex, "intermediate_dim"):
+                cfg.moe_intermediate_size = ex.intermediate_dim
+                cfg.n_routed_experts = getattr(ex, "num_experts", ex.gate_up_proj.shape[0])
+            elif hasattr(ex, "gate_up_proj"):
+                cfg.moe_intermediate_size = ex.gate_up_proj.shape[1] // 2
+                cfg.n_routed_experts = ex.gate_up_proj.shape[0]
+            else:
+                cfg.moe_intermediate_size = getattr(ex[0], "intermediate_size", None) or (
+                    ex[0].gate_proj.weight.shape[0] if len(ex) else 0
+                )
+                cfg.n_routed_experts = talker_block.gate.weight.shape[0]
             cfg.num_experts_per_tok = 8
-            cfg.n_routed_experts = talker_block.gate.weight.shape[0]
             cfg.norm_topk_prob = False
             cfg.hidden_act = "silu"
 

@@ -30,8 +30,9 @@ Example (8-chip mesh on T3K):
    export TT_SYMBIOTE_RUN_MODE=NORMAL
    pytest models/experimental/tt_symbiote/tests/test_qwen_omni.py::test_qwen_omni -v -s -p no:timeout
 
-Symbiote registration is **thinker SparseMoE only** (``register_qwen_omni_symbiote_modules``); Linear,
-attention, talker, audio, and vision stay on stock PyTorch modules.
+Symbiote registration (``register_qwen_omni_symbiote_modules``) replaces **thinker** text MoE with
+``TTNNQwen3OmniThinkerNaiveMoE`` and **talker** text MoE with ``TTNNQwen3TalkerMoE`` (same pattern as
+``test_qwen3_talker_moe.py``). Linear, attention (non-MoE), audio, and vision stay on stock PyTorch modules.
 
 **Note:** Full-resolution image+audio keeps large vision token counts in **PyTorch** paths;
 if those are moved to TTNN later, watch DRAM there too.
@@ -47,7 +48,7 @@ from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProce
 from qwen_omni_utils import process_mm_info
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE
+from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.qwen3omni.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -80,13 +81,20 @@ def _patch_thinker_talker_device_dtype(model):
 
 
 def register_qwen_omni_symbiote_modules(model) -> dict:
-    """Replace thinker text SparseMoE blocks with ``TTNNQwen3OmniThinkerNaiveMoE`` (naive expert loop, no Linear/attn/talker)."""
+    """Replace thinker text MoE with ``TTNNQwen3OmniThinkerNaiveMoE`` and talker text MoE with ``TTNNQwen3TalkerMoE``."""
     thinker_mlp_class = type(model.thinker.model.layers[0].mlp)
-    return register_module_replacement_dict(
+    talker_mlp_class = type(model.talker.model.layers[0].mlp)
+    r_thinker = register_module_replacement_dict(
         model.thinker,
         {thinker_mlp_class: TTNNQwen3OmniThinkerNaiveMoE},
         model_config=None,
     )
+    r_talker = register_module_replacement_dict(
+        model.talker,
+        {talker_mlp_class: TTNNQwen3TalkerMoE},
+        model_config=None,
+    )
+    return {**r_thinker, **r_talker}
 
 
 _MESH_SHAPE_BY_ENV = {
@@ -125,7 +133,7 @@ pytestmark = [
 
 
 def test_qwen_omni_symbiote_replacements_verified(mesh_device):
-    """Load model, apply symbiote replacements, assert thinker MoE layers are TTNN (no generate)."""
+    """Load model, apply symbiote replacements, assert thinker + talker MoE layers are TTNN (no generate)."""
     _require_symbiote_run_mode()
     apply_qwen3_omni_talker_prepare_inputs_fix()
 
@@ -137,6 +145,12 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     )
     model.to(dtype=torch.bfloat16)
 
+    # Talker may mix MoE and dense MLPs; only layers matching layer0's MLP class are replaced (see test_qwen3_talker_moe).
+    talker_moe_class = type(model.talker.model.layers[0].mlp)
+    talker_moe_layer_indices = [
+        i for i, layer in enumerate(model.talker.model.layers) if type(layer.mlp) == talker_moe_class
+    ]
+
     register_qwen_omni_symbiote_modules(model)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
@@ -147,7 +161,15 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             layer.mlp, TTNNQwen3OmniThinkerNaiveMoE
         ), f"thinker.layers[{i}].mlp expected TTNN thinker naive MoE, got {type(layer.mlp)}"
 
-    print(f"Replacements OK: thinker {n_thinker} layers (MoE only; mesh " f"{mesh_device.get_num_devices()} device(s))")
+    for i in talker_moe_layer_indices:
+        assert isinstance(
+            model.talker.model.layers[i].mlp, TTNNQwen3TalkerMoE
+        ), f"talker.layers[{i}].mlp expected TTNNQwen3TalkerMoE, got {type(model.talker.model.layers[i].mlp)}"
+
+    print(
+        f"Replacements OK: thinker {n_thinker} + talker MoE layers {len(talker_moe_layer_indices)}/"
+        f"{len(model.talker.model.layers)} (mesh {mesh_device.get_num_devices()} device(s))"
+    )
 
 
 def test_qwen_omni(mesh_device):
