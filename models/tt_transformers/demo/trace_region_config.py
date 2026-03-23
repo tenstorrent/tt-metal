@@ -86,7 +86,7 @@ def get_supported_trace_region_size(request, mesh_device):
             "TG": 50000000,
         },
         "Llama-3.3-70B": {
-            "T3K": 30000000,
+            "T3K": 90000000,
             "TG": 80000000,
             "P150": 80000000,
             "P300": 80000000,
