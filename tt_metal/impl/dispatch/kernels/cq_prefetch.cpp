@@ -41,8 +41,6 @@ union CQPrefetchHToPrefetchDHeader {
 };
 static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
 
-#define ENABLE_PREFETCH_DPRINTS 0
-
 using prefetch_q_entry_type = uint16_t;
 
 // Use named defines instead of get_compile_time_arg_val indices
@@ -382,8 +380,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     }
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
-    DPRINT << "cq_prefetch: pcie_noc_xy=" << pcie_noc_xy << ENDL();
-    DPRINT << "cq_prefetch: pcie_read_ptr=" << pcie_read_ptr << ENDL();
 #endif
 
     const uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
@@ -393,10 +389,7 @@ FORCE_INLINE uint32_t read_from_pcie(
            << " dst_addr=" << dst_addr << " size=" << size << ENDL();
 #endif
     noc_async_read_set_trid(trid);
-    DPRINT << "cq_prefetch: noc_async_read: host_src_addr=" << host_src_addr << " dst_addr=" << dst_addr
-           << " size=" << size << ENDL();
     noc_async_read(host_src_addr, dst_addr, size);
-    DPRINT << "noc_async_read done" << ENDL();
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
     pending_read_size = needed_bytes;
@@ -532,7 +525,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 
         // Local helper for reading the current prefetch_q entry.
         uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-        DPRINT << "fetch_q_get_cmds: prefetch_q_rd_ptr_local=" << prefetch_q_rd_ptr_local << ENDL();
         uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
         bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
 
@@ -1575,8 +1567,6 @@ uint32_t process_exec_buf_cmd(
     exec_buf_state.prefetch_length = 0;
     uint32_t cmd_ptr = cmddat_q_base;
 
-    DPRINT << "process_exec_buf_cmd: start" << ENDL();
-
     bool done = false;
     while (!done) {
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
@@ -2007,13 +1997,13 @@ bool process_cmd(
             break;
 
         default:
-            DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
-                   << cmddat_q_base << ENDL();
-            DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
-            DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
+            // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
+            //        << cmddat_q_base << ENDL();
+            // DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
             WAYPOINT("!CMD");
             ASSERT(0);
     }
@@ -2407,7 +2397,6 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
 }
 
 void kernel_main_h() {
-    DPRINT << "kernel_main_h: start" << ENDL();
     uint32_t cmd_ptr = cmddat_q_base;
     uint32_t fence = cmddat_q_base;
     bool done = false;
@@ -2554,8 +2543,6 @@ void kernel_main_hd() {
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
-
-    DPRINT << "kernel_main_hd: start" << ENDL();
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");

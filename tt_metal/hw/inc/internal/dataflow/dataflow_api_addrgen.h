@@ -537,8 +537,6 @@ get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_
     } else {
         noc_addr = l1_bank_to_noc_xy[noc][bank_id];
     }
-    DPRINT << "get_noc_addr_from_bank_id: noc_addr=" << noc_addr << " bank_address_offset=" << bank_address_offset
-           << ENDL();
     return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
 }
 

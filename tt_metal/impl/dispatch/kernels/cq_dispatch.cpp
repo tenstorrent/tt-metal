@@ -263,10 +263,7 @@ void notify_host_of_completion_queue_write_pointer() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
-           << " completion_queue_write_ptr_addr=" << completion_queue_write_ptr_addr << ENDL();
     noc_async_write(dev_completion_q_wr_ptr, pcie_noc_xy | completion_queue_write_ptr_addr, 4);
-    DPRINT << "noc_async_write done" << ENDL();
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
 #endif
@@ -303,9 +300,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    DPRINT << "cq_dispatch: cq_noc_async_write_init_state: pcie_noc_xy=" << pcie_noc_xy << ENDL();
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
-    DPRINT << "cq_dispatch: cq_noc_async_write_init_state done" << ENDL();
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
@@ -330,11 +325,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
                 uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-                DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
-                       << " completion_queue_write_addr=" << completion_queue_write_addr
-                       << " last_chunk_size=" << last_chunk_size << ENDL();
                 noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
-                DPRINT << "cq_dispatch: noc_async_write done" << ENDL();
 #else
                 cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
                 uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
@@ -350,11 +341,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
             uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-            DPRINT << "cq_dispatch: noc_async_write: pcie_noc_xy=" << pcie_noc_xy
-                   << " completion_queue_write_addr=" << completion_queue_write_addr << " xfer_size=" << xfer_size
-                   << ENDL();
             noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, xfer_size);
-            DPRINT << "noc_async_write done" << ENDL();
 #else
             cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
             // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
