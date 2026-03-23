@@ -233,7 +233,7 @@ class LTXAudioVideoTransformerBlock(Module):
         video_rope_sin: ttnn.Tensor,
         audio_rope_cos: ttnn.Tensor,
         audio_rope_sin: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
+        trans_mat: ttnn.Tensor | None = None,
         av_ca_audio_temb: ttnn.Tensor | None = None,
         video_prompt_temb: ttnn.Tensor | None = None,  # (1, B, 2, video_dim) from prompt_adaln_single
         audio_prompt_temb: ttnn.Tensor | None = None,  # (1, B, 2, audio_dim)
@@ -591,7 +591,7 @@ class LTXAudioVideoTransformerModel(Module):
         audio_rope_sin: ttnn.Tensor,
         audio_N: int,
         # Shared
-        trans_mat: ttnn.Tensor,
+        trans_mat: ttnn.Tensor | None,
         timestep_torch: torch.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step for both video and audio on device."""
