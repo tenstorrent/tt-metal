@@ -293,11 +293,21 @@ class ttMLA:
             "o_proj.weight": tuple(self.o_proj_weight.shape),
         }
 
+    # Default output dtypes per weight, used when no tuned config exists for the seq_len_local
+    MM_DEFAULT_DTYPES = {
+        "q_a_proj": ttnn.bfloat16,
+        "q_b_proj": ttnn.bfloat16,
+        "wkv_b1": ttnn.bfloat16,
+        "kv_a_proj_with_mqa": ttnn.bfloat16,
+        "wkv_b2": ttnn.bfloat8_b,
+        "o_proj": ttnn.bfloat16,
+    }
+
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults."""
         cfg = self.mm_configs[weight_name].get(seq_len_local)
         if cfg is None:
-            return {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+            return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
         return {
             "memory_config": cfg["out_mem_config"],
             "program_config": cfg["program_config"],
