@@ -37,6 +37,7 @@ void kernel_main() {
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(cargidx++);
 #endif  // FUSE_TERNARY
 
     // Output tensor addresses from common args
@@ -267,6 +268,8 @@ void kernel_main() {
                     cb_id_ternary_a,
                     cb_id_ternary_b,
                     ternary_a_tile_size,
+                    ternary_b_tile_size,
+                    broadcast_ternary_b,
                     m_tile,
                     m_tile_end,
                     n_tile,

@@ -51,6 +51,7 @@ void kernel_main() {
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
     const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
 #endif  // FUSE_TERNARY
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
@@ -324,6 +325,7 @@ void kernel_main() {
                     cb_id_ternary_b,
                     ternary_a_tile_size,
                     ternary_b_tile_size,
+                    broadcast_ternary_b,
                     m_tile,
                     m_tile_end,
                     n_tile,

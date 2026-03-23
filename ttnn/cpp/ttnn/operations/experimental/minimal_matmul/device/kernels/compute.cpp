@@ -75,7 +75,8 @@ void add_bias_and_addcmul_block(
     uint32_t scalar_value,
     uint32_t out_cb,
     uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
+    uint32_t N_block_tiles,
+    uint32_t broadcast_ternary_b) {
     // Note: unary_bcast_tile does not work with fp32_acc_to_dest=True.
     // As a workaround, we perform addcmul through multiple LLKs calls (mul_tiles, mul_unary_tile, add_tiles_bcast).
 
@@ -126,64 +127,98 @@ void add_bias_and_addcmul_block(
 #endif  // FUSE_BIAS
 
     // ============================================
-    // STEP 2: Multiply by ternary_b (broadcast) and scalar
+    // STEP 2: Multiply by ternary_b and scalar
     // Read from intermediate_cb and write back to intermediate_cb
+    // broadcast_ternary_b: 1 = single row broadcast, 0 = row-by-row streaming
     // ============================================
 
     cb_wait_front(intermediate_cb, out_block_num_tiles);
-    cb_wait_front(ternary_b_cb, N_block_tiles);
+
+    if (broadcast_ternary_b) {
+        // === BROADCAST: single row, wait/pop once ===
+        cb_wait_front(ternary_b_cb, N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-    mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
+        mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
 #else
-    unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
-    binop_with_scalar_tile_init();
-    reconfig_data_format(intermediate_cb, ternary_b_cb);
-    pack_reconfig_data_format(intermediate_cb);
+        binop_with_scalar_tile_init();
+        reconfig_data_format(intermediate_cb, ternary_b_cb);
+        pack_reconfig_data_format(intermediate_cb);
 
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            tile_regs_acquire();
+        uint32_t tile_id = 0;
+        for (uint32_t m = 0; m < M_block_tiles; m++) {
+            for (uint32_t n = 0; n < N_block_tiles; n++) {
+                tile_regs_acquire();
 
 #ifndef TERNARY_B_IS_FLOAT32
-            // LLK BUG: unary_bcast gives bad values if mixing fp32_acc_to_dest=True and bfloat16 circular buffer
-            // (https://github.com/tenstorrent/tt-llk/issues/1338)
-            // To avoid the bug, we use:
-            // - unary_bcast/mul_binary_tile for fp32 (more accurate)
-            // - mul_tiles_bcast for bfloat16 (LLK bug workaround).
-
-            // ternary_b_cb is [1, N], broadcast across M rows
-            mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+                mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
-            constexpr uint32_t TERNARY_B_DST_ID = 1;
-            unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+                constexpr uint32_t TERNARY_B_DST_ID = 1;
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+                unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
-            // ternary_b_cb is [1, N], broadcast across M rows
-            unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
+                copy_tile_to_dst_init_short(intermediate_cb);
+                copy_tile(intermediate_cb, tile_id, DST_ID);
 
-            copy_tile_to_dst_init_short(intermediate_cb);
-            copy_tile(intermediate_cb, tile_id, DST_ID);
-
-            mul_binary_tile_init();
-            mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
+                mul_binary_tile_init();
+                mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
-            mul_unary_tile(DST_ID, scalar_value);
+                mul_unary_tile(DST_ID, scalar_value);
 
-            tile_regs_commit();
-            tile_regs_wait();
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(DST_ID, intermediate_cb);
+                tile_regs_release();
+                tile_id++;
+            }
+        }
 
-            pack_tile(DST_ID, intermediate_cb);
+        cb_pop_front(ternary_b_cb, N_block_tiles);
+    } else {
+        // === NO BROADCAST: row-by-row, wait/pop per M row ===
+#ifndef TERNARY_B_IS_FLOAT32
+        mul_tiles_init_short(intermediate_cb, ternary_b_cb);
+#endif
+        binop_with_scalar_tile_init();
+        reconfig_data_format(intermediate_cb, ternary_b_cb);
+        pack_reconfig_data_format(intermediate_cb);
 
-            tile_regs_release();
-            tile_id++;
+        uint32_t tile_id = 0;
+        for (uint32_t m = 0; m < M_block_tiles; m++) {
+            cb_wait_front(ternary_b_cb, N_block_tiles);
+            for (uint32_t n = 0; n < N_block_tiles; n++) {
+                tile_regs_acquire();
+
+#ifndef TERNARY_B_IS_FLOAT32
+                mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+#else
+                constexpr uint32_t TERNARY_B_DST_ID = 1;
+                copy_tile_to_dst_init_short(ternary_b_cb);
+                copy_tile(ternary_b_cb, n, TERNARY_B_DST_ID);
+
+                copy_tile_to_dst_init_short(intermediate_cb);
+                copy_tile(intermediate_cb, tile_id, DST_ID);
+
+                mul_binary_tile_init();
+                mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
+#endif  // TERNARY_B_IS_FLOAT32
+
+                mul_unary_tile(DST_ID, scalar_value);
+
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(DST_ID, intermediate_cb);
+                tile_regs_release();
+                tile_id++;
+            }
+            cb_pop_front(ternary_b_cb, N_block_tiles);
         }
     }
 
-    cb_pop_front(ternary_b_cb, N_block_tiles);
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 
     // 'refill' intermediate_cb (also synchronize packer/unpacker)
@@ -298,9 +333,11 @@ void kernel_main() {
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
+    const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
 #else
     // Default value when ternary is not fused (not used, helps compiler optimize)
     constexpr uint32_t fused_ternary_scalar_uint = 0;
+    constexpr uint32_t broadcast_ternary_b = 1;
 #endif
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
@@ -414,7 +451,8 @@ void kernel_main() {
                 fused_ternary_scalar_uint,
                 out_cb,
                 M_block_tiles,
-                N_block_tiles);
+                N_block_tiles,
+                broadcast_ternary_b);
 #endif  // FUSE_TERNARY
         }
     }
