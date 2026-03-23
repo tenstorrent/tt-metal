@@ -35,7 +35,7 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 - [x] Video pipeline matching official (PSNR 23-24 dB, visually identical)
 - [x] Per-head gating implemented and verified (PCC 0.9999 per layer)
 - [x] Split RoPE with double-precision freq grid
-- [ ] Run existing audio unit tests, fix failures
+- [x] Run existing audio unit tests, fix failures (temb 6→9 params)
 - [ ] Audio self-attention with correct RoPE (1D SPLIT)
 - [ ] Audio cross-attention (text→audio)
 - [ ] Bidirectional A↔V cross-attention
