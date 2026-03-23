@@ -38,29 +38,26 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     constexpr bool rm_orientation = false;
     Buffer* const dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
     const bool nd_sharded = output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
     const uint32_t num_dims = output.padded_shape().rank();
     const uint32_t num_input_tensors = static_cast<uint32_t>(input_tensors.size());
 
-    uint32_t num_pages_in_row = 1;  // pages in a row in input tensors
+    //    uint32_t num_pages_in_row = 1;  // pages in a row in input tensors
     uint32_t num_output_pages;
     uint32_t single_page_size;
+    std::cout << "settings: " << (int)rm_layout << (int)nd_sharded << num_input_tensors << "\n";
     if (rm_layout) {
         if (nd_sharded) {
             num_output_pages = dst_buffer->num_pages();
             single_page_size = dst_buffer->aligned_page_size();
-            const uint32_t shard_width = output_nd_shard_spec.value().shard_shape[-1];
-            num_pages_in_row = tt::div_up(output.logical_shape()[-1], shard_width);
-            if (dim == num_dims - 1) {
-                num_pages_in_row /= num_input_tensors;
-            }
+            std::cout << "rm nd num output pages " << num_output_pages << " sps " << single_page_size << "\n";
 
         } else {
             num_output_pages = output.physical_volume() / output.padded_shape()[-1];
             const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
             single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
+            std::cout << "else rm nd num output pages " << num_output_pages << " sps " << single_page_size << "\n";
         }
     } else {
         if (nd_sharded) {
@@ -174,6 +171,20 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     // aka pages in a row in output tensor
     uint32_t num_output_pages_per_block = 0;
+    auto calculate_pages_in_block = [](const Tensor& in_ref) {
+        uint32_t dimention_pages = in_ref.padded_shape()[-1];
+        if (in_ref.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+            const tt::tt_metal::NdShardSpec& nd_shard_spec = in_ref.nd_shard_spec().value();
+            const uint32_t shard_width = nd_shard_spec.shard_shape[-1];
+            std::cout << "dimention_pages " << dimention_pages << "nd_shard_width " << shard_width << "\n";
+            return dimention_pages / shard_width;
+        } else {
+            const tt::tt_metal::ShardSpec& shard_spec = in_ref.shard_spec().value();
+            const uint32_t shard_width = shard_spec.shape[1];
+            std::cout << "dimention_pages " << dimention_pages << "shard_width " << shard_width << "\n";
+            return dimention_pages / shard_width;
+        }
+    };
 
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
@@ -181,15 +192,15 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
-                if (nd_sharded) {
-                    num_pages_per_block[i] = num_pages_in_row;
-                    num_output_pages_per_block = num_pages_in_row * num_input_tensors;
+                if (input_tensors[i].is_sharded()) {
+                    num_pages_per_block[i] = calculate_pages_in_block(input_tensors[i]);
                 } else {
                     num_pages_per_block[i] = num_accum_pages;
                 }
+                num_output_pages_per_block += num_pages_per_block[i];
             } else {
-                const uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
-                num_pages_per_block[i] = num_accum_pages * dim_pages * num_pages_in_row;
+                uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
+                num_pages_per_block[i] = num_accum_pages * dim_pages;
                 num_output_pages_per_block += num_pages_per_block[i];
             }
         }

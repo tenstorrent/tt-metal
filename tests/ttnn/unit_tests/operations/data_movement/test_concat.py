@@ -663,51 +663,52 @@ def test_nd_sharded_flexible_shard_shape(device, num_tensors, tensor_shape, shar
 @pytest.mark.parametrize(
     "input_shapes, concat_dim, shard_shape",
     [
-        # # 3D: concat along dimension 1 (no axis 3 in a rank-3 tensor)
-        # (
-        #     [(1, 48, 64), (1, 64, 64), (1, 80, 64)],
-        #     1,
-        #     [1, 32, 32],
-        # ),
+        # 3D: concat along dimension 1 (no axis 3 in a rank-3 tensor)
+        (
+            [(1, 48, 64), (1, 64, 64), (1, 80, 64)],
+            1,
+            [1, 32, 32],
+        ),
         # 3D: concat along dimension 2
         (
             [(1, 128, 32), (1, 128, 96), (1, 128, 64)],
             2,
             [1, 32, 32],
         ),
-        # # 4D: concat along dimension 1 (N, C, H, W)
-        # (
-        #     [(1, 32, 64, 64), (1, 32, 64, 64), (1, 32, 64, 64)],
-        #     1,
-        #     [1, 32, 32, 32],
-        # ),
-        # # 4D: concat along dimension 2
-        # (
-        #     [(1, 1, 48, 64), (1, 1, 64, 64), (1, 1, 80, 64)],
-        #     2,
-        #     [1, 1, 32, 32],
-        # ),
-        # # 4D: concat along dimension 3
-        # (
-        #     [(1, 1, 128, 32), (1, 1, 128, 48), (1, 1, 128, 64)],
-        #     3,
-        #     [1, 1, 32, 32],
-        # ),
-        # # 5D: concat along dimension 4
-        # (
-        #     [(1, 1, 32, 64, 32), (1, 1, 32, 64, 32), (1, 1, 32, 64, 32)],
-        #     4,
-        #     [1, 1, 32, 32, 32],
-        # ),
+        # 4D: concat along dimension 1 (N, C, H, W)
+        (
+            [(1, 32, 64, 64), (1, 32, 64, 64), (1, 32, 64, 64)],
+            1,
+            [1, 32, 32, 32],
+        ),
+        # 4D: concat along dimension 2
+        (
+            [(1, 1, 48, 64), (1, 1, 64, 64), (1, 1, 80, 64)],
+            2,
+            [1, 1, 32, 32],
+        ),
+        # 4D: concat along dimension 3
+        (
+            [(1, 1, 128, 32), (1, 1, 128, 48), (1, 1, 128, 64)],
+            3,
+            [1, 1, 32, 32],
+        ),
+        # 5D: concat along dimension 4
+        (
+            [(1, 1, 32, 64, 32), (1, 1, 32, 64, 32), (1, 1, 32, 64, 32)],
+            4,
+            [1, 1, 32, 32, 32],
+        ),
     ],
 )
-# @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+# @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 # @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+# @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM])
 def test_sharded_concat_three_tensors_parametrized(
     device, input_shapes, concat_dim, shard_shape, layout, dtype, buffer_type
 ):
