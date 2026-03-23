@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <vector>
 
-namespace ttnn::operations::creation {
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
-namespace detail {
+namespace ttnn {
+
+namespace creation_detail {
 
 template <typename T>
 Tensor arange_impl(
@@ -150,7 +152,7 @@ template Tensor full_impl<::bfloat16>(
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor);
 
-}  // namespace detail
+}  // namespace creation_detail
 
 template <typename T>
 Tensor full_impl(
@@ -178,7 +180,7 @@ Tensor full_impl(
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
     auto concrete_full = [&]<typename BufferType>(BufferType fill_value) {
-        return detail::full_impl<BufferType>(
+        return creation_detail::full_impl<BufferType>(
             shape_value, fill_value, layout_value, device_to_use, mem_cfg, optional_output_tensor);
     };
 
@@ -384,7 +386,7 @@ Tensor arange(
     const MemoryConfig& memory_config,
     const Layout layout) {
     auto concrete_arange = [&]<typename BufferType>() {
-        return detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
+        return creation_detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
     };
 
     switch (dtype) {
@@ -559,4 +561,4 @@ template Tensor from_buffer<::bfloat16>(
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config);
 
-}  // namespace ttnn::operations::creation
+}  // namespace ttnn
