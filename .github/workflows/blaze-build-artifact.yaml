@@ -1,0 +1,55 @@
+name: "Build tt-metal artifact for Blaze"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        default: "Release"
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+        description: "Build type configuration"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Target Platform"
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy profiler enabled"
+      distributed:
+        required: false
+        type: boolean
+        default: true
+        description: "Build with distributed enabled (Adds OpenMPI dependency)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+permissions:
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      tracy: ${{ inputs.tracy || false }}
+      distributed: ${{ inputs.distributed || true }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      publish-artifact: true
+      publish-package: true
