@@ -212,8 +212,14 @@ class TestUlfmGuardFastFail:
                 executed = True
             assert executed
 
-    def test_ulfm_error_calls_sys_exit_70(self):
-        """ULFM error in fast_fail mode should call sys.exit(70)."""
+    def test_ulfm_error_calls_os_exit_70(self):
+        """ULFM error in fast_fail mode should call os._exit(70).
+
+        We changed from sys.exit(70) to os._exit(70) so that Python atexit
+        handlers (including MPI_Finalize) are bypassed on a revoked
+        communicator.  os._exit() does NOT raise SystemExit — it terminates
+        the process directly — so we mock it instead of using pytest.raises.
+        """
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Get_rank.return_value = 0
@@ -224,11 +230,11 @@ class TestUlfmGuardFastFail:
             # Create an MPI.Exception with a ULFM error code
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
-            with pytest.raises(SystemExit) as exc_info:
+            with patch("os._exit") as mock_os_exit:
                 with mf.ulfm_guard(comm, "Allreduce"):
                     raise mpi_exc
 
-            assert exc_info.value.code == 70
+            mock_os_exit.assert_called_once_with(70)
 
     def test_non_ulfm_error_propagates(self):
         """Non-ULFM MPI errors should propagate normally."""
@@ -253,7 +259,7 @@ class TestUlfmGuardFastFail:
 
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
-            with pytest.raises(SystemExit):
+            with patch("os._exit"):
                 with mf.ulfm_guard(comm, "Barrier"):
                     raise mpi_exc
 
@@ -291,7 +297,7 @@ class TestUlfmGuardFaultTolerant:
             assert err.operation == "Scatter"
 
     def test_fault_tolerant_with_failed_ranks(self):
-        """If Get_failed is available, exception includes failed rank list."""
+        """If Get_failed is available, exception includes world rank list."""
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Get_rank.return_value = 0
@@ -300,6 +306,11 @@ class TestUlfmGuardFaultTolerant:
             failed_group = MagicMock()
             failed_group.Get_size.return_value = 2
             comm.Get_failed.return_value = failed_group
+            comm.Get_group.return_value = MagicMock()  # world group
+
+            # Translate_ranks maps failed-group local indices → world ranks
+            mf.MPI.Group.Translate_ranks.return_value = [0, 1]
+            mf.MPI.UNDEFINED = -32766  # standard MPI_UNDEFINED sentinel
 
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
@@ -307,7 +318,6 @@ class TestUlfmGuardFaultTolerant:
                 with mf.ulfm_guard(comm, "Allreduce", policy="fault_tolerant"):
                     raise mpi_exc
 
-            # failed_ranks should be [0, 1] (range of failed_group size)
             assert exc_info.value.failed_ranks == [0, 1]
 
     def test_success_path_in_fault_tolerant(self):
@@ -390,12 +400,18 @@ class TestTryGetFailedRanks:
             assert result == []
 
     def test_get_failed_returns_group(self):
-        """Normal case: returns list of rank indices from the failed group."""
+        """Normal case: returns world rank integers translated from the failed group."""
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             failed_group = MagicMock()
             failed_group.Get_size.return_value = 3
             comm.Get_failed.return_value = failed_group
+            comm.Get_group.return_value = MagicMock()  # world group
+
+            # Translate_ranks maps failed-group local indices → world ranks
+            mf.MPI.Group.Translate_ranks.return_value = [0, 1, 2]
+            mf.MPI.UNDEFINED = -32766  # standard MPI_UNDEFINED sentinel
+
             result = mf._try_get_failed_ranks(comm)
             assert result == [0, 1, 2]
 
@@ -409,7 +425,7 @@ class TestUlfmFastFail:
     """Test the _ulfm_fast_fail internal helper."""
 
     def test_revoke_failure_is_tolerated(self):
-        """If comm.Revoke() fails, should still exit 70."""
+        """If comm.Revoke() fails, should still call os._exit(70)."""
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Get_rank.return_value = 0
@@ -417,23 +433,23 @@ class TestUlfmFastFail:
             comm.Get_size.return_value = 4
             del comm.Get_failed
 
-            with pytest.raises(SystemExit) as exc_info:
+            with patch("os._exit") as mock_os_exit:
                 mf._ulfm_fast_fail(comm, 0, 54, "test")
 
-            assert exc_info.value.code == 70
+            mock_os_exit.assert_called_once_with(70)
 
     def test_comm_size_query_failure_tolerated(self):
-        """If comm.Get_size() fails, should still exit 70 with sentinel -1."""
+        """If comm.Get_size() fails, should still call os._exit(70)."""
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Revoke = MagicMock()
             comm.Get_size.side_effect = RuntimeError("comm broken")
             del comm.Get_failed
 
-            with pytest.raises(SystemExit) as exc_info:
+            with patch("os._exit") as mock_os_exit:
                 mf._ulfm_fast_fail(comm, 0, 54, "test")
 
-            assert exc_info.value.code == 70
+            mock_os_exit.assert_called_once_with(70)
 
 
 # =====================================================================
