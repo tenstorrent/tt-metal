@@ -1,25 +1,20 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
-#include <cstdint>
 #include <memory>
-#include <optional>
-#include <ostream>
-#include <string>
-#include <vector>
+
+#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 
-struct PipelineManagerRequest {
-    std::string request_id;
-    std::vector<uint32_t> prompt_token_ids;
-    uint32_t max_new_tokens = 0;
-    std::optional<uint32_t> eos_token_id;
-};
+class PipelineInterface;
 
 class PipelineManager {
 public:
-    PipelineManager(
-        std::string h2d_socket_id, std::string d2h_socket_id, uint32_t page_size_bytes, uint32_t connect_timeout_ms);
+    PipelineManager(PipelineInterface& pipeline, int chunk_size = DEFAULT_CHUNK_SIZE);
     ~PipelineManager();
 
     PipelineManager(const PipelineManager&) = delete;
@@ -27,11 +22,17 @@ public:
 
     void start();
     void stop();
-    void write_token(uint32_t token_id);
-    uint32_t read_token();
-    void run_one_shot(PipelineManagerRequest& request, std::ostream& output_stream);
-    void write_over_socket(uint32_t token_id);
-    uint32_t read_over_socket();
+
+    bool push_request(const ISRequest& request);
+    bool try_pop_response(PMResponse& response);
+    bool try_pop_output(OutputMessage& output);
+
+    // Drain request queue and apply API requests to internal state.
+    // Call periodically from the main/API thread.
+    void tick();
+
+    // Query the current state of a user slot. Safe to call from any thread.
+    UserState get_user_state(int user_id) const;
 
 private:
     struct Impl;

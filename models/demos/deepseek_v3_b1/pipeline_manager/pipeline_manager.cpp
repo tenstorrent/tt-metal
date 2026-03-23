@@ -1,331 +1,289 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager.hpp"
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
-#include <cstddef>
-#include <cstdint>
-#include <deque>
-#include <mutex>
-#include <sstream>
-#include <stdexcept>
 #include <thread>
-#include <utility>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/socket_connector.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/decode_staging.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/free_id_pool.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_interface.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/prefill_queue.hpp"
+#include "models/demos/deepseek_v3_b1/pipeline_manager/user_table.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
-namespace {
-
-struct RequestInput {
-    std::string request_id;
-    std::vector<uint32_t> prompt_token_ids;
-    uint32_t max_new_tokens = 0;
-    std::optional<uint32_t> eos_token_id;
-};
-
-RequestInput create_request_input(const PipelineManagerRequest& request) {
-    return RequestInput{
-        .request_id = request.request_id,
-        .prompt_token_ids = request.prompt_token_ids,
-        .max_new_tokens = request.max_new_tokens,
-        .eos_token_id = request.eos_token_id,
-    };
-}
-
-std::string join_generated_tokens(const std::vector<uint32_t>& generated_token_ids) {
-    std::ostringstream output;
-    for (size_t idx = 0; idx < generated_token_ids.size(); ++idx) {
-        if (idx != 0) {
-            output << ",";
-        }
-        output << generated_token_ids[idx];
-    }
-    return output.str();
-}
-
-class TokenStream {
-public:
-    explicit TokenStream(std::ostream& output_stream) : output_stream_(output_stream) {}
-
-    void emit_token(const std::string& request_id, size_t token_index, uint32_t token_id) {
-        output_stream_ << "TOKEN\t" << sanitize_field(request_id) << "\t" << token_index << "\t" << token_id
-                       << std::endl;
-    }
-
-    void emit_complete(const std::string& request_id, const std::vector<uint32_t>& generated_token_ids) {
-        output_stream_ << "COMPLETE\t" << sanitize_field(request_id) << "\t" << generated_token_ids.size() << "\t"
-                       << join_generated_tokens(generated_token_ids) << std::endl;
-    }
-
-    void emit_error(const std::string& request_id, const std::string& message) {
-        output_stream_ << "ERROR\t" << sanitize_field(request_id) << "\t" << sanitize_field(message) << std::endl;
-    }
-
-private:
-    static std::string sanitize_field(const std::string& value) {
-        std::string sanitized = value;
-        std::replace(sanitized.begin(), sanitized.end(), '\t', ' ');
-        std::replace(sanitized.begin(), sanitized.end(), '\n', ' ');
-        std::replace(sanitized.begin(), sanitized.end(), '\r', ' ');
-        return sanitized;
-    }
-
-    std::ostream& output_stream_;
-};
-
-}  // namespace
 
 struct PipelineManager::Impl {
-    Impl(std::string h2d_socket_id, std::string d2h_socket_id, uint32_t page_size_bytes, uint32_t connect_timeout_ms) :
-        writer_socket_(std::move(h2d_socket_id), page_size_bytes, connect_timeout_ms),
-        reader_socket_(std::move(d2h_socket_id), page_size_bytes, connect_timeout_ms) {}
+    PipelineInterface& pipeline;
+    int chunk_size;
 
-    ~Impl() { stop_threads(); }
+    FreeIdPool free_ids;
+    UserTable user_table;
+    PromptTable prompt_table;
+    CancelBitmap cancel_pending;
+    DecodeStaging decode_staging;
+    PrefillQueue prefill_queue;
 
-    void start() { start_threads(); }
+    BoundedQueue<ISRequest, MAX_USERS * 2> request_queue;
+    BoundedQueue<PMResponse, MAX_USERS> response_queue;
+    BoundedQueue<OutputMessage, MAX_USERS * 256> output_queue;
+
+    std::thread writer_thread;
+    std::thread reader_thread;
+    std::atomic<bool> running{false};
+
+    Impl(PipelineInterface& p, int cs) : pipeline(p), chunk_size(cs) {}
+
+    ~Impl() { stop(); }
+
+    void start() {
+        if (running.load(std::memory_order_acquire)) {
+            return;
+        }
+        running.store(true, std::memory_order_release);
+        writer_thread = std::thread([this] { writer_loop(); });
+        reader_thread = std::thread([this] { reader_loop(); });
+    }
 
     void stop() {
-        stop_threads();
-        writer_socket_.barrier();
-        reader_socket_.barrier();
-    }
-
-    void write_token(uint32_t token_id) {
-        ensure_started();
-        enqueue_write(token_id);
-    }
-
-    uint32_t read_token() {
-        ensure_started();
-        enqueue_read();
-        return await_read();
-    }
-
-    void run_one_shot(PipelineManagerRequest& request, std::ostream& output_stream) {
-        if (busy_) {
-            throw std::runtime_error("PipelineManager currently supports one in-flight request");
-        }
-        if (request.request_id.empty()) {
-            throw std::runtime_error("request_id must not be empty");
-        }
-
-        RequestInput request_input = create_request_input(request);
-        std::vector<uint32_t> generated_token_ids;
-        TokenStream token_stream(output_stream);
-
-        busy_ = true;
-        start_threads();
-
-        try {
-            run_request(request_input, generated_token_ids, token_stream);
-        } catch (const std::exception& error) {
-            token_stream.emit_error(request_input.request_id, error.what());
-            stop_threads();
-            busy_ = false;
-            throw;
-        }
-
-        stop_threads();
-        busy_ = false;
-    }
-
-    void start_threads() {
-        if (threads_started_) {
+        if (!running.load(std::memory_order_acquire)) {
             return;
         }
-        stop_requested_.store(false, std::memory_order_release);
-        writer_thread_ = std::thread([this]() { writer_loop(); });
-        reader_thread_ = std::thread([this]() { reader_loop(); });
-        threads_started_ = true;
-    }
-
-    void stop_threads() {
-        if (!threads_started_) {
-            clear_queues();
-            return;
+        running.store(false, std::memory_order_release);
+        pipeline.shutdown();
+        if (writer_thread.joinable()) {
+            writer_thread.join();
         }
-        stop_requested_.store(true, std::memory_order_release);
-        write_cv_.notify_all();
-        read_request_cv_.notify_all();
-
-        if (writer_thread_.joinable()) {
-            writer_thread_.join();
-        }
-        if (reader_thread_.joinable()) {
-            reader_thread_.join();
-        }
-
-        clear_queues();
-        threads_started_ = false;
-    }
-
-    void clear_queues() {
-        {
-            std::lock_guard<std::mutex> write_lock(write_mutex_);
-            pending_writes_.clear();
-        }
-        {
-            std::lock_guard<std::mutex> read_request_lock(read_request_mutex_);
-            pending_read_count_ = 0;
-        }
-        {
-            std::lock_guard<std::mutex> read_result_lock(read_result_mutex_);
-            read_results_.clear();
+        if (reader_thread.joinable()) {
+            reader_thread.join();
         }
     }
 
-    void ensure_started() const {
-        if (!threads_started_) {
-            throw std::runtime_error("PipelineManager threads have not been started");
-        }
-    }
+    // ========================================================================
+    //  Writer Thread — hot path
+    //  Priority: 1) decode tokens  2) prefill tokens (chunked)
+    // ========================================================================
 
     void writer_loop() {
-        while (true) {
-            uint32_t pending_write = 0;
-            {
-                std::unique_lock<std::mutex> lock(write_mutex_);
-                write_cv_.wait(lock, [this]() {
-                    return stop_requested_.load(std::memory_order_acquire) || !pending_writes_.empty();
-                });
-                if (stop_requested_.load(std::memory_order_acquire) && pending_writes_.empty()) {
-                    break;
+        while (running.load(std::memory_order_acquire)) {
+            // --- Priority 1: Decode tokens ---
+            int uid;
+            int32_t tok;
+            int32_t pos;
+            if (decode_staging.try_pop(uid, tok, pos)) {
+                if (cancel_pending.is_set(uid)) {
+                    maybe_finalize_cleanup(uid);
+                    continue;
                 }
-                pending_write = pending_writes_.front();
-                pending_writes_.pop_front();
+
+                pipeline.inject(InjectDescriptor{
+                    .user_id = static_cast<int32_t>(uid),
+                    .token_id = tok,
+                    .position = pos,
+                    .mode = TokenMode::DECODE,
+                    .spec_flag = false,
+                    .temperature = user_table.temperature[uid],
+                    .top_p = user_table.top_p[uid],
+                    .top_k = user_table.top_k[uid],
+                });
+                user_table.in_flight_count[uid].fetch_add(1, std::memory_order_relaxed);
+                continue;
             }
-            writer_socket_.write_token(pending_write);
+
+            // --- Priority 2: Prefill tokens (chunked round-robin) ---
+            int pfuid;
+            if (prefill_queue.try_front(pfuid)) {
+                if (cancel_pending.is_set(pfuid)) {
+                    prefill_queue.pop_front();
+                    maybe_finalize_cleanup(pfuid);
+                    continue;
+                }
+
+                int prompt_len = prompt_table.get_length(pfuid);
+                int cur_pos = user_table.prefill_pos[pfuid];
+                int chunk_rem = user_table.prefill_chunk_remaining[pfuid];
+
+                if (chunk_rem <= 0) {
+                    user_table.prefill_chunk_remaining[pfuid] = chunk_size;
+                    prefill_queue.rotate();
+                    continue;
+                }
+
+                if (cur_pos >= prompt_len) {
+                    prefill_queue.pop_front();
+                    user_table.state[pfuid].store(UserState::DECODE, std::memory_order_release);
+                    prompt_table.clear(pfuid);
+                    continue;
+                }
+
+                bool is_last = (cur_pos == prompt_len - 1);
+
+                pipeline.inject(InjectDescriptor{
+                    .user_id = static_cast<int32_t>(pfuid),
+                    .token_id = prompt_table.get_token(pfuid, cur_pos),
+                    .position = cur_pos,
+                    .mode = is_last ? TokenMode::DECODE : TokenMode::PREFILL,
+                    .spec_flag = false,
+                    .temperature = user_table.temperature[pfuid],
+                    .top_p = user_table.top_p[pfuid],
+                    .top_k = user_table.top_k[pfuid],
+                });
+                user_table.in_flight_count[pfuid].fetch_add(1, std::memory_order_relaxed);
+                user_table.prefill_pos[pfuid] = cur_pos + 1;
+                user_table.current_position[pfuid] = cur_pos + 1;
+                user_table.prefill_chunk_remaining[pfuid] = chunk_rem - 1;
+                continue;
+            }
+
+            // No work
+            std::this_thread::yield();
         }
-        writer_socket_.barrier();
     }
+
+    // ========================================================================
+    //  Reader Thread — hot path
+    //  Processes pipeline results: decode loopback, completion, cancellation.
+    // ========================================================================
 
     void reader_loop() {
-        while (true) {
-            bool should_read = false;
-            {
-                std::unique_lock<std::mutex> lock(read_request_mutex_);
-                read_request_cv_.wait(lock, [this]() {
-                    return stop_requested_.load(std::memory_order_acquire) || pending_read_count_ > 0;
-                });
-                if (stop_requested_.load(std::memory_order_acquire) && pending_read_count_ == 0) {
-                    break;
-                }
-                --pending_read_count_;
-                should_read = true;
-            }
+        while (running.load(std::memory_order_acquire)) {
+            ResultDescriptor result = pipeline.read_result();
 
-            if (should_read) {
-                const uint32_t token_id = reader_socket_.read_token();
-                {
-                    std::lock_guard<std::mutex> lock(read_result_mutex_);
-                    read_results_.push_back(token_id);
-                }
-                read_result_cv_.notify_one();
-            }
-        }
-        reader_socket_.barrier();
-    }
-
-    void enqueue_write(uint32_t token_id) {
-        {
-            std::lock_guard<std::mutex> lock(write_mutex_);
-            pending_writes_.push_back(token_id);
-        }
-        write_cv_.notify_one();
-    }
-
-    void enqueue_read() {
-        {
-            std::lock_guard<std::mutex> lock(read_request_mutex_);
-            ++pending_read_count_;
-        }
-        read_request_cv_.notify_one();
-    }
-
-    uint32_t await_read() {
-        std::unique_lock<std::mutex> lock(read_result_mutex_);
-        read_result_cv_.wait(lock, [this]() { return !read_results_.empty(); });
-        const uint32_t token_id = read_results_.front();
-        read_results_.pop_front();
-        return token_id;
-    }
-
-    uint32_t run_prefill(
-        const RequestInput& request, std::vector<uint32_t>& generated_token_ids, TokenStream& token_stream) {
-        if (request.prompt_token_ids.empty()) {
-            throw std::runtime_error("Prompt token list must not be empty");
-        }
-
-        uint32_t last_output_token = 0;
-        for (uint32_t prompt_token : request.prompt_token_ids) {
-            enqueue_write(prompt_token);
-            enqueue_read();
-            last_output_token = await_read();
-        }
-
-        generated_token_ids.push_back(last_output_token);
-        token_stream.emit_token(request.request_id, 0, last_output_token);
-        return last_output_token;
-    }
-
-    void run_decode(
-        const RequestInput& request,
-        std::vector<uint32_t>& generated_token_ids,
-        uint32_t first_generated_token,
-        TokenStream& token_stream) {
-        uint32_t input_token = first_generated_token;
-        for (uint32_t step = 0; step + 1 < request.max_new_tokens; ++step) {
-            if (request.eos_token_id.has_value() && input_token == request.eos_token_id.value()) {
+            int uid = result.user_id;
+            if (uid < 0) {
                 break;
             }
 
-            enqueue_write(input_token);
-            enqueue_read();
-            const uint32_t output_token = await_read();
-            generated_token_ids.push_back(output_token);
-            token_stream.emit_token(request.request_id, generated_token_ids.size() - 1, output_token);
-            input_token = output_token;
+            user_table.in_flight_count[uid].fetch_sub(1, std::memory_order_relaxed);
+
+            if (cancel_pending.is_set(uid)) {
+                maybe_finalize_cleanup(uid);
+                continue;
+            }
+
+            if (!result.sampled) {
+                continue;
+            }
+
+            int32_t tok = result.actual_token;
+            user_table.tokens_generated[uid]++;
+
+            bool is_eos = (tok == EOS_TOKEN);
+            bool is_max = (user_table.tokens_generated[uid] >= user_table.max_new_tokens[uid]);
+            bool is_complete = is_eos || is_max;
+
+            output_queue.try_push(OutputMessage{
+                .user_id = static_cast<int32_t>(uid),
+                .token_id = tok,
+                .is_eos = is_eos,
+                .is_complete = is_complete,
+                .tokens_generated = user_table.tokens_generated[uid],
+            });
+
+            if (is_complete) {
+                user_table.state[uid].store(UserState::COMPLETE, std::memory_order_release);
+            } else {
+                // Decode loopback: stage token for re-injection by Writer.
+                // current_position is the next free KV slot.
+                int32_t next_pos = user_table.current_position[uid];
+                decode_staging.stage(uid, tok, next_pos);
+                user_table.current_position[uid] = next_pos + 1;
+            }
         }
     }
 
-    void run_request(
-        const RequestInput& request, std::vector<uint32_t>& generated_token_ids, TokenStream& token_stream) {
-        if (request.max_new_tokens == 0) {
-            throw std::runtime_error("max_new_tokens must be greater than zero");
-        }
+    // ========================================================================
+    //  API Request Handler — called by main thread via tick()
+    // ========================================================================
 
-        const uint32_t first_generated_token = run_prefill(request, generated_token_ids, token_stream);
-        run_decode(request, generated_token_ids, first_generated_token, token_stream);
-        token_stream.emit_complete(request.request_id, generated_token_ids);
+    void handle_api_requests() {
+        ISRequest req;
+        while (request_queue.try_pop(req)) {
+            switch (req.type) {
+                case RequestType::ALLOCATE: {
+                    int uid = free_ids.allocate();
+                    if (uid >= 0) {
+                        user_table.reset(uid);
+                        cancel_pending.clear(uid);
+                    }
+                    response_queue.try_push(PMResponse{
+                        .request_id = req.request_id,
+                        .user_id = static_cast<int32_t>(uid),
+                        .error_code = (uid < 0) ? 1 : 0,
+                    });
+                    break;
+                }
+
+                case RequestType::SUBMIT: {
+                    int uid = req.user_id;
+                    prompt_table.store(uid, req.tokens.data(), req.token_count);
+                    user_table.state[uid].store(UserState::PREFILL, std::memory_order_release);
+                    user_table.current_position[uid] = 0;
+                    user_table.prefill_pos[uid] = 0;
+                    user_table.max_new_tokens[uid] = req.max_new_tokens;
+                    user_table.tokens_generated[uid] = 0;
+                    user_table.in_flight_count[uid].store(0, std::memory_order_relaxed);
+                    user_table.prefill_chunk_remaining[uid] = chunk_size;
+                    user_table.spec_decode_enabled[uid] = req.spec_decode;
+                    user_table.temperature[uid] = req.temperature;
+                    user_table.top_p[uid] = req.top_p;
+                    user_table.top_k[uid] = req.top_k;
+                    prefill_queue.push(uid);
+                    break;
+                }
+
+                case RequestType::CONTINUE: {
+                    int uid = req.user_id;
+                    int start_pos = user_table.current_position[uid];
+                    prompt_table.store(uid, req.tokens.data(), req.token_count, start_pos);
+
+                    user_table.state[uid].store(UserState::PREFILL, std::memory_order_release);
+                    user_table.prefill_pos[uid] = start_pos;
+                    user_table.max_new_tokens[uid] = req.max_new_tokens;
+                    user_table.tokens_generated[uid] = 0;
+                    user_table.prefill_chunk_remaining[uid] = chunk_size;
+                    user_table.temperature[uid] = req.temperature;
+                    user_table.top_p[uid] = req.top_p;
+                    user_table.top_k[uid] = req.top_k;
+                    prefill_queue.push(uid);
+                    break;
+                }
+
+                case RequestType::CANCEL: {
+                    int uid = req.user_id;
+                    cancel_pending.mark(uid);
+                    prefill_queue.remove(uid);
+                    maybe_finalize_cleanup(uid);
+                    break;
+                }
+            }
+        }
     }
 
-    void write_over_socket(uint32_t token_id) { writer_socket_.write_token(token_id); }
-
-    uint32_t read_over_socket() { return reader_socket_.read_token(); }
-
-    H2DWriterSocket writer_socket_;
-    D2HReaderSocket reader_socket_;
-    std::thread writer_thread_;
-    std::thread reader_thread_;
-    std::mutex write_mutex_;
-    std::condition_variable write_cv_;
-    std::deque<uint32_t> pending_writes_;
-    std::mutex read_request_mutex_;
-    std::condition_variable read_request_cv_;
-    size_t pending_read_count_ = 0;
-    std::mutex read_result_mutex_;
-    std::condition_variable read_result_cv_;
-    std::deque<uint32_t> read_results_;
-    bool busy_ = false;
-    bool threads_started_ = false;
-    std::atomic<bool> stop_requested_{false};
+    // Safe to call from any thread (writer, reader, or API handler).
+    // cancel_pending stays set until the slot is re-allocated — this prevents
+    // the writer from injecting stale decode staging entries after the uid
+    // is freed. All operations here are idempotent, so concurrent calls from
+    // multiple threads are harmless.
+    void maybe_finalize_cleanup(int uid) {
+        if (cancel_pending.is_set(uid) && user_table.in_flight_count[uid].load(std::memory_order_acquire) == 0) {
+            pipeline.reset_kv(uid);
+            user_table.state[uid].store(UserState::INACTIVE, std::memory_order_release);
+            free_ids.free(uid);
+        }
+    }
 };
 
-PipelineManager::PipelineManager(
-    std::string h2d_socket_id, std::string d2h_socket_id, uint32_t page_size_bytes, uint32_t connect_timeout_ms) :
-    impl_(std::make_unique<Impl>(
-        std::move(h2d_socket_id), std::move(d2h_socket_id), page_size_bytes, connect_timeout_ms)) {}
+// ============================================================================
+//  PipelineManager public API — forwards to Impl
+// ============================================================================
+
+PipelineManager::PipelineManager(PipelineInterface& pipeline, int chunk_size) :
+    impl_(std::make_unique<Impl>(pipeline, chunk_size)) {}
 
 PipelineManager::~PipelineManager() = default;
 
@@ -333,16 +291,16 @@ void PipelineManager::start() { impl_->start(); }
 
 void PipelineManager::stop() { impl_->stop(); }
 
-void PipelineManager::write_token(uint32_t token_id) { impl_->write_token(token_id); }
+bool PipelineManager::push_request(const ISRequest& request) { return impl_->request_queue.try_push(request); }
 
-uint32_t PipelineManager::read_token() { return impl_->read_token(); }
+bool PipelineManager::try_pop_response(PMResponse& response) { return impl_->response_queue.try_pop(response); }
 
-void PipelineManager::write_over_socket(uint32_t token_id) { impl_->write_over_socket(token_id); }
+bool PipelineManager::try_pop_output(OutputMessage& output) { return impl_->output_queue.try_pop(output); }
 
-uint32_t PipelineManager::read_over_socket() { return impl_->read_over_socket(); }
+void PipelineManager::tick() { impl_->handle_api_requests(); }
 
-void PipelineManager::run_one_shot(PipelineManagerRequest& request, std::ostream& output_stream) {
-    impl_->run_one_shot(request, output_stream);
+UserState PipelineManager::get_user_state(int user_id) const {
+    return impl_->user_table.state[user_id].load(std::memory_order_acquire);
 }
 
 }  // namespace models::demos::deepseek_v3_b1::pipeline_manager
