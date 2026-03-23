@@ -157,6 +157,7 @@ class TtTemporalSelfAttention:
             sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
             sampling_locations = reference_points + sampling_locations
             ttnn.deallocate(offset_normalizer_xy)
+            ttnn.deallocate(offset_normalizer)
             reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(
