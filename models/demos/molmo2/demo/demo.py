@@ -1872,6 +1872,9 @@ class Molmo2Generator:
 
         Note: ttnn.argmax requires TILE_LAYOUT input -- do NOT untilize first.
         """
+        # Slice to actual sequence length (decode mode outputs single token padded to TILE_SIZE)
+        # Logits shape: [1, 1, padded_seq, vocab_size] -> [1, 1, 1, vocab_size]
+        logits = logits[:, :, :1, :]
         tt_token = ttnn.argmax(logits, dim=-1, keepdim=False)
         tt_token = ttnn.reshape(tt_token, [1, 1])
         if tt_token.dtype != ttnn.uint32:
@@ -1912,10 +1915,15 @@ class Molmo2Generator:
         # Build prompt with image tokens
         image_grid = image_inputs["image_grids"][0]
         image_tokens_str = get_image_tokens(image_grid)
-        full_prompt = prompt.replace(IMAGE_PROMPT, image_tokens_str)
+        content_with_images = prompt.replace(IMAGE_PROMPT, image_tokens_str)
+
+        # Apply chat template (Molmo2 expects this format)
+        messages = [{"role": "user", "content": content_with_images}]
+        full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        logger.debug(f"Full prompt (first 200 chars): {full_prompt[:200]}...")
 
         # Tokenize input
-        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt")
+        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
 
         # Get pooling indices
         pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
@@ -2047,10 +2055,15 @@ class Molmo2Generator:
 
         # Build prompt with video tokens (replaces <|video|> with per-frame patch tokens)
         video_tokens_str = get_video_tokens(n_frames, pooled_h, pooled_w, timestamps)
-        full_prompt = prompt.replace(VIDEO_PROMPT, video_tokens_str)
+        content_with_videos = prompt.replace(VIDEO_PROMPT, video_tokens_str)
+
+        # Apply chat template (Molmo2 expects this format)
+        messages = [{"role": "user", "content": content_with_videos}]
+        full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        logger.debug(f"Full prompt (first 200 chars): {full_prompt[:200]}...")
 
         # Tokenize input
-        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt")
+        input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
 
         # pooled_patches_idx shape: [n_frames, N_out, K_pool] -- no unsqueeze needed
         pooled_patches_idx = video_inputs["image_token_pooling"]  # [n_frames, N_out, K_pool]
