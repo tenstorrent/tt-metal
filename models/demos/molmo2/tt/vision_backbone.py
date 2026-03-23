@@ -142,6 +142,7 @@ class VisionBackbone(LightweightModule):
         self,
         images_embedded: ttnn.Tensor,
         num_crops: int = 1,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         """
         Encode images through ViT and extract multi-scale features.
@@ -158,6 +159,7 @@ class VisionBackbone(LightweightModule):
         hidden_states = self.image_vit.forward(
             images_embedded,
             return_all_hidden_states=True,
+            matmul_output_memory_config=matmul_output_memory_config,
         )
 
         # Extract features from specified layers and concat
@@ -175,6 +177,7 @@ class VisionBackbone(LightweightModule):
         self,
         pixel_values: torch.Tensor,
         num_crops: int = 1,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         """
         Encode images from raw pixel values through ViT.
@@ -190,6 +193,7 @@ class VisionBackbone(LightweightModule):
         hidden_states = self.image_vit.forward_with_patch_embed(
             pixel_values,
             return_all_hidden_states=True,
+            matmul_output_memory_config=matmul_output_memory_config,
         )
 
         # Extract features from specified layers and concat
@@ -226,12 +230,26 @@ class VisionBackbone(LightweightModule):
         """
         batch_size = pooled_patches_idx.shape[0]
 
+        # Optional: use L1 for matmul outputs when tensors are small (same logic as forward_ttnn)
+        if isinstance(images_embedded, torch.Tensor):
+            # pixel_values: [B, C, H, W] -> num_patches = (H/14)*(W/14), vit_el = B * num_patches * hidden_dim
+            _, _, h, w = images_embedded.shape
+            num_patches = (h // self.image_vit.patch_size) * (w // self.image_vit.patch_size)
+            _vit_el = batch_size * num_patches * self.image_vit.hidden_dim
+        else:
+            _vit_el = images_embedded.shape[2] * images_embedded.shape[3]
+        vit_matmul_config = ttnn.L1_MEMORY_CONFIG if _vit_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         # 1. Encode image through ViT
         # Check if input is raw pixels (torch.Tensor) or already embedded (ttnn.Tensor)
         if isinstance(images_embedded, torch.Tensor):
-            image_features = self.encode_image_from_pixels(images_embedded, num_crops)
+            image_features = self.encode_image_from_pixels(
+                images_embedded, num_crops, matmul_output_memory_config=vit_matmul_config
+            )
         else:
-            image_features = self.encode_image(images_embedded, num_crops)
+            image_features = self.encode_image(
+                images_embedded, num_crops, matmul_output_memory_config=vit_matmul_config
+            )
 
         # 2. Convert to torch for gathering (CPU operation)
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
@@ -249,6 +267,15 @@ class VisionBackbone(LightweightModule):
         pool_dim = image_features_torch.shape[-1]
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
+
+        # L1 for pooling/projector matmuls when small (same threshold as forward_ttnn)
+        _query_el = batch_size * n_out * 1 * pool_dim
+        _to_pool_el = batch_size * n_out * k_pool * pool_dim
+        pool_matmul_config = (
+            ttnn.L1_MEMORY_CONFIG if _query_el <= 512 * 1024 and _to_pool_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+        )
+        _pooled_el = batch_size * n_out * self.adapter_hidden_dim
+        project_matmul_config = ttnn.L1_MEMORY_CONFIG if _pooled_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
 
         # Identify valid indices (>= 0)
         valid = pooled_patches_idx >= 0
@@ -326,6 +353,7 @@ class VisionBackbone(LightweightModule):
             query=query_ttnn,
             key_value=to_pool_ttnn,
             attn_mask=attn_mask_ttnn,
+            matmul_output_memory_config=pool_matmul_config,
         )
 
         ttnn.deallocate(query_ttnn)
@@ -337,7 +365,10 @@ class VisionBackbone(LightweightModule):
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
 
         # 7. Project to language model dimension
-        visual_embeddings = self.image_projector(pooled_features)
+        visual_embeddings = self.image_projector(
+            pooled_features,
+            matmul_output_memory_config=project_matmul_config,
+        )
 
         # 8. Filter by valid tokens (return only valid embeddings)
         # Convert to torch for filtering
@@ -401,8 +432,14 @@ class VisionBackbone(LightweightModule):
         """
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
 
+        _vit_el = images_embedded.shape[2] * images_embedded.shape[3]
+        vit_matmul_config = ttnn.L1_MEMORY_CONFIG if _vit_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+
         # 1. Encode image through ViT
-        image_features = self.encode_image(images_embedded)
+        image_features = self.encode_image(
+            images_embedded,
+            matmul_output_memory_config=vit_matmul_config,
+        )
         # image_features: [1, 1, B*T*N, pool_dim]
 
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
@@ -420,9 +457,11 @@ class VisionBackbone(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # gathered: [1, B*N_out*K_pool, pool_dim]
+        # Free ViT output immediately to reduce memory pressure for subsequent matmuls
+        ttnn.deallocate(image_features)
 
         # Reshape to [1, 1, B*N_out*K_pool, pool_dim] for masking
-        pool_dim = image_features.shape[-1]
+        pool_dim = image_features_2d.shape[-1]
         gathered = ttnn.reshape(gathered, [1, 1, batch_size * n_out * k_pool, pool_dim])
 
         # 3. Apply valid mask (zero out invalid positions)
@@ -441,27 +480,49 @@ class VisionBackbone(LightweightModule):
         # at the cost of slight accuracy reduction vs forward() which uses a proper masked mean.
         # Measured PCC gap vs forward() path: < 0.01 for typical inputs.
         query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(query_sum)
+
+        # Optional: move small inputs to L1 so pooling matmuls read from L1 (reduces latency).
+        # Only when tensor fits in L1 to avoid OOM (e.g. < 512K elements per tensor).
+        _query_el = batch_size * n_out * 1 * pool_dim
+        _to_pool_el = batch_size * n_out * k_pool * pool_dim
+        if _query_el <= 512 * 1024:
+            query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG)
+        if _to_pool_el <= 512 * 1024:
+            to_pool = ttnn.to_memory_config(to_pool, ttnn.L1_MEMORY_CONFIG)
 
         # 5. Cross-attention pooling
         # query: [1, B*N_out, 1, pool_dim]
         # to_pool (key/value): [1, B*N_out, K_pool, pool_dim]
         # attn_mask is skipped here: dynamic masking breaks TTNN trace capture.
         # The non-traced forward() path passes the mask correctly.
+        pool_matmul_config = (
+            ttnn.L1_MEMORY_CONFIG if _query_el <= 512 * 1024 and _to_pool_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+        )
         pooled_features = self.image_pooling_2d(
             query=query,
             key_value=to_pool,
             attn_mask=None,
+            matmul_output_memory_config=pool_matmul_config,
         )
 
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
         ttnn.deallocate(gathered)
-        ttnn.deallocate(image_features)
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
         pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
 
+        # Optional: move to L1 so projector matmuls read from L1 when tensor is small
+        _pooled_el = batch_size * n_out * self.adapter_hidden_dim
+        if _pooled_el <= 512 * 1024:
+            pooled_features = ttnn.to_memory_config(pooled_features, ttnn.L1_MEMORY_CONFIG)
+
         # 6. Project to language model dimension
-        visual_embeddings = self.image_projector(pooled_features)
+        project_matmul_config = ttnn.L1_MEMORY_CONFIG if _pooled_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
+        visual_embeddings = self.image_projector(
+            pooled_features,
+            matmul_output_memory_config=project_matmul_config,
+        )
 
         return visual_embeddings

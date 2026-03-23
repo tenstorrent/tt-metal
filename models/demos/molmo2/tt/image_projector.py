@@ -122,7 +122,11 @@ class ImageProjector(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
         """
         Forward pass through SwiGLU projector.
 
@@ -142,21 +146,21 @@ class ImageProjector(LightweightModule):
         gate = ttnn.linear(
             x,
             self.w1_weight,
+            activation="silu",
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-        gate = ttnn.silu(gate)
 
         # w3 (up projection)
         up = ttnn.linear(
             x,
             self.w3_weight,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
 
         # Element-wise multiply: silu(w1(x)) * w3(x)
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden = ttnn.mul(gate, up, memory_config=matmul_output_memory_config)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
@@ -165,7 +169,7 @@ class ImageProjector(LightweightModule):
             hidden,
             self.w2_weight,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
         ttnn.deallocate(hidden)
 

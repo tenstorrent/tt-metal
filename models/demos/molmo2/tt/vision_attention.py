@@ -187,7 +187,11 @@ class VisionAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
         """
         Forward pass through attention.
 
@@ -207,12 +211,12 @@ class VisionAttention(LightweightModule):
         qkv = ttnn.linear(
             x,
             self.wqkv,
+            bias=self.bqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
 
         # Add bias
-        qkv = qkv + self.bqkv
 
         # Reshape back if needed
         if seq_len > 2048 and seq_len % 2048 == 0:
@@ -226,7 +230,7 @@ class VisionAttention(LightweightModule):
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,  # Full attention, not GQA
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
 
         ttnn.deallocate(qkv)
@@ -256,7 +260,7 @@ class VisionAttention(LightweightModule):
         # Concatenate heads
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
 
         # Output projection (reshape only when divisible for memory optimization)
@@ -266,12 +270,10 @@ class VisionAttention(LightweightModule):
         output = ttnn.linear(
             attn_output,
             self.wo,
+            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=matmul_output_memory_config,
         )
-
-        # Add output bias
-        output = output + self.bo
 
         if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
