@@ -45,6 +45,7 @@ ttnn::Tensor welford_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::prim
