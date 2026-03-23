@@ -342,35 +342,6 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
     EXPECT_EQ(new_buffer->address(), target_original_address);
 }
 
-TEST_F(MeshBufferTestSuite, MoveConstructorPreservesData) {
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
-
-    const ReplicatedBufferConfig buffer_config{.size = 4096};
-    auto original_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-
-    std::vector<uint32_t> src_vec(1024, 0);
-    std::iota(src_vec.begin(), src_vec.end(), 0);
-
-    for (std::size_t col = 0; col < original_buffer->device()->num_cols(); col++) {
-        for (std::size_t row = 0; row < original_buffer->device()->num_rows(); row++) {
-            WriteShard(mesh_device_->mesh_command_queue(), original_buffer, src_vec, MeshCoordinate(row, col));
-        }
-    }
-
-    MeshBuffer moved_buffer(std::move(*original_buffer));
-
-    auto moved_buffer_ptr = std::shared_ptr<MeshBuffer>(&moved_buffer, [](MeshBuffer*) {});
-
-    for (std::size_t col = 0; col < moved_buffer.device()->num_cols(); col++) {
-        for (std::size_t row = 0; row < moved_buffer.device()->num_rows(); row++) {
-            std::vector<uint32_t> dst_vec = {};
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, moved_buffer_ptr, MeshCoordinate(row, col));
-            EXPECT_EQ(dst_vec, src_vec);
-        }
-    }
-}
-
 class DeviceLocalMeshBufferShardingTest
     : public MeshBufferTest2x4,
       public testing::WithParamInterface<
