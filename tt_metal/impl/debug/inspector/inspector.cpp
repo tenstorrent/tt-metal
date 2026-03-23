@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
+#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
@@ -19,10 +20,23 @@
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() { return tt::tt_metal::MetalContext::instance().get_inspector_data(); }
+inspector::Data* get_inspector_data() {
+    // TODO: we assume inspector only works on the silicon context
+    // https://github.com/tenstorrent/tt-metal/issues/39745
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).get_inspector_data();
+    }
+    return nullptr;
+}
 }  // namespace
 
-bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
+// Inspector is not used on mock devices
+bool Inspector::is_enabled() {
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).rtoptions().get_inspector_enabled();
+    }
+    return false;
+}
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
     if (!is_enabled()) {
@@ -508,11 +522,40 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     }
 }
 
+std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id) {
+    std::string elf_path;
+
+    if (!is_enabled()) {
+        return elf_path;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize.
+        return elf_path;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto program_id_it = data->kernel_id_to_program_id.find(watcher_kernel_id);
+        if (program_id_it != data->kernel_id_to_program_id.end()) {
+            auto program_id = data->kernel_id_to_program_id.at(watcher_kernel_id);
+            auto program_data_it = data->programs_data.find(program_id);
+            if (program_data_it != data->programs_data.end()) {
+                auto& program_data = program_data_it->second;
+                auto kernel_data_it = program_data.kernels.find(watcher_kernel_id);
+                if (kernel_data_it != program_data.kernels.end()) {
+                    elf_path = kernel_data_it->second.path;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to get ELF path from watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+    }
+    return elf_path;
+}
+
 namespace experimental::inspector {
 
-bool IsEnabled() {
-    return Inspector::is_enabled();
-}
+bool IsEnabled() { return Inspector::is_enabled(); }
 
 void EmitMeshWorkloadAnnotation(
     tt::tt_metal::distributed::MeshWorkload& workload,

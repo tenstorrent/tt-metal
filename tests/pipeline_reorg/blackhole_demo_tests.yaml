@@ -10,7 +10,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: whisper performance
-  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation" --timeout=600
   skus:
     bh_p150_perf:
       timeout: 10
@@ -19,7 +19,7 @@
   model-name: whisper
 
 - name: whisper nightly
-  cmd: pytest tests/nightly/single_card/whisper
+  cmd: pytest tests/nightly/single_card/whisper --timeout=600
   skus:
     bh_p150:
       timeout: 10
@@ -103,8 +103,6 @@
   cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4 --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
-      timeout: 10
-    bh_loudbox:
       timeout: 10
     bh_quietbox_2:
       timeout: 10
@@ -291,6 +289,15 @@
   team: models
   model-name: flux.1-dev
 
+- name: Mochi BH QuietBox 2 performance (2x2sp0tp1)
+  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/genmo TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB" --timeout=1800
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U06BXU8RWQ2 # Kevin Mi
+  team: models
+  model-name: mochi
+
 - name: Wan2.2-T2V-A14B BH QuietBox 2 performance
   cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x2sp0tp1 and resolution_480p and t2v" --timeout=1200
   skus:
@@ -301,10 +308,23 @@
   model-name: wan2.2-t2v-a14b
 
 - name: Wan2.2-T2V-A14B BH LoudBox performance
-  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x8sp0tp1 and resolution_480p and t2v" --timeout=1200
+  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4sp1tp0 and resolution_480p and t2v" --timeout=1200
   skus:
     bh_loudbox:
       timeout: 20
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+- name: stable_diffusion_xl demos
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  skus:
+    bh_p150b_civ2:
+      timeout: 120
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+  model-name: stable_diffusion_xl

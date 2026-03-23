@@ -111,12 +111,6 @@ def check_noc_status(
 
 
 def run(args, context: Context):
-    if context.devices[0].is_blackhole():
-        log_warning(
-            "Currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
-        )
-        return
-
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
     NOC_IDS = [0, 1]

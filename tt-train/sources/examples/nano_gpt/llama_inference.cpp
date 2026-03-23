@@ -4,7 +4,6 @@
 
 #include <CLI/CLI.hpp>
 #include <chrono>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -13,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
     CLI11_PARSE(app, argc, argv);
 
     // Use default LLaMA config path
-    std::string model_config_path = "./configs/model_configs/tinyllama.yaml";
+    std::string model_config_path = "./tt-train/configs/model_configs/tinyllama.yaml";
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");

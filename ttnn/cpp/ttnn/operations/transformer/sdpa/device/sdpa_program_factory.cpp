@@ -81,6 +81,7 @@ bool can_use_streaming_compute(
     bool fp32_dest_acc_en,
     uint32_t qk_out_subblock_h,
     uint32_t Sk_chunk_t,
+    uint32_t dst_size,
     uint32_t padded_Sk,
     uint32_t Sk,
     uint32_t Sq_chunk_t) {
@@ -90,7 +91,12 @@ bool can_use_streaming_compute(
     if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
         return false;
     }
-    if (qk_out_subblock_h > 2 || Sk_chunk_t % (8 / qk_out_subblock_h) != 0) {
+    if (qk_out_subblock_h > 2 || Sk_chunk_t % (dst_size / qk_out_subblock_h) != 0) {
+        return false;
+    }
+    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
+    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
+    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
         return false;
     }
     // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
@@ -222,7 +228,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // q - [B, NHQ, Sq, DH_qk]
     // k - [B, 1, Sk, DH_qk]
     // v - [B, NVH, Sk, DH_v]
-    // k head is in latent space, and is reused accross all q heads
+    // k head is in latent space, and is reused across all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
@@ -389,6 +395,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         fp32_dest_acc_en,
         qk_out_subblock_h,
         Sk_chunk_t,
+        dst_size,
         padded_Sk,
         Sk,
         Sq_chunk_t);
@@ -424,7 +431,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -580,7 +588,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         B,
         NQH,
         NKH,
-        Skt,
+        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
         DHt,
         vDHt,
         Sq_chunk_t,

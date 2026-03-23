@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
@@ -279,6 +279,19 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // Set router type based on detection
     config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+
+    if (config.requires_vc1) {
+        auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+        auto tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
+        bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
+        bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        config.requires_vc2 = rtoptions.get_enable_fabric_vc2() && is_blackhole && !is_udm_mode && !is_mux_extension;
+        TT_FATAL(
+            !rtoptions.get_enable_fabric_vc2(),
+            "TT_METAL_ENABLE_FABRIC_VC2 is not yet supported — VC2 feature is under development");
+    }
 
     return config;
 }

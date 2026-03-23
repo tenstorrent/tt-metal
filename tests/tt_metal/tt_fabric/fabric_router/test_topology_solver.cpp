@@ -10,8 +10,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
 namespace tt::tt_fabric {
@@ -114,6 +113,83 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
     EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
     EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+        }
+    }
+
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+
+            for (const auto& neighbor : adj_graph.get_neighbors(adj_graph.get_nodes()[i])) {
+                EXPECT_TRUE(
+                    std::find(
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).begin(),
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end(),
+                        neighbor) != adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end())
+                    << "Mesh " << mesh_id.get() << " should have neighbor " << neighbor << " for node "
+                    << adj_graph.get_nodes()[i];
+            }
+        }
+    }
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
@@ -2797,6 +2873,89 @@ TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
         constraints.is_valid_mapping(4, 10));  // Not in target_nodes set (but constraint still applies if queried)
 }
 
+// Same-group constraint: target groups map within global group boundaries (no splitting).
+// Multiple target groups may share one global group.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_Basic) {
+    // Chain 1-2-3-4; groups {1,2}, {3,4} -> globals {10,11}, {12,13}
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11, 13};
+    global_adj[13] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}, {3, 4}},
+        std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    TestGlobalNode g1 = result.target_to_global.at(1), g2 = result.target_to_global.at(2);
+    TestGlobalNode g3 = result.target_to_global.at(3), g4 = result.target_to_global.at(4);
+    bool grp0_first = (g1 == 10 || g1 == 11) && (g2 == 10 || g2 == 11);
+    bool grp1_first = (g3 == 10 || g3 == 11) && (g4 == 10 || g4 == 11);
+    EXPECT_NE(grp0_first, grp1_first) << "Each target group stays within one global group";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SharedGlobalGroup) {
+    // {1} {2} map to {1,3,2}: multiple target groups may share one global group; no boundary breaking
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[1] = {3};
+    global_adj[3] = {1, 2};
+    global_adj[2] = {3};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1}, {2}}, std::vector<std::set<TestGlobalNode>>{{1, 3, 2}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    // Both targets in same global group; chain 1-2 maps to path in 1-3-2
+    EXPECT_TRUE(
+        (result.target_to_global.at(1) == 1 && result.target_to_global.at(2) == 3) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 1) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 2) ||
+        (result.target_to_global.at(1) == 2 && result.target_to_global.at(2) == 3));
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTargetGroupRejected) {
+    // [1,2,3] must stay together; globals {10},{11},{12} force splitting -> should fail
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2, 3}}, std::vector<std::set<TestGlobalNode>>{{10}, {11}, {12}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
+}
+
 TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {
     // Test many-to-many constraint intersection with existing constraints
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
@@ -3977,5 +4136,173 @@ TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_EquivalentToExplicit
         EXPECT_EQ(pairs1.size(), pairs2.size());
         EXPECT_EQ(pairs1, pairs2) << "Many-to-many should generate same pairs as explicit listing";
     }
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
+    // Create ring topology (target graph): 48 nodes (0-47) with degree 2
+    // Each node connects to its two neighbors in a ring
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+
+    // TODO: Change this to a programmatically generated ring topology
+    // Parse ring topology from the provided data
+    // Node 0: connects to 47 and 1
+    target_adj_map[0] = {47, 47, 47, 47, 1, 1, 1, 1, 1, 1, 1, 1};
+    target_adj_map[1] = {2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0};
+    target_adj_map[2] = {3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1};
+    target_adj_map[3] = {4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2};
+    target_adj_map[4] = {5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3};
+    target_adj_map[5] = {6, 6, 6, 6, 4, 4, 4, 4, 4, 4, 4, 4};
+    target_adj_map[6] = {7, 7, 7, 7, 7, 7, 7, 7, 5, 5, 5, 5};
+    target_adj_map[7] = {8, 8, 8, 8, 8, 8, 8, 8, 6, 6, 6, 6, 6, 6, 6, 6};
+    target_adj_map[8] = {9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7};
+    target_adj_map[9] = {10, 10, 10, 10, 10, 10, 10, 10, 8, 8, 8, 8};
+    target_adj_map[10] = {11, 11, 11, 11, 11, 11, 11, 11, 9, 9, 9, 9, 9, 9, 9, 9};
+    target_adj_map[11] = {12, 12, 12, 12, 12, 12, 12, 12, 10, 10, 10, 10, 10, 10, 10, 10};
+    target_adj_map[12] = {13, 13, 13, 13, 11, 11, 11, 11, 11, 11, 11, 11};
+    target_adj_map[13] = {14, 14, 14, 14, 12, 12, 12, 12};
+    target_adj_map[14] = {15, 15, 15, 15, 13, 13, 13, 13};
+    target_adj_map[15] = {16, 16, 16, 16, 14, 14, 14, 14};
+    target_adj_map[16] = {17, 17, 17, 17, 17, 17, 17, 17, 15, 15, 15, 15};
+    target_adj_map[17] = {18, 18, 18, 18, 18, 18, 18, 18, 16, 16, 16, 16, 16, 16, 16, 16};
+    target_adj_map[18] = {19, 19, 19, 19, 19, 19, 19, 19, 17, 17, 17, 17, 17, 17, 17, 17};
+    target_adj_map[19] = {20, 20, 20, 20, 18, 18, 18, 18, 18, 18, 18, 18};
+    target_adj_map[20] = {21, 21, 21, 21, 21, 21, 21, 21, 19, 19, 19, 19};
+    target_adj_map[21] = {22, 22, 22, 22, 22, 22, 22, 22, 20, 20, 20, 20, 20, 20, 20, 20};
+    target_adj_map[22] = {23, 23, 23, 23, 23, 23, 23, 23, 21, 21, 21, 21, 21, 21, 21, 21};
+    target_adj_map[23] = {24, 24, 24, 24, 22, 22, 22, 22, 22, 22, 22, 22};
+    target_adj_map[24] = {25, 25, 25, 25, 25, 25, 25, 25, 23, 23, 23, 23};
+    target_adj_map[25] = {26, 26, 26, 26, 26, 26, 26, 26, 24, 24, 24, 24, 24, 24, 24, 24};
+    target_adj_map[26] = {27, 27, 27, 27, 27, 27, 27, 27, 25, 25, 25, 25, 25, 25, 25, 25};
+    target_adj_map[27] = {28, 28, 28, 28, 26, 26, 26, 26, 26, 26, 26, 26};
+    target_adj_map[28] = {29, 29, 29, 29, 29, 29, 29, 29, 27, 27, 27, 27};
+    target_adj_map[29] = {30, 30, 30, 30, 30, 30, 30, 30, 28, 28, 28, 28, 28, 28, 28, 28};
+    target_adj_map[30] = {31, 31, 31, 31, 31, 31, 31, 31, 29, 29, 29, 29, 29, 29, 29, 29};
+    target_adj_map[31] = {32, 32, 32, 32, 30, 30, 30, 30, 30, 30, 30, 30};
+    target_adj_map[32] = {33, 33, 33, 33, 31, 31, 31, 31};
+    target_adj_map[33] = {34, 34, 34, 34, 32, 32, 32, 32};
+    target_adj_map[34] = {35, 35, 35, 35, 33, 33, 33, 33};
+    target_adj_map[35] = {36, 36, 36, 36, 36, 36, 36, 36, 34, 34, 34, 34};
+    target_adj_map[36] = {37, 37, 37, 37, 37, 37, 37, 37, 35, 35, 35, 35, 35, 35, 35, 35};
+    target_adj_map[37] = {38, 38, 38, 38, 38, 38, 38, 38, 36, 36, 36, 36, 36, 36, 36, 36};
+    target_adj_map[38] = {39, 39, 39, 39, 37, 37, 37, 37, 37, 37, 37, 37};
+    target_adj_map[39] = {40, 40, 40, 40, 40, 40, 40, 40, 38, 38, 38, 38};
+    target_adj_map[40] = {41, 41, 41, 41, 41, 41, 41, 41, 39, 39, 39, 39, 39, 39, 39, 39};
+    target_adj_map[41] = {42, 42, 42, 42, 40, 40, 40, 40, 40, 40, 40, 40};
+    target_adj_map[42] = {43, 43, 43, 43, 43, 43, 43, 43, 41, 41, 41, 41};
+    target_adj_map[43] = {44, 44, 44, 44, 44, 44, 44, 44, 42, 42, 42, 42, 42, 42, 42, 42};
+    target_adj_map[44] = {45, 45, 45, 45, 43, 43, 43, 43, 43, 43, 43, 43};
+    target_adj_map[45] = {46, 46, 46, 46, 46, 46, 46, 46, 44, 44, 44, 44};
+    target_adj_map[46] = {47, 47, 47, 47, 47, 47, 47, 47, 45, 45, 45, 45, 45, 45, 45, 45};
+    target_adj_map[47] = {0, 0, 0, 0, 46, 46, 46, 46, 46, 46, 46, 46};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create mesh topology (global graph): 48 nodes (0-47) with varying degrees
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+
+    // Parse mesh topology from the provided data
+    global_adj_map[0] = {29, 29, 22, 22, 29, 29, 27, 27, 13, 13, 27, 27,
+                         29, 29, 27, 27, 22, 22, 27, 27, 29, 29, 13, 13};
+    global_adj_map[1] = {32, 32, 22, 22, 32, 32, 13, 13, 28, 28, 32, 32,
+                         28, 28, 32, 32, 22, 22, 28, 28, 13, 13, 28, 28};
+    global_adj_map[2] = {30, 30, 23, 23, 30, 30, 20, 20, 23, 23, 34, 34,
+                         34, 34, 20, 20, 34, 34, 34, 34, 30, 30, 30, 30};
+    global_adj_map[3] = {34, 34, 14, 14, 34, 34, 12, 12, 34, 34, 34, 34,
+                         14, 14, 30, 30, 30, 30, 30, 30, 12, 12, 30, 30};
+    global_adj_map[4] = {21, 21, 24, 24, 22, 22, 24, 24, 25, 25, 25, 25, 18, 18,
+                         25, 25, 25, 25, 21, 21, 24, 24, 22, 22, 18, 18, 24, 24};
+    global_adj_map[5] = {32, 32, 32, 32, 19, 19, 32, 32, 28, 28, 17, 17,
+                         17, 17, 32, 32, 28, 28, 28, 28, 19, 19, 28, 28};
+    global_adj_map[6] = {25, 25, 24, 24, 16, 16, 25, 25, 24, 24, 24, 24,
+                         15, 15, 16, 16, 25, 25, 15, 15, 25, 25, 24, 24};
+    global_adj_map[7] = {26, 26, 21, 21, 33, 33, 26, 26, 18, 18, 33, 33,
+                         26, 26, 21, 21, 18, 18, 33, 33, 26, 26, 33, 33};
+    global_adj_map[8] = {31, 31, 23, 23, 35, 35, 35, 35, 20, 20, 35, 35,
+                         35, 35, 31, 31, 23, 23, 31, 31, 31, 31, 20, 20};
+    global_adj_map[9] = {33, 33, 26, 26, 33, 33, 15, 15, 15, 15, 26, 26,
+                         26, 26, 33, 33, 16, 16, 26, 26, 33, 33, 16, 16};
+    global_adj_map[10] = {17, 17, 29, 29, 29, 29, 27, 27, 27, 27, 19, 19,
+                          29, 29, 27, 27, 17, 17, 29, 29, 27, 27, 19, 19};
+    global_adj_map[11] = {18, 18, 31, 31, 18, 18, 14, 14, 31, 31, 22, 22, 35, 35, 14, 14,
+                          31, 31, 35, 35, 12, 12, 31, 31, 22, 22, 35, 35, 35, 35, 12, 12};
+    global_adj_map[12] = {37, 37, 11, 11, 43, 43, 3, 3, 43, 43, 37, 37, 37, 37, 37, 37, 3, 3, 43, 43, 11, 11, 43, 43};
+    global_adj_map[13] = {44, 44, 0, 0, 1, 1, 41, 41, 44, 44, 1, 1, 0, 0, 41, 41, 41, 41, 44, 44, 41, 41, 44, 44};
+    global_adj_map[14] = {39, 39, 3, 3, 40, 40, 39, 39, 39, 39, 3, 3, 40, 40, 40, 40, 11, 11, 40, 40, 39, 39, 11, 11};
+    global_adj_map[15] = {36, 36, 9, 9, 36, 36, 42, 42, 42, 42, 6, 6, 42, 42, 9, 9, 42, 42, 36, 36, 6, 6, 36, 36};
+    global_adj_map[16] = {38, 38, 6, 6, 38, 38, 9, 9, 46, 46, 6, 6, 46, 46, 46, 46, 38, 38, 46, 46, 38, 38, 9, 9};
+    global_adj_map[17] = {41, 41, 10, 10, 44, 44, 44, 44, 41, 41, 5, 5, 41, 41, 10, 10, 44, 44, 5, 5, 44, 44, 41, 41};
+    global_adj_map[18] = {42, 42, 7, 7, 42, 42, 42, 42, 4,  4,  42, 42, 11, 11,
+                          36, 36, 7, 7, 36, 36, 36, 36, 11, 11, 4,  4,  36, 36};
+    global_adj_map[19] = {45, 45, 5, 5, 45, 45, 45, 45, 10, 10, 47, 47, 45, 45, 5, 5, 47, 47, 10, 10, 47, 47, 47, 47};
+    global_adj_map[20] = {40, 40, 2, 2, 2, 2, 39, 39, 40, 40, 40, 40, 40, 40, 8, 8, 8, 8, 39, 39, 39, 39, 39, 39};
+    global_adj_map[21] = {7, 7, 38, 38, 46, 46, 46, 46, 4, 4, 46, 46, 7, 7, 38, 38, 4, 4, 38, 38, 38, 38, 46, 46};
+    global_adj_map[22] = {47, 47, 4,  4,  45, 45, 11, 11, 47, 47, 0,  0,  4, 4, 0,  0,
+                          45, 45, 47, 47, 1,  1,  11, 11, 47, 47, 45, 45, 1, 1, 45, 45};
+    global_adj_map[23] = {37, 37, 43, 43, 43, 43, 37, 37, 43, 43, 8, 8, 43, 43, 2, 2, 2, 2, 37, 37, 8, 8, 37, 37};
+    global_adj_map[24] = {36, 36, 4, 4, 4, 4, 6, 6, 6, 6, 6, 6, 36, 36, 38, 38, 4, 4, 4, 4, 6, 6, 38, 38};
+    global_adj_map[25] = {6, 6, 4, 4, 6, 6, 42, 42, 6, 6, 4, 4, 46, 46, 6, 6, 4, 4, 42, 42, 4, 4, 46, 46};
+    global_adj_map[26] = {42, 42, 9, 9, 7, 7, 46, 46, 46, 46, 9, 9, 7, 7, 7, 7, 42, 42, 9, 9, 9, 9, 7, 7};
+    global_adj_map[27] = {10, 10, 45, 45, 0, 0, 0, 0, 10, 10, 45, 45, 41, 41, 0, 0, 10, 10, 41, 41, 0, 0, 10, 10};
+    global_adj_map[28] = {1, 1, 5, 5, 45, 45, 41, 41, 1, 1, 45, 45, 1, 1, 5, 5, 41, 41, 5, 5, 1, 1, 5, 5};
+    global_adj_map[29] = {0, 0, 0, 0, 44, 44, 47, 47, 10, 10, 10, 10, 0, 0, 47, 47, 0, 0, 10, 10, 44, 44, 10, 10};
+    global_adj_map[30] = {40, 40, 3, 3, 2, 2, 3, 3, 43, 43, 3, 3, 2, 2, 40, 40, 2, 2, 2, 2, 43, 43, 3, 3};
+    global_adj_map[31] = {8, 8, 40, 40, 8, 8, 8, 8, 43, 43, 11, 11, 40, 40, 11, 11, 8, 8, 43, 43, 11, 11, 11, 11};
+    global_adj_map[32] = {1, 1, 47, 47, 5, 5, 5, 5, 47, 47, 5, 5, 1, 1, 1, 1, 44, 44, 1, 1, 44, 44, 5, 5};
+    global_adj_map[33] = {9, 9, 7, 7, 36, 36, 7, 7, 9, 9, 36, 36, 9, 9, 38, 38, 7, 7, 9, 9, 38, 38, 7, 7};
+    global_adj_map[34] = {2, 2, 2, 2, 3, 3, 3, 3, 39, 39, 3, 3, 37, 37, 39, 39, 2, 2, 3, 3, 37, 37, 2, 2};
+    global_adj_map[35] = {11, 11, 11, 11, 11, 11, 39, 39, 37, 37, 8,  8,  8, 8,
+                          47, 47, 8,  8,  11, 11, 37, 37, 47, 47, 39, 39, 8, 8};
+    global_adj_map[36] = {33, 33, 18, 18, 24, 24, 18, 18, 18, 18, 18, 18,
+                          15, 15, 15, 15, 24, 24, 15, 15, 15, 15, 33, 33};
+    global_adj_map[37] = {12, 12, 35, 35, 23, 23, 34, 34, 23, 23, 12, 12,
+                          35, 35, 12, 12, 34, 34, 23, 23, 12, 12, 23, 23};
+    global_adj_map[38] = {24, 24, 21, 21, 16, 16, 16, 16, 21, 21, 21, 21,
+                          16, 16, 33, 33, 16, 16, 24, 24, 33, 33, 21, 21};
+    global_adj_map[39] = {14, 14, 35, 35, 14, 14, 34, 34, 34, 34, 20, 20,
+                          20, 20, 14, 14, 20, 20, 35, 35, 20, 20, 14, 14};
+    global_adj_map[40] = {30, 30, 14, 14, 14, 14, 20, 20, 20, 20, 20, 20,
+                          30, 30, 20, 20, 31, 31, 31, 31, 14, 14, 14, 14};
+    global_adj_map[41] = {17, 17, 28, 28, 27, 27, 13, 13, 13, 13, 17, 17,
+                          28, 28, 13, 13, 17, 17, 27, 27, 17, 17, 13, 13};
+    global_adj_map[42] = {15, 15, 26, 26, 15, 15, 25, 25, 15, 15, 18, 18,
+                          25, 25, 18, 18, 26, 26, 18, 18, 15, 15, 18, 18};
+    global_adj_map[43] = {12, 12, 23, 23, 30, 30, 23, 23, 31, 31, 30, 30,
+                          12, 12, 23, 23, 31, 31, 12, 12, 12, 12, 23, 23};
+    global_adj_map[44] = {13, 13, 32, 32, 13, 13, 13, 13, 29, 29, 13, 13,
+                          17, 17, 17, 17, 32, 32, 17, 17, 29, 29, 17, 17};
+    global_adj_map[45] = {27, 27, 22, 22, 22, 22, 19, 19, 19, 19, 22, 22,
+                          28, 28, 22, 22, 19, 19, 28, 28, 19, 19, 27, 27};
+    global_adj_map[46] = {21, 21, 26, 26, 21, 21, 16, 16, 26, 26, 16, 16,
+                          21, 21, 25, 25, 16, 16, 16, 16, 21, 21, 25, 25};
+    global_adj_map[47] = {22, 22, 19, 19, 22, 22, 29, 29, 22, 22, 32, 32, 35, 35,
+                          29, 29, 19, 19, 22, 22, 32, 32, 19, 19, 35, 35, 19, 19};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, /* quiet_mode= */ false);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Ring to mesh mapping should succeed";
+    EXPECT_TRUE(result.error_message.empty()) << "Should have no error message on success";
+
+    // Verify mappings
+    EXPECT_EQ(result.target_to_global.size(), 48u) << "Should map all 48 target nodes";
+    EXPECT_EQ(result.global_to_target.size(), 48u) << "Should have bidirectional mappings for all nodes";
+
+    // Verify all target nodes are mapped
+    for (uint32_t i = 0; i < 48; ++i) {
+        EXPECT_NE(result.target_to_global.find(i), result.target_to_global.end())
+            << "Target node " << i << " should be mapped";
+    }
+
+    // Verify statistics
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
 }  // namespace tt::tt_fabric

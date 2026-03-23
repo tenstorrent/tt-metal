@@ -25,6 +25,13 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
+def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
+    try:
+        return a.buffer_address() != b.buffer_address()
+    except Exception:
+        return a is not b
+
+
 class DecoderBlock2DBase(DecoderBlockBase):
     @classmethod
     def convert_weights(
@@ -122,10 +129,15 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLA norm
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
-        ttnn.deallocate(mla_norm_in)
+        if _has_distinct_buffer(mla_norm_in, x):
+            ttnn.deallocate(mla_norm_in)
 
         # MLA
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        mla_reshard_memory_config = ttnn.create_sharded_memory_config(
+            mla_norm_out.shape,
+            **cfg["mla_reshard"],
+        )
+        mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
@@ -136,7 +148,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLP norm
         mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
         mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
-        ttnn.deallocate(mlp_norm_in)
+        if _has_distinct_buffer(mlp_norm_in, x):
+            ttnn.deallocate(mlp_norm_in)
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])

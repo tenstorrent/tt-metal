@@ -19,6 +19,7 @@
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -186,6 +187,7 @@ int main(int argc, char* argv[]) {
 #endif
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_ncrisc_completion();
 #if defined(ARCH_WORMHOLE)

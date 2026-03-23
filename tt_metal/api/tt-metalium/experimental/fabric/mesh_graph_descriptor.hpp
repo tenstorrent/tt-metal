@@ -193,6 +193,14 @@ public:
     uint32_t get_chip_count(GlobalNodeId mesh_instance_id) const;
     uint32_t get_chip_count(const InstanceData& mesh_instance) const;
 
+    // Calculate chip count from device_topology dimensions for a switch instance
+    // Returns the product of all dimensions in device_topology.dims()
+    // Same calculation as meshes - switches use the same device_topology structure
+    // Example: [4, 4] = 4 × 4 = 16 chips
+    // Example: [8, 2] = 8 × 2 = 16 chips
+    uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
+    uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
+
     // Count instances by type
     // Returns a map from type name to count of instances with that type
     // Example: count_instances_by_type({"MESH", "POD"}) returns {MESH: 4, POD: 2}
@@ -285,7 +293,7 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in separate PR
     void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 

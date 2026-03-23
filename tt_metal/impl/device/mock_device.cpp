@@ -8,7 +8,10 @@
 #include <tt_stl/assert.hpp>
 #include <unordered_map>
 #include "llrt/get_platform_architecture.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "impl/device/mock_device_util.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -24,6 +27,12 @@ static std::optional<MockDeviceConfig> g_registered_mock_config = std::nullopt;
 void configure_mock_mode(tt::ARCH arch, uint32_t num_chips) {
     g_registered_mock_config = MockDeviceConfig{arch, num_chips};
     log_info(tt::LogMetal, "Mock mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
+
+    // Only destroy MetalContext if it already exists to avoid creating it unnecessarily
+    if (tt::tt_metal::MetalContext::instance_exists() &&
+        tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
+    }
 }
 
 void configure_mock_mode_from_hw() {
@@ -38,17 +47,12 @@ void disable_mock_mode() {
     }
 
     g_registered_mock_config = std::nullopt;
+    log_info(tt::LogMetal, "Mock mode disabled");
 
-    // Only attempt to reinitialize MetalContext if it has been fully initialized
-    // This keeps disable_mock_mode() safe to call early (e.g., from constructors)
-    // where configure_mock_mode() is also allowed
-    auto& context = tt::tt_metal::MetalContext::instance();
-    if (context.is_device_manager_initialized()) {
-        context.reinitialize_for_real_hardware();
-        log_info(tt::LogMetal, "Mock mode disabled and switched to real hardware");
-    } else {
-        log_info(
-            tt::LogMetal, "Mock mode disabled; MetalContext not yet initialized, skipping hardware reinitialization");
+    // Only destroy MetalContext if it already exists
+    if (tt::tt_metal::MetalContext::instance_exists() &&
+        tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
     }
 }
 
@@ -61,28 +65,15 @@ std::optional<std::string> get_mock_cluster_desc() {
         return std::nullopt;
     }
 
-    static const std::unordered_map<tt::ARCH, std::unordered_map<uint32_t, std::string>> cluster_configs = {
-        {tt::ARCH::WORMHOLE_B0,
-         {{1, "wormhole_N150.yaml"},
-          {2, "wormhole_N300.yaml"},
-          {4, "2x2_n300_cluster_desc.yaml"},
-          {8, "t3k_cluster_desc.yaml"},
-          {32, "tg_cluster_desc.yaml"}}},
-        {tt::ARCH::BLACKHOLE, {{1, "blackhole_P150.yaml"}, {2, "blackhole_P300_both_mmio.yaml"}}}};
-
-    const auto& config = *g_registered_mock_config;
-    auto arch_it = cluster_configs.find(config.arch);
-    if (arch_it != cluster_configs.end()) {
-        auto chip_it = arch_it->second.find(config.num_chips);
-        if (chip_it != arch_it->second.end()) {
-            return std::string(chip_it->second);
-        }
+    auto name = get_mock_cluster_desc_name(g_registered_mock_config->arch, g_registered_mock_config->num_chips);
+    if (!name.has_value()) {
+        TT_THROW(
+            "Unsupported mock device configuration: arch={}, num_chips={}",
+            static_cast<int>(g_registered_mock_config->arch),
+            g_registered_mock_config->num_chips);
     }
 
-    TT_THROW(
-        "Unsupported mock device configuration: arch={}, num_chips={}",
-        static_cast<int>(config.arch),
-        config.num_chips);
+    return name;
 }
 
 }  // namespace tt::tt_metal::experimental

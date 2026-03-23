@@ -302,7 +302,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
+    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
@@ -916,6 +916,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t output_width_shard_dim = args.output_width_shard_dim;
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / output_width_shard_dim;
 
+    constexpr uint32_t buffer_size_total_tokens =
+        512;  // Hardware buffer is always sized for 512 tokens, even if total tokens is smaller
+
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
@@ -932,7 +935,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tile_height", tile_height},
         {"tile_width", tile_width},
         {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
-        {"num_tokens_total", tokens},
+        {"buffer_size_total_tokens", buffer_size_total_tokens},  // Hardware buffer is always sized for 512 tokens
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
     };
