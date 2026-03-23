@@ -21,6 +21,7 @@
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
 #include "models/mlp.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
@@ -109,7 +110,10 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
     }
 
-    m.def_submodule("linear_regression");
+    {
+        auto py_linear_regression_module = m.def_submodule("linear_regression");
+        nb::class_<ttml::modules::LinearLayer, ttml::modules::ModuleBase>(py_linear_regression_module, "LinearLayer");
+    }
 
     // Distributed models: register classes so return types can be wrapped
     m.def_submodule("distributed");
