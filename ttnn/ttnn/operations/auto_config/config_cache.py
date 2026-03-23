@@ -124,16 +124,13 @@ class ConfigCache:
                 del self._memory_cache[hashed]
                 return None
 
-            # Reconstruct ConfigCandidate from cached data
-            return ConfigCandidate(
-                config=None,  # Config will be regenerated from params
-                config_family=entry["config_family"],
-                backend=entry["backend"],
-                params=entry["params"],
-                score=entry.get("score", 0.0),
-                is_valid=True,
-                validation_reason="cached",
-            )
+            # We cannot safely reconstruct a full program config object
+            # from cached params alone. Returning a ConfigCandidate with
+            # config=None would cause callers to fall back to default
+            # behavior (program_config=None) without running selection.
+            # Treat as cache miss so normal config selection runs.
+            # TODO: Persist enough info to reconstruct the exact program_config.
+            return None
 
     def put(self, key: str, candidate: ConfigCandidate) -> None:
         """Store a config candidate in the cache."""

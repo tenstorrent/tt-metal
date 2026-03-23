@@ -128,6 +128,7 @@ class MatmulAutoConfig(AutoConfigSelector):
             candidate.config_family,
             candidate.backend,
             features,
+            math_fidelity=getattr(candidate, "math_fidelity", None),
         )
 
     def score(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
@@ -360,18 +361,23 @@ def _execute_multi_device(
 
         # Case B: Fused matmul + reduce_scatter
         # Typically used in Row-Parallel linear layers
-        if is_b_sharded and hasattr(ttnn.experimental, "matmul_reduce_scatter_async"):
-             logger.info("Using ttnn.experimental.matmul_reduce_scatter_async")
-             # Returns (matmul_out, reduce_scatter_out)
-             mm_out, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
-                 input_tensor_a,
-                 input_tensor_b,
-                 scatter_dim=0,
-                 math_op=ttnn.ReduceType.Sum,
-                 memory_config=memory_config,
-                 program_config=config,
-             )
-             return rs_out
+        if (
+            is_b_sharded
+            and result.backend == "matmul"
+            and config is not None
+            and hasattr(ttnn.experimental, "matmul_reduce_scatter_async")
+        ):
+            logger.info("Using ttnn.experimental.matmul_reduce_scatter_async")
+            # Returns (matmul_out, reduce_scatter_out)
+            mm_out, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
+                input_tensor_a,
+                input_tensor_b,
+                scatter_dim=0,
+                math_op=ttnn.ReduceType.Sum,
+                memory_config=memory_config,
+                program_config=config,
+            )
+            return rs_out
 
         # Case C: Fused all_gather + matmul
         # Typically used in Data-Parallel or Column-Parallel where A needs AG
@@ -698,86 +704,3 @@ def _benchmark_all_candidates(
 __all__ = ["matmul_auto", "MatmulAutoConfig"]
 
 
-# --- TARGETED HARDWARE FIXES ---
-_original_matmul_auto = matmul_auto
-_failed_shape_cache = set()
-
-# Minimum FLOPs threshold: shapes below this skip config selection entirely.
-# 32*64*1024*2 = ~4M FLOPs. Set to 8M to cover all tiny attention shapes.
-_MIN_FLOPS_THRESHOLD = 8_000_000
-
-
-def matmul_auto(
-    input_tensor_a,
-    input_tensor_b,
-    *,
-    bias=None,
-    activation=None,
-    dtype=None,
-    memory_config=None,
-    force_api=None,
-    force_program_config=None,
-    benchmark_mode=False,
-):
-    """matmul_auto with small-shape bypass and failure caching."""
-    # FALLBACK_TO_DEFAULT
-    import ttnn
-
-    a_shape = input_tensor_a.shape
-    b_shape = input_tensor_b.shape
-    M = a_shape[-2] if len(a_shape) >= 2 else 1
-    K = a_shape[-1] if len(a_shape) >= 1 else 1
-    N = b_shape[-1] if len(b_shape) >= 1 else 1
-
-    # Fix 2: Skip tiny shapes -- overhead dominates microsecond ops
-    # Bypass if output tile count is too small to benefit from config selection
-    # or if total FLOPs are below threshold
-    output_tiles = (M // 32) * (N // 32) if M >= 32 and N >= 32 else 1
-    if M <= 32 or output_tiles < 16 or (M * K * N * 2) < _MIN_FLOPS_THRESHOLD:
-        return _default_matmul(input_tensor_a, input_tensor_b, bias, dtype, memory_config, activation)
-
-    # Fix 1: Check cached failures -- zero-overhead after first attempt
-    cache_key = (M, K, N)
-    if cache_key in _failed_shape_cache:
-        return _default_matmul(input_tensor_a, input_tensor_b, bias, dtype, memory_config, activation)
-
-    try:
-        import ttnn.operations.auto_config.matmul_auto as _selfmod
-        _result = _original_matmul_auto(
-            input_tensor_a,
-            input_tensor_b,
-            bias=bias,
-            activation=activation,
-            dtype=dtype,
-            memory_config=memory_config,
-            force_api=force_api,
-            force_program_config=force_program_config,
-            benchmark_mode=benchmark_mode,
-        )
-        _selfmod._last_selected_config = True
-        _selfmod._last_selected_api = "auto"
-        return _result
-    except Exception:
-        # Fix 1: Cache this shape as failed -- never retry
-        _failed_shape_cache.add(cache_key)
-        return _default_matmul(input_tensor_a, input_tensor_b, bias, dtype, memory_config, activation)
-
-
-def _default_matmul(input_tensor_a, input_tensor_b, bias, dtype, memory_config, activation):
-    """Direct ttnn.matmul fallback with minimal overhead."""
-    import ttnn
-    kwargs = {}
-    if dtype is not None:
-        kwargs["dtype"] = dtype
-    if memory_config is not None:
-        kwargs["memory_config"] = memory_config
-    result = ttnn.matmul(input_tensor_a, input_tensor_b, **kwargs)
-    if bias is not None:
-        result = ttnn.add(result, bias)
-    if activation == "relu":
-        result = ttnn.relu(result)
-    elif activation == "gelu":
-        result = ttnn.gelu(result)
-    elif activation == "silu":
-        result = ttnn.silu(result)
-    return result

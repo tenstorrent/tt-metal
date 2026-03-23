@@ -37,16 +37,16 @@ MAX_CANDIDATES_PER_FAMILY = 8
 # Subblock choices ordered by priority (largest to smallest product).
 # Mirrors SUBBLOCK_HW_CHOICES from matmul_program_config.cpp (line 16-25).
 SUBBLOCK_HW_CHOICES = [
-    (4, 2), (2, 4),          # subblock_hw = 8
-    (7, 1), (1, 7),          # subblock_hw = 7
-    (3, 2), (2, 3),          # subblock_hw = 6
-    (6, 1), (1, 6),          # subblock_hw = 6
-    (5, 1), (1, 5),          # subblock_hw = 5
-    (2, 2),                  # subblock_hw = 4
-    (4, 1), (1, 4),          # subblock_hw = 4
-    (3, 1), (1, 3),          # subblock_hw = 3
-    (2, 1), (1, 2),          # subblock_hw = 2
-    (1, 1),                  # subblock_hw = 1
+    (4, 2), (2, 4), (8, 1), (1, 8),  # subblock_hw = 8
+    (7, 1), (1, 7),                  # subblock_hw = 7
+    (3, 2), (2, 3),                  # subblock_hw = 6
+    (6, 1), (1, 6),                  # subblock_hw = 6
+    (5, 1), (1, 5),                  # subblock_hw = 5
+    (2, 2),                          # subblock_hw = 4
+    (4, 1), (1, 4),                  # subblock_hw = 4
+    (3, 1), (1, 3),                  # subblock_hw = 3
+    (2, 1), (1, 2),                  # subblock_hw = 2
+    (1, 1),                          # subblock_hw = 1
 ]
 
 

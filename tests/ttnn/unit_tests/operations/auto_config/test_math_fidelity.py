@@ -5,11 +5,7 @@
 """Unit tests for math fidelity module (CPU-only, no hardware required)."""
 
 import pytest
-import sys
-import os
 
-# Add the auto_config directory to Python path for direct imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from ttnn.operations.auto_config.math_fidelity import (
     MathFidelity,
