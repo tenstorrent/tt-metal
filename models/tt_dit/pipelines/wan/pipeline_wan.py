@@ -4,6 +4,7 @@
 
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 
+import hashlib
 import html
 import os
 from contextlib import nullcontext
@@ -417,6 +418,26 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 
+    @staticmethod
+    def _conv3d_cin_key(tt_model):
+        """Hash C_in_block values from all conv3d layers for cache key.
+
+        prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
+        are only valid for the same C_in_block values.
+        """
+        cin_blocks = []
+
+        def _collect(module):
+            if hasattr(module, "conv_config") and hasattr(module.conv_config, "C_in_block"):
+                cin_blocks.append(str(module.conv_config.C_in_block))
+            for _, child in module.named_children():
+                _collect(child)
+
+        _collect(tt_model)
+        if not cin_blocks:
+            return ""
+        return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+
     def _prepare_vae(self):
         cache.load_model(
             self.tt_vae,
@@ -425,6 +446,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
+            extra_key=self._conv3d_cin_key(self.tt_vae),
         )
 
     def _get_t5_prompt_embeds(
