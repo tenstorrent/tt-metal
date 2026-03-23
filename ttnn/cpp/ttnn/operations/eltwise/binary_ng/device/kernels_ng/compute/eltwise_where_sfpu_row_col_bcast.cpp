@@ -61,6 +61,9 @@ ALWI void process_tile(
         cb_pop_front(CB_OTHER, num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
+#endif
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);

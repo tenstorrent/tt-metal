@@ -8,6 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 
 #include <algorithm>
 using namespace tt::tt_metal;
@@ -759,10 +760,15 @@ bool is_llk_bcast(
         subtile_broadcast_type == SubtileBroadcastType::COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
-        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) ||
-            all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
-            all_match(DataType::UINT16)) {
+        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B)) {
             return true;
+        }
+        if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
+            all_match(DataType::UINT16)) {
+            tt::ARCH arch = tt::tt_metal::hal::get_arch();
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                return true;
+            }
         }
     }
 

@@ -74,6 +74,9 @@ void kernel_main() {
         cb_pop_front(cb_bcast, num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
+#endif
 
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_post_lhs, num_tiles_per_cycle);

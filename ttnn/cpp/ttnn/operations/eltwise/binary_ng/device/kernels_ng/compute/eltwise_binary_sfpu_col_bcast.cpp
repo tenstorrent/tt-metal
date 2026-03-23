@@ -64,6 +64,9 @@ ALWI void process_tile(
     tile_regs_release();
 
     pack_reconfig_data_format(cb_llk_post, cb_out);
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
+#endif
 
     PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
     cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
