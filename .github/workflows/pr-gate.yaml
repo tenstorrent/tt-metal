@@ -418,6 +418,80 @@ jobs:
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
 
+  # ============================================================================
+  # TEMPORARY: LLK workflow testing
+  # These jobs are added temporarily to test the ported LLK workflows.
+  # They will be removed after testing is complete.
+  # ============================================================================
+
+  llk-on-pr-test:
+    name: "🛠️ LLK On-PR Pipeline (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-on-pr.yaml
+    secrets: inherit
+
+  llk-nightly-test:
+    name: "🌙 LLK Nightly Tests (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-nightly.yaml
+    secrets: inherit
+
+  llk-nightly-perf-test:
+    name: "🌙 LLK Nightly Perf Tests (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-nightly-perf-tests.yaml
+    secrets: inherit
+
+  llk-run-perf-test:
+    name: "🚀 LLK Run Perf Tests (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-run-perf-tests.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+
+  llk-setup-and-test-wh-test:
+    name: "🌀 LLK Setup & Test WH (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  llk-setup-and-test-bh-test:
+    name: "🕳️ LLK Setup & Test BH (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  llk-build-quasar-test:
+    name: "🌟 LLK Build Quasar (TEST)"
+    needs: build-docker-images
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/llk-build-quasar.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
+      pytest_markers: "quasar"
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -441,6 +515,14 @@ jobs:
       - clang-tidy-light
       - model-charts-sync
       - build-docs
+      # TEMPORARY: LLK test jobs
+      - llk-on-pr-test
+      - llk-nightly-test
+      - llk-nightly-perf-test
+      - llk-run-perf-test
+      - llk-setup-and-test-wh-test
+      - llk-setup-and-test-bh-test
+      - llk-build-quasar-test
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -449,6 +531,9 @@ jobs:
           required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            ttsim-integration-tests, model-charts-sync, build-docs
+            ttsim-integration-tests, model-charts-sync, build-docs,
+            llk-on-pr-test, llk-nightly-test, llk-nightly-perf-test,
+            llk-run-perf-test, llk-setup-and-test-wh-test, llk-setup-and-test-bh-test,
+            llk-build-quasar-test
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

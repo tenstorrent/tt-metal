@@ -16,6 +16,7 @@ on:
         required: false
         default: "not perf"
         type: string
+  workflow_call:
 
 permissions:
   checks: write

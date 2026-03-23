@@ -22,6 +22,7 @@ on:
         required: false
         default: false
         type: boolean
+  workflow_call:
 
 permissions:
   checks: write
