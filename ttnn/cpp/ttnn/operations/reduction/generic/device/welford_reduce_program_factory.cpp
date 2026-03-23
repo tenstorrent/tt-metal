@@ -155,6 +155,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         W,
         tile_width,
         static_cast<uint32_t>(do_scale),
+        static_cast<uint32_t>(operation_attributes.correction),
     };
 
     const std::string compute_kernel =

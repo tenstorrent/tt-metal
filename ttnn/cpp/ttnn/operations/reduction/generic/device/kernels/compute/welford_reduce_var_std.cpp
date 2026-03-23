@@ -30,6 +30,8 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_compile_time_arg_val(2);
     // Whether input scaling is required.
     constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
+    // Whether to apply Bessel's correction (divide by N-1 instead of N).
+    constexpr bool correction = get_compile_time_arg_val(4) != 0;
 
     constexpr uint32_t onetile = 1;
 
@@ -139,9 +141,12 @@ void kernel_main() {
                 // Last tile: finalize and keep DST acquired for variance packing
                 //        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                // Store the mean and variance to the destination registers
-                //        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
-                welford_finalize_to_row<0>(mean_dst, W - 1, {});
+                // Store the mean and variance to the destination registers.
+                // scale_idx controls the divisor for M2 -> variance conversion:
+                //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
+                //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
+                constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
+                welford_finalize_to_row<0>(mean_dst, scale_idx, {});
                 tile_regs_commit();
             }
             cb_transpose_src_obj.pop_front(onetile);

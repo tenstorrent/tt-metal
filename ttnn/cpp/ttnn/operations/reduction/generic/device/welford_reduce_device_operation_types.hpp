@@ -19,6 +19,7 @@ struct WelfordReduceParams {
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    bool correction{true};
 };
 
 }  // namespace ttnn::prim

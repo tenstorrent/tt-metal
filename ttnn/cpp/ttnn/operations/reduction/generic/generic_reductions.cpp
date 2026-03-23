@@ -332,11 +332,9 @@ static Tensor std_var_impl(
         reduced_volume *= input_shape[axis];
     }
 
-    // Bessel's correction (i.e. divisor of N-1)
-    if (correction) {
-        reduced_volume -= 1;
-    }
-    TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
+    // Validate that the divisor is positive (Bessel's correction subtracts 1).
+    int divisor = correction ? (reduced_volume - 1) : reduced_volume;
+    TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
 /*
     auto mean_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
@@ -366,10 +364,26 @@ static Tensor std_var_impl(
 
 */
     ttnn::Tensor output_tensor;
-    if constexpr (reduce_type == ReduceType::Std) {
-        output_tensor = ttnn::prim::welford_reduce(input_tensor, tt::tt_metal::ReduceOpMath::STD, scalar, memory_config, std::nullopt, compute_kernel_config, sub_core_grids);
-    } else if constexpr (reduce_type == ReduceType::Var) {
-        output_tensor = ttnn::prim::welford_reduce(input_tensor, tt::tt_metal::ReduceOpMath::VAR, scalar, memory_config, std::nullopt, compute_kernel_config, sub_core_grids);
+    if constexpr (reduce_type == reduction_common::ReduceType::Std) {
+        output_tensor = ttnn::prim::welford_reduce(
+            input_tensor,
+            tt::tt_metal::ReduceOpMath::STD,
+            scalar,
+            memory_config,
+            std::nullopt,
+            compute_kernel_config,
+            correction,
+            sub_core_grids);
+    } else if constexpr (reduce_type == reduction_common::ReduceType::Var) {
+        output_tensor = ttnn::prim::welford_reduce(
+            input_tensor,
+            tt::tt_metal::ReduceOpMath::VAR,
+            scalar,
+            memory_config,
+            std::nullopt,
+            compute_kernel_config,
+            correction,
+            sub_core_grids);
     } else {
         TT_THROW("Unsupported reduction type: {} for Welford reduce. Expected Std or Var.", reduce_type);
     }

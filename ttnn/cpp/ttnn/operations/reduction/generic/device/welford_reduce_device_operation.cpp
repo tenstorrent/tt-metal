@@ -80,7 +80,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
-    //TODO: Add hash for any paremeters added later.
+    // TODO: Add hash for any paremeters added later.
 
     return tt::tt_metal::operation::hash_operation<WelfordReduceDeviceOperation>(
         operation_attributes.math_op,
@@ -89,6 +89,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
         operation_attributes.output_dtype,
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
+        operation_attributes.correction,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
@@ -102,6 +103,7 @@ ttnn::Tensor welford_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -117,7 +119,8 @@ ttnn::Tensor welford_reduce(
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
-            sub_core_grids},
+            sub_core_grids,
+            correction},
         input_tensor);
 }
 
