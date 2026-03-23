@@ -15,42 +15,6 @@ os.environ.setdefault("MESH_DEVICE", "TG")
 THRESHOLD = 0.5
 THRESHOLD_PERCENTAGE = 0.03
 
-unoptimized_moe_gate_decode_dict = {
-    "FillPadDeviceOperation": 6,
-    "SliceDeviceOperation": 6,
-    "BinaryNgDeviceOperation": 5,
-    "RepeatDeviceOperation": 5,
-    "ReshapeViewDeviceOperation": 4,
-    "TopKDeviceOperation": 3,
-    "TilizeWithValPaddingDeviceOperation": 3,
-    "UntilizeWithUnpaddingDeviceOperation": 2,
-    "ReduceDeviceOperation": 2,
-    "PadDeviceOperation": 2,
-    "TilizeDeviceOperation": 1,
-    "UnaryDeviceOperation": 1,
-    "ScatterDeviceOperation": 1,
-    "GatherDeviceOperation": 1,
-    "MatmulDeviceOperation": 1,
-}
-
-unoptimized_moe_gate_prefill_dict = {
-    "FillPadDeviceOperation": 6,
-    "SliceDeviceOperation": 6,
-    "BinaryNgDeviceOperation": 5,
-    "RepeatDeviceOperation": 5,
-    "ReshapeViewDeviceOperation": 4,
-    "TopKDeviceOperation": 3,
-    "TilizeWithValPaddingDeviceOperation": 3,
-    "UntilizeWithUnpaddingDeviceOperation": 2,
-    "ReduceDeviceOperation": 2,
-    "PadDeviceOperation": 2,
-    "TilizeDeviceOperation": 1,
-    "UnaryDeviceOperation": 1,
-    "ScatterDeviceOperation": 1,
-    "GatherDeviceOperation": 1,
-    "MatmulDeviceOperation": 1,
-}
-
 moe_gate_decode_dict = {
     "InterleavedToShardedDeviceOperation": 5,
     "UntilizeDeviceOperation": 5,
@@ -102,35 +66,28 @@ def galaxy_type():
 
 
 @pytest.mark.parametrize(
-    "use_unoptimized_moe_gate, mode, warmup_iters, num_iters, perf_target_us",
+    "mode, warmup_iters, num_iters, perf_target_us",
     [
-        (False, "decode", 5, 10, 357.00),
-        (False, "prefill", 5, 10, 338.89),
-        (True, "decode", 5, 10, 812.04),
-        (True, "prefill", 5, 10, 832.85),
+        ("decode", 5, 10, 357.00),
+        ("prefill", 5, 10, 338.89),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_moe_gate_perf(
-    use_unoptimized_moe_gate,
     mode,
     warmup_iters,
     num_iters,
     perf_target_us,
     galaxy_type,
 ):
-    subdir = f"deepseek_moe_gate_perf_{'unoptimized' if use_unoptimized_moe_gate else 'optimized'}"
+    subdir = "deepseek_moe_gate_perf"
     step_name = f"moe_gate_{mode}"
-    if use_unoptimized_moe_gate:
-        if mode == "decode":
-            command = "pytest models/demos/deepseek_v3/tests/test_unoptimized_moe_gate.py::test_forward_pass[real-5-10-True-True-decode-32-1-device_params0]"
-        else:
-            command = "pytest models/demos/deepseek_v3/tests/test_unoptimized_moe_gate.py::test_forward_pass[real-5-10-True-True-prefill-1-512-device_params0]"
+    if mode == "decode":
+        command = (
+            "pytest models/demos/deepseek_v3/tests/test_moe_gate.py::test_forward_pass[5-10-decode-32-1-device_params0]"
+        )
     else:
-        if mode == "decode":
-            command = "pytest models/demos/deepseek_v3/tests/test_moe_gate.py::test_forward_pass[5-10-decode-32-1-device_params0]"
-        else:
-            command = "pytest models/demos/deepseek_v3/tests/test_moe_gate.py::test_forward_pass[5-10-prefill-1-512-device_params0]"
+        command = "pytest models/demos/deepseek_v3/tests/test_moe_gate.py::test_forward_pass[5-10-prefill-1-512-device_params0]"
     cols = ["DEVICE KERNEL"]
 
     profiler = BenchmarkProfiler()
@@ -149,16 +106,7 @@ def test_moe_gate_perf(
     measured_max = 0
     measured_avg = 0
     measured_std = 0
-    if mode == "decode":
-        if use_unoptimized_moe_gate:
-            current_value_dict = unoptimized_moe_gate_decode_dict.copy()
-        else:
-            current_value_dict = moe_gate_decode_dict.copy()
-    else:
-        if use_unoptimized_moe_gate:
-            current_value_dict = unoptimized_moe_gate_prefill_dict.copy()
-        else:
-            current_value_dict = moe_gate_prefill_dict.copy()
+    current_value_dict = moe_gate_decode_dict.copy() if mode == "decode" else moe_gate_prefill_dict.copy()
     for op in results.keys():
         assert op in current_value_dict, f"Operation {op} not found in current_value_dict"
         measured_min += current_value_dict[op] * results[op][cols[0]]["MIN"]
