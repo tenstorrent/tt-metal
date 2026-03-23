@@ -190,24 +190,19 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
     hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
 
     if skip_host_comparison == False:
-        # Create causal attention mask
-        attention_mask = torch.triu(torch.ones(seq_len, seq_len) * float("-inf"), diagonal=1).to(torch.bfloat16)
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, seq_len, seq_len)
-
         # Create position IDs
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
         # Run reference forward pass with cache to capture KVPE
+        # Uses F.scaled_dot_product_attention with is_causal=True (no explicit mask needed)
         logger.info("Running reference CPU forward pass...")
         mla_ref = mla_ref.eval().to(torch.bfloat16)
         ref_cache = DynamicCache()
         with torch.no_grad():
             ref_output, _, ref_cache = mla_ref(
                 hidden_states=hidden_states,
-                attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=ref_cache,
-                output_attentions=False,
                 use_cache=True,
             )
 
