@@ -1054,7 +1054,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
             self._prepare_vae()
             # tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=True)
-            tt_video_BCTHW, new_logical_h = self.tt_vae(self.vae_buffer, logical_h, use_cache=True)
+            tt_video_BCTHW, new_logical_h = self.tt_vae(self.vae_buffer, logical_h, use_cache=False)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
