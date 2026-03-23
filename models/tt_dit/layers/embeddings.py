@@ -53,14 +53,14 @@ class Timesteps(Module):
 
         exponent = -math.log(self.max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32)
         exponent = exponent / (half_dim - self.downscale_freq_shift)
-        factor = torch.exp(exponent)
+        factor = self.scale * torch.exp(exponent)
 
         return ttnn.unsqueeze_to_4D(typed_tensor(factor, dtype=self.dtype, device=self.mesh_device))
 
     def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
         assert timestep.dtype == self.dtype, f"Input timestep {timestep.dtype} and model dtype {self.dtype} must match"
-        emb = self.scale * timestep * self.time_proj_factor
+        emb = timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         cat_args = [c, s] if self.cos_first else [s, c]

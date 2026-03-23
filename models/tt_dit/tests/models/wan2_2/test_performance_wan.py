@@ -245,16 +245,17 @@ def test_pipeline_performance(
                 num_frames=num_frames,
                 num_inference_steps=2,  # Small number of steps to reduce test time.
             )
-            signpost("trace warmup")
-            pipeline(
-                prompt=prompts[0],
-                image_prompt=image_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=2,  # Small number of steps to reduce test time.
-                traced=traced,
-            )
+            if traced:
+                signpost("trace warmup")
+                pipeline(
+                    prompt=prompts[0],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=2,  # Small number of steps to reduce test time.
+                    traced=traced,
+                )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
