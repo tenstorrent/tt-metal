@@ -24,6 +24,11 @@ import time
 import torch
 from loguru import logger
 
+# Monkey-patch CUDA for CPU-only text encoding
+torch.cuda.is_available = lambda: False
+torch.cuda.synchronize = lambda *a, **kw: None
+torch.cuda.empty_cache = lambda: None
+
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
 
@@ -84,7 +89,7 @@ def main():
     parser.add_argument("--width", type=int, default=768)
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--guidance_scale", type=float, default=1.0)
+    parser.add_argument("--guidance_scale", type=float, default=3.0)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--gemma_path", type=str, default="google/gemma-3-12b-it")
     parser.add_argument("--num_layers", type=int, default=48)
@@ -97,13 +102,31 @@ def main():
     logger.info(f"Generating: '{args.prompt}'")
     logger.info(f"Output: {args.num_frames} frames @ {args.height}x{args.width}, {args.steps} steps")
 
-    # 1. Encode text
+    # 1. Encode text (positive + negative prompts)
+    from ltx_pipelines.utils.helpers import encode_prompts
+    from ltx_pipelines.utils.model_ledger import ModelLedger
+
     t0 = time.time()
-    video_embeds, audio_embeds = encode_prompt(checkpoint, args.gemma_path, args.prompt)
-    logger.info(f"Text encoding: {time.time()-t0:.1f}s")
+    gemma_local = resolve_gemma_path(args.gemma_path)
+    ledger = ModelLedger(
+        dtype=torch.bfloat16,
+        device=torch.device("cpu"),
+        checkpoint_path=checkpoint,
+        gemma_root_path=gemma_local,
+    )
+    results = encode_prompts([args.prompt, ""], ledger)
+    video_embeds = results[0].video_encoding.float()
+    audio_embeds = results[0].audio_encoding.float() if results[0].audio_encoding is not None else None
+    neg_video_embeds = results[1].video_encoding.float()
+    neg_audio_embeds = results[1].audio_encoding.float() if results[1].audio_encoding is not None else None
+    del ledger
+    logger.info(
+        f"Text encoding: {time.time()-t0:.1f}s, v={video_embeds.shape}, a={audio_embeds.shape if audio_embeds is not None else None}"
+    )
 
     if audio_embeds is None:
         audio_embeds = torch.zeros(1, video_embeds.shape[1], 2048)
+        neg_audio_embeds = torch.zeros(1, neg_video_embeds.shape[1], 2048)
         logger.warning("No audio embeddings from encoder, using zeros")
 
     # 2. Load AV model on TT mesh
@@ -240,14 +263,18 @@ def main():
     # Push prompts to device
     tt_v_prompt = bf16_tensor(video_embeds.unsqueeze(0), device=mesh)
     tt_a_prompt = bf16_tensor(audio_embeds.unsqueeze(0), device=mesh)
+    do_cfg = args.guidance_scale > 1.0
+    if do_cfg:
+        tt_neg_v_prompt = bf16_tensor(neg_video_embeds.unsqueeze(0), device=mesh)
+        tt_neg_a_prompt = bf16_tensor(neg_audio_embeds.unsqueeze(0), device=mesh)
 
     # Sigma schedule and initial noise
     sigmas = compute_sigmas(steps=args.steps, num_tokens=video_N)
     logger.info(f"Sigmas: {sigmas[0]:.4f} -> {sigmas[-1]:.4f}")
 
     torch.manual_seed(args.seed)
-    video_latent = torch.randn(1, video_N, 128, dtype=torch.float32) * sigmas[0]
-    audio_latent = torch.randn(1, audio_N, 128, dtype=torch.float32) * sigmas[0]
+    video_latent = torch.randn(1, video_N, 128, dtype=torch.bfloat16).float() * sigmas[0]
+    audio_latent = torch.randn(1, audio_N, 128, dtype=torch.bfloat16).float() * sigmas[0]
 
     # 4. Joint denoising loop
     logger.info(f"Starting AV denoising: {args.steps} steps")
@@ -278,6 +305,41 @@ def main():
         a_velocity = LTXAudioVideoTransformerModel.device_to_host(a_out).squeeze(0)
         v_denoised = (video_latent.bfloat16().float() - v_velocity.float() * sigma).bfloat16()
         a_denoised = (audio_latent.bfloat16().float() - a_velocity.float() * sigma).bfloat16()
+
+        # CFG with variance rescaling (matching video-only pipeline)
+        if do_cfg:
+            uv_out, ua_out = model.inner_step(
+                video_1BNI_torch=video_latent.unsqueeze(0),
+                video_prompt_1BLP=tt_neg_v_prompt,
+                video_rope_cos=tt_v_cos,
+                video_rope_sin=tt_v_sin,
+                video_N=video_N,
+                audio_1BNI_torch=audio_latent.unsqueeze(0),
+                audio_prompt_1BLP=tt_neg_a_prompt,
+                audio_rope_cos=tt_a_cos,
+                audio_rope_sin=tt_a_sin,
+                audio_N=audio_N,
+                trans_mat=None,
+                timestep_torch=timestep,
+            )
+            uv = (
+                video_latent.bfloat16().float()
+                - LTXAudioVideoTransformerModel.device_to_host(uv_out).squeeze(0).float() * sigma
+            ).bfloat16()
+            ua = (
+                audio_latent.bfloat16().float()
+                - LTXAudioVideoTransformerModel.device_to_host(ua_out).squeeze(0).float() * sigma
+            ).bfloat16()
+
+            rescale = 0.7
+            # Video CFG
+            v_pred = v_denoised.float() + (args.guidance_scale - 1) * (v_denoised.float() - uv.float())
+            v_factor = rescale * (v_denoised.float().std() / v_pred.std()) + (1 - rescale)
+            v_denoised = (v_pred * v_factor).bfloat16()
+            # Audio CFG
+            a_pred = a_denoised.float() + (args.guidance_scale - 1) * (a_denoised.float() - ua.float())
+            a_factor = rescale * (a_denoised.float().std() / a_pred.std()) + (1 - rescale)
+            a_denoised = (a_pred * a_factor).bfloat16()
 
         video_latent = euler_step(video_latent, v_denoised.float(), sigma, sigma_next).bfloat16().float()
         audio_latent = euler_step(audio_latent, a_denoised.float(), sigma, sigma_next).bfloat16().float()
