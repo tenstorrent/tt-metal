@@ -309,12 +309,6 @@ def train():
     """
     Main training loop for fine-tuning on GSM8K dataset.
     """
-
-    print("Loading tokenizer and config...")
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-
     yaml_config = load_config(CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs")
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
@@ -342,17 +336,30 @@ def train():
 
     # initialize device
     device_config = DeviceConfig(yaml_config)
-    ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
-        ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
-    )
+
     # no need to initialize device if #devices=1
     if device_config.total_devices() > 1:
         initialize_device(yaml_config)
 
+    ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
+        ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
+    )
+
+    model_type = model_config["transformer_config"]["model_type"]
+
+    if model_type == "gpt2":
+        repo_id = "gpt2"
+    else:
+        repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    print("Loading tokenizer...")
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
+    tokenizer = AutoTokenizer.from_pretrained(repo_id)
+
     # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="gpt2",
+        repo_id=repo_id,
         filename="model.safetensors",
     )
 
@@ -362,7 +369,7 @@ def train():
     # Setup model
     print("Setting up model...")
     orig_vocab_size = tokenizer.vocab_size
-    tt_model_factory = TransformerModelFactory(model_config)
+    tt_model_factory = TransformerModelFactory(yaml_config)
     tt_model_factory.transformer_config.vocab_size = orig_vocab_size
     print("Created Model Factory")
 
