@@ -24,7 +24,7 @@ Two failure policies
     On rank failure the process prints a structured diagnostic to stderr,
     revokes the communicator (if ULFM bindings are available), and exits
     with code 70 (``EX_SOFTWARE``).  This mirrors the C++ ULFM handler in
-    ``tt_metal/distributed/mesh_command_queue.cpp``.
+    ``tt_metal/distributed/multihost/mpi_distributed_context.cpp``.
 
 ``fault_tolerant``
     Instead of exiting, raises ``MPIRankFailureError``.  The caller should
@@ -231,7 +231,7 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
     """Print a structured diagnostic and exit.
 
     Mirrors the C++ ``handle_rank_failure`` in
-    ``tt_metal/distributed/mesh_command_queue.cpp``:
+    ``tt_metal/distributed/multihost/mpi_distributed_context.cpp``:
     1. Identify failed ranks (best-effort via MPIX)
     2. Revoke the communicator so other ranks unblock
     3. Print diagnostic to stderr

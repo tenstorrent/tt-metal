@@ -133,7 +133,7 @@ def interpret_exit_code(returncode: int) -> ExitCodeInterpretation:
         )
 
     # Exit code 70: ULFM fast-fail path
-    # The C++ handler (_exit(70)) and Python mpi_fault.py (sys.exit(70)) both
+    # The C++ handler (_exit(70)) and Python mpi_fault.py (os._exit(70)) both
     # use 70 (EX_SOFTWARE) to signal "rank failure detected via ULFM".
     # This also covers MPI_Finalize watchdog timeout (SIGALRM -> _exit(70)).
     if returncode == EXIT_ULFM_FAST_FAIL:

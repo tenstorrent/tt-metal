@@ -926,7 +926,7 @@ void MPIContext::set_failure_policy(FailurePolicy policy) {
     failure_policy_.store(policy, std::memory_order_release);
 }
 
-std::optional<bool> MPIContext::agree(bool local_value) const {
+std::optional<bool> MPIContext::agree([[maybe_unused]] bool local_value) const {
 #if OMPI_HAS_ULFM
     int flag = local_value ? 1 : 0;
     int rc = MPIX_Comm_agree(comm_, &flag);
@@ -935,9 +935,10 @@ std::optional<bool> MPIContext::agree(bool local_value) const {
     }
     return flag != 0;
 #else
-    // Without ULFM, all ranks must be alive to reach this point,
-    // so agreement is trivially the local value.
-    return local_value;
+    // Without ULFM support, agreement is not available.
+    // Return nullopt so callers can distinguish "no ULFM" from a real result,
+    // consistent with the base-class default and the header doc.
+    return std::nullopt;
 #endif
 }
 
