@@ -17,6 +17,110 @@
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #endif
 
+#if defined(COMPILE_FOR_TRISC)
+#define REDUCE_OP (PoolType::SUM)
+#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+
+template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
+void softmax_sub_exp_bcast_cols_inplace() {
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    exp_tile_init<true>();
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < cols; ++u) {
+            tile_regs_acquire();
+            sub_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            exp_tile<true>(0);
+            tile_regs_commit();
+            cb_pop_front(in0_cb, 1);
+            cb_reserve_back(in0_cb, 1);
+            tile_regs_wait();
+            pack_tile(0, in0_cb);
+            cb_push_back(in0_cb, 1);
+            tile_regs_release();
+        }
+    }
+}
+
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t out_cb,
+    uint32_t rows,
+    uint32_t cols>
+void softmax_reduce_c() {
+    reconfig_data_format(in0_cb, scale_cb);
+    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+    const uint32_t num_tiles = rows * cols;
+    cb_wait_front(scale_cb, 1);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_reserve_back(out_cb, rows);
+    constexpr uint32_t reduce_dst_idx = 0;
+    for (uint32_t i = 0; i < rows; i++) {
+        acquire_dst();
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        cb_reserve_back(out_cb, 1);
+        pack_reconfig_data_format(out_cb);
+        pack_tile(reduce_dst_idx, out_cb);
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+    reduce_uninit();
+    UNPACK(tensix_sync());
+}
+
+inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    recip_tile_init();
+    cb_wait_front(in_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in_cb, 0, 0);
+        cb_pop_front(in_cb, 1);
+        recip_tile(0);
+        cb_reserve_back(in_cb, 1);
+        pack_tile(0, in_cb);
+        cb_push_back(in_cb, 1);
+        release_dst();
+    }
+}
+
+inline void softmax_mul_block_bcast_cols(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+    uint32_t num_tiles = rows * cols;
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, rows);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            acquire_dst();
+            mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            cb_pop_front(in0_cb, 1);
+            cb_reserve_back(out_cb, 1);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst();
+        }
+    }
+    cb_pop_front(in1_cb, rows);
+}
+#endif  // COMPILE_FOR_TRISC
+
 namespace deepseek_b1_ops {
 
 struct TopKSampling {
@@ -49,7 +153,10 @@ struct TopKSampling {
         uint32_t ScoresCBId = 0xFFFFFFFF,
         uint32_t ScoresNumPages = 0,
         uint32_t GatherCBId = 0xFFFFFFFF,
-        uint32_t WinnerCBId = 0xFFFFFFFF>
+        uint32_t WinnerCBId = 0xFFFFFFFF,
+        uint32_t SoftmaxInCBId = 0xFFFFFFFF,
+        uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
+        uint32_t ScalerCBId = 0xFFFFFFFF>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t topk_k = TopK;
@@ -80,6 +187,9 @@ struct TopKSampling {
         static constexpr uint32_t scores_num_pages = ScoresNumPages;
         static constexpr uint32_t gather_cb_id = GatherCBId;
         static constexpr uint32_t winner_cb_id = WinnerCBId;
+        static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
+        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr uint32_t scaler_cb = ScalerCBId;
 
         // Gather buffer layout (globally split for LLK compatibility):
         //   [core0 scores | core1 scores | ... | coreN scores]
@@ -106,7 +216,14 @@ struct TopKSampling {
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
 
-    struct ComputeCTArgs {};
+    template <uint32_t SoftmaxInCBId, uint32_t SoftmaxOutCBId, uint32_t MaxCBId, uint32_t SumCBId, uint32_t ScalerCBId>
+    struct ComputeCTArgs {
+        static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
+        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr uint32_t max_cb = MaxCBId;
+        static constexpr uint32_t sum_cb = SumCBId;
+        static constexpr uint32_t scaler_cb = ScalerCBId;
+    };
 
     struct ReaderArgs {
         uint32_t scores_addr;
@@ -463,6 +580,50 @@ struct TopKSampling {
                     winner_addr + CTArgs::topk_scores_stride);
                 phase2_merge_global_topk(gather_addr, global_scores, global_indices);
 
+                // Pack top-K scores into a bf16 tile for TRISC softmax.
+                {
+                    constexpr uint32_t K = CTArgs::topk_k;
+                    constexpr uint32_t FACE_ELEMS = 256;
+                    constexpr uint16_t BF16_ONE = 0x3F80;
+
+                    DPRINT << "Top-" << K << " scores (before softmax):" << ENDL();
+                    for (uint32_t i = 0; i < K; ++i) {
+                        DPRINT << "  [" << i << "] " << BF16(global_scores[i]) << ENDL();
+                    }
+
+                    cb_reserve_back(CTArgs::scaler_cb, 1);
+                    auto scaler_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::scaler_cb));
+                    for (uint32_t i = 0; i < 1024; ++i) {
+                        scaler_ptr[i] = BF16_ONE;
+                    }
+                    cb_push_back(CTArgs::scaler_cb, 1);
+
+                    cb_reserve_back(CTArgs::softmax_in_cb, 1);
+                    auto tile_u32 =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
+                    for (uint32_t i = 0; i < 512; ++i) {
+                        tile_u32[i] = 0;
+                    }
+                    auto tile_u16 =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
+                    for (uint32_t i = 0; i < 16 && i < K; ++i) {
+                        tile_u16[i] = global_scores[i];
+                    }
+                    for (uint32_t i = 0; i < 16 && (i + 16) < K; ++i) {
+                        tile_u16[FACE_ELEMS + i] = global_scores[16 + i];
+                    }
+                    cb_push_back(CTArgs::softmax_in_cb, 1);
+
+                    cb_wait_front(CTArgs::softmax_out_cb, 1);
+                    auto out_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
+                    DPRINT << "Top-" << K << " probs (after softmax):" << ENDL();
+                    for (uint32_t i = 0; i < K; ++i) {
+                        uint16_t prob_bf16 = (i < 16) ? out_u16[i] : out_u16[FACE_ELEMS + (i - 16)];
+                        DPRINT << "  [" << i << "] " << BF16(prob_bf16) << ENDL();
+                    }
+                    cb_pop_front(CTArgs::softmax_out_cb, 1);
+                }
+
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_indices[0];
@@ -503,7 +664,27 @@ struct TopKSampling {
                 send_persistent_next_iter_inc_via_fabric_brisc(args, arg_idx);
             }
 #elif defined(COMPILE_FOR_TRISC)
-            // TODO: softmax over top-K scores (Phase 4)
+            if constexpr (IsFinalCore) {
+                softmax_reduce_c<
+                    PoolType::MAX,
+                    ReduceDim::REDUCE_ROW,
+                    CTArgs::softmax_in_cb,
+                    CTArgs::scaler_cb,
+                    CTArgs::max_cb,
+                    1,
+                    1>();
+                softmax_sub_exp_bcast_cols_inplace<CTArgs::softmax_in_cb, CTArgs::max_cb, 1, 1>();
+                softmax_reduce_c<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    CTArgs::softmax_in_cb,
+                    CTArgs::scaler_cb,
+                    CTArgs::sum_cb,
+                    1,
+                    1>();
+                softmax_recip_block_inplace(CTArgs::sum_cb, 1);
+                softmax_mul_block_bcast_cols(CTArgs::softmax_in_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
+            }
             (void)args;
 #endif
         }
