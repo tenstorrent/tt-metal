@@ -16,6 +16,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+def _distributed_barrier() -> None:
+    """Call a distributed barrier if running in a multi-host context, otherwise a no-op."""
+    if ttnn.distributed_context_is_initialized():
+        ttnn.distributed_context_barrier()
+
+
 class Tracer:
     """Wrapper for capturing and executing a trace of a given function.
 
@@ -31,6 +37,10 @@ class Tracer:
 
     2. The tracer returns the same output tensor objects every time; a subsequent call
        overwrites previous results in place.
+
+    3. In multi-host setups, all hosts must call the tracer simultaneously. The tracer
+       inserts distributed barriers around the prep run and trace capture to guarantee that
+       all hosts enter and exit these phases together, keeping ping-pong CCL state in sync.
     """
 
     _traces_live: int = 0
@@ -134,8 +144,16 @@ class Tracer:
                     prep_args = self._args
                     prep_kwargs = self._kwargs
 
+                # Barrier 1: all hosts must start the prep run together so that CCL ping-pong
+                # indices stay in sync across hosts before the prep run advances them.
+                _distributed_barrier()
                 self._function(*prep_args, **prep_kwargs)
                 del prep_args, prep_kwargs
+                # Barrier 2: all hosts must complete the prep run before any host calls
+                # begin_trace_capture. Without this, a fast host can enter capture mode while
+                # a slow host is still executing the prep-run CCL ops, causing mismatched
+                # execution/record phases on the two sides of an all_gather.
+                _distributed_barrier()
 
             # capture trace
             logger.debug("capturing trace...")
@@ -150,6 +168,10 @@ class Tracer:
             except Exception:
                 ttnn.release_trace(self._device, trace_id)
                 raise
+
+            # Barrier 3: all hosts must finish trace capture before any host starts executing.
+            # This ensures all remote-side CCL ops are captured before they are exercised.
+            _distributed_barrier()
 
             if tracer_execute_on_capture:
                 # Trace capture records commands but does not execute them. Execute the trace to
@@ -201,6 +223,9 @@ class Tracer:
         trace_id = self._trace_id
 
         if trace_id is not None:
+            # Barrier: ensure all hosts have finished executing the trace before any host
+            # releases it. Releasing while a peer is mid-execution corrupts CCL state.
+            _distributed_barrier()
             self._trace_id = None
             self._args = ()
             self._kwargs = {}
