@@ -4,30 +4,26 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
-namespace operations::copy {
+Tensor typecast(
+    const Tensor& input,
+    const DataType& output_dtype,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-struct Typecast {
-    static Tensor invoke(
-        const Tensor& input,
-        const DataType& output_dtype,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const DataType& tt_input_dtype,
-        const DataType& tt_output_dtype,
-        const std::optional<MemoryConfig>& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-}  // namespace operations::copy
-
-constexpr auto typecast = ttnn::register_operation<"ttnn::typecast", ttnn::operations::copy::Typecast>();
+Tensor typecast(
+    const Tensor& input_tensor,
+    const DataType& tt_input_dtype,
+    const DataType& tt_output_dtype,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

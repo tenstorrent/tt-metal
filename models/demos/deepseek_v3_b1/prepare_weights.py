@@ -96,13 +96,66 @@ class DenseRoutedExpertWeights:
     routed_down_proj: ttnn.Tensor
 
 
+# Must match MoeRoutedExpertOp.setup_dram_matmul(..., num_subblocks_k=4) for stride checks.
+_MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K = 4
+
+
+def _moe_routed_expert_stride_bytes(weights_tensor: ttnn.Tensor) -> int:
+    """Packed DRAM size of one routed expert tensor (bytes), per DRAMStreamingMatmul indexing."""
+    shard_spec = weights_tensor.memory_config().shard_spec
+    if shard_spec is None:
+        raise ValueError("MoE routed expert weights must be sharded (WIDTH_SHARDED DRAM).")
+    weights_shard_shape = shard_spec.shape
+    K = weights_shard_shape[0]
+    tile = weights_tensor.tile
+    th, tw = tile.tile_shape[0], tile.tile_shape[1]
+    per_core_n = weights_shard_shape[1] // tw
+    Kt = K // th
+    if Kt % _MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K != 0:
+        raise AssertionError(
+            f"Kt ({Kt}) must be divisible by num_subblocks_k ({_MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K}) "
+            "for MoE DRAM matmul stride check."
+        )
+    weights_tile_size = tile.get_tile_size(weights_tensor.dtype)
+    return Kt * per_core_n * weights_tile_size
+
+
+def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: str) -> None:
+    """Experts must be contiguous in DRAM; see MoERoutedExpertWeights.validate_contiguous_dram."""
+    if len(tensors) < 2:
+        return
+    if not ttnn.is_tensor_storage_on_device(tensors[0]):
+        return
+    stride = _moe_routed_expert_stride_bytes(tensors[0])
+    base = tensors[0].buffer_address()
+    for i, t in enumerate(tensors):
+        expected = base + i * stride
+        actual = t.buffer_address()
+        if actual != expected:
+            raise AssertionError(
+                f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
+                f"expected buffer_address {expected}, got {actual} (stride {stride} bytes per expert). "
+                "Allocate all experts of one projection in one batch before the next projection."
+            )
+
+
 @dataclass
 class MoERoutedExpertWeights:
-    """Routed expert weights for MoE layers (list of tensors, one per expert)."""
+    """Routed expert weights for MoE layers (list of tensors, one per expert).
+
+    When on device, each of ``routed_gate_proj``, ``routed_up_proj``, and ``routed_down_proj`` must
+    be allocated contiguously in DRAM (see :meth:`validate_contiguous_dram`).
+    """
 
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
+
+    def validate_contiguous_dram(self) -> None:
+        """Assert experts are contiguous in DRAM for each projection (DRAMStreamingMatmul base+stride)."""
+        _assert_moe_routed_expert_list_contiguous(self.routed_gate_proj, "routed_gate_proj")
+        _assert_moe_routed_expert_list_contiguous(self.routed_up_proj, "routed_up_proj")
+        _assert_moe_routed_expert_list_contiguous(self.routed_down_proj, "routed_down_proj")
 
 
 @dataclass
@@ -197,9 +250,38 @@ _NUM_HEADS = 64
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 256
 _QK_NOPE_HEAD_DIM = 128
+_QK_ROPE_HEAD_DIM = 64
 _V_HEAD_DIM = 128
 _KV_LORA_RANK = 512
 _KV_B_PROJ_HEAD_DIM = _QK_NOPE_HEAD_DIM + _V_HEAD_DIM  # 256
+_Q_HEAD_DIM = _QK_NOPE_HEAD_DIM + _QK_ROPE_HEAD_DIM  # 192
+
+
+def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
+    """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
+
+    HF stores q_b_proj with out_features = num_heads * q_head_dim, where each head's
+    nope and rope dims are contiguous: [h0_nope|h0_rope|h1_nope|h1_rope|...].
+    After .T the columns follow this interleaved order.
+
+    The b1 pipeline expects columns grouped as [ALL_NOPE | ALL_ROPE]:
+    [h0_nope|h1_nope|...|hN_nope|h0_rope|h1_rope|...|hN_rope].
+
+    Args:
+        q_b_transposed: q_b_proj.weight.T with shape (K, num_heads * q_head_dim).
+        num_heads: Number of attention heads.  If None, inferred from the width.
+
+    Returns:
+        Tensor of the same shape with columns reordered to [ALL_NOPE | ALL_ROPE].
+    """
+    q_b_transposed = q_b_proj.T
+    K, N = q_b_transposed.shape
+    if num_heads is None:
+        num_heads = N // _Q_HEAD_DIM
+    heads = q_b_transposed.reshape(K, num_heads, _Q_HEAD_DIM)
+    nope = heads[:, :, :_QK_NOPE_HEAD_DIM].reshape(K, -1)
+    rope = heads[:, :, _QK_NOPE_HEAD_DIM:].reshape(K, -1)
+    return torch.cat([nope, rope], dim=1).contiguous()
 
 
 def _key(layer_idx: int, suffix: str) -> str:
@@ -235,7 +317,7 @@ def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device:
     )
 
 
-def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2.
 
     Expects full logical shape (32768, 512) for 4x2 mesh.
@@ -314,7 +396,7 @@ def _slice_shared_expert_weights_for_moe_tp(
     return shared_gate, shared_up, shared_down
 
 
-def _get_layer_raw_tensors(
+def get_layer_raw_tensors(
     state_dict: dict[str, torch.Tensor], layer_idx: int
 ) -> tuple[
     torch.Tensor,
@@ -332,13 +414,13 @@ def _get_layer_raw_tensors(
 
     Expects full logical HF shapes. We transpose HF
     (out_features, in_features) to (K, N); norms unsqueeze(0) to
-    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see _split_kv_b_proj).
+    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see split_kv_b_proj).
 
     Transformation (HF full logical -> transform -> passed to BlitzDecodeWeights):
 
         Weight        | HF key (under model.layers.{i}.)     | HF shape      | Transform   | To blitz
         --------------|-------------------------------------|---------------|-------------|------------------
-        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T          | (1536, 24576)
+        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T + deinterleave | (1536, 24576) [ALL_NOPE|ALL_ROPE]
         o_proj        | self_attn.o_proj.weight              | (7168, 16384) | .T          | (16384, 7168)
         kv_b_proj     | self_attn.kv_b_proj.weight           | (32768, 512)  | split       | kv_b1, kv_b2
         q_a_proj      | self_attn.q_a_proj.weight            | (1536, 7168)  | .T          | (7168, 1536)
@@ -352,9 +434,9 @@ def _get_layer_raw_tensors(
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
     """
     q_a = state_dict[_key(layer_idx, "self_attn.q_a_proj.weight")].T.contiguous()
-    q_b = state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T.contiguous()
+    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")])
     kv_a = state_dict[_key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-    kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
+    kv_b1, kv_b2 = split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
     o_proj = state_dict[_key(layer_idx, "self_attn.o_proj.weight")].T.contiguous()
 
     attn_norm = state_dict[_key(layer_idx, "input_layernorm.weight")].unsqueeze(0)
@@ -413,7 +495,7 @@ def prepare_attention_weights(
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
     t0 = time.perf_counter()
-    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
+    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
         state_dict, layer_idx
     )
     # Single-device (mla_tp=1) expects per-TP shapes; slice if state dict has full logical (2-TP) size
@@ -550,11 +632,14 @@ def prepare_routed_expert_weights(
             gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
-        return MoERoutedExpertWeights(
+        routed = MoERoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
             routed_up_proj=routed_up_proj,
             routed_down_proj=routed_down_proj,
         )
+        if move_to_device:
+            routed.validate_contiguous_dram()
+        return routed
     else:
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
@@ -1220,11 +1305,15 @@ def load_moe_routed_experts(
 ) -> MoERoutedExpertWeights:
     """Load only the routed expert weights for an MoE layer from cache.
 
-    Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Since setup_fast_dispatch can
-    only be used once per program, call this under setup_fast_dispatch and pass the
-    result to load_moe_decoder_layer(..., preloaded_routed_experts=...). If you do
-    not use fast dispatch, omit preloaded_routed_experts and load_moe_decoder_layer
-    will load experts from disk in the current dispatch mode.
+    Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Loads all gate experts, then all
+    up, then all down, so DRAM allocation order matches ``get_tt_moe_routed_expert_weights``
+    (required for DRAMStreamingMatmul expert indexing).
+
+    Since setup_fast_dispatch can only be used once per program, call this under
+    setup_fast_dispatch and pass the result to load_moe_decoder_layer(...,
+    preloaded_routed_experts=...). If you do not use fast dispatch, omit
+    preloaded_routed_experts and load_moe_decoder_layer will load experts from disk in the
+    current dispatch mode.
     """
     path = Path(path)
     layer_dir = path / f"layer_{layer_idx:03d}"
@@ -1244,29 +1333,28 @@ def load_moe_routed_experts(
     routed_down_proj = []
     for e in range(num_experts):
         if e > 0 and e % 64 == 0:
-            logger.debug("  loaded experts 0..{}", e - 1)
+            logger.debug("  loaded gate experts 0..{}", e - 1)
         expert_dir = experts_dir / f"e_{e:03d}"
-        t_load_gate_t0 = time.perf_counter()
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
-        t_load_gate = time.perf_counter() - t_load_gate_t0
-
-        t_load_up_t0 = time.perf_counter()
+    for e in range(num_experts):
+        if e > 0 and e % 64 == 0:
+            logger.debug("  loaded up experts 0..{}", e - 1)
+        expert_dir = experts_dir / f"e_{e:03d}"
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
-        t_load_up = time.perf_counter() - t_load_up_t0
-
-        t_load_down_t0 = time.perf_counter()
+    for e in range(num_experts):
+        if e > 0 and e % 64 == 0:
+            logger.debug("  loaded down experts 0..{}", e - 1)
+        expert_dir = experts_dir / f"e_{e:03d}"
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
-        t_load_down = time.perf_counter() - t_load_down_t0
 
-        logger.debug(
-            f"    Loaded expert {e}: gate_proj.tensorbin in {t_load_gate:.3f}s, up_proj.tensorbin in {t_load_up:.3f}s, down_proj.tensorbin in {t_load_down:.3f}s"
-        )
     logger.info("  routed experts for layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - t0)
-    return MoERoutedExpertWeights(
+    routed = MoERoutedExpertWeights(
         routed_gate_proj=routed_gate_proj,
         routed_up_proj=routed_up_proj,
         routed_down_proj=routed_down_proj,
     )
+    routed.validate_contiguous_dram()
+    return routed
 
 
 def load_dense_decoder_layer(
