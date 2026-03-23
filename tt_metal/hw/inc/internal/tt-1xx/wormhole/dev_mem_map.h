@@ -79,14 +79,14 @@
 
 #define MEM_ZEROS_SIZE 512
 
-#define MEM_LLK_DEBUG_SIZE 1024
+#define MEM_LLK_DEBUG_SIZE 0
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12896
+#define MEM_MAILBOX_SIZE 13920
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)

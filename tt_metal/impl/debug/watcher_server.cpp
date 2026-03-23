@@ -396,7 +396,6 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
 
         // Initialize CB usage tracking to zero
         data.cb_usage().kernel_count() = 0;
-        data.cb_usage().pad() = 0;
         for (int cb = 0; cb < dev_msgs::DEBUG_CB_USAGE_NUM_CBS; cb++) {
             data.cb_usage().reserve_count()[cb] = 0;
             data.cb_usage().push_count()[cb] = 0;

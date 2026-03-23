@@ -75,7 +75,7 @@
 
 #define MEM_ZEROS_SIZE 512
 
-#define MEM_LLK_DEBUG_SIZE 1024
+#define MEM_LLK_DEBUG_SIZE 0
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
@@ -99,7 +99,7 @@
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 57680
+#define MEM_MAILBOX_SIZE 58704
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
