@@ -6,7 +6,7 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::polynorm_fw::device {
+namespace ttml::metal::ops::polynorm3_fw::device {
 
 struct operation_attributes_t {
     float epsilon{1e-5F};
@@ -22,4 +22,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = ttnn::Tensor;
 
-}  // namespace ttml::metal::ops::polynorm_fw::device
+}  // namespace ttml::metal::ops::polynorm3_fw::device

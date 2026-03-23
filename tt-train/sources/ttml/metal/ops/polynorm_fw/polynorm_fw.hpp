@@ -8,8 +8,8 @@
 
 namespace ttml::metal {
 
-// Fused PolyNorm forward kernel entry point.
-ttnn::Tensor polynorm_fw(
+// Fused PolyNorm3 forward kernel entry point.
+ttnn::Tensor polynorm3_fw(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& weight, const ttnn::Tensor& bias, float epsilon = 1e-5F);
 
 }  // namespace ttml::metal

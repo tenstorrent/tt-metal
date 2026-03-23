@@ -7,10 +7,10 @@
 #include "metal/ttnn_all_includes.hpp"
 #include "polynorm_fw_device_operation_types.hpp"
 
-namespace ttml::metal::ops::polynorm_fw::device {
+namespace ttml::metal::ops::polynorm3_fw::device {
 
-// Program factory for PolyNorm forward (reader/compute/writer kernels + runtime args).
-struct PolyNormForwardProgramFactory {
+// Program factory for PolyNorm3 forward (reader/compute/writer kernels + runtime args).
+struct PolyNorm3ForwardProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
@@ -38,4 +38,4 @@ struct PolyNormForwardProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttml::metal::ops::polynorm_fw::device
+}  // namespace ttml::metal::ops::polynorm3_fw::device

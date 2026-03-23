@@ -126,7 +126,7 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
     auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
 
-    auto out = ops::polynorm(x, w, b, epsilon);
+    auto out = ops::polynorm3(x, w, b, epsilon);
     const auto out_xt = core::to_xtensor(out->get_value());
     auto out_reference_xt = polynorm_reference(data.input, data.weight, data.bias, epsilon);
 
@@ -193,7 +193,7 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
 
     EXPECT_THROW(
         {
-            auto out = ops::polynorm(x, w, b, 1e-5F);
+            auto out = ops::polynorm3(x, w, b, 1e-5F);
             (void)out;
         },
         std::runtime_error);

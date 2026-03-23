@@ -420,8 +420,8 @@ void py_module(nb::module_& m) {
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def(
-            "polynorm",
-            &ttml::ops::polynorm,
+            "polynorm3",
+            &ttml::ops::polynorm3,
             nb::arg("tensor"),
             nb::arg("weight"),
             nb::arg("bias"),

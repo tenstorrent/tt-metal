@@ -45,7 +45,7 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumOneTile = 1U;
 
-struct PolyNormForwardKernels {
+struct PolyNorm3ForwardKernels {
     tt::tt_metal::KernelHandle reader{};
     tt::tt_metal::KernelHandle writer{};
     tt::tt_metal::KernelHandle compute_group_1{};
@@ -55,7 +55,7 @@ struct PolyNormForwardKernels {
 // Assign reader/writer runtime arguments for every active core.
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
-    const PolyNormForwardKernels& kernels,
+    const PolyNorm3ForwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* weight_buffer,
     const tt::tt_metal::Buffer* bias_buffer,
@@ -101,10 +101,10 @@ void assign_per_core_runtime_args(
 
 }  // namespace
 
-namespace ttml::metal::ops::polynorm_fw::device {
+namespace ttml::metal::ops::polynorm3_fw::device {
 
 // Build and cache the full PolyNorm forward program (reader/compute/writer kernels + CB layout).
-PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::create(
+PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
@@ -113,7 +113,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
 
     tt::tt_metal::Program program{};
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
-    TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNormForward currently supports BF16 input only");
+    TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNorm3Forward currently supports BF16 input only");
     const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 
@@ -185,7 +185,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
         "Output buffer must be in DRAM. Output buffer of type {}",
         enchantum::to_string(output_buffer->buffer_type()));
 
-    PolyNormForwardKernels kernels;
+    PolyNorm3ForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
@@ -243,7 +243,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
 }
 
 // Update runtime addresses/scalars when operation attributes or buffers change.
-void PolyNormForwardProgramFactory::override_runtime_arguments(
+void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -278,4 +278,4 @@ void PolyNormForwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::ops::polynorm_fw::device
+}  // namespace ttml::metal::ops::polynorm3_fw::device

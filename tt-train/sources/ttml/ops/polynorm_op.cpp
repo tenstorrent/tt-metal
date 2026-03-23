@@ -30,7 +30,7 @@ void validate_input_shapes(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
     const auto input_shape = tensor->get_value().logical_shape();
     if (input_shape.rank() != 4) {
-        throw std::runtime_error("polynorm only supports rank-4 input tensors.");
+        throw std::runtime_error("polynorm3 only supports rank-4 input tensors.");
     }
 
     const auto [batch, n, seq, channels] = input_shape.to_array_4D();
@@ -38,17 +38,18 @@ void validate_input_shapes(
     (void)seq;
     (void)channels;
     if (n != 1U) {
-        throw std::runtime_error("polynorm expects input shape [B, 1, S, C].");
+        throw std::runtime_error("polynorm3 expects input shape [B, 1, S, C].");
     }
 
     const auto weight_shape = weight->get_value().logical_shape().to_array_4D();
+    // PolyNorm3 is intentionally fixed to three polynomial terms (x, x^2, x^3).
     if (weight_shape != std::array<uint32_t, 4>{1, 1, 1, 3}) {
-        throw std::runtime_error("polynorm expects weight shape [1, 1, 1, 3].");
+        throw std::runtime_error("polynorm3 expects weight shape [1, 1, 1, 3].");
     }
 
     const auto bias_shape = bias->get_value().logical_shape().to_array_4D();
     if (bias_shape != std::array<uint32_t, 4>{1, 1, 1, 1}) {
-        throw std::runtime_error("polynorm expects bias shape [1, 1, 1, 1].");
+        throw std::runtime_error("polynorm3 expects bias shape [1, 1, 1, 1].");
     }
 }
 
@@ -118,7 +119,7 @@ ttnn::Tensor scalar_sum(const ttnn::Tensor& x) {
 
 }  // namespace
 
-autograd::TensorPtr polynorm(
+autograd::TensorPtr polynorm3(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
@@ -130,9 +131,9 @@ autograd::TensorPtr polynorm(
     const auto bias_tensor = bias->get_value();
     if (x.logical_shape()[-1] % 32U != 0U) {
         throw std::runtime_error(
-            "polynorm fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
+            "polynorm3 fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
     }
-    const auto out_value = metal::polynorm_fw(x, weight_tensor, bias_tensor, epsilon);
+    const auto out_value = metal::polynorm3_fw(x, weight_tensor, bias_tensor, epsilon);
 
     auto out = autograd::create_tensor(out_value);
 
