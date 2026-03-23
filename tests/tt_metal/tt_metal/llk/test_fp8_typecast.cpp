@@ -155,7 +155,7 @@ static double compute_pcc(const vector<float>& a, const vector<float>& b) {
         sum_b2 += bi * bi;
         sum_ab += ai * bi;
     }
-    double denom_a = n * sum_a2 - (sum_a * sum_a);
+    double denom_a = (n * sum_a2) - (sum_a * sum_a);
     double denom_b = (n * sum_b2) - (sum_b * sum_b);
     if (denom_a == 0.0 || denom_b == 0.0) {
         return 1.0;
