@@ -410,11 +410,15 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
 
 void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
     if (is_dram_backed()) {
+        const IDevice* device =
+            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
+        const uint32_t dram_channel =
+            device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
         MetalContext::instance().get_cluster().read_dram_vec(
             this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset),
             this->get_completion_queue_size(cq_id),
             this->device_id,
-            this->get_dram_region_channel(),
+            dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
                 cq_interfaces[cq_id].cq_start + cq_interfaces[cq_id].command_issue_region_size);
     }
@@ -536,17 +540,21 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     if (is_dram_backed()) {
+        const IDevice* device =
+            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
+        const uint32_t dram_channel =
+            device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
         MetalContext::instance().get_cluster().write_dram_vec(
             this->cq_sysmem_start + (cq_interface.offset - this->channel_offset) + cq_interface.cq_start,
             this->get_issue_queue_size(cq_id),
             this->device_id,
-            this->get_dram_region_channel(),
+            dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
         MetalContext::instance().get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
             this->device_id,
-            this->get_dram_region_channel(),
+            dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
         return;
     }
@@ -575,11 +583,13 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
         CommandQueueHostAddrType::COMPLETION_Q_RD);
 
     if (is_dram_backed()) {
+        const IDevice* device =
+            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
         MetalContext::instance().get_cluster().write_dram_vec(
             &read_ptr_and_toggle,
             sizeof(uint32_t),
             this->device_id,
-            this->get_dram_region_channel(),
+            device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id()),
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + completion_q_rd_ptr);
         return;
     }
@@ -788,11 +798,9 @@ uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
         .get_dev_addr(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
 }
 
-uint32_t SystemMemoryManager::get_dram_region_channel() const {
+uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
-    const IDevice* device =
-        MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
-    return device->allocator_impl()->get_dram_channel_from_bank_id(0);
+    return 0;
 }
 
 }  // namespace tt::tt_metal

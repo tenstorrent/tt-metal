@@ -12,8 +12,10 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
+#include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -1586,14 +1588,14 @@ void read_completion_queue(
     uint32_t completion_q_data_offset,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+                                          .device_manager()
+                                          ->get_active_device(device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
         tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
             .get_cluster()
-            .read_dram_vec(
-                dst,
-                size_bytes,
-                device_id,
-                sysmem_manager.get_dram_region_channel(),
-                completion_q_read_ptr + completion_q_data_offset);
+            .read_dram_vec(dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
     } else {
         tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
             .get_cluster()

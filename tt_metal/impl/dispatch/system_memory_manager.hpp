@@ -104,7 +104,7 @@ public:
 
     uint32_t get_dram_region_base_addr() const;
 
-    uint32_t get_dram_region_channel() const;
+    uint32_t get_dram_region_bank_id() const;
 
 private:
     bool is_mock_device() const;

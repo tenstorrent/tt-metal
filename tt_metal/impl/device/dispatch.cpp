@@ -4,7 +4,9 @@
 
 #include "dispatch.hpp"
 #include <cstdint>
+#include "allocator/allocator.hpp"
 #include "context/context_types.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -187,8 +189,13 @@ void read_completion_queue(
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            dst, size_bytes, device_id, sysmem_manager.get_dram_region_channel(), addr);
+            dst, size_bytes, device_id, dram_channel, addr);
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
     }

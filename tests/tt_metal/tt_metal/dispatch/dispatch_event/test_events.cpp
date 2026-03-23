@@ -7,17 +7,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <future>
-#include <initializer_list>
 #include <memory>
-#include <thread>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include "allocator/allocator.hpp"
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/device.hpp>
+#include "device/device_manager.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "gtest/gtest.h"
@@ -38,8 +36,12 @@ void read_completion_queue_event_id(
     const SystemMemoryManager& sysmem, ChipId mmio_device_id, uint16_t channel, uint32_t byte_addr, uint32_t& out) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (sysmem.is_dram_backed()) {
-        cluster.read_dram_vec(
-            &out, sizeof(uint32_t), sysmem.get_device_id(), sysmem.get_dram_region_channel(), byte_addr);
+        const uint32_t dram_channel = MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(sysmem.get_device_id())
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem.get_dram_region_bank_id());
+        cluster.read_dram_vec(&out, sizeof(uint32_t), sysmem.get_device_id(), dram_channel, byte_addr);
     } else {
         cluster.read_sysmem(&out, sizeof(uint32_t), byte_addr, mmio_device_id, channel);
     }

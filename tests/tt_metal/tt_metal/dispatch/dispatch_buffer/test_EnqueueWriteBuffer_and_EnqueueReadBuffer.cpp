@@ -10,6 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "allocator/allocator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -302,11 +303,13 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     auto device_coord = distributed::MeshCoordinate(0, 0);
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
     if (device->sysmem_manager().is_dram_backed()) {
+        const uint32_t dram_channel =
+            device->allocator_impl()->get_dram_channel_from_bank_id(device->sysmem_manager().get_dram_region_bank_id());
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
             cq_zeros.data(),
             (cq_size - cq_start),
             device->id(),
-            device->sysmem_manager().get_dram_region_channel(),
+            dram_channel,
             device->sysmem_manager().get_dram_region_base_addr() + get_absolute_cq_offset(channel, 0, cq_size) +
                 cq_start);
     } else {

@@ -15,7 +15,9 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -51,7 +53,12 @@ void read_cq_memory_for_dump(
     const SystemMemoryManager& sysmem_manager) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (sysmem_manager.is_dram_backed()) {
-        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, 0, byte_addr);
+        const uint32_t dram_channel = MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(mmio_device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, dram_channel, byte_addr);
     } else {
         cluster.read_sysmem(dst, size_bytes, byte_addr, mmio_device_id, channel);
     }
