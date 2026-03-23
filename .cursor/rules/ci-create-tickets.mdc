@@ -13,21 +13,32 @@ Create issues only for **deterministic** CI failures that are still repeating an
 
 ## Required Inputs
 
-- Candidate failures from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
+- Exactly one of:
+  - Candidate failures from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`, or
+  - A **single** GitHub Actions failing **job URL** to validate directly.
 - Existing open issues in `tenstorrent/tt-metal`, especially issues labeled `glean CI maintenance`.
 
 ## Required Flow
 
-0. **Start with a clean slate.** Before doing anything else, delete stale files in `build_ci/ci_ticketing/create_tickets` so you never rely on pre-existing outputs. **Exception:** if the user specified they already ran `tools/ci/extract_failing_jobs.py`, delete everything in that folder **except** `failing_jobs.json` (that file is the input for this run). Otherwise delete everything there, including any old `failing_jobs.json`. In all cases remove old `created_issues.jsonl`, `created_tickets_report.json`, and contents of `downloaded_logs`.
+0. **Start with a clean slate.** Before doing anything else, delete stale files in `build_ci/ci_ticketing/create_tickets` so you never rely on pre-existing outputs.
+   - If using `failing_jobs.json` mode: **Exception:** if the user specified they already ran `tools/ci/extract_failing_jobs.py`, delete everything in that folder **except** `failing_jobs.json` (that file is the input for this run). Otherwise delete everything there, including any old `failing_jobs.json`.
+   - If using **single job URL** mode: do not run `tools/ci/extract_failing_jobs.py`, and do not read or rely on `failing_jobs.json` or any previously downloaded candidate dataset.
+   - In all modes remove old `created_issues.jsonl`, `created_tickets_report.json`, and contents of `downloaded_logs`.
 1. Use only direct `gh` / `gh api` commands for GitHub operations.
-2. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`. This file must either be produced in this run (e.g. by running `extract_failing_jobs.py`) or, if the user specified they already ran that script, it may be the existing `failing_jobs.json` (the only file that may be reused in that case).
-3. Deduplicate candidates against open `glean CI maintenance` issues.
+2. Select input mode:
+   - **Mode A: `failing_jobs.json`**
+     Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`. This file must either be produced in this run (e.g. by running `extract_failing_jobs.py`) or, if the user specified they already ran that script, it may be the existing `failing_jobs.json` (the only file that may be reused in that case).
+   - **Mode B: single job URL**
+     Treat the provided URL as the only candidate. Resolve that job's identity (repo, workflow, and job name) from GitHub API, then look up the **latest 3 completed failing runs on `main` for that same job**. Never run `extract_failing_jobs.py` in this mode and never consume `failing_jobs.json`.
+3. Deduplicate candidate(s) against open `glean CI maintenance` issues.
+   - In single job URL mode, only check for and potentially create an issue for that one job.
 4. Before validation, ensure `build_ci/ci_ticketing/create_tickets/downloaded_logs` is empty (already done in step 0 if you cleared it there).
 5. **For each candidate you might create an issue for:** download the job logs for **all three** failing runs (e.g. save to `downloaded_logs` or equivalent), then:
    - Read the downloaded logs and confirm the **same** error or failure signature appears in all three runs. If it does not, skip creating an issue for that candidate.
    - Extract the **actual** error text from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception message) for use in the issue body.
    - Delete each downloaded log file after you finish using it.
 6. Create issues **only** for candidates you have validated in step 5. Do not create issues for candidates you have not validated with downloaded logs.
+   - In single job URL mode, create **at most one** issue and it must be for that job only.
 7. Create issues one by one with explicit `gh issue create` commands (no scripted bulk creation).
 8. Never assign newly created issues directly to developers.
 9. Always include label `glean CI maintenance` on created issues.
@@ -56,6 +67,7 @@ If in doubt, choose the error that occurs **closest to** the end of the failed s
 - The failure is not already covered by an open `glean CI maintenance` issue.
 - The issue is within the user-requested create cap.
 - You have a **real** error excerpt from the logs to put in the issue body.
+- In single job URL mode: the three runs are the **latest 3 completed failing runs on `main` for that exact job**, and all three have an identical terminal failure signature from logs.
 
 ### Skip issue creation if any condition is true
 
@@ -64,6 +76,7 @@ If in doubt, choose the error that occurs **closest to** the end of the failed s
 - The failure is already tracked by an open `glean CI maintenance` issue.
 - Creating it would exceed the user-requested create cap.
 - You would have to use a generic placeholder instead of a real error excerpt.
+- In single job URL mode: you cannot find 3 qualifying main-branch runs for that exact job, or the three logs do not have an identical terminal failure.
 
 ## Output Files
 

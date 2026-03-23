@@ -5,14 +5,21 @@ Create deterministic CI maintenance tickets for repeated failures on `main` in `
 
 ## Steps
 0. **Start with a clean slate**
-   - Delete stale files in `build_ci/ci_ticketing/create_tickets` so you never rely on pre-existing outputs. **Exception:** if the user specified they already ran `tools/ci/extract_failing_jobs.py`, delete everything in that folder **except** `build_ci/ci_ticketing/create_tickets/failing_jobs.json` (that file is the input for this run). Otherwise delete everything (including any old `failing_jobs.json`) so that step 1 produces a fresh `failing_jobs.json`.
+   - Delete stale files in `build_ci/ci_ticketing/create_tickets` so you never rely on pre-existing outputs.
+   - If the input is a **single failing job URL**, do not run `tools/ci/extract_failing_jobs.py` and do not use `build_ci/ci_ticketing/create_tickets/failing_jobs.json` or any previously downloaded candidate data.
+   - If the input is not a single job URL, you may use `failing_jobs.json` mode: **Exception:** if the user specified they already ran `tools/ci/extract_failing_jobs.py`, delete everything in that folder **except** `build_ci/ci_ticketing/create_tickets/failing_jobs.json` (that file is the input for this run). Otherwise delete everything (including any old `failing_jobs.json`) so that step 1 produces a fresh `failing_jobs.json`.
    - In all cases, remove old `created_issues.jsonl`, `created_tickets_report.json`, and contents of `downloaded_logs` so this run’s outputs are not mixed with previous runs.
 
 1. **Prepare candidate failures**
-   - Enter the virtual environment defined locally in tt-metal (or tell the user to create a virtual environment if you can't find one locally in tt-metal)
-   - Run `python tools/ci/extract_failing_jobs.py` (unless the user specified they already ran it—then skip this and use the existing `failing_jobs.json`).
-   - Optional: filter one workflow with `python tools/ci/extract_failing_jobs.py <workflow-name>`
-   - Confirm candidates exist in `build_ci/ci_ticketing/create_tickets/failing_jobs.json`
+   - If a **single failing job URL** is provided:
+     - Treat that job as the only candidate.
+     - Resolve job metadata from GitHub API (job name and workflow identity) and gather exactly the **latest 3 completed failing runs on `main` for that same job**.
+     - Do not run `tools/ci/extract_failing_jobs.py`.
+   - Otherwise (`failing_jobs.json` mode):
+     - Enter the virtual environment defined locally in tt-metal (or tell the user to create a virtual environment if you can't find one locally in tt-metal).
+     - Run `python tools/ci/extract_failing_jobs.py` (unless the user specified they already ran it—then skip this and use the existing `failing_jobs.json`).
+     - Optional: filter one workflow with `python tools/ci/extract_failing_jobs.py <workflow-name>`.
+     - Confirm candidates exist in `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
 
 2. **Validate each candidate before creating any issue**
    - Follow `.cursor/rules/ci-create-tickets.mdc` in full.
@@ -21,6 +28,10 @@ Create deterministic CI maintenance tickets for repeated failures on `main` in `
      - Read the downloaded logs and confirm the **same** error (or same failure signature) appears in all three runs. If it does not, do not create an issue for that candidate.
      - Extract the **actual** error excerpt from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception/failure message). Never use a generic placeholder like "Job failed in the last 3 runs" in the issue body. Use the **terminal** failure that caused the job to fail (e.g. the last exception or a device timeout), not an earlier TT_FATAL/assertion that may be from a negative test—see the "Error excerpt" section in `.cursor/rules/ci-create-tickets.mdc`.
      - Delete each downloaded log file after you finish using it.
+   - If the input is a single failing job URL:
+     - Validate only that one job.
+     - Create **at most one** issue, for that job only.
+     - Skip issue creation unless all 3 latest main runs are found and the terminal failure is identical across all 3 logs.
    - Only create as many issues as you have capacity to validate in this way. Do not create issues for candidates you have not validated with downloaded logs.
 
 3. **Create issues explicitly**
