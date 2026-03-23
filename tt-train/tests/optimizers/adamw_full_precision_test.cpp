@@ -8,13 +8,16 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "tt-metalium/bfloat16.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWFullPrecisionCase {

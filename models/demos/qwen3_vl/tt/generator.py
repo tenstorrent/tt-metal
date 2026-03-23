@@ -53,7 +53,7 @@ class Generator(WarmupForwardMixin):
         prompt_lens=None,
         deepstack_visual_embeds=None,
     ):
-        batch, batch_seq_len = tokens.shape[:2]
+        batch, batch_seq_len = tokens.shape[0], tokens.shape[1]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <nanobind/nanobind.h>
 
 #include <enchantum/enchantum.hpp>

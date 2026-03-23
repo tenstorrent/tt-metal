@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
@@ -33,6 +35,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -48,13 +51,16 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 
 #include "fabric_fixture.hpp"
+#include "t3k_mesh_descriptor_chip_mappings.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
 // ============================================================================
 // Type alias for the capture results struct used throughout these tests
 // ============================================================================
-using CaptureResults = FabricDatapathUsageL1Results<true, builder_config::num_max_receiver_channels, builder_config::num_max_sender_channels>;
+using CaptureResults =
+    FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
 
 // ============================================================================
 // Helper: Result of reading capture data from a single ETH core
@@ -164,7 +170,8 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
     }
 
     // Run the real exporter (writes to {logs_dir}/generated/reports/channel_trimming_capture.yaml)
-    export_channel_trimming_capture();
+    auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
+    tt::tt_fabric::export_channel_trimming_capture(env.impl());
 
     // Determine the output path
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -479,7 +486,7 @@ protected:
             should_skip_ = true;
             return;
         }
-        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+        if (tt::tt_metal::GetNumAvailableDevices() != 4) {
             should_skip_ = true;
             return;
         }
@@ -1201,6 +1208,854 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
     auto all_captures = src_captures;
     all_captures.insert(all_captures.end(), dst_captures.begin(), dst_captures.end());
     verify_capture_roundtrip(all_captures);
+}
+
+// ============================================================================
+// Fixture: Fabric1D with channel trimming override (force-enable all VC1)
+// applied standalone (no capture profile). Verifies that override-only mode
+// correctly loads overrides and that traffic still flows through the fabric.
+// ============================================================================
+class Fabric1DChannelTrimmingOverrideFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
+
+        // Write override YAML to a temp file
+        override_dir_ = std::filesystem::temp_directory_path() / "channel_trimming_override_test";
+        std::filesystem::create_directories(override_dir_);
+        override_yaml_path_ = override_dir_ / "override.yaml";
+        {
+            std::ofstream f(override_yaml_path_);
+            f << "channel_trimming_overrides:\n"
+              << "  vc1:\n"
+              << "    force_enable_all_sender_channels: true\n"
+              << "    force_enable_all_receiver_channels: true\n";
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_trimming_override_path(override_yaml_path_.string());
+        // Override-only mode: no capture mode (mutually exclusive), no profile
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            rtoptions.set_fabric_trimming_override_path("");
+        }
+        if (std::filesystem::exists(override_dir_)) {
+            std::filesystem::remove_all(override_dir_);
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Channel trimming override tests require Blackhole architecture with at least 4 devices";
+        }
+        BaseFabricFixture::SetUp();
+    }
+
+    inline static bool should_skip_ = false;
+    inline static std::filesystem::path override_dir_;
+    inline static std::filesystem::path override_yaml_path_;
+};
+
+// ============================================================================
+// Fixture: Fabric1D with a synthetic capture profile + override.
+//
+// Phase 1: Initialize fabric with capture mode enabled, run 1-hop unicast
+//          traffic to populate capture data, export the capture to YAML.
+// Phase 2: Tear down and re-initialize with the captured profile + an
+//          override that force-enables all VC1 channels.
+//
+// This tests the full end-to-end flow: capture → export → reimport + override.
+// ============================================================================
+class Fabric1DChannelTrimmingCaptureAndOverrideFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+        // === Phase 1: Capture traffic ===
+        rtoptions.set_enable_channel_trimming_capture(true);
+        rtoptions.set_fabric_trimming_profile_path("");
+        rtoptions.set_fabric_trimming_override_path("");
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+
+        // Export capture data (even if zero — that's a valid baseline)
+        auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
+        tt::tt_fabric::export_channel_trimming_capture(env.impl());
+        capture_yaml_path_ =
+            std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+
+        if (!std::filesystem::exists(capture_yaml_path_)) {
+            should_skip_ = true;
+            BaseFabricFixture::DoTearDownTestSuite();
+            rtoptions.set_enable_channel_trimming_capture(false);
+            return;
+        }
+
+        // Tear down Phase 1
+        BaseFabricFixture::DoTearDownTestSuite();
+        rtoptions.set_enable_channel_trimming_capture(false);
+
+        // === Phase 2: Re-initialize with profile + override ===
+        override_dir_ = std::filesystem::temp_directory_path() / "channel_trimming_capture_and_override_test";
+        std::filesystem::create_directories(override_dir_);
+        override_yaml_path_ = override_dir_ / "override.yaml";
+        {
+            std::ofstream f(override_yaml_path_);
+            // Override: force-enable VC0 sender[0]+receiver[0] (keeps worker channel alive)
+            // and force-enable all VC1 channels (simulating KV cache migration support)
+            f << "channel_trimming_overrides:\n"
+              << "  vc0:\n"
+              << "    force_enable_sender_channels: [0]\n"
+              << "    force_enable_receiver_channels: [0]\n"
+              << "  vc1:\n"
+              << "    force_enable_all_sender_channels: true\n"
+              << "    force_enable_all_receiver_channels: true\n";
+        }
+
+        rtoptions.set_fabric_trimming_profile_path(capture_yaml_path_.string());
+        rtoptions.set_fabric_trimming_override_path(override_yaml_path_.string());
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            rtoptions.set_fabric_trimming_profile_path("");
+            rtoptions.set_fabric_trimming_override_path("");
+        }
+        if (std::filesystem::exists(override_dir_)) {
+            std::filesystem::remove_all(override_dir_);
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Channel trimming capture+override tests require Blackhole with at least 4 devices "
+                            "and a successful capture export";
+        }
+        BaseFabricFixture::SetUp();
+    }
+
+    inline static bool should_skip_ = false;
+    inline static std::filesystem::path capture_yaml_path_;
+    inline static std::filesystem::path override_dir_;
+    inline static std::filesystem::path override_yaml_path_;
+};
+
+// ============================================================================
+// Tests: Fabric1DChannelTrimmingOverrideFixture (override-only, no capture profile)
+// ============================================================================
+
+// Test: Global overrides are loaded into the builder context
+TEST_F(Fabric1DChannelTrimmingOverrideFixture, GlobalOverridesLoaded) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+
+    EXPECT_TRUE(global_overrides.has_any_override());
+    // VC0 should have no override
+    EXPECT_FALSE(global_overrides.per_vc[0].has_override());
+    // VC1 should have force_enable_all
+    EXPECT_TRUE(global_overrides.per_vc[1].has_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+}
+
+// Test: Runtime option getter/setter for override path
+TEST_F(Fabric1DChannelTrimmingOverrideFixture, RuntimeOptionOverridePath) {
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    EXPECT_TRUE(rtoptions.has_fabric_trimming_override());
+    EXPECT_FALSE(rtoptions.get_fabric_trimming_override_path().empty());
+}
+
+// Test: 1-hop unicast traffic works with override-only mode (no capture profile)
+// The override applies to a fully-enabled baseline, so all channels remain available.
+// This verifies that override-only mode doesn't break normal traffic flow.
+TEST_F(Fabric1DChannelTrimmingOverrideFixture, UnicastTrafficWithOverride) {
+    auto path_result = find_1d_path_with_hops(1);
+    if (!path_result.found) {
+        GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
+    }
+
+    // Traffic should flow — override-only mode constructs a fully-enabled baseline
+    // and applies the override (which only affects VC1 here). VC0 remains fully enabled.
+    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    EXPECT_FALSE(result.skipped) << "Override-only mode should not prevent traffic flow";
+}
+
+// ============================================================================
+// Fixture: Fabric1D with a restrictive override that only enables VC0
+// sender channel 0 and receiver channel 0 (all other channels disabled).
+// No capture profile — override-only mode with replacement semantics.
+// Verifies that unicast traffic (which uses channel 0) still works when
+// all other channels are trimmed via override.
+// ============================================================================
+class Fabric1DChannelTrimmingOverrideChannel0OnlyFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
+
+        // Write override YAML: only VC0 sender[0] + receiver[0] enabled
+        override_dir_ = std::filesystem::temp_directory_path() / "channel_trimming_override_ch0_only_test";
+        std::filesystem::create_directories(override_dir_);
+        override_yaml_path_ = override_dir_ / "override.yaml";
+        {
+            std::ofstream f(override_yaml_path_);
+            f << "channel_trimming_overrides:\n"
+              << "  vc0:\n"
+              << "    force_enable_sender_channels: [0]\n"
+              << "    force_enable_receiver_channels: [0]\n"
+              << "  vc1:\n"
+              << "    force_enable_sender_channels: []\n"
+              << "    force_enable_receiver_channels: []\n";
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_trimming_override_path(override_yaml_path_.string());
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            rtoptions.set_fabric_trimming_override_path("");
+        }
+        if (std::filesystem::exists(override_dir_)) {
+            std::filesystem::remove_all(override_dir_);
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Channel trimming override tests require Blackhole architecture with at least 4 devices";
+        }
+        BaseFabricFixture::SetUp();
+    }
+
+    inline static bool should_skip_ = false;
+    inline static std::filesystem::path override_dir_;
+    inline static std::filesystem::path override_yaml_path_;
+};
+
+// Test: Override loads correctly — only VC0 has sender/receiver overrides
+TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, OverrideLoaded) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+    EXPECT_TRUE(global_overrides.has_any_override());
+
+    // VC0: only sender[0] and receiver[0]
+    EXPECT_TRUE(global_overrides.per_vc[0].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[0].has_receiver_override());
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_sender_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_sender_channels->size(), 1u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[0], 0u);
+
+    // VC1: explicitly disabled — empty channel lists
+    EXPECT_TRUE(global_overrides.per_vc[1].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].has_receiver_override());
+    ASSERT_TRUE(global_overrides.per_vc[1].force_enable_sender_channels.has_value());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_sender_channels->empty());
+    ASSERT_TRUE(global_overrides.per_vc[1].force_enable_receiver_channels.has_value());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_receiver_channels->empty());
+}
+
+// Test: 1-hop unicast traffic works with only channel 0 enabled
+// Unicast uses sender channel 0, so this restrictive override should not block traffic.
+TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, UnicastTrafficWithChannel0Only) {
+    auto path_result = find_1d_path_with_hops(1);
+    if (!path_result.found) {
+        GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
+    }
+
+    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    EXPECT_FALSE(result.skipped) << "Override with only channel 0 enabled should still allow unicast traffic";
+}
+
+// ============================================================================
+// Tests: Fabric1DChannelTrimmingCaptureAndOverrideFixture (capture + override)
+// ============================================================================
+
+// Test: Both capture overrides and global overrides are loaded
+TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, BothOverridesLoaded) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    // Capture profile should be loaded
+    const auto& trimming_overrides = builder_ctx.get_channel_trimming_overrides();
+    EXPECT_TRUE(trimming_overrides.has_value());
+    EXPECT_GT(trimming_overrides->size(), 0u) << "Capture profile should have at least one router entry";
+
+    // Global overrides should also be loaded
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+    EXPECT_TRUE(global_overrides.has_any_override());
+
+    // Verify VC0 override
+    EXPECT_TRUE(global_overrides.per_vc[0].has_override());
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_sender_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_sender_channels->size(), 1u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[0], 0u);
+
+    // Verify VC1 override
+    EXPECT_TRUE(global_overrides.per_vc[1].has_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+}
+
+// Test: 1-hop unicast traffic works with capture + override
+TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, UnicastTrafficWithCaptureAndOverride) {
+    auto path_result = find_1d_path_with_hops(1);
+    if (!path_result.found) {
+        GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
+    }
+
+    auto result = run_unicast_traffic_bw_nodes(this, path_result.src_node, path_result.dst_node, 1);
+    if (result.skipped) {
+        GTEST_SKIP() << "No forwarding links between selected nodes";
+    }
+
+    // Traffic should flow correctly — the override replaces VC decisions but
+    // VC0 sender channel 0 (worker channel) is explicitly enabled in the override,
+    // so normal unicast traffic should work fine.
+    // Verify sender/receiver status was PASS (checked inside run_unicast_traffic_bw_nodes)
+    EXPECT_FALSE(result.skipped);
+}
+
+// ============================================================================
+// Host-Side Unit Tests: Global Override Parsing and Apply Logic
+// These tests don't require a device — they exercise YAML parsing and the
+// bitfield merge logic using synthetic data.
+// ============================================================================
+
+// Test: Parse a global override YAML with force_enable_all for VC1
+TEST(ChannelTrimmingGlobalOverride, ParseForceEnableAllVC1) {
+    // Write a temporary YAML file
+    auto tmp_dir = std::filesystem::temp_directory_path() / "channel_trimming_test";
+    std::filesystem::create_directories(tmp_dir);
+    auto yaml_path = tmp_dir / "override_vc1_all.yaml";
+
+    {
+        std::ofstream f(yaml_path);
+        f << "channel_trimming_overrides:\n"
+          << "  vc1:\n"
+          << "    force_enable_all_sender_channels: true\n"
+          << "    force_enable_all_receiver_channels: true\n";
+    }
+
+    auto overrides = load_channel_trimming_global_overrides(yaml_path.string());
+
+    // VC0 should have no override
+    EXPECT_FALSE(overrides.per_vc[0].has_override());
+
+    // VC1 should have force_enable_all
+    EXPECT_TRUE(overrides.per_vc[1].has_override());
+    EXPECT_TRUE(overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+    EXPECT_FALSE(overrides.per_vc[1].force_enable_sender_channels.has_value());
+    EXPECT_FALSE(overrides.per_vc[1].force_enable_receiver_channels.has_value());
+
+    EXPECT_TRUE(overrides.has_any_override());
+
+    std::filesystem::remove_all(tmp_dir);
+}
+
+// Test: Parse a global override YAML with specific channel indices for VC0 and force_all for VC1
+TEST(ChannelTrimmingGlobalOverride, ParseMixedVC0AndVC1) {
+    auto tmp_dir = std::filesystem::temp_directory_path() / "channel_trimming_test";
+    std::filesystem::create_directories(tmp_dir);
+    auto yaml_path = tmp_dir / "override_mixed.yaml";
+
+    {
+        std::ofstream f(yaml_path);
+        f << "channel_trimming_overrides:\n"
+          << "  vc0:\n"
+          << "    force_enable_sender_channels: [0, 2]\n"
+          << "    force_enable_receiver_channels: [0]\n"
+          << "  vc1:\n"
+          << "    force_enable_all_sender_channels: true\n"
+          << "    force_enable_all_receiver_channels: true\n";
+    }
+
+    auto overrides = load_channel_trimming_global_overrides(yaml_path.string());
+
+    // VC0: specific indices
+    EXPECT_TRUE(overrides.per_vc[0].has_override());
+    EXPECT_FALSE(overrides.per_vc[0].force_enable_all_sender_channels.has_value());
+    ASSERT_TRUE(overrides.per_vc[0].force_enable_sender_channels.has_value());
+    ASSERT_EQ(overrides.per_vc[0].force_enable_sender_channels->size(), 2u);
+    EXPECT_EQ((*overrides.per_vc[0].force_enable_sender_channels)[0], 0u);
+    EXPECT_EQ((*overrides.per_vc[0].force_enable_sender_channels)[1], 2u);
+    ASSERT_TRUE(overrides.per_vc[0].force_enable_receiver_channels.has_value());
+    ASSERT_EQ(overrides.per_vc[0].force_enable_receiver_channels->size(), 1u);
+    EXPECT_EQ((*overrides.per_vc[0].force_enable_receiver_channels)[0], 0u);
+
+    // VC1: force_enable_all
+    EXPECT_TRUE(overrides.per_vc[1].has_override());
+    EXPECT_TRUE(overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+
+    std::filesystem::remove_all(tmp_dir);
+}
+
+// Test: Apply global override replaces VC bits — force_enable_all on VC1
+TEST(ChannelTrimmingGlobalOverride, ApplyForceEnableAllVC1) {
+    // Simulate a topology with:
+    //   VC0: 5 sender channels, 1 receiver channel
+    //   VC1: 3 sender channels, 1 receiver channel
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {5, 3};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    // Start with a capture that has VC0 sender channels 0,1 used (bits 0,1),
+    // and no VC1 channels used.
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x0003;              // bits 0,1 = VC0 channels 0,1
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0001;  // bit 0 = VC0 receiver 0
+
+    // Override: force-enable ALL VC1 sender+receiver channels (no receiver override for VC1 senders test)
+    ChannelTrimmingGlobalOverrides overrides;
+    overrides.per_vc[1].force_enable_all_sender_channels = true;    // std::optional<bool> = true
+    overrides.per_vc[1].force_enable_all_receiver_channels = true;  // std::optional<bool> = true
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // VC0 bits (0..4) should be UNCHANGED: bits 0,1 still set
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x001F, 0x0003u);
+
+    // VC1 bits (5..7) should all be set: channels 5,6,7
+    uint16_t vc1_sender_mask = 0x07 << 5;  // bits 5,6,7
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & vc1_sender_mask, vc1_sender_mask);
+
+    // VC0 receiver bit (0) should be UNCHANGED
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0001, 0x0001u);
+
+    // VC1 receiver bit (1) should be set
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0002, 0x0002u);
+}
+
+// Test: Apply global override replaces VC bits — specific channels on VC0
+TEST(ChannelTrimmingGlobalOverride, ApplySpecificChannelsReplacesCapture) {
+    // Topology: VC0 has 5 sender channels, VC1 has 3
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {5, 3};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    // Capture shows ALL VC0 senders used (bits 0..4 set) and all VC1 senders used (bits 5..7)
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x00FF;              // all bits set
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0003;  // both receivers
+
+    // Override: for VC0, only enable sender channel 0 and receiver channel 0 (REPLACES, not ORs)
+    ChannelTrimmingGlobalOverrides overrides;
+    overrides.per_vc[0].force_enable_sender_channels = std::vector<size_t>{0};
+    overrides.per_vc[0].force_enable_receiver_channels = std::vector<size_t>{0};
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // VC0 should only have bit 0 set (replacement semantics — capture bits cleared first)
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x001F, 0x0001u);
+
+    // VC1 bits should be UNCHANGED (no override for VC1)
+    uint16_t vc1_sender_mask = 0x07 << 5;
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & vc1_sender_mask, vc1_sender_mask);
+
+    // VC0 receiver: only bit 0
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0001, 0x0001u);
+    // VC1 receiver: unchanged (bit 1)
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0002, 0x0002u);
+}
+
+// Test: Sender-only override does not affect receiver bits
+TEST(ChannelTrimmingGlobalOverride, SenderOnlyOverridePreservesReceiverBits) {
+    // Topology: VC0 has 5 sender channels, 1 receiver channel
+    //           VC1 has 3 sender channels, 1 receiver channel
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {5, 3};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    // Start with capture: VC0 senders 0,1 used, VC1 senders 5,6 used, both receivers used
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x0063;              // bits 0,1 (VC0) + bits 5,6 (VC1)
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0003;  // both receivers
+
+    // Override: force-enable ALL VC1 senders, but NO receiver override
+    ChannelTrimmingGlobalOverrides overrides;
+    overrides.per_vc[1].force_enable_all_sender_channels = true;
+    // Deliberately leave receiver override as nullopt
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // VC0 sender bits (0..4) should be UNCHANGED: bits 0,1 still set
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x001F, 0x0003u);
+
+    // VC1 sender bits (5..7) should all be set (force_enable_all)
+    uint16_t vc1_sender_mask = 0x07 << 5;
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & vc1_sender_mask, vc1_sender_mask);
+
+    // BOTH receiver bits should be UNCHANGED — sender-only override must not touch receivers
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc, 0x0003u);
+}
+
+// Test: has_any_override returns false when no overrides specified
+TEST(ChannelTrimmingGlobalOverride, HasAnyOverrideEmpty) {
+    ChannelTrimmingGlobalOverrides overrides;
+    EXPECT_FALSE(overrides.has_any_override());
+}
+
+// Test: Apply with empty override has no effect
+TEST(ChannelTrimmingGlobalOverride, ApplyEmptyOverrideNoEffect) {
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {5, 3};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x0023;
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0001;
+
+    ChannelTrimmingGlobalOverrides overrides;  // empty
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // Nothing should change
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc, 0x0023u);
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc, 0x0001u);
+}
+
+// Test: Apply global override with VC0={s0,s1,r0} and VC1=all enabled
+// Uses 2D-mesh-like channel counts: VC0 has 4 sender + 1 receiver, VC1 has 4 sender + 1 receiver
+TEST(ChannelTrimmingGlobalOverride, ApplyVC0S0S1AndVC1All) {
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {4, 4};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    // Capture: all channels used
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x00FF;              // all 8 sender bits
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0003;  // both receivers
+
+    // Override: VC0={s0,s1,r0}, VC1=all
+    ChannelTrimmingGlobalOverrides overrides;
+    overrides.per_vc[0].force_enable_sender_channels = std::vector<size_t>{0, 1};
+    overrides.per_vc[0].force_enable_receiver_channels = std::vector<size_t>{0};
+    overrides.per_vc[1].force_enable_all_sender_channels = true;
+    overrides.per_vc[1].force_enable_all_receiver_channels = true;
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // VC0 senders (bits 0-3): only bits 0,1 set (replacement clears bits 2,3)
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x000F, 0x0003u);
+    // VC1 senders (bits 4-7): all bits set
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x00F0, 0x00F0u);
+    // VC0 receiver (bit 0): set
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0001, 0x0001u);
+    // VC1 receiver (bit 1): set
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0002, 0x0002u);
+}
+
+// Test: Apply VC0={s0,s1} override to a baseline with NO channels used
+// Verifies that override sets bits even when the capture had nothing enabled.
+TEST(ChannelTrimmingGlobalOverride, ApplyVC0S0S1AndVC1AllToEmptyBaseline) {
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_counts = {4, 4};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_counts = {1, 1};
+
+    // Capture: no channels used at all
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+    entry.sender_channel_used_bitfield_by_vc = 0x0000;
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = 0x0000;
+
+    // Override: VC0={s0,s1,r0}, VC1=all
+    ChannelTrimmingGlobalOverrides overrides;
+    overrides.per_vc[0].force_enable_sender_channels = std::vector<size_t>{0, 1};
+    overrides.per_vc[0].force_enable_receiver_channels = std::vector<size_t>{0};
+    overrides.per_vc[1].force_enable_all_sender_channels = true;
+    overrides.per_vc[1].force_enable_all_receiver_channels = true;
+
+    apply_global_overrides_to_entry(entry, overrides, sender_counts, receiver_counts);
+
+    // VC0 senders: bits 0,1 set (override replaces empty baseline)
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x000F, 0x0003u);
+    // VC1 senders: all bits 4-7 set
+    EXPECT_EQ(entry.sender_channel_used_bitfield_by_vc & 0x00F0, 0x00F0u);
+    // VC0 receiver: bit 0 set
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0001, 0x0001u);
+    // VC1 receiver: bit 1 set
+    EXPECT_EQ(entry.receiver_channel_data_forwarded_bitfield_by_vc & 0x0002, 0x0002u);
+}
+
+// ============================================================================
+// Fixture: Fabric2D with override: VC0={s0,s1,r0}, VC1=all enabled.
+// Override-only mode (no capture profile) — the builder context constructs a
+// fully-enabled baseline and applies the override with replacement semantics.
+// ============================================================================
+class Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
+            should_skip_ = true;
+            return;
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+            should_skip_ = true;
+            return;
+        }
+
+        // Write override YAML to a temp file
+        override_dir_ = std::filesystem::temp_directory_path() / "channel_trimming_override_2d_vc0s0s1_vc1all_test";
+        std::filesystem::create_directories(override_dir_);
+        override_yaml_path_ = override_dir_ / "override.yaml";
+        {
+            std::ofstream f(override_yaml_path_);
+            f << "channel_trimming_overrides:\n"
+              << "  vc0:\n"
+              << "    force_enable_sender_channels: [0, 1]\n"
+              << "    force_enable_receiver_channels: [0]\n"
+              << "  vc1:\n"
+              << "    force_enable_all_sender_channels: true\n"
+              << "    force_enable_all_receiver_channels: true\n";
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_trimming_override_path(override_yaml_path_.string());
+        // Override-only mode: no capture, no profile
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            rtoptions.set_fabric_trimming_override_path("");
+        }
+        if (std::filesystem::exists(override_dir_)) {
+            std::filesystem::remove_all(override_dir_);
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "2D channel trimming override tests require Blackhole architecture with at least 4 devices";
+        }
+        BaseFabricFixture::SetUp();
+    }
+
+    inline static bool should_skip_ = false;
+    inline static std::filesystem::path override_dir_;
+    inline static std::filesystem::path override_yaml_path_;
+};
+
+// ============================================================================
+// Tests: Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture
+// ============================================================================
+
+// Test: Global overrides are loaded and match the YAML specification
+TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+
+    EXPECT_TRUE(global_overrides.has_any_override());
+
+    // VC0: sender[0,1] + receiver[0]
+    EXPECT_TRUE(global_overrides.per_vc[0].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[0].has_receiver_override());
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_sender_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_sender_channels->size(), 2u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[0], 0u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[1], 1u);
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_receiver_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_receiver_channels->size(), 1u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_receiver_channels)[0], 0u);
+
+    // VC1: all senders + all receivers
+    EXPECT_TRUE(global_overrides.per_vc[1].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].has_receiver_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+}
+
+// Test: Max channel counts from builder context are consistent with 2D mesh topology
+// Note: VC1 channel counts depend on whether inter-mesh routing is active; on a
+// single-mesh 2D fabric they may be 0.  We only assert VC0 minimums here.
+TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, ChannelCountsConsistentWith2DMesh) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    const auto& max_sender = builder_ctx.get_max_sender_channels_per_vc();
+    const auto& max_receiver = builder_ctx.get_max_receiver_channels_per_vc();
+
+    // 2D mesh: VC0 should have >= 4 sender channels (Worker + N/E/S/W directions)
+    EXPECT_GE(max_sender[0], 4u);
+    // VC0 should have at least 1 receiver
+    EXPECT_GE(max_receiver[0], 1u);
+}
+
+// Test: Override-only mode (no capture profile) creates a fully-enabled baseline.
+// Verify that no per-router capture profile is loaded (override-only mode).
+TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, StandaloneOverrideCreatesFullyEnabledBaseline) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    // In override-only mode (no profile path), the per-router override map should be empty
+    const auto& trimming_overrides = builder_ctx.get_channel_trimming_overrides();
+    EXPECT_FALSE(trimming_overrides.has_value()) << "Override-only mode should not have a per-router capture profile";
+
+    // But global overrides should be active
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+    EXPECT_TRUE(global_overrides.has_any_override());
+}
+
+// ============================================================================
+// Fixture: T3k 2D multi-mesh (intermesh) with override: VC0={s0,s1,r0}, VC1=all.
+// Uses a T3k 2x2 mesh descriptor (two 2x2 meshes with inter-mesh connectivity),
+// which enables VC1. Per-test SetUp/TearDown because custom mesh graph requires it.
+// ============================================================================
+class T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    void SetUp() override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+            GTEST_SKIP() << "Intermesh channel trimming override tests require a T3K cluster";
+        }
+        if (tt::tt_metal::GetNumAvailableDevices() < 8) {
+            GTEST_SKIP() << "Intermesh channel trimming override tests require at least 8 devices";
+        }
+
+        // Write override YAML to a temp file
+        override_dir_ = std::filesystem::temp_directory_path() / "channel_trimming_override_t3k_intermesh_test";
+        std::filesystem::create_directories(override_dir_);
+        override_yaml_path_ = override_dir_ / "override.yaml";
+        {
+            std::ofstream f(override_yaml_path_);
+            f << "channel_trimming_overrides:\n"
+              << "  vc0:\n"
+              << "    force_enable_sender_channels: [0, 1]\n"
+              << "    force_enable_receiver_channels: [0]\n"
+              << "  vc1:\n"
+              << "    force_enable_all_sender_channels: true\n"
+              << "    force_enable_all_receiver_channels: true\n";
+        }
+
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_trimming_override_path(override_yaml_path_.string());
+
+        // Use t3k_2x2 mesh descriptor (2 meshes, inter-mesh connectivity → VC1 enabled)
+        const auto& [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_mesh_descriptor_chip_mappings[2];
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
+            mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
+        BaseFabricFixture::DoTearDownTestSuite();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_trimming_override_path("");
+        if (std::filesystem::exists(override_dir_)) {
+            std::filesystem::remove_all(override_dir_);
+        }
+    }
+
+    std::filesystem::path override_dir_;
+    std::filesystem::path override_yaml_path_;
+};
+
+// ============================================================================
+// Tests: T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture
+// ============================================================================
+
+// Test: Global overrides are loaded and match the YAML specification (with intermesh VC1)
+TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+
+    EXPECT_TRUE(global_overrides.has_any_override());
+
+    // VC0: sender[0,1] + receiver[0]
+    EXPECT_TRUE(global_overrides.per_vc[0].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[0].has_receiver_override());
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_sender_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_sender_channels->size(), 2u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[0], 0u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_sender_channels)[1], 1u);
+    ASSERT_TRUE(global_overrides.per_vc[0].force_enable_receiver_channels.has_value());
+    ASSERT_EQ(global_overrides.per_vc[0].force_enable_receiver_channels->size(), 1u);
+    EXPECT_EQ((*global_overrides.per_vc[0].force_enable_receiver_channels)[0], 0u);
+
+    // VC1: all senders + all receivers
+    EXPECT_TRUE(global_overrides.per_vc[1].has_sender_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].has_receiver_override());
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_sender_channels.value_or(false));
+    EXPECT_TRUE(global_overrides.per_vc[1].force_enable_all_receiver_channels.value_or(false));
+}
+
+// Test: VC1 channel counts are non-zero in an intermesh topology
+TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, IntermeshVC1ChannelCountsNonZero) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    const auto& max_sender = builder_ctx.get_max_sender_channels_per_vc();
+    const auto& max_receiver = builder_ctx.get_max_receiver_channels_per_vc();
+
+    // VC0: should have >= 4 sender channels (Worker + mesh directions)
+    EXPECT_GE(max_sender[0], 4u);
+    EXPECT_GE(max_receiver[0], 1u);
+
+    // VC1: intermesh topology should have non-zero VC1 channels
+    EXPECT_GT(max_sender[1], 0u) << "Intermesh topology should have VC1 sender channels";
+    EXPECT_GE(max_sender[1], 3u) << "Intermesh VC1 should have >= 3 sender channels (one per mesh direction)";
+    EXPECT_GE(max_receiver[1], 1u) << "Intermesh VC1 should have >= 1 receiver channel";
+}
+
+// Test: Override-only mode has no per-router profile, but global overrides are active
+TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, StandaloneOverrideNoProfile) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+
+    // No per-router capture profile
+    const auto& trimming_overrides = builder_ctx.get_channel_trimming_overrides();
+    EXPECT_FALSE(trimming_overrides.has_value()) << "Override-only mode should not have a per-router capture profile";
+
+    // Global overrides should be active
+    const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
+    EXPECT_TRUE(global_overrides.has_any_override());
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

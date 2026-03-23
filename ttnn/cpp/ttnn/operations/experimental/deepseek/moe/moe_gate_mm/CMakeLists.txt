@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_deepseek_moe_moe_gate_mm ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM ALIAS ttnn_op_experimental_deepseek_moe_moe_gate_mm)
 
-target_precompile_headers(ttnn_op_experimental_deepseek_moe_moe_gate_mm REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_moe_moe_gate_mm TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_moe_moe_gate_mm)
 
 target_sources(

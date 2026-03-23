@@ -98,8 +98,8 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Implemention for when only one of the height dimension (rank - 2) and the width dimension is swapped with another
-    // dimension (dims = {..., rank - 2,
+    // Implementation for when only one of the height dimension (rank - 2) and the width dimension is swapped with
+    // another dimension (dims = {..., rank - 2,
     // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

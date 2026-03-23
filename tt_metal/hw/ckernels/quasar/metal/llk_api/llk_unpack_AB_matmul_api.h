@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -72,8 +73,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint32_t l1_tile_idx_0 = get_local_cb_interface(operandA_id).fifo_rd_tile_idx + tile_index_a;
-    const std::uint32_t l1_tile_idx_1 = get_local_cb_interface(operandB_id).fifo_rd_tile_idx + tile_index_b;
+    const std::uint32_t l1_tile_idx_0 = g_dfb_interface[operandA_id].rd_entry_idx + tile_index_a;
+    const std::uint32_t l1_tile_idx_1 = g_dfb_interface[operandB_id].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UPMW");
     _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1);

@@ -9,44 +9,22 @@
 
 namespace ttnn {
 
-namespace operations::kv_cache {
+ttnn::Tensor fill_cache_for_user_(const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index);
 
-struct ExecuteFillCache {
-    static ttnn::Tensor invoke(const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index);
-};
+ttnn::Tensor update_cache_for_token_(
+    const ttnn::Tensor& cache,
+    const ttnn::Tensor& input,
+    uint32_t update_index,
+    uint32_t batch_offset,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-struct ExecuteUpdateCache {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& cache,
-        const ttnn::Tensor& input,
-        uint32_t update_index,
-        uint32_t batch_offset,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-};
+ttnn::Tensor update_cache(
+    const ttnn::Tensor& cache,
+    const ttnn::Tensor& input,
+    uint32_t update_idx,
+    uint32_t batch_offset = 0,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-struct UpdateCacheOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& cache,
-        const ttnn::Tensor& input,
-        uint32_t update_idx,
-        uint32_t batch_offset,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-};
-
-struct FillCacheOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx);
-};
-
-}  // namespace operations::kv_cache
-
-constexpr auto fill_cache_for_user_ =
-    ttnn::register_operation<"ttnn::kv_cache::fill_cache_for_user_", ttnn::operations::kv_cache::ExecuteFillCache>();
-constexpr auto update_cache_for_token_ = ttnn::
-    register_operation<"ttnn::kv_cache::update_cache_for_token_", ttnn::operations::kv_cache::ExecuteUpdateCache>();
-
-constexpr auto update_cache =
-    ttnn::register_operation<"ttnn::update_cache", ttnn::operations::kv_cache::UpdateCacheOperation>();
-constexpr auto fill_cache =
-    ttnn::register_operation<"ttnn::fill_cache", ttnn::operations::kv_cache::FillCacheOperation>();
+ttnn::Tensor fill_cache(const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx);
 
 }  // namespace ttnn

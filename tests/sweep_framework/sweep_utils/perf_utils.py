@@ -125,6 +125,11 @@ def prepare_program_cache_for_comparison(device) -> None:
 
 
 def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
+    # Filter 'device' from test_vector to avoid conflict with explicit device param
+    if "device" in test_vector:
+        test_vector = {k: v for k, v in test_vector.items() if k != "device"}
+    # Convert "__ABSENT__" sentinel values to None (missing columns in multi-config suites)
+    test_vector = {k: (None if v == "__ABSENT__" else v) for k, v in test_vector.items()}
     results = test_module.run(**test_vector, device=device)
     if isinstance(results, list):
         status, message = results[0]

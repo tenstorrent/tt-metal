@@ -14,6 +14,8 @@
 namespace ttnn::operations::experimental::ccl {
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(operation_attributes.axis.has_value(), "Cluster axis argument required");
+
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto scores_tensor = tensor_args.expert_scores_tensor;

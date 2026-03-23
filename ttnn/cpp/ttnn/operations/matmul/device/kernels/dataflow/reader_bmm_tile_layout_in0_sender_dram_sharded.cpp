@@ -14,22 +14,23 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(3);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(5);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(6);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(6);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(7);
     // block args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_dest_noc_start_x = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(9);
-    constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_mcast_dest_noc_start_x = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
     // in0 semaphore always valid
-    uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(12));
+    uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(13));
 
-    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
     // RUNTIME ARGS
@@ -102,6 +103,12 @@ void kernel_main() {
                     pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
                 }
             }
+            if constexpr (in0_last_ktile_h > 0) {
+                if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
+                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                }
+            }
 
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
@@ -139,6 +146,12 @@ void kernel_main() {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
                         auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                    }
+                }
+                if constexpr (in0_last_ktile_h > 0) {
+                    if (is_last_ktile_padded && (block == num_blocks - 1)) {
+                        auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
                     }
                 }
 #ifndef SKIP_MCAST

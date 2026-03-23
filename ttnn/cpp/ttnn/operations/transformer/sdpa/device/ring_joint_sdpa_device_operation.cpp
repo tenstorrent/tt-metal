@@ -16,6 +16,7 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -48,21 +49,30 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
-    TT_FATAL(
-        args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
-        "SDPA coregrid overlaps with AllGather coregrid");
+    const auto strategy = args.all_gather_operation_attributes.core_allocation_strategy;
+    if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
+        TT_FATAL(
+            args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
+            "SDPA coregrid overlaps with AllGather coregrid (column-major)");
+    } else {
+        TT_FATAL(
+            args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+            "SDPA coregrid overlaps with AllGather coregrid (row-major)");
+    }
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
     // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
-        TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+    if (!args.is_causal) {
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -91,10 +101,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    const auto NVH = v_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
+
+    auto q_chunk_size = args.get_q_chunk_size();
+    auto k_chunk_size = args.get_k_chunk_size();
+
+    TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
+
+    TT_FATAL(
+        !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
+        "q_chunk_size must divide half of local q seq_len in balanced case");
 
     TT_FATAL(
         k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
@@ -107,26 +127,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[0]);
 
     // Validate head dimensions match
-    TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-            joint_v_shape[3] == DH,
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        DH,
-        k_shape[3],
-        v_shape[3],
-        joint_q_shape[3],
-        joint_k_shape[3],
-        joint_v_shape[3]);
-
-    TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        NQH,
-        NKH,
-        v_shape[1],
-        joint_q_shape[1],
-        joint_k_shape[1],
-        joint_v_shape[1]);
+    if (!args.is_causal) {
+        TT_FATAL(
+            k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
+                joint_v_shape[3] == DH,
+            "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            DH,
+            k_shape[3],
+            v_shape[3],
+            joint_q_shape[3],
+            joint_k_shape[3],
+            joint_v_shape[3]);
+    } else {
+        TT_FATAL(
+            k_shape[3] == DH && joint_k_shape[3] == DH,
+            "Q/K head dimensions must match. Got Q: {}, K: {}",
+            DH,
+            k_shape[3]);
+    }
 
     TT_FATAL(
         v_shape[2] == N_global,
@@ -177,11 +195,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(NQH == NKH, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", NQH, NKH);
+    TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
+    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided
-    auto q_chunk_size = args.get_q_chunk_size();
-    auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
@@ -218,32 +235,35 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
-    auto lse_shape = input.logical_shape();
-    lse_shape[3] = 1;
-    lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
+    auto stats_shape = input.logical_shape();
+    stats_shape[3] = 1;
+    // 2× the sequence length: first half stores running max, second half stores running sum.
+    // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
+    stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
+
+    auto out_shape = input.logical_shape();
+    // head dim as v head dim
+    out_shape[3] = tensor_args.input_v.logical_shape()[3];
 
     return {
-        .output = TensorSpec(
-            input.logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        .joint_output = TensorSpec(
+        TensorSpec(out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        .lse_output = TensorSpec(
-            lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
-        .output = create_device_tensor(output_specs.output, tensor_args.input_q.device()),
-        .joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.device()),
-        .lse_output = create_device_tensor(output_specs.lse_output, tensor_args.input_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.joint_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
-tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
@@ -259,6 +279,8 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         input_tensors,
         args.joint_strategy,
         args.scale,
+        args.is_causal,
+        args.is_balanced,
         args.logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -267,6 +289,56 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
             args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
     );
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
+    Tensors input_tensors = {
+        tensor_args.input_q,
+        tensor_args.input_k,
+        tensor_args.input_v,
+        tensor_args.joint_q,
+        tensor_args.joint_k,
+        tensor_args.joint_v,
+        tensor_args.gathered_k,
+        tensor_args.gathered_v};
+
+    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
+
+    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+        log_warning(tt::LogOp, "RingJointSDPA perf model does not support arch '{}'", enchantum::to_string(arch));
+        return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, 0);
+    }
+
+    const auto& q_shape = tensor_args.input_q.logical_shape();
+    const auto& gathered_k_shape = tensor_args.gathered_k.logical_shape();
+    const auto& v_shape = tensor_args.gathered_v.logical_shape();
+    const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
+
+    CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                     : output_tensor.device()->compute_with_storage_grid_size();
+    MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+
+    const uint32_t B = q_shape[0];
+    const uint32_t NQH = q_shape[1];
+    const uint32_t N_local = q_shape[2];
+    const uint32_t N_global = gathered_k_shape[2];
+    const uint32_t L = joint_q_shape[2];
+    const uint32_t DH = q_shape[3];
+    const uint32_t DV = v_shape[3];
+
+    // RingJointSDPA: local Q and joint Q attend to (gathered K + joint K)
+    // Total Q dimension: N_local + L, Total K dimension: N_global + L
+    const uint32_t cat_Sq = N_local + L;
+    const uint32_t cat_Sk = N_global + L;
+
+    // Single attention pass over concatenated dimensions, non-causal
+    int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
+        B, NQH, cat_Sq, cat_Sk, DH, DV, false, fidelity, grid.x * grid.y);
+
+    return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
 }  // namespace ttnn::prim
@@ -293,8 +365,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::Topology topology,
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const bool is_causal,
+    const bool is_balanced,
     const std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -328,13 +403,16 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         topology,
         multi_device_global_semaphore,
         subdevice_id,
-        cluster_axis};
+        cluster_axis,
+        core_allocation_strategy};
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         {input_tensor_k, input_tensor_v}, {persistent_output_buffer_k, persistent_output_buffer_v}};
 
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
         scale,
+        is_causal,
+        is_balanced,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

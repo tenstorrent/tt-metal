@@ -210,7 +210,7 @@ private:
         page_offset_within_shard += dspec.shard_strides()[dspec.rank() - 1];
 
         // Update NOC address and bank offset
-        current_noc_addr += accessor.page_size;
+        current_noc_addr += accessor.get_aligned_page_size();
         current_page_mapping.bank_page_offset++;
     }
 

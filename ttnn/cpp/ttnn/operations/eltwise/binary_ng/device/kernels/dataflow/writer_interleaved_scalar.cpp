@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -25,8 +28,12 @@ void kernel_main() {
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
     constexpr uint32_t onetile = 1;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_src(cb_id_src);
+    experimental::CircularBuffer cb_dst(cb_id_dst);
+
     // we only need to fill a tile with the scalar value once
-    cb_reserve_back(cb_id_src, onetile);
+    cb_src.reserve_back(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
     const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
     FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
@@ -34,7 +41,7 @@ void kernel_main() {
 #ifdef FILL_WITH_VALUE
     FILL_WITH_VALUE(cb_id_src, packed_scalar);
 #endif
-    cb_push_back(cb_id_src, onetile);
+    cb_src.push_back(onetile);
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
@@ -68,11 +75,11 @@ void kernel_main() {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
                              ++tw, ++num_tiles_written) {
                             // write a tile to dst
-                            cb_wait_front(cb_id_dst, onetile);
-                            uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_page(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_id_dst, onetile);
+                            cb_dst.wait_front(onetile);
+                            noc.async_write(
+                                cb_dst, dst, dst_tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
+                            noc.async_write_barrier();
+                            cb_dst.pop_front(onetile);
                         }
                         if constexpr (has_sharding) {
                             // adjust the output tile offset since we had to skip parts of the row

@@ -17,6 +17,7 @@ from tt_lib.utils import (
     is_close,
 )
 from models.common.utility_functions import is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def rmsnorm(x, gamma, beta, eps):

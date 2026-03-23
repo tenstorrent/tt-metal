@@ -4,11 +4,12 @@
 
 #include "embedding_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/embedding/embedding.hpp"
+#include "ttnn/operations/embedding_backward/embedding_backward.hpp"
 
 namespace ttml::ops {
 
@@ -35,8 +36,7 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
         weight->add_grad(weight_grad);
     };
 
-    auto links = autograd::get_links(weight);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor));
     return out;
 }
 

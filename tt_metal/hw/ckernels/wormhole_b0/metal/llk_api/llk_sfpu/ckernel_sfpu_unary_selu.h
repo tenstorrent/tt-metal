@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -23,7 +23,7 @@ inline void calculate_selu(uint scale, uint alpha) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v >= 0.0f) { sfpi::dst_reg[0] = v * scale_value; }
         v_else {
-            sfpi::vFloat exp_calc = _sfpu_exp_21f_<true>(
+            sfpi::vFloat exp_calc = _sfpu_exp_21f_bf16_<true>(
                 v);  // is_fp32_dest_acc_en set to true to avoid rounding as it has to be done at the end of operation
             sfpi::vFloat minus_mul = exp_calc - sfpi::vConst1;
             sfpi::vFloat result = minus_mul * alpha_value * scale_value;

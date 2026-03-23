@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
-// arrived at (atleast one of) the intended destination(s)
+// arrived at (at least one of) the intended destination(s)
 static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
@@ -121,16 +121,18 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
-// Since we unicast to local, we must omit the packet header
-// This function only does reads, and within scope there are no modifications to the packet header
+// Core implementation of unicast-to-local-chip dispatch.
+// Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
+// when the caller has already loaded these (e.g. via a packed 4B load).
 __attribute__((optimize("jump-tables")))
 #ifndef FABRIC_2D
 FORCE_INLINE
 #endif
     void
-    execute_chip_unicast_to_local_chip(
+    execute_chip_unicast_to_local_chip_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
         uint16_t payload_size_bytes,
+        tt::tt_fabric::NocSendType noc_send_type,
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
     const auto& header = *packet_start;
@@ -138,7 +140,6 @@ FORCE_INLINE
 
     constexpr bool update_counter = false;
 
-    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -296,6 +297,25 @@ FORCE_INLINE
             ASSERT(false);
         } break;
     };
+}
+
+// Wrapper that resolves noc_send_type from the packet header via a packed 4B load
+// (payload_size_bytes + noc_send_type in one read), then delegates to the core implementation.
+// The caller-provided payload_size_bytes is still used (not the packed copy) to preserve
+// existing call-site semantics.
+__attribute__((optimize("jump-tables")))
+#ifndef FABRIC_2D
+FORCE_INLINE
+#endif
+    void
+    execute_chip_unicast_to_local_chip(
+        tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+        uint16_t payload_size_bytes,
+        uint32_t transaction_id,
+        uint8_t rx_channel_id) {
+    auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+    execute_chip_unicast_to_local_chip_impl(
+        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
 }
 
 // Forward packet to local relay in UDM mode

@@ -6,8 +6,9 @@
 
 #include "device/fold_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_fold {
-Tensor MorehFold::invoke(
+namespace ttnn {
+
+Tensor moreh_fold(
     const Tensor& input,
     const std::optional<Tensor>& output,
     const std::vector<uint32_t>& output_size,
@@ -19,4 +20,4 @@ Tensor MorehFold::invoke(
     return ttnn::prim::moreh_fold(input, output, output_size, kernel_size, dilation, padding, stride, memory_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_fold
+}  // namespace ttnn

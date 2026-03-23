@@ -15,6 +15,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 
 namespace ttnn {
 
@@ -79,7 +80,7 @@ struct unique_string {
 };
 
 // Helper struct template - each unique operation name creates a unique type
-template <unique_string Name>
+template <unique_string Name, unique_string Namespace = unique_string{"ttnn."}>
 struct unique_wrapper_base {
     std::string name_;
     std::string py_name_;
@@ -109,7 +110,7 @@ template <unique_string FuncName, unique_string Namespace = unique_string{"ttnn.
 void bind_function(nb::module_& mod, const char* doc, Overloads&&... overloads) {
     // Create a unique wrapper type using the operation name
     // Each operation name creates a distinct type, ensuring uniqueness across TUs
-    using wrapper_t = unique_wrapper_base<FuncName>;
+    using wrapper_t = unique_wrapper_base<FuncName, Namespace>;
 
     std::string class_name = std::string(FuncName) + "_t";
     std::string python_fully_qualified_name = std::string(Namespace) + std::string(FuncName);

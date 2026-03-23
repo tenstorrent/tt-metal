@@ -84,7 +84,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto inter_shape = input_tensor.logical_shape();
+    auto inter_shape = input_tensor.padded_shape();
 
     MemoryConfig adjusted_intermediate_mem_config,
         intermediate_mem_config =
@@ -139,7 +139,7 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
     return {intermediate_buffer, output_buffer};
 }
 
-tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");
 

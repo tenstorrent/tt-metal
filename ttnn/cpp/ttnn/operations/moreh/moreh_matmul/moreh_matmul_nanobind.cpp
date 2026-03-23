@@ -10,24 +10,24 @@
 #include <nanobind/stl/optional.h>
 
 #include "moreh_matmul.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
 void bind_moreh_matmul_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_matmul">(
         mod,
-        ttnn::moreh_matmul,
         "Moreh Matmul Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_matmul,
             nb::arg("input").noconvert(),
             nb::arg("other").noconvert(),
             nb::kw_only(),
-            nb::arg("transpose_input").noconvert() = false,
-            nb::arg("transpose_other").noconvert() = false,
-            nb::arg("output").noconvert() = nb::none(),
-            nb::arg("bias").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("transpose_input") = false,
+            nb::arg("transpose_other") = false,
+            nb::arg("output") = nb::none(),
+            nb::arg("bias") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul

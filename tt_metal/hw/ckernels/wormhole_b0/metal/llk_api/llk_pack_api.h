@@ -37,6 +37,8 @@ inline void llk_pack_mop_config(const uint32_t output) {
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
+inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -160,7 +162,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     LLK_ASSERT(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id))),
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
         "");
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
@@ -215,12 +217,12 @@ inline void llk_pack_untilize(
             (block_c_index * ((num_faces > 2) ? num_faces / 2 : num_faces) * block_ct_dim * FACE_C_DIM)) /
             16;
 
-    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        LLK_ASSERT(
-            (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-                pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
-            "");
+    LLK_ASSERT(
+        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
+        "");
 
+    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, 4, block_rt * block_ct_dim + tile_dst_rt_offset);
 
@@ -234,18 +236,15 @@ inline void llk_matmul_pack(
     std::uint8_t output_id = get_output_id(output);
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+    LLK_ASSERT(
+        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output))),
+        "");
+    LLK_ASSERT(((start_tile_index + ntiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        LLK_ASSERT((tile_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
-
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
-
-        LLK_ASSERT(
-            (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-                pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output_id))),
-            "");
-
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
 }
@@ -318,7 +317,7 @@ inline void llk_pack_fast_tilize_init(
 
     LLK_ASSERT(
         (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-            pack_src_format[input_id], pack_dst_format[output_id])),
+            pack_src_format[output_id], pack_dst_format[output_id])),
         "");
 
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);

@@ -13,9 +13,10 @@
 #include "ttnn/operations/full/full.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
+using namespace ttnn::operations::ccl;
 
-ttnn::Tensor ExecuteAllToAllCombine::invoke(
+ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
@@ -84,4 +85,4 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         shard_dim);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

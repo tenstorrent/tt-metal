@@ -13,6 +13,7 @@
 #include <numa.h>
 #include <tt-metalium/device.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -31,12 +32,13 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
     return cpu_cores_per_numa_node;
 }
 
-bool balanced_physical_device_numa() {
+bool balanced_physical_device_numa(ContextId context_id) {
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
-        for (auto device_id : MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            auto numa_node_for_device = MetalContext::instance().get_cluster().get_numa_node_for_device(device_id);
+        for (auto device_id : MetalContext::instance(context_id).get_cluster().user_exposed_chip_ids()) {
+            auto numa_node_for_device =
+                MetalContext::instance(context_id).get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }
         return numa_nodes_for_cluster.size() == num_nodes;
@@ -44,20 +46,28 @@ bool balanced_physical_device_numa() {
     return false;
 }
 
-uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
+uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < MetalContext::instance().get_cluster().number_of_devices() &&
-        !tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    if (physical_device_id < MetalContext::instance(context_id).get_cluster().number_of_devices() &&
+        !tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_simulator_enabled()) {
         // If the cluster uses all NUMA nodes, assign worker threads to CPU cores based
         // on the NUMA layout. If not, balance the worker threads across all NUMA Nodes/
         // CPU cores to minimize resource contention.
-        static bool devices_balanced_across_numa_nodes = balanced_physical_device_numa();
-        numa_node = devices_balanced_across_numa_nodes
-                        ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
+        static std::unordered_map<uint64_t, bool> balanced_cache;
+        auto& cluster = MetalContext::instance(context_id).get_cluster();
+        uint64_t cache_key = static_cast<uint64_t>(cluster.arch()) |
+                             (static_cast<uint64_t>(cluster.get_target_device_type()) << 8) |
+                             (static_cast<uint64_t>(cluster.number_of_devices()) << 16);
+        auto [it, inserted] = balanced_cache.try_emplace(cache_key, false);
+        if (inserted) {
+            it->second = balanced_physical_device_numa(context_id);
+        }
+        numa_node = it->second
+                        ? MetalContext::instance(context_id).get_cluster().get_numa_node_for_device(physical_device_id)
                         : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.contains(numa_node)) {
@@ -164,7 +174,7 @@ private:
 // Contains:
 //  1. A TaskQueue where tasks can be submitted by the user, to be asynchronously executed
 //  2. A worker thread to asynchronously execute tasks
-//  3. Primitves to synchronize the application and worker thread
+//  3. Primitives to synchronize the application and worker thread
 // Usage:
 // This executor should only be used to asynchronously process tasks for a specific TT-Device
 // (specified through the physical_device_id constructor argument).
@@ -174,7 +184,7 @@ private:
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(uint32_t physical_device_id) {
+    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
@@ -215,7 +225,7 @@ public:
             }
         });
 
-        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(physical_device_id);
+        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
 
@@ -279,23 +289,24 @@ using threading_primitives::NumaAwareExecutor;
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
 public:
-    // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
+    // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
-    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
+    // All physical devices must belong to the same context ID.
+    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id()));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id()));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
-    DeviceBoundThreadPool(uint32_t thread_count) : num_workers_(thread_count) {
+    DeviceBoundThreadPool(ContextId context_id, uint32_t thread_count) : num_workers_(thread_count) {
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i));
             phys_device_to_thread_id_[i] = i;
         }
     }
@@ -349,16 +360,16 @@ public:
 
 }  // namespace thread_pool_impls
 
-std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(num_threads);
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id, int num_threads) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, num_threads);
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(physical_devices);
+    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
 }
 
-std::shared_ptr<ThreadPool> create_passthrough_thread_pool() {
+std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
     return std::make_shared<thread_pool_impls::PassThroughThreadPool>();
 }
 

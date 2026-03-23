@@ -9,7 +9,8 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -30,7 +31,11 @@ public:
     DispatchQueryManager& operator=(DispatchQueryManager&& other) noexcept = delete;
     DispatchQueryManager(const DispatchQueryManager&) = delete;
     DispatchQueryManager(DispatchQueryManager&& other) noexcept = delete;
-    DispatchQueryManager(uint8_t num_hw_cqs);
+    DispatchQueryManager(
+        MetalEnv& env,
+        dispatch_core_manager& core_manager,
+        DispatchCoreConfig& dispatch_core_config,
+        uint8_t num_hw_cqs);
 
     // dispatch_s related queries
     bool dispatch_s_enabled() const;
@@ -42,8 +47,10 @@ public:
     tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
 
 private:
-    void reset(uint8_t num_hw_cqs);
+    void reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
+    MetalEnv& env_;
+    dispatch_core_manager& core_manager_;
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;
     NOC go_signal_noc_ = NOC::NOC_0;

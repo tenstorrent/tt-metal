@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>

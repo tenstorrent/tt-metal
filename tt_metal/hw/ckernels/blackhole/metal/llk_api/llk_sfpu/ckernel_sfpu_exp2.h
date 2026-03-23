@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "sfpu/ckernel_sfpu_exp2.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
 
@@ -18,9 +18,9 @@ inline void calculate_exp2() {
         sfpi::vFloat result;
 
         if constexpr (is_fp32_dest_acc_en) {
-            result = _sfpu_exp_f32_accurate_(v);
+            result = _sfpu_exp_fp32_accurate_(v);
         } else {
-            result = _sfpu_exp_21f_<true>(v);
+            result = _sfpu_exp_21f_bf16_<true>(v);
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }
 

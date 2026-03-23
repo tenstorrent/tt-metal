@@ -79,7 +79,7 @@ Intermediate Usage
 **Step 4: Single-core Matrix Multiplication**
     Implement a :ref:`Single-core Matrix Multiplication Kernel<MatMul_Single_Core example>` that performs matrix multiplication using the matrix engine. This will help you understand how to handle complex dataflow and computations on the Tensix core.
 
-    **What you'll learn:** Complex dataflow, tilized operatins and using the matrix engine for matrix multiplication.
+    **What you'll learn:** Complex dataflow, tilized operations and using the matrix engine for matrix multiplication.
 
 Advanced Usage
 ^^^^^^^^^^^^^^
@@ -90,7 +90,7 @@ Advanced Usage
     **What you'll learn:** Parallel processing and splitting workloads across multiple cores.
 
 **Step 6: Optimized Multi-core Matrix Multiplication**
-    :ref:`Optimize the multi-core matrix multiplication<MatMul_Multi_Core_example>` kernel by implementing exploting the grid structure of the processor. Avoid redundant reads from DRAM and avoid NoC congestion by reading with one core and broadcasting the data to other cores. This will help you understand how to optimize performance by minimizing unneeded data movement and maximizing data reuse.
+    :ref:`Optimize the multi-core matrix multiplication<MatMul_Multi_Core_example>` kernel by exploiting the grid structure of the processor. Avoid redundant reads from DRAM and avoid NoC congestion by reading with one core and broadcasting the data to other cores. This will help you understand how to optimize performance by minimizing unneeded data movement and maximizing data reuse.
 
     **What you'll learn:** Performance optimization techniques for high-performance kernels.
 

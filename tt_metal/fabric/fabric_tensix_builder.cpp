@@ -11,6 +11,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
 #include "llrt/core_descriptor.hpp"
 #include "impl/device/device_manager.hpp"
 #include "fabric_context.hpp"
@@ -179,7 +180,7 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
 }
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    // Initialize channel mappings and configurations, skipping the rest initialization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
     }
@@ -302,9 +303,11 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     auto num_hw_cqs = tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     tt_metal::DispatchCoreConfig dispatch_core_config =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    logical_fabric_mux_cores_ = tt::get_logical_fabric_mux_cores(device_id, num_hw_cqs, dispatch_core_config);
+
+    tt_metal::MetalEnvImpl& env_impl = tt_metal::MetalEnvAccessor(tt_metal::MetalContext::instance().get_env()).impl();
+    logical_fabric_mux_cores_ = tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
     // TODO: once we merge the mux cores from dispatch to fabric, we can remove this.
-    logical_dispatch_mux_cores_ = tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config);
+    logical_dispatch_mux_cores_ = tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
 
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 

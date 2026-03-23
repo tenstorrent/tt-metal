@@ -15,7 +15,16 @@ from .module import Module, Parameter
 
 
 class RMSNorm(Module):
-    def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
+    def __init__(
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        dtype=ttnn.bfloat16,
+        fused_activation=None,
+    ):
         super().__init__()
 
         # https://github.com/tenstorrent/tt-metal/issues/31216
@@ -26,21 +35,23 @@ class RMSNorm(Module):
         self.norm_elementwise_affine = norm_elementwise_affine
         self.mesh_device = mesh_device
         self.use_bias = norm_elementwise_affine and bias
+        self.fused_activation = fused_activation
 
         if norm_elementwise_affine:
-            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device)
-            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device) if bias else None
+            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype)
+            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype) if bias else None
         else:
             self.weight = None
             self.bias = None
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
-        return ttnn.rms_norm(
+        return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config,
+            activation=self.fused_activation,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -362,7 +373,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to overrride the num_out_blocks computed based on the input shape.
+    }  # used to override the num_out_blocks computed based on the input shape.
 
     def __init__(
         self,

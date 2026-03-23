@@ -11,6 +11,8 @@
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
+// TODO: For Quasar, this range would need to be expanded if we need to write into uncached L1
+// (>= MEM_L1_UNCACHED_BASE) from host, probably by baking the existence of uncached memory into HAL.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
@@ -146,9 +148,22 @@ inline void watcher_sanitize_host_noc_multicast_write(
     const CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
-    if (core_start.x > core_end.x || core_start.y > core_end.y) {
+    // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start,
+    // but only for Tensix cores. DRAM/PCIe/Eth cores don't support wrap-around.
+    bool has_noc_torus =
+        (tt::tt_metal::MetalContext::instance().hal().get_noc_topology() == tt::tt_metal::NoCTopologyType::TORUS);
+    bool is_tensix_multicast = (coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_start) ||
+                                coord_found_p(virtual_worker_cores, core_start)) &&
+                               (coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_end) ||
+                                coord_found_p(virtual_worker_cores, core_end));
+
+    // Allow wrap-around only for Tensix cores on torus architectures
+    bool allow_wrap_around = has_noc_torus && is_tensix_multicast;
+
+    if (!allow_wrap_around && (core_start.x > core_end.x || core_start.y > core_end.y)) {
         TT_THROW(
-            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y",
+            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y (multicast "
+            "invalid range)",
             core_start.str(),
             core_end.str());
     }

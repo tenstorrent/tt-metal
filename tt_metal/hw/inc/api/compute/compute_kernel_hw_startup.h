@@ -71,4 +71,52 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
 #endif  // TODO: AM; add Quasar implementation
 }
 
+// clang-format off
+/**
+ * Enables FP32 accumulation in the destination register.
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
+ * for 32-bit destination reads. This is a lightweight, standalone
+ * reconfiguration that is safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup.
+ *
+ * Must be paired with disable_fp32_dest_acc() when switching back to
+ * BF16 accumulation mode within the same kernel.
+ *
+ * Only available on Wormhole and Blackhole (no-op on Quasar).
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void enable_fp32_dest_acc() {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_set_fp32_dest_acc(true)));
+    PACK((llk_pack_set_fp32_dest_acc(true)));
+#endif
+}
+
+// clang-format off
+/**
+ * Disables FP32 accumulation in the destination register, reverting to
+ * BF16 accumulation mode.
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
+ * to disable 32-bit destination reads. This is a lightweight, standalone
+ * reconfiguration that is safe to call mid-kernel without re-running
+ * compute_kernel_hw_startup.
+ *
+ * Only available on Wormhole and Blackhole (no-op on Quasar).
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void disable_fp32_dest_acc() {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_set_fp32_dest_acc(false)));
+    PACK((llk_pack_set_fp32_dest_acc(false)));
+#endif
+}
+
 }  // namespace ckernel

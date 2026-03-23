@@ -18,9 +18,11 @@ on:
           - whisper
           - llama3.1-8b
           - unet-shallow
+          - stable_diffusion_xl
           - llama3.3-70b
           - qwen3-32b
           - flux.1-dev
+          - mochi
           - wan2.2-t2v-a14b
       system-type:
         description: 'Select system type to test'
@@ -30,6 +32,7 @@ on:
         options:
           - all
           - P150 (1xP150)
+          - P150 CIv2 (1xP150)
           - Quietbox (4xP150)
           - DeskBox (2xP150)
           - LoudBox (8xP150)
@@ -104,12 +107,14 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 (1xP150)", "runner-label": "P150", "extra-tag": "pipeline-perf", "num_devices": 1, "key": "p150"},
-            {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
-            {"name": "DeskBox (2xP150)", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150)", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
-            {"name": "P300 (1xP300)", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
-            {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
+            {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
+            {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
+            {"name": "P150 CIv2 (1xP150)", "weights-cache-mode": "lfc", "num_devices": 1, "sku": "bh_p150b_civ2"},
+            {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
+            {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
+            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
+            {"name": "P300 (1xP300)", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
+            {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="${{ inputs.system-type || 'all' }}"
@@ -145,11 +150,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
+      enabled-skus: ${{ matrix.test-group.sku }}
+      weights-cache-mode: ${{ matrix.test-group.weights-cache-mode }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
       model: ${{ inputs.model || 'all' }}

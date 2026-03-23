@@ -335,7 +335,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
@@ -359,19 +360,39 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     for (const auto& cr : available_cores.ranges()) {
         auto start = cr.start_coord;
         auto end = cr.end_coord;
-        for (size_t y = start.y; y <= end.y; y++) {
+
+        if (strategy == CoreAllocationStrategy::COL_MAJOR) {
+            // Column-major allocation: fill columns first (outer loop x, inner loop y)
             for (size_t x = start.x; x <= end.x; x++) {
-                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                for (size_t y = start.y; y <= end.y; y++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
             }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
+        } else {
+            // Row-major allocation: fill rows first (outer loop y, inner loop x) - default behavior
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
             }
         }
+
         if (sender_worker_core_range.num_cores() == num_workers_preferred) {
             break;
         }
@@ -940,6 +961,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
             }
         }
 
+        TT_ASSERT(min_num_workers_per_row > 0);
         const uint32_t min_workers_row_min_cols_per_worker = tensor_slice_shape_in_tiles.x / min_num_workers_per_row;
         const uint32_t min_workers_row_max_col_worker_count = tensor_slice_shape_in_tiles.x % min_num_workers_per_row;
         const uint32_t min_workers_row_max_cols_per_worker = min_workers_row_max_col_worker_count != 0
@@ -1675,8 +1697,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
-void validate_fabric_2d_dynamic_config(Topology topology) {
-    TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+void validate_fabric_2d_dynamic_config() {
     auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
     TT_FATAL(
         physical_mesh_shapes.size() == 1,
@@ -1719,7 +1740,6 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 }
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
-    Topology topology,
     const MeshCoordinate& /*src_device_coord*/,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1728,8 +1748,8 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
@@ -1777,7 +1797,6 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 }
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology,
     const MeshCoordinate& src_device_coord,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1790,8 +1809,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,

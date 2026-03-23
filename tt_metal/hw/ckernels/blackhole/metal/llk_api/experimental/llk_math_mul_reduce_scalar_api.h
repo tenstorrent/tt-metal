@@ -15,20 +15,20 @@ template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar_init(
     const std::uint32_t operand_A, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     _llk_math_eltwise_binary_init_<
         EltwiseBinaryType::ELWMUL,
         BroadcastType::NONE,
         math_fidelity,
-        EltwiseBinaryReuseDestType::NONE>(num_faces, acc_to_dest);
+        EltwiseBinaryReuseDestType::NONE>(tensor_shape, acc_to_dest);
 }
 
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar(
     uint dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t operand_id = get_operand_id(icb0);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     _llk_math_eltwise_binary_<
         EltwiseBinaryType::ELWMUL,
@@ -36,7 +36,7 @@ inline void llk_math_eltwise_mul_reduce_scalar(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         math_fidelity,
-        EltwiseBinaryReuseDestType::NONE>(num_faces, dst_index, clear_fp32_dst_acc);
+        EltwiseBinaryReuseDestType::NONE>(tensor_shape, dst_index, clear_fp32_dst_acc);
 }
 
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>

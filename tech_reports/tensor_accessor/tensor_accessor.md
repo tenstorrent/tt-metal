@@ -44,7 +44,7 @@ You can configure which parts of the accessor arguments are passed through runti
 
 These flags can be combined with bitwise OR (|) to specify multiple runtime parameters.
 
-There is one important limitation: In case size of container (rank/num_banks) is runtime argument, then values of containers (tensor_shape/shard_shape/bank_coords) must also be runtime arguments. The reason is that all compile-time indecies must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
+There is one important limitation: In case size of container (rank/num_banks) is runtime argument, then values of containers (tensor_shape/shard_shape/bank_coords) must also be runtime arguments. The reason is that all compile-time indices must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
 
 ## Device-Side Usage
 **Creating an Accessor**
@@ -66,7 +66,9 @@ constexpr uint32_t new_base_idx_cta = args.next_compile_time_args_offset();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
 uint32_t new_base_idx_crta = args.next_common_runtime_args_offset();
 
-// Create a TensorAccessor with runtime page size
+// Option 1 (preferred, less error-prone): Using default tensor buffer's aligned_page_size to create a TensorAccessor
+auto tensor_accessor = TensorAccessor(args, bank_base_address);
+// Option 2: Create a TensorAccessor with custom runtime page size passed in as the 3rd argument
 auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);
 ```
 
@@ -170,7 +172,7 @@ bool is_local = tensor_accessor.is_local_page(page_id);
 bool is_local = tensor_accessor.is_local_shard(shard_id);
 ```
 
-Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
+Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwise `Span<uint32_t>`
 
 ## Tensor Accessor iterators
 You can use TensorAccessor iterators to speed up and/or simplify iteration over pages in a tensor.

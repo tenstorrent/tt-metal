@@ -49,34 +49,96 @@ def load_attention_weights(
     Returns:
         AttentionWeights container with all loaded weights
     """
-    # Extract projection weights from state dict
-    q_proj_weight = substate(state_dict, "q_proj")["weight"]  # [num_heads * head_dim, hidden_size]
-    k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
-    v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
-    o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
-    o_proj_bias = substate(state_dict, "o_proj")["bias"]
+    # Compute o_proj padding size based on config/mesh (independent of state_dict)
+    hidden_size = config.hidden_size
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
+    o_proj_pad_size = padded_local_hidden - local_hidden
+    o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
 
-    # Create fused QKV weight
-    # Split Q, K, V across devices, then concatenate per device
-    qkv_list = []
-    for i in range(mesh_config.tp):
-        # Chunk weights across tensor parallel dimension
-        wq_selected = torch.chunk(q_proj_weight, mesh_config.tp, dim=0)[i]
-        wk_selected = torch.chunk(k_proj_weight, mesh_config.tp, dim=0)[i]
-        wv_selected = torch.chunk(v_proj_weight, mesh_config.tp, dim=0)[i]
+    if state_dict:
+        # Extract projection weights from state dict
+        q_proj_weight = substate(state_dict, "q_proj")["weight"]  # [num_heads * head_dim, hidden_size]
+        k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
+        v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
-        # Transpose for matmul: [hidden_size, local_dim]
-        wq = wq_selected.transpose(-2, -1)
-        wk = wk_selected.transpose(-2, -1)
-        wv = wv_selected.transpose(-2, -1)
+        o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
+        o_proj_bias = substate(state_dict, "o_proj")["bias"]
 
-        # Concatenate Q, K, V: [hidden_size, local_q_dim + local_k_dim + local_v_dim]
-        qkv = torch.cat([wq, wk, wv], dim=-1)
-        qkv_list.append(qkv)
+        # Create fused QKV weight
+        # Split Q, K, V across devices, then concatenate per device
+        qkv_list = []
+        for i in range(mesh_config.tp):
+            # Chunk weights across tensor parallel dimension
+            wq_selected = torch.chunk(q_proj_weight, mesh_config.tp, dim=0)[i]
+            wk_selected = torch.chunk(k_proj_weight, mesh_config.tp, dim=0)[i]
+            wv_selected = torch.chunk(v_proj_weight, mesh_config.tp, dim=0)[i]
 
-    # Concatenate across devices: [hidden_size, total_qkv_dim]
-    qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
+            # Transpose for matmul: [hidden_size, local_dim]
+            wq = wq_selected.transpose(-2, -1)
+            wk = wk_selected.transpose(-2, -1)
+            wv = wv_selected.transpose(-2, -1)
+
+            # Concatenate Q, K, V: [hidden_size, local_q_dim + local_k_dim + local_v_dim]
+            qkv = torch.cat([wq, wk, wv], dim=-1)
+            qkv_list.append(qkv)
+
+        # Concatenate across devices: [hidden_size, total_qkv_dim]
+        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
+
+        # Handle biases - create fused QKV bias
+        q_proj_bias = substate(state_dict, "q_proj")["bias"]
+        k_proj_bias = substate(state_dict, "k_proj")["bias"]
+        v_proj_bias = substate(state_dict, "v_proj")["bias"]
+
+        qkv_bias_list = []
+        for i in range(mesh_config.tp):
+            q_bias_selected = torch.chunk(q_proj_bias, mesh_config.tp, dim=0)[i]
+            k_bias_selected = torch.chunk(k_proj_bias, mesh_config.tp, dim=0)[i]
+            v_bias_selected = torch.chunk(v_proj_bias, mesh_config.tp, dim=0)[i]
+            qkv_bias = torch.cat([q_bias_selected, k_bias_selected, v_bias_selected], dim=-1)
+            qkv_bias_list.append(qkv_bias)
+
+        qkv_bias_cat = torch.cat(qkv_bias_list, dim=-1)  # [total_qkv_dim]
+
+        # Attention sinks (GPT-OSS specific feature)
+        #
+        # IMPORTANT: TT SDPA kernels apply `scale` inside the exp path for BOTH QK and sinks.
+        # HF GPT-OSS behavior is: QK logits are scaled, sinks are NOT additionally scaled.
+        # To match HF, we provide sinks in "pre-divided" form: sink_input = sink / scale,
+        # so that the kernel's internal multiplication by `scale` yields the original sink values.
+        sinks = state_dict["sinks"].reshape(1, config.num_heads, 1, 1)
+        sinks_for_sdpa = sinks / config.scaling
+        decode_sinks = torch.nn.functional.pad(
+            sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
+        )
+        decode_sinks /= config.scaling
+
+        # Pad o_proj output dimension for tile alignment in CCL operations.
+        # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
+        # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
+        if o_proj_pad_size > 0 and mesh_config.tp > 1:
+            # Pad the output dimension of o_proj weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
+            # Each TP device's output goes from local_hidden to padded_local_hidden
+            padded_hidden = padded_local_hidden * mesh_config.tp
+            o_proj = torch.nn.functional.pad(o_proj, (0, padded_hidden - hidden_size), "constant", value=0.0)
+            # Pad bias similarly
+            o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padded_hidden - hidden_size), "constant", value=0.0)
+
+        if mesh_config.tp > 1:
+            o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
+
+        # Use unique cache key when padding is applied
+
+    else:
+        # If state_dict is not provided, create empty tensors for weights
+        qkv_cat = None
+        qkv_bias_cat = None
+        o_proj = None
+        o_proj_bias = None
+        decode_sinks = None
+        sinks_for_sdpa = None
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -93,21 +155,6 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Handle biases - create fused QKV bias
-    q_proj_bias = substate(state_dict, "q_proj")["bias"]
-    k_proj_bias = substate(state_dict, "k_proj")["bias"]
-    v_proj_bias = substate(state_dict, "v_proj")["bias"]
-
-    qkv_bias_list = []
-    for i in range(mesh_config.tp):
-        q_bias_selected = torch.chunk(q_proj_bias, mesh_config.tp, dim=0)[i]
-        k_bias_selected = torch.chunk(k_proj_bias, mesh_config.tp, dim=0)[i]
-        v_bias_selected = torch.chunk(v_proj_bias, mesh_config.tp, dim=0)[i]
-        qkv_bias = torch.cat([q_bias_selected, k_bias_selected, v_bias_selected], dim=-1)
-        qkv_bias_list.append(qkv_bias)
-
-    qkv_bias_cat = torch.cat(qkv_bias_list, dim=-1)  # [total_qkv_dim]
-
     wqkv_bias = ttnn.as_tensor(
         qkv_bias_cat,
         device=mesh_device,
@@ -118,41 +165,6 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Attention sinks (GPT-OSS specific feature)
-    #
-    # IMPORTANT: TT SDPA kernels apply `scale` inside the exp path for BOTH QK and sinks.
-    # HF GPT-OSS behavior is: QK logits are scaled, sinks are NOT additionally scaled.
-    # To match HF, we provide sinks in "pre-divided" form: sink_input = sink / scale,
-    # so that the kernel's internal multiplication by `scale` yields the original sink values.
-    sinks = state_dict["sinks"].reshape(1, config.num_heads, 1, 1)
-    sinks_for_sdpa = sinks / config.scaling
-    decode_sinks = torch.nn.functional.pad(
-        sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
-    )
-    decode_sinks /= config.scaling
-
-    # Output projection
-    # Pad o_proj output dimension for tile alignment in CCL operations.
-    # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
-    # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
-    hidden_size = config.hidden_size
-    local_hidden = hidden_size // mesh_config.tp
-    padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
-    o_proj_pad_size = padded_local_hidden - local_hidden
-
-    if o_proj_pad_size > 0 and mesh_config.tp > 1:
-        # Pad the output dimension of o_proj weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
-        # Each TP device's output goes from local_hidden to padded_local_hidden
-        padded_hidden = padded_local_hidden * mesh_config.tp
-        o_proj = torch.nn.functional.pad(o_proj, (0, padded_hidden - hidden_size), "constant", value=0.0)
-        # Pad bias similarly
-        o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padded_hidden - hidden_size), "constant", value=0.0)
-
-    if mesh_config.tp > 1:
-        o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
-
-    # Use unique cache key when padding is applied
-    o_proj_cache_suffix = f"_padded{padded_local_hidden}" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
     o_proj_tt = ttnn.as_tensor(
         o_proj,
         device=mesh_device,

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -244,7 +244,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     return output_tensors;
 }
 
-// static tt::stl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
+// static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
 //     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
 std::tuple<SparseMatmulDeviceOperation::operation_attributes_t, SparseMatmulDeviceOperation::tensor_args_t>

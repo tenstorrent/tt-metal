@@ -10,15 +10,18 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
+#include "context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
 
 class SubDeviceImpl {
 public:
     // Constructors for internal tt_metal/ use
-    explicit SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
-    explicit SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
-    explicit SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDeviceImpl(
+        tt::tt_metal::MetalEnvImpl* env, const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
+    explicit SubDeviceImpl(
+        tt::tt_metal::MetalEnvImpl* env, std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
+    explicit SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, tt::stl::Span<const CoreRangeSet> cores);
 
     // Copy/move semantics
     SubDeviceImpl(const SubDeviceImpl&) = default;
@@ -36,6 +39,7 @@ private:
     void validate() const;
 
     std::array<CoreRangeSet, NumHalProgrammableCoreTypes> cores_;
+    tt::tt_metal::MetalEnvImpl* env_;
 };
 
 }  // namespace tt::tt_metal

@@ -5,7 +5,6 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "dm_common.hpp"

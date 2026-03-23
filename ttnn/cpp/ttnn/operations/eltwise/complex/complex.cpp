@@ -30,7 +30,7 @@ const Tensor& get<1>(const ComplexTensor& complex) {
     return complex.imag();
 }
 
-ComplexTensor CreateComplexTensor::invoke(const Tensor& real, const Tensor& imag) {
+ComplexTensor complex_tensor(const Tensor& real, const Tensor& imag) {
     TT_ASSERT(real.padded_shape() == imag.padded_shape(), "Tensor shapes of real and imag should be identical");
     return ComplexTensor({real, imag});
 }

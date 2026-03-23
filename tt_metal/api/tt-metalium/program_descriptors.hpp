@@ -12,6 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
+// UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <bitset>
@@ -133,7 +134,7 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
-    std::optional<ttsl::hash::hash_t> custom_program_hash;
+    std::optional<std::uint64_t> custom_program_hash;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
@@ -153,9 +154,7 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 namespace std {
 template <>
 struct hash<tt::tt_metal::TileDescriptor> {
-    std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
-    }
+    std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept;
 };
 }  // namespace std
 

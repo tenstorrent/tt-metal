@@ -12,6 +12,7 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USERS_PER_ROW) -> torch.Tensor:
@@ -158,6 +159,23 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         assert (
             num_layers == self.hf_config.num_hidden_layers
         ), f"Number of layers {num_layers} does not match the number of layers in the model {self.hf_config.num_hidden_layers}"
+
+        if kv_cache_shape is not None:
+            block_size = int(kv_cache_shape[2])
+            max_num_blocks = int(kv_cache_shape[0])
+            if (
+                self.paged_config is None
+                or self.paged_config.block_size != block_size
+                or self.paged_config.max_num_blocks != max_num_blocks
+            ):
+                logger.info(
+                    "Aligning paged_config to vLLM kv_cache: block_size={} max_num_blocks={}",
+                    block_size,
+                    max_num_blocks,
+                )
+                self.paged_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+                self.page_tables_tt = None
+        self.kv_cache_shape = kv_cache_shape
 
         kv_cache_config = KvCacheConfig(kv_cache_shape=kv_cache_shape, dtype=dtype)
         self._prepare_run_configs("prefill", kv_cache_override=kv_cache_config)

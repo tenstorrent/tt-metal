@@ -21,9 +21,17 @@ Tokenizer (full‑model mode): expect one of `tokenizer.model`, `tokenizer.json`
 ### 1) Full model with local safetensors
 Use this when you have a local DeepSeek‑V3 model (config, tokenizer, and `.safetensors`).
 
+If you only have the original fp8 Hugging Face checkpoint, export a bf16 checkpoint first:
+
+```bash
+python models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py \
+  /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
+  --output-model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
+```
+
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
-export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
 # Where to store converted TTNN weights
 export DEEPSEEK_V3_CACHE=/proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers
 # What system type are we running on? (Can be TG, DUAL, QUAD)
@@ -41,7 +49,7 @@ Runs a minimal single‑layer pipeline with randomly initialized weights. This d
 
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
-export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
 # What system type are we running on? (Can be TG, DUAL, QUAD)
 export MESH_DEVICE=DUAL
 
@@ -70,6 +78,8 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
   - Full‑model mode requires tokenizer files and at least one `.safetensors` shard.
   - Random‑weights mode only requires `config.json`; tokenizer is optional.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32). Greedy decoding only.
+- `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
+- `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS.
 - `--cache-dir PATH`: Where to store converted TTNN weights and caches.
 - `--random-weights`: Use randomly initialized weights derived from the HF config (no safetensors).
 - `--single-layer {mlp,moe}`: With `--random-weights`, request a single‑layer run. `mlp` is supported; `moe` is not.
@@ -77,6 +87,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 ## Behavior and Output
 - The demo opens a mesh device based on specified system type (`TG`, `DUAL`, `QUAD`).
 - Prefill is emulated by iterating decode steps over the prompt before generating new tokens.
+- Output recording stops at EOS by default. Use `--no-stop-at-eos` for fixed-length stress or eval-style runs.
 - Prints the generated text between separators:
   ```
   ===== Generated =====
@@ -93,4 +104,4 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 
 ## Notes
 - Converted weights are cached under `--cache-dir/weights` to speed up subsequent runs.
-- This script focuses on decode and greedy sampling for simplicity; stopping at EOS, temperature/top‑k/p are not exposed here.
+- This script focuses on decode and greedy sampling for simplicity; stopping at EOS is exposed and enabled by default, while temperature/top‑k/p are not.

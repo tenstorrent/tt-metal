@@ -17,6 +17,7 @@
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -129,7 +130,7 @@ int main() {
     }
 #endif
 
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
     while (1) {
         WAYPOINT("W");
         while (*subordinate_erisc_run != RUN_SYNC_MSG_GO) {
@@ -158,6 +159,7 @@ int main() {
         record_stack_usage(stack_free);
 #endif
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_subordinate_erisc_completion();
     }

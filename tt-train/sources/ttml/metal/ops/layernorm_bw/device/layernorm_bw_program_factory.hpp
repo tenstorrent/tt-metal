@@ -11,10 +11,10 @@ namespace ttml::metal::ops::layernorm_bw::device {
 
 struct LayerNormBackwardProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle layernorm_bw_reader_kernel_id;
-        tt::tt_metal::KernelHandle layernorm_bw_writer_kernel_id;
-        tt::tt_metal::KernelHandle layernorm_bw_kernel_group_1_id;
-        tt::tt_metal::KernelHandle layernorm_bw_kernel_group_2_id;
+        tt::tt_metal::KernelHandle layernorm_bw_reader_kernel_id{};
+        tt::tt_metal::KernelHandle layernorm_bw_writer_kernel_id{};
+        tt::tt_metal::KernelHandle layernorm_bw_kernel_group_1_id{};
+        tt::tt_metal::KernelHandle layernorm_bw_kernel_group_2_id{};
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};

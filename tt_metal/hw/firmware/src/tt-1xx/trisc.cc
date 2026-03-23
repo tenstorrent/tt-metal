@@ -15,6 +15,7 @@
 #include "internal/debug/fw_debug.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #if !defined(UCK_CHLKC_MATH)
 #include "internal/circular_buffer_interface.h"
@@ -215,6 +216,7 @@ int main(int argc, char* argv[]) {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
         tensix_sync();

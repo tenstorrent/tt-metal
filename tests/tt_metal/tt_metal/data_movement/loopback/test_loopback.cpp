@@ -5,6 +5,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -78,14 +79,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         (uint32_t)test_config.test_id};
 
     // Kernels
-    auto sender_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
-        master_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = test_config.noc_id,
-            .compile_args = sender_compile_args});
+    KernelHandle sender_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        sender_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            master_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    } else {
+        sender_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            master_core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = test_config.noc_id,
+                .compile_args = sender_compile_args});
+    }
 
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);

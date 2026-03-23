@@ -38,25 +38,25 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
-    // High-level C++ functions (like ttnn::transpose) are not traced.
-    // Only device operations and low-level operations are captured.
-
     // operations[0]: PermuteDeviceOperation (device operation)
     const auto& operation0 = operations[0];
     EXPECT_EQ(operation0.operation_name, "PermuteDeviceOperation");
     EXPECT_EQ(operation0.arguments.size(), 2);
-    EXPECT_EQ(
-        operation0.arguments[0],
-        "[ unsupported type , "
-        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
-        "const>]");
-    EXPECT_EQ(
-        operation0.arguments[1],
-        "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, "
-        "std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]");
+
+    // arguments[0]: operation_attributes_t with permutation, memory config, padding value
+    EXPECT_TRUE(operation0.arguments[0].find("SmallVector([0, 2, 1, 3])") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("MemoryConfig(") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("TensorMemoryLayout::INTERLEAVED") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("BufferType::L1") != std::string::npos);
+
+    // arguments[1]: vector of input tensors with full tensor info
+    EXPECT_TRUE(operation0.arguments[1].find("Tensor(") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("Shape([1, 1, 2048, 512])") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("DataType::BFLOAT16") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("RowMajorPageConfig") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
     // Find tt::tt_metal::create_device_tensor operation (output tensor creation)
-    // Note: The index may vary, so we search by name
     auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
         return op.operation_name == "tt::tt_metal::create_device_tensor";
     });

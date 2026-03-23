@@ -6,20 +6,13 @@
 
 #include <optional>
 
-#include "ttnn/decorators.hpp"
-
-namespace ttnn::operations::data_movement {
-struct ExecuteTosaGather {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const Tensor& input_index_tensor,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
-};
-}  // namespace ttnn::operations::data_movement
+#include "ttnn/types.hpp"
 
 namespace ttnn::tosa {
 
-constexpr auto gather =
-    ttnn::register_operation<"ttnn::tosa_gather", ttnn::operations::data_movement::ExecuteTosaGather>();
+Tensor gather(
+    const Tensor& input_tensor,
+    const Tensor& input_index_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn::tosa

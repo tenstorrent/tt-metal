@@ -490,4 +490,258 @@ TEST_F(TensorDistribution2x4Test, NdMapperShard3D) {
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 
+TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
+    const int num_devices = mesh_device_->num_devices();
+    ASSERT_EQ(num_devices, 8);
+
+    // Returns true when every shard's underlying data pointer falls inside [src, src + count).
+    auto check_borrow = []<typename T>(const Tensor& distributed, const T* src, size_t count) {
+        auto shards = get_device_tensors(distributed);
+        for (const auto& shard : shards) {
+            auto buf = tt::tt_metal::host_buffer::get_host_buffer(shard);
+            auto span = buf.view_as<T>();
+            if (span.data() < src || span.data() + span.size() > src + count) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Verifies that each shard contains the expected iota-contiguous float data.
+    auto verify_iota_shards = []<typename T = float>(const Tensor& distributed, int num_devices, int elems_per_shard) {
+        auto shards = get_device_tensors(distributed);
+        ASSERT_EQ(static_cast<int>(shards.size()), num_devices);
+        for (int i = 0; i < num_devices; i++) {
+            auto v = shards[i].to_vector<T>();
+            ASSERT_EQ(static_cast<int>(v.size()), elems_per_shard);
+            for (int j = 0; j < elems_per_shard; j++) {
+                if constexpr (std::is_same_v<T, float>) {
+                    EXPECT_FLOAT_EQ(v[j], static_cast<T>(i * elems_per_shard + j));
+                } else {
+                    EXPECT_EQ(v[j], static_cast<T>(i * elems_per_shard + j));
+                }
+            }
+        }
+    };
+
+    const TensorLayout tensor_layout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{});
+
+    // ========================================================================
+    // Positive cases — can_borrow should be TRUE.
+    //
+    // Requirements for borrowing:
+    //   1. Single shard dimension
+    //   2. buffer_pin != nullptr
+    //   3. ROW_MAJOR layout + no padding (logical_matches_physical)
+    //   4. Buffer element type matches shard spec dtype
+    //   5. All dimensions preceding the shard dimension have size 1
+    // ========================================================================
+
+    constexpr size_t elements_per_shard = 3;
+    // Shard dim 0: shape {8, 1, 3, 1} — no preceding dims to check.
+    {
+        SCOPED_TRACE("Positive: shard dim 0");
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 0);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{static_cast<uint32_t>(num_devices), 1, elements_per_shard, 1},
+            pin,
+            tensor_layout,
+            *mapper);
+
+        EXPECT_TRUE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        verify_iota_shards(dist, num_devices, elements_per_shard);
+    }
+
+    // Shard dim 1: shape {1, 8, 3, 1} — dim 0 = 1.
+    {
+        SCOPED_TRACE("Positive: shard dim 1");
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{1, static_cast<uint32_t>(num_devices), elements_per_shard, 1},
+            pin,
+            tensor_layout,
+            *mapper);
+
+        EXPECT_TRUE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        verify_iota_shards(dist, num_devices, elements_per_shard);
+    }
+
+    // Shard dim 2: shape {1, 1, 24, 1} — dims 0, 1 = 1.
+    {
+        SCOPED_TRACE("Positive: shard dim 2");
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 2);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{1, 1, static_cast<uint32_t>(num_devices * elements_per_shard), 1},
+            pin,
+            tensor_layout,
+            *mapper);
+
+        EXPECT_TRUE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        verify_iota_shards(dist, num_devices, elements_per_shard);
+    }
+
+    // Shard dim 3 (last): shape {1, 1, 1, 24} — dims 0, 1, 2 = 1.
+    {
+        SCOPED_TRACE("Positive: shard dim 3");
+
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 3);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{1, 1, 1, static_cast<uint32_t>(num_devices * elements_per_shard)},
+            pin,
+            tensor_layout,
+            *mapper);
+
+        EXPECT_TRUE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        verify_iota_shards(dist, num_devices, elements_per_shard);
+    }
+
+    // uint32_t dtype: shape {1, 8, 3, 1}, shard dim 1.
+    // Verifies that the dtype matching condition works for non-float types.
+    {
+        SCOPED_TRACE("Positive: uint32_t dtype");
+        auto data = std::make_shared<std::vector<uint32_t>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0u);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<uint32_t> span(data->data(), data->size());
+        const TensorLayout rm_uint32_tensor_layout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{});
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{1, static_cast<uint32_t>(num_devices), elements_per_shard, 1},
+            pin,
+            rm_uint32_tensor_layout,
+            *mapper);
+
+        EXPECT_TRUE(check_borrow.operator()<uint32_t>(dist, data->data(), data->size()));
+        verify_iota_shards.operator()<uint32_t>(dist, num_devices, elements_per_shard);
+    }
+
+    // ========================================================================
+    // Negative cases — can_borrow should be FALSE.
+    // Each test violates exactly one of the borrowing requirements.
+    // ========================================================================
+
+    // Multi-dim sharding: two Shard placements → shard_dims.size() == 2 (violates req 1).
+    {
+        SCOPED_TRACE("Negative: multi-dim sharding");
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = create_mesh_mapper(
+            *mesh_device_,
+            MeshMapperConfig{
+                .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+                .mesh_shape_override = MeshShape(2, 4),
+            });
+        Tensor dist =
+            create_distributed_tensor(span, ttnn::Shape{1, 2, 4, elements_per_shard}, pin, tensor_layout, *mapper);
+
+        EXPECT_FALSE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        auto shards = get_device_tensors(dist);
+        ASSERT_EQ(static_cast<int>(shards.size()), num_devices);
+        for (const auto& shard : shards) {
+            EXPECT_EQ(shard.to_vector<float>().size(), elements_per_shard);
+        }
+    }
+
+    // Null buffer_pin: const-span overload passes MemoryPin() internally (violates req 2).
+    {
+        SCOPED_TRACE("Negative: null buffer_pin (const span)");
+        auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::stl::Span<const float> const_span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+        Tensor dist = create_distributed_tensor(
+            const_span,
+            ttnn::Shape{1, static_cast<uint32_t>(num_devices), elements_per_shard, 1},
+            tensor_layout,
+            *mapper);
+
+        EXPECT_FALSE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        verify_iota_shards(dist, num_devices, elements_per_shard);
+    }
+
+    // TILE layout: logical_matches_physical returns false for non-ROW_MAJOR (violates req 3).
+    {
+        SCOPED_TRACE("Negative: TILE layout");
+        constexpr int kTileHW = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        auto data = std::make_shared<std::vector<float>>(num_devices * kTileHW);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+        const TensorLayout tile_float_tensor_layout(DataType::FLOAT32, Layout::TILE, MemoryConfig{});
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{1, static_cast<uint32_t>(num_devices), tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            pin,
+            tile_float_tensor_layout,
+            *mapper);
+
+        EXPECT_FALSE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        auto shards = get_device_tensors(dist);
+        ASSERT_EQ(static_cast<int>(shards.size()), num_devices);
+        for (int i = 0; i < num_devices; i++) {
+            auto v = shards[i].to_vector<float>();
+            ASSERT_EQ(v.size(), static_cast<size_t>(kTileHW));
+            EXPECT_FLOAT_EQ(v[0], static_cast<float>(i * kTileHW));
+            EXPECT_FLOAT_EQ(v[kTileHW - 1], static_cast<float>((i + 1) * kTileHW - 1));
+        }
+    }
+
+    // Preceding dim > 1: shape {2, 8, 3, 1}, shard dim 1 — dim 0 = 2 (violates req 5).
+    // Shard data is non-contiguous in the source buffer so borrowing is not possible.
+    {
+        SCOPED_TRACE("Negative: preceding dim > 1");
+        auto data = std::make_shared<std::vector<float>>(2 * num_devices * elements_per_shard);
+        std::iota(data->begin(), data->end(), 0.0f);
+        tt::tt_metal::MemoryPin pin(data);
+        tt::stl::Span<float> span(data->data(), data->size());
+
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+        Tensor dist = create_distributed_tensor(
+            span,
+            ttnn::Shape{2, static_cast<uint32_t>(num_devices), elements_per_shard, 1},
+            pin,
+            tensor_layout,
+            *mapper);
+
+        EXPECT_FALSE(check_borrow.operator()<float>(dist, data->data(), data->size()));
+        auto shards = get_device_tensors(dist);
+        ASSERT_EQ(static_cast<int>(shards.size()), num_devices);
+        for (const auto& shard : shards) {
+            EXPECT_EQ(shard.to_vector<float>().size(), 2 * elements_per_shard);
+        }
+    }
+}
+
 }  // namespace ttnn::distributed::test

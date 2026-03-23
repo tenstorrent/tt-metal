@@ -4,13 +4,13 @@
 
 #include "grouped_query_attention.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttml::modules {
 
@@ -34,7 +34,7 @@ GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
 }
 
 ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     // Standard attention without KV cache
     auto q = (*m_q_linear)(x);
     auto kv = (*m_kv_linear)(x);
@@ -86,12 +86,12 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const auto& k_cache = kv_cache->get_k_cache(layer_idx);
     const auto& v_cache = kv_cache->get_v_cache(layer_idx);
 
-    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-    const ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
     const auto cache_shape = k_cache.logical_shape();
     // Use mask's key sequence length (last dimension) which is padded_whole_len
     // This matches the key sequence length expected by the attention operation
-    const ttnn::SmallVector<uint32_t> token_end = {
+    const ttsl::SmallVector<uint32_t> token_end = {
         cache_shape[0], cache_shape[1], mask->get_value().logical_shape()[-1], cache_shape[3]};
 
     const tt::tt_metal::Tensor& k_cache_slice = ttnn::slice(k_cache, token_start, token_end, step);

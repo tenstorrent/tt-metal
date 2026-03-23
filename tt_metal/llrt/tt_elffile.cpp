@@ -39,7 +39,7 @@ std::string format(std::string m, Args&&...) {
 // NOLINTBEGIN (readability-redundant-access-specifiers)
 // NOLINTBEGIN (cppcoreguidelines-explicit-virtual-function)
 
-// Verify some knowledge of, and compatibilty with, RiscV
+// Verify some knowledge of, and compatibility with, RiscV
 #ifndef EM_RISCV
 #error "Don't know RISCV elf details"
 #endif
@@ -94,6 +94,8 @@ public:
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
 
+    virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const = 0;
+
 private:
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
     [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
@@ -128,6 +130,17 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
+
+    virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const override {
+        for (const auto& shdr : GetShdrs()) {
+            const char* sec_name = GetName(shdr);
+            if (name == sec_name) {
+                virtual_address = shdr.sh_addr;
+                return GetContents(shdr);
+            }
+        }
+        return {};
+    }
 
 private:
     [[nodiscard]] auto GetHeader() const -> Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
@@ -171,7 +184,7 @@ private:
             // case of a zero length section sitting at that
             // boundary. We also take advantage of the (a) fact that
             // sections cannot straddle segment boundaries -- they're
-            // either wholey inside or wholey outside, and (b)
+            // either wholly inside or wholly outside, and (b)
             // unsigned arithmetic.
             if (shdr.sh_addr + shdr.sh_size - seg.address <= seg.membytes) {
                 return &seg;
@@ -257,6 +270,13 @@ ElfFile::~ElfFile() {
     if (!contents_.empty()) {
         munmap(contents_.data(), contents_.size());
     }
+}
+
+std::span<std::byte> ElfFile::GetSectionContents(std::string_view section_name, uint64_t& virtual_address) const {
+    if (pimpl_ == nullptr) {
+        return {};
+    }
+    return pimpl_->GetSectionContents(section_name, virtual_address);
 }
 
 void ElfFile::ReleaseImpl() {
@@ -498,6 +518,12 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         }
         // If it's allocatable, make sure it's in a segment.
         if (section.sh_flags & SHF_ALLOC && !FindSegment(section)) {
+            std::string_view sec_name = GetName(section);
+            if (sec_name.starts_with(".device_print")) {
+                // Special case: .device_print sections are used for
+                // debug printing, and are not mapped into memory.
+                continue;
+            }
             TT_THROW(
                 "{}: allocatable section {} [{:#x},+{:#x})@{:#x} is not in known segment",
                 path_,
@@ -686,7 +712,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
     // lui/lo12 pairings. We have to use heuristics to locate the
     // matching relocs and that could get arbitrarily hard. We
     // presume (a) the compiler doesn't duplicate lui insns, and
-    // (b) the lui preceeds the lo12 in program counter
+    // (b) the lui precedes the lo12 in program counter
     // order. Thus we look for a hi20 reloc matching the symbol at
     // a lower offset than the lo12 in question. Fortunately we
     // only need to do this for relocs that need translating, and

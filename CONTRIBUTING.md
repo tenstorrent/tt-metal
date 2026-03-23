@@ -534,10 +534,10 @@ To set up pre-commit on your local machine, follow these steps:
 
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
-  on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
+  the link to [sanity tests](https://github.com/tenstorrent/tt-metal/actions/workflows/sanity-tests.yaml), clicking "Run workflow",
   selecting your branch, then selecting `build-type` as "Release" and pressing "Run workflow".
 
-  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
+  ![Dropdown menu of sanity tests and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.
@@ -655,7 +655,7 @@ If that doesn't work, you should use `branch --set-upstream-to`.
 Once you have a pull request, in the UI you can run actions against the branch.
 Go to Actions (https://github.com/tenstorrent/tt-metal/actions) and run the
 workflows that you want against your branch. At the very least, you should run
-All post-commit tests.
+Sanity tests.
 
 You can make more changes, commit them, and then if everything is set up and you
 don't need to rebase, then you can just do
@@ -805,7 +805,7 @@ After that, the UI will usually delete your branch.
     are relevant for the PR.
   - Pass any required post-commit pipelines, updated to the latest main. These
     pipelines will generally, but not always, be defined in
-    `.github/workflows/all-post-commit-workflows.yaml`.
+    `.github/workflows/sanity-tests.yaml`.
   - Pass any acceptance criteria mandated in the original issue.
   - Pass any testing criteria mandated by codeowners whose modules are relevant
     for the PR.

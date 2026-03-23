@@ -56,7 +56,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
+    const uint32_t total_size = local_units_per_shard * unit_size;
     const std::string kernel_name =
         local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"

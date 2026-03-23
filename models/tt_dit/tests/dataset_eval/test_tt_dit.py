@@ -16,7 +16,7 @@ from loguru import logger
 import ttnn
 
 # from .fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
+from models.demos.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from .clip_encoder import CLIPEncoder

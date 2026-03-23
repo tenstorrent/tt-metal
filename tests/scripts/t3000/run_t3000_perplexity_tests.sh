@@ -45,26 +45,6 @@ run_t3000_llama70b_perplexity_tests() {
   fi
 }
 
-run_t3000_mixtral8x7b_perplexity_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
-
-  # Mixtral8x7B perplexity tests
-  # pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mixtral8x7b_perplexity_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_llama3_perplexity_tests_single_card() {
 
   echo "LOG_METAL: Checking number of devices"
@@ -231,9 +211,6 @@ run_t3000_tests() {
 
   # Run mistral perplexity tests
   run_t3000_mistral_perplexity_tests
-
-  # Run Mixtral8x7B perplexity tests
-  run_t3000_mixtral8x7b_perplexity_tests
 
   # Run llama3 perplexity tests
   run_t3000_llama3_perplexity_tests_single_card

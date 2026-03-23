@@ -9,25 +9,17 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
-namespace operations::ccl {
 
-struct ExecuteAllToAllDispatch {
-    static std::array<ttnn::Tensor, 2> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& expert_indices_tensor,
-        const ttnn::Tensor& expert_mapping_tensor,
-        std::optional<uint32_t> axis = std::nullopt,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors = std::nullopt,
-        std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<uint32_t>& output_concat_dim = std::nullopt);
-};
-
-}  // namespace operations::ccl
-
-constexpr auto all_to_all_dispatch =
-    ttnn::register_operation<"ttnn::all_to_all_dispatch", ttnn::operations::ccl::ExecuteAllToAllDispatch>();
+std::array<ttnn::Tensor, 2> all_to_all_dispatch(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    std::optional<uint32_t> axis = std::nullopt,
+    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors = std::nullopt,
+    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<uint32_t>& output_concat_dim = std::nullopt);
 
 }  // namespace ttnn

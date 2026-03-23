@@ -10,7 +10,7 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
-    // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
+    // need to have these as compile-time, they are inner loop bounds / unroll loops / constexpr conditionals based on
     // them
     constexpr uint32_t window_outer = get_compile_time_arg_val(4);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
@@ -34,15 +34,15 @@ void kernel_main() {
     uint32_t runtime_arg_idx = 0;
     uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
     load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(core_index);
-    // Activation reuse args
-    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(32);
-    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(33);
-    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(34) == 1;
-    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(35);
-    constexpr uint32_t output_image_width = get_compile_time_arg_val(36);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(37);
-    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(38) == 1;
-    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(39) == 1;
+    // Activation reuse args (offset by 4 from index 29: address + page_size + 2 TensorAccessorArgs)
+    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(33);
+    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(34);
+    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(36);
+    constexpr uint32_t output_image_width = get_compile_time_arg_val(37);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(38);
+    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(39) == 1;
+    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(40) == 1;
 
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(runtime_arg_idx++);
 

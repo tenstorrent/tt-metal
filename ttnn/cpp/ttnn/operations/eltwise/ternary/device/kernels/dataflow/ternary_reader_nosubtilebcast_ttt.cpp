@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -48,23 +51,28 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_src0);
+    experimental::CircularBuffer cb1(cb_id_src1);
+    experimental::CircularBuffer cb2(cb_id_src2);
+
 #if SRC_SHARDED_A
-    cb_reserve_back(cb_id_src0, src0_num_tiles);
-    cb_push_back(cb_id_src0, src0_num_tiles);
+    cb0.reserve_back(src0_num_tiles);
+    cb0.push_back(src0_num_tiles);
 #else
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_src0);
     const auto src0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
 #endif
 #if SRC_SHARDED_B
-    cb_reserve_back(cb_id_src1, src1_num_tiles);
-    cb_push_back(cb_id_src1, src1_num_tiles);
+    cb1.reserve_back(src1_num_tiles);
+    cb1.push_back(src1_num_tiles);
 #else
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_src1);
     const auto src1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
 #endif
 #if SRC_SHARDED_C
-    cb_reserve_back(cb_id_src2, src2_num_tiles);
-    cb_push_back(cb_id_src2, src2_num_tiles);
+    cb2.reserve_back(src2_num_tiles);
+    cb2.push_back(src2_num_tiles);
 #else
     const uint32_t src2_tile_bytes = get_tile_size(cb_id_src2);
     const auto src2 = TensorAccessor(src2_args, src2_addr, src2_tile_bytes);
@@ -120,31 +128,31 @@ void kernel_main() {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED_A
-                            cb_reserve_back(cb_id_src0, onetile);
-                            uint32_t l1_write_addr_src0 = get_write_ptr(cb_id_src0);
-                            noc_async_read_page(tile_offset + tw, src0, l1_write_addr_src0);
+                            cb0.reserve_back(onetile);
+                            noc.async_read(
+                                src0, cb0, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_B
-                            cb_reserve_back(cb_id_src1, onetile);
-                            uint32_t l1_write_addr_src1 = get_write_ptr(cb_id_src1);
-                            noc_async_read_page(tile_offset_b + tw, src1, l1_write_addr_src1);
+                            cb1.reserve_back(onetile);
+                            noc.async_read(
+                                src1, cb1, src1_tile_bytes, {.page_id = tile_offset_b + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_C
-                            cb_reserve_back(cb_id_src2, onetile);
-                            uint32_t l1_write_addr_src2 = get_write_ptr(cb_id_src2);
-                            noc_async_read_page(tile_offset_c + tw, src2, l1_write_addr_src2);
+                            cb2.reserve_back(onetile);
+                            noc.async_read(
+                                src2, cb2, src2_tile_bytes, {.page_id = tile_offset_c + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
 #endif
 #if !SRC_SHARDED_A
-                            cb_push_back(cb_id_src0, onetile);
+                            cb0.push_back(onetile);
 #endif
 #if !SRC_SHARDED_B
-                            cb_push_back(cb_id_src1, onetile);
+                            cb1.push_back(onetile);
 #endif
 #if !SRC_SHARDED_C
-                            cb_push_back(cb_id_src2, onetile);
+                            cb2.push_back(onetile);
 #endif
                         }
                         if constexpr (!has_sharding) {

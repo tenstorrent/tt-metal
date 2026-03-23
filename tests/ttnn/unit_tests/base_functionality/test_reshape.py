@@ -11,7 +11,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 @pytest.mark.parametrize(
@@ -21,7 +20,6 @@ from models.common.utility_functions import is_watcher_enabled, skip_with_watche
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_program_cache()
@@ -49,7 +47,6 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_and_clear_program_cache()
@@ -114,8 +111,6 @@ def test_reshape_block_shard(
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_height_shard(device, layout):
-    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
     input_shape = [1, 1, 256, 32]
     output_shape = [1, 1, 32, 256]
     input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -142,8 +137,6 @@ def test_reshape_height_shard(device, layout):
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_width_shard(device, layout):
-    if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
     input_shape = [1, 1, 256, 256]
     output_shape = [1, 1, 64, 1024]
     input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -326,7 +319,8 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -350,7 +344,7 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("h", [32])
@@ -401,7 +395,6 @@ def test_reshape_in_4D(n, c, h, w):
 @pytest.mark.parametrize("c", [32, 64])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_reshape_in_4D_on_device(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
@@ -416,7 +409,6 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
@@ -785,7 +777,7 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
+@pytest.mark.timeout(320)
 def test_reshape_oob(device):
     """
     Test proves that this reshape op writes data out of bounds, corrupting

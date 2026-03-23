@@ -17,234 +17,149 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
-// Custom matmul that uses MOP to loop both srcA and srcB along inner dim. Output height
-// and width should be single tile with tile shape [1, 32]. Further work will uplift the
-// custom mm to support for tiles along the width.
+// Custom matmul that reuses SrcB from dest and only unpacks SrcA.
+// Output height and width should be single tile with tile shape [1, 32].
 //
-// K-dimension optimized implementation with MOP looping over kt_dim
+// Both nt_dim and kt_dim loops are collapsed into a single MOP call using
+// CFGSHIFTMASK with two scratch registers:
+//   SCRATCH_SEC0 = block_increment (advance to next tile within a k-row)
+//   SCRATCH_SEC1 = inner_increment (jump from end of one k-row to start of next)
 //
-// Implementation assumptions:
-// - ct_dim = 1, rt_dim = 1 (single output tile, optimized for K-dimension reduction)
-// - MOP replay buffer unpacks both SrcA and SrcB, incrementing both addresses per iteration
-// - kernel_broadcast_a = 0 (no broadcast)
-// - kernel_broadcast_b = 0 (no broadcast)
-inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_() {
-    // in0/inA - loaded to SrcB
-    // in1/inB - loaded to SrcA
+// The replay buffer is 30 instructions, containing 9 block_increment
+// reuse blocks followed by 1 inner_increment reuse block (3 insns each).
+// The MOP template selects sliding windows into this buffer to cover any
+// nt_dim from 1 to 16. Each MOP iteration covers 2 k-rows (via B-mode or
+// halo-mode), and kt_dim/2 MOP iterations cover the full inner dimension.
+//
+// Constraints:
+// - ct_dim = 1, rt_dim = 1 (single output tile)
+// - nt_dim: 1 to 16
+// - kt_dim: even number from 2 to 256 (inclusive)
+// - kernel_broadcast_a = 0, kernel_broadcast_b = 0
+inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std::uint32_t nt_dim) {
+    // Replay buffer layout (30 instructions):
+    //   [0-26]:  9 reuse blocks with block_increment (3 insns each)
+    //   [27-29]: 1 final reuse block with inner_increment (3 insns)
+    //
+    // Each reuse block: SrcA unpack + CFGSHIFTMASK + NOP (3 insns)
+    // block_increment reuse: CFGSHIFTMASK selects SCRATCH_SEC0
+    // inner_increment reuse (final): CFGSHIFTMASK selects SCRATCH_SEC1
+    //
+    // This supports first_half up to 9 tiles and second_half up to 9 tiles = 18 max.
+    // Practical limit is 16 due to dst size.
 
-    // MOP replay buffer now updates both SrcA and SrcB addresses for K-dimension loop
-    const std::uint32_t replay_buf_run_len = 3;
-    const std::uint32_t replay_buf_prog_len = replay_buf_run_len * 2;
+    constexpr std::uint32_t REPLAY_BUF_LEN = 30;
+    load_replay_buf(0, REPLAY_BUF_LEN, [] {
+        for (std::uint32_t i = 0; i < 9; i++) {
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_NOP;
+        }
+        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
+        TTI_NOP;
+    });
 
-    load_replay_buf(
-        0,
-        replay_buf_prog_len,
-        // Lambda function to set up replay buffer
-        [] {
-            // === Context 0 ===
-            // Wait for context available
-            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+    // Mop covers two k-rows per iteration, allowing up to 256 kt_dim with 128 MOP iterations.
+    // zmask is always 0 (skip path never used), which is required for iterations beyond 32.
+    //
+    // Each k-row processes nt_dim tiles: (nt_dim-1) tiles with block_increment, then
+    // 1 tile with inner_increment. The tiles are split between two halves for the template:
+    //   first_half_iterations = ceil(nt_dim/2)
+    //   second_half_iterations = floor(nt_dim/2)
+    //
+    // first_half window: starts at buffer beginning, covers first_half_iterations * 3 insns
+    // second_half window: ends at buffer end (always includes inner_increment block),
+    //   covers second_half_iterations * 3 insns
+    //
+    // nt_dim == 1: B-mode (A0 + B), both pointing to the inner_increment block
+    // nt_dim >= 2: Halo-mode (A0, A1, A2, A3), alternating first_half/second_half
 
-            // Unpack SrcA (in1/inB)
-            TTI_UNPACR(
-                SrcA,
-                0b00000000,
-                0,
-                0,
-                0,
-                1 /*Set OvrdThreadId*/,
-                1 /*Set Dvalid*/,
-                p_unpacr::RAREFYB_DISABLE,
-                0,
-                0 /* Set ContextIdInc */,
-                0,
-                0,
-                1);
+    const std::uint32_t first_half_iters = (nt_dim + 1) >> 1;
+    const std::uint32_t second_half_iters = nt_dim >> 1;
 
-            // Signal context done
-            t6_semaphore_get(semaphore::UNPACK_SYNC);
+    const std::uint32_t first_half = lltt::replay_insn(0, first_half_iters * 3);
+    const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_LEN - second_half_iters * 3, second_half_iters * 3);
 
-            // === Context 1 ===
-            // Wait for context available
-            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
-
-            // Unpack SrcA (in1/inB)
-            TTI_UNPACR(
-                SrcA,
-                0b00000000,
-                0,
-                1,
-                0,
-                1 /*Set OvrdThreadId*/,
-                1 /*Set Dvalid*/,
-                p_unpacr::RAREFYB_DISABLE,
-                0,
-                0 /* Set ContextIdInc */,
-                0,
-                0,
-                1);
-
-            t6_semaphore_get(semaphore::UNPACK_SYNC);
-        });
+    // For nt_dim == 1: only inner_increment block is needed, use B-mode
+    // block_increment == inner_increment when nt_dim == 1 so either block works,
+    // but we use the inner_increment block (last 3 insns) for correctness
+    const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_LEN - 3, 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                     // src B
-        false,                                     // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_run_len),  // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len),  // runs when context is 1
-        0,
-        0);
+        nt_dim == 1,                             // B-mode when single tile per k-row
+        nt_dim != 1,                             // Halo-mode when multiple tiles per k-row
+        nt_dim == 1 ? single_tile : first_half,  // A0
+        second_half,                             // A1
+        nt_dim == 1 ? single_tile : first_half,  // A2
+        second_half,                             // A3
+        0,                                       // Skip A (unused, zmask always 0)
+        single_tile,                             // B (used in B-mode for nt_dim==1)
+        0                                        // Skip B (unused)
+    );
 
     tmp.program();
+    TTI_MOP_CFG(0);
 }
 
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_hw_configure_(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpB_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t unpA_num_faces = 4,
-    const std::uint32_t unpB_num_faces = 4,
-    const std::uint32_t unpA_tile_size = 0,
-    const std::uint32_t unpB_tile_size = 0) {
-    constexpr bool is_row_pool = false;
-    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
-    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
-    constexpr bool pack_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Pack);
-
-    configure_unpack_AB<is_fp32_dest_acc_en, is_row_pool, fpu_srnd_en, pack_srnd_en>(
-        unpA_src_format,
-        unpB_src_format,
-        unpA_dst_format,
-        unpB_dst_format,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces,
-        unpB_num_faces);
-
-    // Configure tile size in datums
-    const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-    const uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
-
-    regfile[p_gpr_unpack::TILE_SIZE_A] = unpA_tile_size;
-    regfile[p_gpr_unpack::TILE_SIZE_B] = unpB_tile_size;
-    sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
-}
-
-// K-dimension optimized initialization:
-// - transpose = 0 (no transpose)
-// - ct_dim = 1 (column tile dimension is 1, single output tile width)
-// - rt_dim = 1 (row tile dimension is 1, single output tile height)
-// - unpA_partial_face = false (always use full tile unpacking for input A)
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
-    const std::uint32_t kt_dim = 1,
+    const std::uint32_t nt_dim = 1,
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces = 4,
-    const std::uint32_t unpB_num_faces = 4,
-    const bool unpB_partial_face = false) {
-    // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
-    // on WH, the unpacker performs both transpose of faces as well as transpose each face.
-    // the former is configured in mop, the latter is configured in cfg register in hw_configure
-    // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
+    const std::uint32_t unpA_num_faces = 4) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
 
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_();
+    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(nt_dim);
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-// K-dimension optimized implementation:
-// - ct_dim = 1 (column tile dimension is 1, single output tile width)
-// - rt_dim = 1 (row tile dimension is 1, single output tile height)
-// - MOP loops kt_dim times, unpacking both SrcA and SrcB with address increments
-// - unpA_partial_face = false (always use full tile unpacking for input A)
+// Both nt_dim and kt_dim loops collapsed into a single MOP call.
+// CFGSHIFTMASK auto-increments the SrcA L1 address:
+//   SCRATCH_SEC0 = block_increment (tile_size_a, advances within a k-row)
+//   SCRATCH_SEC1 = inner_increment (jumps from end of one k-row to start of next)
 // - in1_k_stride: stride between K tiles in in1 (default 1 for contiguous, use out_w for row-major layout)
 inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     const std::uint32_t base_address_a,
-    const std::uint32_t base_address_b,
     const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
-    const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     const std::uint32_t in1_k_stride = 1) {
-    // In0/InA -> srcB (supports partial face)
-    // In1/InB -> srcA
+    volatile uint* cfg = get_cfg_pointer();
 
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
+    const std::uint32_t block_increment = tile_size_a;
+    // inner_increment: after (nt_dim-1) block_increments we're at the last tile of the k-row.
+    // We need to jump to the first tile of the next k-row.
+    // After processing a full k-row, address has advanced by (nt_dim-1) * tile_size_a
+    // via block_increments. The inner_increment must bring us to the next k-row:
+    //   (nt_dim - 1) * tile_size_a + inner_increment = in1_k_stride * tile_size_a
+    //   inner_increment = (in1_k_stride - nt_dim + 1) * tile_size_a
+    const std::uint32_t inner_increment = (in1_k_stride - nt_dim + 1) * tile_size_a;
 
-    std::uint32_t offset_address_a = tile_size_a * tile_index_a;
-    std::uint32_t offset_address_b = tile_size_b * tile_index_b;
+    wait_for_next_context(1);
+    reset_config_context();
 
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t address_b = base_address_b + offset_address_b;
+    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
+    cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
 
-    // Calculate byte stride for in1 (SrcA) - stride in tiles * tile_size
-    const std::uint32_t address_b_stride = tile_size_b;
-    std::uint32_t offset_kt_stride = in1_k_stride - nt_dim;
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    TT_MOP(0, (kt_dim / 2) - 1, 0);
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
     // Wait for all contexts to be free
     wait_for_next_context(1);
     reset_config_context();
+
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
-    std::uint32_t num_loops = nt_dim / 16;
-    std::uint32_t remaining_nt_dim = nt_dim % 16;
-    for (std::uint32_t i = 0; i < kt_dim; i++) {
-        // Unpack 16 tiles per loop, run 16 mop iterations and risc does 16 unrolled address updates 8 cnxt0 + 8 cnxt1
-        for (std::uint32_t j = 0; j < num_loops; j++) {
-            TTI_MOP(0, 15, 0xAAAA);
-#pragma GCC unroll 8
-            for (std::uint32_t k = 0; k < 8; k++) {
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += address_b_stride;
-                semaphore_post(semaphore::UNPACK_SYNC);
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += address_b_stride;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }
-        }
-
-        // Do any remaining kt_dim % 16 iterations, run mop remaining_kt times and risc does similar address updates
-        if (remaining_nt_dim != 0) {
-            TT_MOP(0, remaining_nt_dim - 1, 0xAAAA);
-            for (std::uint32_t j = 0; j < remaining_nt_dim / 2; j++) {
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += address_b_stride;
-                semaphore_post(semaphore::UNPACK_SYNC);
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += address_b_stride;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }
-            // Last address update if odd number of remaining kt_dim only hits context 0
-            if ((remaining_nt_dim % 2) != 0) {
-                wait_for_next_context(2);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += address_b_stride;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }
-        }
-        address_b += offset_kt_stride * address_b_stride;
-    }
-
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
-    unpacker_addr_counter_init();
 }

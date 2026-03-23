@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -90,6 +95,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Parse platform
@@ -193,6 +199,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -287,6 +294,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

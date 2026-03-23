@@ -47,8 +47,8 @@ void kernel_main() {
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
@@ -68,19 +68,16 @@ void kernel_main() {
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
     constexpr uint32_t cb_in = tt::CBIndex::c_29;
 
-    // constexpr uint32_t block_w = 4;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
-
+    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out =
-        (fuse_gamma or fuse_beta)
-            ? (((fuse_gamma and not fuse_beta) or (not fuse_gamma and fuse_beta)) ? cb_in : cb_out0)
-            : cb_out0;
+    constexpr uint32_t cb_out = (fuse_gamma or fuse_beta) ? cb_out0 : cb_reread_write_out;
 #endif
+
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_out);
+    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
 
     // input mask
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
@@ -249,7 +246,7 @@ void kernel_main() {
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -258,11 +255,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -270,7 +267,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {

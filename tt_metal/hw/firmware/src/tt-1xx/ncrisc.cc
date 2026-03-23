@@ -19,6 +19,7 @@
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -143,6 +144,14 @@ int main(int argc, char* argv[]) {
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
         // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_CB_SANITIZE)
+        // Zero all CB interfaces so stale entries from previous programs
+        // don't cause false positives in the CB sanitize check.
+        for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+            get_local_cb_interface(i).fifo_size = 0;
+        }
+#endif
         uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
         uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
         setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
@@ -178,6 +187,7 @@ int main(int argc, char* argv[]) {
 #endif
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_ncrisc_completion();
 #if defined(ARCH_WORMHOLE)

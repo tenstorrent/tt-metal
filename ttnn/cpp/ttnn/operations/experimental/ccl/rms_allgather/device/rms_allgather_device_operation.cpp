@@ -215,7 +215,7 @@ Tensor RMSAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 

@@ -705,11 +705,11 @@ void generate_ccl_command_stream_to_kernel_args(
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW(
-                    "CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_EDM_TO_TENSOR is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
                 TT_THROW(
-                    "CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_TENSOR_TO_EDM is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
 
@@ -897,7 +897,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_addr_args_str = [](std::stringstream& ss, CclCommandAddrArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandAddrRelativeAddress const& a) {
                         ss << fmt::format("(relative_address:{})", a.relative_address);
                     },
@@ -915,7 +915,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         };
         auto get_cmd_args_str = [](std::stringstream& ss, CclCommandArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandStreamTensorSlice const& a) {
                         ss << fmt::format(
                             "(shape: (w:{},z:{},y:{},x:{}), slice_shape: (w:{},z:{},y:{},x:{}), slice_offset: "
@@ -957,7 +957,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](CclCommandCoreDescriptorTypeAddrgen const&  /*a*/) { ss << fmt::format("(addrgen)"); },
                     [&ss](CclCommandCoreDescriptorTypeLocal const&  /*a*/) { ss << fmt::format("(local_core)"); },
                     [&ss](CclCommandCoreDescriptorTypeNocXY const& a) { ss << fmt::format("(x:{}, y:{})", a.x, a.y); },
@@ -976,7 +976,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
 
         auto get_fabric_transfer_args_str = [](std::stringstream& ss, CclCommandDestArgs const& args) {
             std::visit(
-                tt::stl::overloaded{
+                ttsl::overloaded{
                     [&ss](UnicastCommandDestArgs const& a) {
                         ss << fmt::format(
                             "(distance_in_hops:{}, is_forward_direction:{})",
@@ -1091,7 +1091,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             rt_args.push_back(tensors[i]->buffer()->address());
         } else {
             // take up the rt arg with filler value  in case user built a kernel across a core range
-            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
+            // set with multiple command streams/tensors, but this particular core doesn't actually need/use
             // both tensors/command streams
             rt_args.push_back(0xdeaddead);
         }

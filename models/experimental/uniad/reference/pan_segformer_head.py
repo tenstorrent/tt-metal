@@ -510,7 +510,7 @@ class PansegformerHead(nn.Module):
                 mask_pred.dtype
             )
             for i, scores in enumerate(scores_all):
-                # MDS: things and sutff have different threholds may perform a little bit better
+                # MDS: things and stuff have different thresholds may perform a little bit better
                 if labels_all[i] < self.num_things_classes and scores < self.quality_threshold_things:
                     continue
                 elif labels_all[i] >= self.num_things_classes and scores < self.quality_threshold_stuff:

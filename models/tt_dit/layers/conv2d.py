@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # TODO: Add support for coll and row parallel conv2d
 class Conv2d(Module):
     """
-    Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
+    Conv2d with support for tensor parallelism. Data and Sequence Parallelism TBD.
 
     """
 
@@ -38,12 +38,13 @@ class Conv2d(Module):
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
@@ -51,24 +52,26 @@ class Conv2d(Module):
         },
         (4, 4): {
             (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
             (1024, 1024, 128, 3): 8,
         },
         (2, 4): {
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
@@ -77,19 +80,20 @@ class Conv2d(Module):
     }
     slice_default = {
         (512, 512, 512, 64): 16,
-        (128, 128, 16, 512): 8,
+        (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
         (128, 128, 512, 512): 4,
         (256, 256, 512, 512): 8,
         (512, 512, 512, 512): 16,
         (512, 512, 512, 256): 16,
         (512, 512, 256, 256): 4,
+        (512, 512, 128, 3): 4,
         (1024, 1024, 256, 256): 16,
         (1024, 1024, 256, 128): 16,
         (1024, 1024, 128, 128): 16,
         (1024, 1024, 128, 3): 8,
     }
 
-    # TODO: Allow weight initilization?
+    # TODO: Allow weight initialization?
     def __init__(
         self,
         in_channels: int,
@@ -118,7 +122,7 @@ class Conv2d(Module):
             in_mesh_axis: Axis to shard input channels across mesh devices.
             out_mesh_axis: Axis to shard output channels across mesh devices.
             ccl_manager: CCL manager to use.
-            torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
+            torch_ref: Reference to the torch layer. Parameters from this will be used to initialize the layer
 
         The arguments in_mesh_axis and out_mesh_axis control how weights and biases are sharded
         across the mesh devices and how the input and output tensors are sharded.

@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_watcher_enabled
 
 
 @pytest.mark.parametrize(
@@ -28,9 +27,6 @@ from models.common.utility_functions import is_watcher_enabled
     ],
 )
 def test_unsqueeze(device, input_shape, dim, layout):
-    if is_watcher_enabled() and input_shape == (8732,) and dim in [1, -1] and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Skipping test with watcher enabled, see #37096")
-
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_unsqueeze_tensor = torch.unsqueeze(torch_input_tensor, dim)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)

@@ -20,10 +20,12 @@
  */
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
-    // Configure data formats for transpose operation
+    // Configure data formats for transpose operation.
+    // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
+    // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
-    pack_reconfig_data_format(input_cb_index);
+    pack_reconfig_data_format(dest_cb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
     cb_wait_front(input_cb_index, 2 * total_tiles);

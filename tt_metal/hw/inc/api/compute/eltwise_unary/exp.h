@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -80,6 +80,52 @@ template <
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
+        calculate_exponential,
+        approx,
+        fast_and_approx,
+        DST_ACCUM_MODE,
+        scale_en,
+        skip_positive_check,
+        (input_clamping == InputClamping::ClampToNegative),
+        iterations,
+        idst,
+        vector_mode,
+        scale));
+}
+
+/**
+ * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
+ * to enable FPU/SFPU overlap with math-thread matmul operations.
+ */
+template <
+    bool approx = false,
+    bool fast_and_approx = true,
+    uint32_t scale = 0x3F800000,
+    InputClamping input_clamping = InputClamping::ClampToNegative>
+ALWI void exp_packthread_tile_init() {
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(
+        exponential,
+        sfpu::exp_init,
+        approx,
+        fast_and_approx,
+        scale,
+        (input_clamping == InputClamping::ClampToNegative)));
+}
+
+/**
+ * Pack-thread variant of exp_tile. Runs the exp computation on the pack thread
+ * to enable FPU/SFPU overlap with math-thread matmul operations.
+ */
+template <
+    bool approx = false,
+    bool fast_and_approx = true,
+    bool scale_en = false,
+    bool skip_positive_check = false,
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    int iterations = 8>
+ALWI void exp_packthread_tile(
+    uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    PACK(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
         calculate_exponential,
         approx,
         fast_and_approx,

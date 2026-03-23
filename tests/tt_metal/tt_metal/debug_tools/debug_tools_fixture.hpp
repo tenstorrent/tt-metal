@@ -18,6 +18,11 @@
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
+// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+#include "jit_build/build_env_manager.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+
 namespace tt::tt_metal {
 
 class DebugToolsMeshFixture : public MeshDispatchFixture {
@@ -86,6 +91,10 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
@@ -117,6 +126,10 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, true);
@@ -295,6 +308,117 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+    }
+};
+
+class DevicePrintFixture : public DebugToolsMeshFixture {
+protected:
+    std::string dprint_file_name;
+    int memfd_;
+
+    void SetUp() override {
+        const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
+        std::string test_desc =
+            fmt::format("dprint_{}_{}_{}", getpid(), test_info->test_suite_name(), test_info->name());
+
+        memfd_ = memfd_create(test_desc.c_str(), 0);
+        if (memfd_ < 0) {
+            TT_THROW("Failed to create memory file descriptor: {}", strerror(errno));
+        }
+        // Use /proc/self/fd path which works transparently with ofstream/ifstream
+        dprint_file_name = fmt::format("/proc/self/fd/{}", memfd_);
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+            tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+        // Send output to a file so the test can check after program is run.
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
+            tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
+        watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(true);
+
+        // Parent class initializes devices and any necessary flags
+        DebugToolsMeshFixture::SetUp();
+    }
+
+    void TearDown() override {
+        // Parent class tears down devices
+        DebugToolsMeshFixture::TearDown();
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(false);
+    }
+
+public:
+    std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
+        // Get the first available mesh device
+        auto mesh_device = this->devices_.at(0);
+
+        // Set up program
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // This tests prints only on a single core
+        constexpr CoreCoord core = {0, 0};  // Print on first core only
+        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+        auto* device = mesh_device->get_devices()[0];
+        detail::CompileProgram(device, program_);
+
+        // Find compiled kernel and extract format string from it to compare with expected_format_message
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        uint32_t tensix_core_type = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
+        uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
+
+        int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
+
+        const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+
+        const auto& kernel = program_.impl().get_kernel(kernel_handle);
+        const std::string full_kernel_name = kernel->get_full_kernel_name();
+        return build_state.get_target_out_path(full_kernel_name);
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::string& kernel_path,
+        stl::Span<const uint32_t> runtime_args = {}) {
+        // Set up program
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // This tests prints only on a single core
+        constexpr CoreCoord core = {0, 0};  // Print on first core only
+        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
     }
 };
 

@@ -5,7 +5,6 @@
 #include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
@@ -42,9 +41,10 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     const CoreRange core_range,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
-    const uint32_t index_tile_size) {
-    const auto config_opt =
-        find_topk_core_config(width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
+    const uint32_t index_tile_size,
+    uint32_t tile_width = 32) {
+    const auto config_opt = find_topk_core_config(
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
     if (config_opt.has_value()) {
         const auto& config = config_opt.value();
         return {
@@ -62,8 +62,6 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
 
 TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::create(
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
-    using namespace tt::constants;
-
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& input_indices_tensor = tensor_args.indices;
@@ -78,6 +76,14 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
     const bool is32_bit_data = index_cb_data_format == tt::DataFormat::UInt32;
 
+    // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
+    // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
+    // elements in that block encode to 0, corrupting the sort result).
+    const tt::DataFormat compute_cb_data_format =
+        (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
+            ? tt::DataFormat::Float16_b
+            : input_cb_data_format;
+
     // Core grid and tile size calculations
     const auto first_core_range = args.sub_core_grids.ranges().at(0);
     const auto first_core_range_set = CoreRangeSet(first_core_range);
@@ -85,6 +91,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
     const uint32_t value_tile_size = tile_size(value_cb_data_format);
     const uint32_t index_tile_size = tile_size(index_cb_data_format);
+    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // DRAM buffer pointers for kernel runtime arguments
     const auto* input_buffer = input_tensor.buffer();
@@ -95,7 +102,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const auto* device = input_tensor.device();
 
     const auto input_shape = input_tensor.padded_shape();
-    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
@@ -106,7 +115,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         first_core_range,            // Available core grid
         device->l1_size_per_core(),  // L1 memory per core
         value_tile_size,             // Value tile memory footprint
-        index_tile_size);            // Index tile memory footprint
+        index_tile_size,             // Index tile memory footprint
+        tile_width);
 
     constexpr bool select_cores_row_wise = false;
 
@@ -129,9 +139,9 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     all_cores_range_set = all_cores_range_set.merge(final_cores_range_set);
 
     // Calculate processing dimensions in tile units
-    const uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;  // Width tiles per local core
-    const uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;  // Total width tiles for final core
-    const uint32_t Kt = args.k % TILE_WIDTH == 0 ? args.k / TILE_WIDTH : (args.k / TILE_WIDTH) + 1;  // TopK in tiles
+    const uint32_t Wt_local = local_topk_input_size / tile_width;  // Width tiles per local core
+    const uint32_t Wt_final = final_topk_input_size / tile_width;  // Total width tiles for final core
+    const uint32_t Kt = args.k % tile_width == 0 ? args.k / tile_width : (args.k / tile_width) + 1;  // TopK in tiles
 
     const uint32_t num_cb_unit = 2;                // Base buffering unit
     const uint32_t cb_in_units = 2 * num_cb_unit;  // 4 units total for double-buffered input
@@ -161,13 +171,17 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_input_intermed0_config);
 
-    // Gathered values (aggregation buffer for final core)
-    // Receives local TopK results from all worker cores (Wt_final = num_cores * Kt)
+    // Gathered values (aggregation buffer for final core).
+    // Uses compute_cb_data_format (bf16 when input is bfp8/bfp4): the local cores write
+    // tiles in transposed layout where each tile row mixes values from different H positions
+    // (e.g. [normal_H0, INF_H1, ..., INF_H31]). If stored as bfp8 the shared-exponent
+    // block is dominated by INF, zeroing out H=0's value. Keeping bf16 here and in
+    // values_cb_index (local) avoids that precision loss for the inter-core transfer.
     constexpr uint32_t gathered_values_cb_index = tt::CBIndex::c_4;
     const tt::tt_metal::CircularBufferConfig gathered_values_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Wt_final * value_tile_size, {{gathered_values_cb_index, value_cb_data_format}})
-            .set_page_size(gathered_values_cb_index, value_tile_size);
+            Wt_final * compute_tile_size, {{gathered_values_cb_index, compute_cb_data_format}})
+            .set_page_size(gathered_values_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_values_cb_config);
 
     // Gathered indices (aggregation buffer for final core)
@@ -178,13 +192,6 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(gathered_indices_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_indices_cb_config);
 
-    // Local TopK values output (local cores → writer → final core)
-    constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
-    const tt::tt_metal::CircularBufferConfig values_cb_config =
-        tt::tt_metal::CircularBufferConfig(num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
-            .set_page_size(values_cb_index, value_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, values_cb_config);
-
     // Local TopK indices output (local cores → writer → final core)
     constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_9;
     const tt::tt_metal::CircularBufferConfig output_ind_cb_config =
@@ -193,12 +200,14 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, output_ind_cb_config);
 
     // Transposed values (single-buffered for in-place bitonic operations)
-    // Holds all Wt_local tiles for complete width chunk processing
+    // Holds all Wt_local tiles for complete width chunk processing.
+    // Uses bf16 when input is bfp8/bfp4 to avoid precision loss from shared-exponent
+    // grouping during the sort (inf in one slot zeroes out its block-mates).
     constexpr uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_transposed_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
-            .set_page_size(input_transposed_cb_index, input_tile_size);
+            Wt_local * compute_tile_size, {{input_transposed_cb_index, compute_cb_data_format}})
+            .set_page_size(input_transposed_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, input_transposed_cb_config);
 
     // Transposed indices (single-buffered for in-place bitonic operations)
@@ -209,11 +218,36 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(index_transposed_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, index_transposed_cb_config);
 
-    // Final values (staging buffer for final compute output)
+    // Local TopK values output — split format between local and final cores.
+    //
+    // Local cores (bf16): the sorted Kt tile in transposed layout has rows of the form
+    // [normal_H0, INF_H1, ..., INF_H31]. Packing such a row to bfp8 makes the
+    // shared-exponent INF-dominated, reducing H=0's value to 0. Using bf16 here
+    // preserves all values through the NoC transfer to the final core's c_4 buffer
+    // (also bf16, same tile size, so the raw-byte NoC copy is format-consistent).
+    //
+    // Final core (bfp8): after the final merge and transpose-back, the tile rows are
+    // per-H-row (H=0 row has only normal values, no INF mixing), so bfp8 quantisation
+    // is safe. bfp8 also matches the output tensor dtype for the DRAM write.
+    constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
+    const tt::tt_metal::CircularBufferConfig values_cb_config_local =
+        tt::tt_metal::CircularBufferConfig(num_cb_unit * compute_tile_size, {{values_cb_index, compute_cb_data_format}})
+            .set_page_size(values_cb_index, compute_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, values_cb_config_local);
+
+    const tt::tt_metal::CircularBufferConfig values_cb_config_final =
+        tt::tt_metal::CircularBufferConfig(num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
+            .set_page_size(values_cb_index, value_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, values_cb_config_final);
+
+    // Final values (staging buffer for final compute output).
+    // Uses bf16 when input is bfp8/bfp4 so that the final bitonic merge operates at
+    // higher precision (same rationale as input_transposed_cb_index above).
     constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
     const tt::tt_metal::CircularBufferConfig final_values_cb_config =
-        tt::tt_metal::CircularBufferConfig(Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
-            .set_page_size(final_values_cb_index, value_tile_size);
+        tt::tt_metal::CircularBufferConfig(
+            Wt_final * compute_tile_size, {{final_values_cb_index, compute_cb_data_format}})
+            .set_page_size(final_values_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, final_values_cb_config);
 
     // Final indices (staging buffer for final compute output)
@@ -237,7 +271,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         index_cb_index,                // CB1: Input indices destination
         Ht,                            // Height tiles in tensor
         Wt_local,                      // Width tiles per local core
-        input_shape[-1] / TILE_WIDTH,  // Total width tiles (Wt)
+        input_shape[-1] / tile_width,  // Total width tiles (Wt)
     };
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_local_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_local_compile_time_args);

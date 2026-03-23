@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -427,9 +427,6 @@ private:
         add_port(ports, PortType::QSFP_DD, PortId(12), {{5, ChanId(9)}, {6, ChanId(9)}});  // ASIC 5,6: channel 9
         add_port(ports, PortType::QSFP_DD, PortId(13), {{3, ChanId(9)}, {4, ChanId(9)}});  // ASIC 3,4: channel 9
         add_port(ports, PortType::QSFP_DD, PortId(14), {{7, ChanId(9)}, {8, ChanId(9)}});  // ASIC 7,8: channel 9
-
-        // NOTE: These Linking Board connections are not finalized yet.
-        log_warning(tt::LogDistributed, "UBB_BLACKHOLE: Linking Board connections are not finalized yet.");
 
         // LINKING_BOARD_1 ports
         add_sequential_port(ports, PortType::LINKING_BOARD_1, PortId(1), 5, 6, 7);  // ASIC 5, channels 6,7

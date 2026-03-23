@@ -35,7 +35,8 @@ public:
         float dropout_prob = 0.0F,
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
 
 private:
     std::shared_ptr<ModuleBase> m_mlp;

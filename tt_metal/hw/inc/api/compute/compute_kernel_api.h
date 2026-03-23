@@ -27,7 +27,6 @@
 #include "llk_math_reduce_api.h"
 #endif
 #define MATH(x) x
-#define MAIN math_main()
 #else
 #define MATH(x)
 #endif
@@ -36,7 +35,6 @@
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #define PACK(x) x
-#define MAIN pack_main()
 #else
 #define PACK(x)
 #endif
@@ -53,7 +51,6 @@
 #endif
 #include "llk_io_unpack.h"
 #define UNPACK(x) x
-#define MAIN unpack_main()
 #else
 #define UNPACK(x)
 #endif
@@ -139,7 +136,7 @@ ALWI void log_with_base_tile_init() {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Postive integers                                      | True     |
+ * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Positive integers                                     | True     |
  */
 // clang-format on
 template <bool fast_and_approx = false>
@@ -338,7 +335,7 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_power<APPROX, DST_ACCUM_MODE>(idst, param0)));
 }
 
 /**

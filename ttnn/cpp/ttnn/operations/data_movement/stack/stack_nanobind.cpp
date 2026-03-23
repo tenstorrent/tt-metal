@@ -9,33 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/data_movement/stack/stack.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
-namespace {
-
-template <typename data_movement_operation_t>
-void bind_stack_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self, const std::vector<ttnn::Tensor>& input_tensors, const int dim)
-                -> ttnn::Tensor { return self(input_tensors, dim); },
-            nb::arg("input_tensors"),
-            nb::arg("dim")});
-}
-
-}  // namespace
-
 void bind_stack(nb::module_& mod) {
-    bind_stack_op(
-        mod,
-        ttnn::stack,
+    const auto* doc =
         R"doc(
         Stacks tensors along a new dimension.
 
@@ -47,7 +28,9 @@ void bind_stack(nb::module_& mod) {
            >>> input_tensor = ttnn.from_torch(torch.randn((2, 2), dtype=torch.bfloat16), device=device)
            >>> output = ttnn.stack((input_tensor,input_tensor), 1)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"stack">(mod, doc, ttnn::overload_t(&ttnn::stack, nb::arg("input_tensors"), nb::arg("dim")));
 }
 
 }  // namespace ttnn::operations::data_movement

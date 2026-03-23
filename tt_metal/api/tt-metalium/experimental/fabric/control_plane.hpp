@@ -6,6 +6,9 @@
 
 #include <unordered_set>
 
+// UMD: EthCoord is a UMD type alias used in the private method
+// get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -172,7 +175,7 @@ public:
     // Returns the distributed context with only one host.
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
-    // Return valid ethernet channels on the specificed routing plane
+    // Return valid ethernet channels on the specified routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
@@ -273,6 +276,7 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -463,7 +467,7 @@ private:
     // Multi-Host Intermesh Connectivity Helper Function:
     // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
     // connections.
-    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+    AnnotatedIntermeshConnections convert_port_descriptors_to_intermesh_connections(
         PortDescriptorTable& port_descriptors);
 
     // Single-Host Intermesh Connectivity Helper Function:

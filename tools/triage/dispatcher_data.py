@@ -18,6 +18,9 @@ Owner:
 from dataclasses import dataclass
 import os
 import threading
+from typing import Callable
+
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
@@ -29,7 +32,7 @@ from ttexalens.memory_access import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
-from run_checks import RunChecks
+from run_checks import RunChecks, BlockType
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -93,6 +96,7 @@ class DispatcherData:
         self.lock = threading.Lock()
         self._mailboxes_cache: dict[OnChipCoordinate, ElfVariable] = {}
         self._core_data_cache: dict[tuple[OnChipCoordinate, str], DispatcherCoreData] = {}
+        self._get_block_type: Callable[[OnChipCoordinate], BlockType | None] = run_checks.get_block_type
 
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
@@ -263,38 +267,35 @@ class DispatcherData:
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
+        block_type = self._get_block_type(location)
         l1_mem_access = MemoryAccess.create_l1(location)
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            fw_elf = self._brisc_elf
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            fw_elf = self._idle_erisc_elf
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            fw_elf = self._active_erisc_elf
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
+        match block_type:
+            case "tensix":
+                fw_elf = self._brisc_elf
+            case "idle_eth":
+                fw_elf = self._idle_erisc_elf
+            case "active_eth":
+                fw_elf = self._active_erisc_elf
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
     ) -> DispatcherCoreData:
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_TENSIX
-            enum_values = self._enum_values_tenisx
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
-            enum_values = self._enum_values_eth
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
-            enum_values = self._enum_values_eth
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
-
+        block_type = self._get_block_type(location)
+        match block_type:
+            case "tensix":
+                programmable_core_type = self._ProgrammableCoreTypes_TENSIX
+                enum_values = self._enum_values_tenisx
+            case "idle_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
+                enum_values = self._enum_values_eth
+            case "active_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
+                enum_values = self._enum_values_eth
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
         device_unique_id = location._device.unique_id
@@ -332,22 +333,30 @@ class DispatcherData:
             kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
                 programmable_core_type
             ]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             # enum dispatch_core_processor_classes
             watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
                 proc_type
             ]
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
@@ -361,23 +370,33 @@ class DispatcherData:
         try:
             go_message_index = mailboxes.go_message_index
             go_data = mailboxes.go_messages[go_message_index].signal
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
         try:
             previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
+        except TimeoutDeviceRegisterError:
+            raise
         except:
             pass
         try:
             waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
             waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             pass
 
@@ -424,7 +443,7 @@ class DispatcherData:
             # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
             # ETH Blackhole: "EE" (2 ERISCs)
             # ETH Wormhole: "E" (1 ERISC)
-            if location.device.get_block_type(location) == "functional_workers":
+            if self._get_block_type(location) == "tensix":
                 symbols = "BNT"
             elif location.device.is_blackhole():
                 symbols = "EE"

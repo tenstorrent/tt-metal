@@ -15,6 +15,10 @@
 #
 # === Evaluated ===
 #
+# modernize-use-pragma-once:
+#   Intentionally enabled. Enforces #pragma once in all header files instead
+#   of #ifndef/#define include guards. Requires clang-tidy >= 18 (project uses clang-20).
+#
 # bugprone-unchecked-optional-access:
 #   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
 #

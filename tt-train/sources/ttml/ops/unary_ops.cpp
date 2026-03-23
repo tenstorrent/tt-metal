@@ -5,7 +5,6 @@
 #include "ops/unary_ops.hpp"
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 #include <optional>
 
 #include "autograd/auto_context.hpp"
@@ -15,6 +14,16 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
+#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+#include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
+#include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
+#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -28,8 +37,7 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
         tensor->add_grad(res[0]);
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }
@@ -43,8 +51,7 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
         tensor->add_grad(dL_dt);
     };
 
-    std::vector<autograd::NodeId> links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -58,8 +65,7 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
         tensor->add_grad(res.front().value());
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }
@@ -73,8 +79,7 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
         auto grad = ttnn::subtract(out->get_grad(), ttnn::multiply(softmax, sum_grad_over_dim));
         tensor->add_grad(grad);
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -101,8 +106,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
         tensor->add_grad(grad);
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -130,9 +134,8 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
             core::ComputeKernelConfig::precise());
         tensor->add_grad(res);
     };
-    auto links = autograd::get_links(tensor);
 
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 
@@ -149,9 +152,8 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
         auto res = ttnn_fixed::sum_over_batch(out->get_grad());
         tensor->add_grad(res);
     };
-    std::vector<autograd::NodeId> links = autograd::get_links(tensor);
 
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }
 

@@ -179,3 +179,26 @@ void pad_last_ktile(uint32_t l1_write_addr_in0) {
             l1_write_addr_in0, /*pad_value=*/0);
     }
 }
+
+/**
+ * @brief Pads the last K tile when the input is transposed.
+ *
+ * When transpose_a is true, K maps to the height dimension of the physical tile.
+ * This function applies zero padding to the height (rows) of the last K tile,
+ * leaving width fully unpadded.
+ *
+ * @tparam in0_data_format The data format of the input tensor (Float32 or Float16_b)
+ * @tparam in0_last_ktile_h The unpadded height of the last K tile
+ * @param l1_write_addr_in0 The L1 memory address where the zeros should be written
+ */
+template <DataFormat in0_data_format, uint32_t in0_last_ktile_h>
+void pad_last_transposed_ktile(uint32_t l1_write_addr_in0) {
+    using namespace tt::constants;
+    if constexpr (in0_data_format == DataFormat::Float32) {
+        fill_pad_tile<uint32_t, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
+            l1_write_addr_in0, /*pad_value=*/0);
+    } else if constexpr (in0_data_format == DataFormat::Float16_b) {
+        fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
+            l1_write_addr_in0, /*pad_value=*/0);
+    }
+}

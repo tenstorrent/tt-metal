@@ -6,6 +6,7 @@ import argparse
 import torch
 
 from models.demos.deepseek_v3.reference.deepseek_reference_outputs_gen import *
+from models.demos.deepseek_v3.utils.hf_model_utils import index_model_weights
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -33,8 +34,8 @@ def main():
         print("Model loaded successfully")
 
         # Load the model weights
-        print("Loading model weights")
-        weights_dict = load_model_weights(args.local_model_path)
+        print("Indexing model weights lazily")
+        weights_dict = index_model_weights(args.local_model_path)
         add_dynamic_weight_loading_hooks(model, weights_dict)
         print("Model weights loaded successfully")
 

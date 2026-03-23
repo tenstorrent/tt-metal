@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -46,10 +47,12 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
     }
 }
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
+get_cb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     bool fp32_dest_acc_en) {
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -59,8 +62,17 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::D
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_cb_data_format = stats.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
-    return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format};
+    return {
+        out_data_format,
+        cb_data_format,
+        gamma_cb_data_format,
+        beta_cb_data_format,
+        stats_cb_data_format,
+        reciprocal_cb_data_format};
 }
 
 namespace {
@@ -98,8 +110,9 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 
 GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
     auto spec = input.shard_spec().value();
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
-    uint32_t block_h = block_ht * TILE_HEIGHT;
+    uint32_t block_h = block_ht * tile_height;
     bool mcast = M == block_h;
     bool rw = spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = spec.grid.bounding_box();
@@ -470,7 +483,14 @@ KernelPaths KernelPaths::get(
 }
 
 KernelDefines KernelDefines::build(
-    bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back) {
+    bool has_b,
+    bool has_gamma,
+    bool has_beta,
+    bool rms_norm,
+    bool use_welford,
+    bool skip_write_back,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<tt::tt_metal::DataType> output_dtype) {
     KernelDefines defines;
 
     // Reader defines
@@ -498,6 +518,17 @@ KernelDefines KernelDefines::build(
     }
     if (rms_norm && !use_welford) {
         defines.compute.emplace_back("RMSNORM", "1");
+    }
+    if (fused_activation.has_value()) {
+        const auto& act = fused_activation.value();
+        // The inner tile loop variable in layernorm_sharded.cpp is "w" (dst register index).
+        // Using "i" would refer to the outer block_h loop and apply the activation to the
+        // wrong dst register.
+        auto act_defines =
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "w", output_dtype);
+        for (auto& [key, val] : act_defines) {
+            defines.compute.emplace_back(key, val);
+        }
     }
 
     return defines;
@@ -530,7 +561,7 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
 
     if (is_post_all_gather) {
-        sizes.stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        sizes.stats_cb_size = post_all_gather_stats_block_tiles * stats_single_tile_size;
         sizes.stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
 
@@ -716,8 +747,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     // Welford-specific compute args
     if (ctx.use_welford) {
-        constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
-        uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
+        const uint32_t tile_width = ctx.tile_width;
+        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 
         args.compute_all_to_all.push_back(tile_width);
@@ -746,12 +777,56 @@ void add_kernel_descriptors(
     const WorkerDistribution& workers,
     const GridParams& grid,
     KernelConfig&& kernel_config) {
+    // Named compile-time args for CB indices - enables kernel chaining/fusion
+    KernelDescriptor::NamedCompileTimeArgs reader_cb_named_args = {
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs writer_cb_named_args = {
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_out_resharded", tt::CBIndex::c_17},
+        {"cb_in_2", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_in_4", tt::CBIndex::c_4},
+    };
+
+    KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_scaler", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_scaler_global", tt::CBIndex::c_4},
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_ex_partial", tt::CBIndex::c_8},
+        {"cb_ex", tt::CBIndex::c_9},
+        {"cb_ex_external", tt::CBIndex::c_10},
+        {"cb_ex_partial2", tt::CBIndex::c_11},
+        {"cb_ex2", tt::CBIndex::c_12},
+        {"cb_ex_external2", tt::CBIndex::c_13},
+        {"cb_ex_global", tt::CBIndex::c_15},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_xmm", tt::CBIndex::c_18},
+        {"cb_ex2pe", tt::CBIndex::c_20},
+        {"cb_x", tt::CBIndex::c_24},
+    };
+
     // Reader sender kernel
     KernelDescriptor reader_sender_kernel_desc;
     reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
     reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
     reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
+    reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
     reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
     reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
     reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -768,6 +843,7 @@ void add_kernel_descriptors(
         reader_receiver_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_workers_except_sender;
         reader_receiver_all_to_all_kernel_desc.compile_time_args =
             std::move(kernel_config.reader_receiver_all_to_all_ct_args);
+        reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
         reader_receiver_all_to_all_kernel_desc.runtime_args =
             std::move(kernel_config.reader_receiver_all_to_all_rt_args);
@@ -785,6 +861,7 @@ void add_kernel_descriptors(
         reader_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
+        reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
         reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
         reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
         reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -800,6 +877,7 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
+    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -815,6 +893,7 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
+        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -830,6 +909,7 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     compute_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_all_to_all_ct_args);
+    compute_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
     compute_all_to_all_kernel_desc.defines = kernel_config.compute_defines;
     compute_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_all_to_all_rt_args);
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -845,6 +925,7 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_not_all_to_all_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         compute_not_all_to_all_kernel_desc.compile_time_args = std::move(kernel_config.compute_not_all_to_all_ct_args);
+        compute_not_all_to_all_kernel_desc.named_compile_time_args = compute_cb_named_args;
         compute_not_all_to_all_kernel_desc.defines = std::move(kernel_config.compute_defines);
         compute_not_all_to_all_kernel_desc.runtime_args = std::move(kernel_config.compute_not_all_to_all_rt_args);
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
@@ -1050,8 +1131,8 @@ void add_cb_descriptors(
         stats_cb_desc.core_ranges = core_ranges.sender_cores;
         stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_7,
-            .data_format = cb_config.cb_data_format,
-            .page_size = cb_config.single_tile_size});
+            .data_format = cb_config.stats_cb_data_format,
+            .page_size = cb_config.stats_single_tile_size});
         stats_cb_desc.buffer = cb_config.stats_buffer;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 

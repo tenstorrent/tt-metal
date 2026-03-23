@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
+
 #include "fabric_command_interface.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"

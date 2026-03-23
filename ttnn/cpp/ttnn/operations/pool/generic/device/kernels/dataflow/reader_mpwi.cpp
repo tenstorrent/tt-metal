@@ -139,7 +139,7 @@ ALWI void initialize_return_indices_data() {
     cb_push_back(in_idx_cb_id, 1);
 
     // initialize the increment CBs
-    // TODO we used to fill the 16 bit values two at a time, but this techincally resulted in overflow with odd
+    // TODO we used to fill the 16 bit values two at a time, but this technically resulted in overflow with odd
     // c dimensions so for now we do it one at a time for both 16 and 32 bit indexes
     if constexpr (indexes_32_bit) {
         auto fill_inc_32 = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {

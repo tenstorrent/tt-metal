@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "gather.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -67,37 +67,19 @@ void bind_gather_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
     )doc";
 
-    using OperationType = decltype(ttnn::gather);
-    bind_registered_operation(
+    ttnn::bind_function<"gather">(
         mod,
-        ttnn::gather,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const ttnn::Tensor& input_index_tensor,
-               const bool sparse_grad,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    input_index_tensor,
-                    sparse_grad,
-                    memory_config,
-                    optional_output_tensor,
-                    sub_core_grids);
-            },
+        ttnn::overload_t(
+            &ttnn::gather,
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::arg("index"),
             nb::kw_only(),
             nb::arg("sparse_grad") = false,
-            nb::arg("out") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("out") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

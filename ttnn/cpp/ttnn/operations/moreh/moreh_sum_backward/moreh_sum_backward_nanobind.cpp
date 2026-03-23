@@ -8,17 +8,22 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "moreh_sum_backward.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 void bind_moreh_sum_backward_operation(nb::module_& mod) {
-    bind_registered_operation(
+    const auto* doc = R"doc(
+        Moreh Sum Backward Operation
+    )doc";
+
+    ttnn::bind_function<"moreh_sum_backward">(
         mod,
-        ttnn::moreh_sum_backward,
-        "Moreh Sum Backward Operation",
-        ttnn::nanobind_arguments_t{
+        doc,
+        ttnn::overload_t(
+            &ttnn::moreh_sum_backward,
             nb::arg("output_grad"),
             nb::kw_only(),
             nb::arg("input") = nb::none(),
@@ -26,7 +31,6 @@ void bind_moreh_sum_backward_operation(nb::module_& mod) {
             nb::arg("keepdim") = false,
             nb::arg("input_grad") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-        });
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_sum_backward

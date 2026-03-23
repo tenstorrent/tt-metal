@@ -150,7 +150,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
-tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto input_mem_config = tensor.input_tensor_.memory_config();
     auto in_dtype = tensor.input_tensor_.dtype();
     auto out_dtype = op_attr.output_dtype_;

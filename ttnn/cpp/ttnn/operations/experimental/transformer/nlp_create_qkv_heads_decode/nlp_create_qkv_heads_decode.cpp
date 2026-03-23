@@ -8,9 +8,9 @@
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode(
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
@@ -65,4 +65,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     return {out.at(0), out.at(1), out.at(2)};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

@@ -19,6 +19,7 @@ run_dual_t3k_unit_tests() {
   local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
   local rank_binding="tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml"
   local strict_rank_binding="tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml"
+  local bigmesh_rank_binding="tests/tt_metal/distributed/config/dual_t3k_1x16_experimental_bigmesh_rank_bindings.yaml"
 
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
@@ -26,6 +27,7 @@ run_dual_t3k_unit_tests() {
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
   tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

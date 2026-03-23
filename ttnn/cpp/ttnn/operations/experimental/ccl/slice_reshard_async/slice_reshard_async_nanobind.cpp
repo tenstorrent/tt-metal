@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -17,37 +17,12 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_slice_reshard_async_op(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("dim"),
-            nb::arg("output_dim_offset"),
-            nb::arg("output_dim_shape"),
-            nb::arg("cluster_axis"),
-            nb::arg("final_semaphore"),
-            nb::arg("barrier_semaphore"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("topology") = ttnn::ccl::Topology::Linear});  // TODO_NANOBIND: cast?
-}
-
-}  // namespace
-
 void bind_slice_reshard_async(nb::module_& mod) {
-    bind_slice_reshard_async_op(
+    ttnn::bind_function<"slice_reshard_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::slice_reshard_async,
         R"doc(
 
-        Slice a multi-device tensor, and then reshard the tensor across devices.  The slice is computed in the space of the aggregate multi-device tensor, not in each device tensor individually.  The use case for this is when the input tensor is padded, and then after various operations changes in size in the dimension it is sharded on.  This could lead to unneccessary amounts of padding, so the padding is trimmed, and the resulting slice of the aggregate input tensor is resharded across devices.
+        Slice a multi-device tensor, and then reshard the tensor across devices.  The slice is computed in the space of the aggregate multi-device tensor, not in each device tensor individually.  The use case for this is when the input tensor is padded, and then after various operations changes in size in the dimension it is sharded on.  This could lead to unnecessary amounts of padding, so the padding is trimmed, and the resulting slice of the aggregate input tensor is resharded across devices.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
@@ -63,7 +38,19 @@ void bind_slice_reshard_async(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the slice_resharded output tensor.
-        )doc");
+        )doc",
+        &ttnn::experimental::slice_reshard_async,
+        nb::arg("input_tensor"),
+        nb::arg("dim"),
+        nb::arg("output_dim_offset"),
+        nb::arg("output_dim_shape"),
+        nb::arg("cluster_axis"),
+        nb::arg("final_semaphore"),
+        nb::arg("barrier_semaphore"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -44,7 +44,10 @@ struct Sampling {
         uint32_t SenderIdx,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0>
+        uint32_t SocketPageSizeBytes = 0,
+        uint32_t ScoresCBId = 0xFFFFFFFF,
+        uint32_t ScoresNumPages = 0,
+        uint32_t GatherCBId = 0xFFFFFFFF>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
@@ -70,6 +73,9 @@ struct Sampling {
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr uint32_t scores_cb_id = ScoresCBId;
+        static constexpr uint32_t scores_num_pages = ScoresNumPages;
+        static constexpr uint32_t gather_cb_id = GatherCBId;
     };
 
     template <
@@ -85,6 +91,8 @@ struct Sampling {
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
     };
+
+    struct ComputeCTArgs {};
 
     struct ReaderArgs {
         uint32_t scores_addr;
@@ -103,6 +111,13 @@ struct Sampling {
         uint32_t final_noc_y;
         uint32_t scratch_addr;
         uint32_t socket_config_addr = 0;
+        // Optional persistent-mode next-iteration signal routing (BRISC path).
+        uint32_t persistent_enable = 0;
+        uint32_t persistent_dst_noc_x = 0;
+        uint32_t persistent_dst_noc_y = 0;
+        uint32_t persistent_dst_mesh_id = 0;
+        uint32_t persistent_dst_chip_id = 0;
+        uint32_t persistent_dst_sem_addr = 0;
     };
 
     struct ComputeArgs {};
@@ -240,7 +255,7 @@ struct Sampling {
             uint32_t final_noc_y,
             uint32_t local_slot_addr,
             const BriscMeshSendMetadata& metadata,
-            size_t arg_idx) {
+            size_t& arg_idx) {
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
@@ -268,7 +283,33 @@ struct Sampling {
             noc_async_full_barrier();
         }
 
-        FORCE_INLINE void send_d2h_token_from_cb_brisc(uint32_t socket_config_addr) {
+        FORCE_INLINE void send_persistent_next_iter_inc_via_fabric_brisc(const WriterArgs& args, size_t& arg_idx) {
+            if (args.persistent_enable == 0) {
+                return;
+            }
+            constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+            auto route_id = PacketHeaderPool::allocate_header_n(1);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+            set_unicast_route(
+                packet_header,
+                static_cast<uint16_t>(args.persistent_dst_chip_id),
+                static_cast<uint16_t>(args.persistent_dst_mesh_id),
+                1);
+            packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr), 1});
+
+            auto fabric_sender =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            fabric_sender.open();
+            fabric_sender.wait_for_empty_write_slot();
+            fabric_sender.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+            fabric_sender.close();
+            noc_async_full_barrier();
+        }
+
+        FORCE_INLINE void send_d2h_token_from_cb_brisc(const WriterArgs& args) {
+            const uint32_t socket_config_addr = args.socket_config_addr;
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
             const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
@@ -295,14 +336,14 @@ struct Sampling {
             noc_async_write_barrier();
         }
 
-        FORCE_INLINE void send_d2d_token_from_cb_brisc(uint32_t socket_config_addr) {
+        FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
+            const uint32_t socket_config_addr = args.socket_config_addr;
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
 
             socket_reserve_pages(sender_socket, 1);
             cb_wait_front(CTArgs::socket_cb_id, 1);
             const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-
             for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
                 sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
                 noc_async_write(
@@ -325,13 +366,18 @@ struct Sampling {
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
-            const uint32_t gather_addr = args.gather_addr;
-
+            const uint32_t gather_addr =
+                (CTArgs::gather_cb_id != 0xFFFFFFFF) ? get_write_ptr(CTArgs::gather_cb_id) : args.gather_addr;
+            uint32_t scores_addr = args.scores_addr;
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_wait_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
+                scores_addr = get_read_ptr(CTArgs::scores_cb_id);
+            }
             invalidate_l1_cache();
 
             // Phase 1: per-core local argmax and delivery to the final core.
             if constexpr (IsActiveCore) {
-                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.scores_addr);
+                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
                 auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
                 uint16_t best_score = NEG_INF_BFLOAT16;
                 uint32_t best_index = 0xFFFFFFFF;
@@ -345,6 +391,9 @@ struct Sampling {
                     phase1_send_local_winner_to_final(
                         local_slot_addr, gather_addr + slot_offset, args.final_noc_x, args.final_noc_y);
                 }
+            }
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_pop_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
             }
 
             // Phase 2: final-core intra-device reduction across all active cores.
@@ -426,10 +475,12 @@ struct Sampling {
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
+            size_t arg_idx = 0;
+            PacketHeaderPool::reset();
             if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
-                send_d2h_token_from_cb_brisc(args.socket_config_addr);
+                send_d2h_token_from_cb_brisc(args);
             } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                send_d2d_token_from_cb_brisc(args.socket_config_addr);
+                send_d2d_token_from_cb_brisc(args);
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
@@ -437,11 +488,13 @@ struct Sampling {
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
 
-                size_t arg_idx = 0;
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                 const uint32_t local_slot_addr = args.scratch_addr + metadata.local_slot_offset;
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
+            }
+            if constexpr (IsFinalCore) {
+                send_persistent_next_iter_inc_via_fabric_brisc(args, arg_idx);
             }
 #elif defined(COMPILE_FOR_TRISC)
             // No-op for k=1 argmax fast path.

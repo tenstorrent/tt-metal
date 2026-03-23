@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/graph_processor.hpp"
@@ -41,7 +42,7 @@ private:
 // implicit conversions (e.g., T -> std::optional<T>).
 template <typename Op, typename Tuple, std::size_t... Is>
 auto invoke_op_impl(Op&& op, Tuple& args, std::index_sequence<Is...>) {
-    return std::forward<Op>(op)(std::get<Is>(args)...);
+    return std::invoke(std::forward<Op>(op), std::get<Is>(args)...);
 }
 
 template <typename Op, typename Tuple>
@@ -61,7 +62,7 @@ auto invoke_op(Op&& op, Tuple& args) {
 template <typename T>
 inline std::vector<Tensor> extract_output_tensors(const T& result) {
     std::vector<Tensor> tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
+    ttsl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
     return tensors;
 }
 
@@ -71,7 +72,7 @@ inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& res
     std::vector<Tensor> tensors;
     std::visit(
         [&tensors](auto&& value) {
-            tt::stl::reflection::visit_object_of_type<Tensor>(
+            ttsl::reflection::visit_object_of_type<Tensor>(
                 [&tensors](auto&& tensor) { tensors.push_back(tensor); }, value);
         },
         result);

@@ -348,3 +348,17 @@ advanced_nd_sharded = ttnn.from_torch(
 > **Note:** When using `NdShardSpec`, ensure that the tensor dimensions are compatible with the specified shard shapes and core ranges.
 
 </details>
+
+## TensorMemoryLayout Enum Values
+
+Each tensor's `memory_config` contains a `TensorMemoryLayout` value that identifies how its data is distributed across memory banks. The following table summarizes the mapping between sharding strategy and enum value:
+
+| Sharding Strategy | `TensorMemoryLayout` Value | Description |
+|---|---|---|
+| Interleaved (non-sharded) | `TensorMemoryLayout::INTERLEAVED` | Pages are distributed across all available memory banks in round-robin order. No explicit shard specification is required. |
+| Height sharded (legacy) | `TensorMemoryLayout::HEIGHT_SHARDED` | The tensor is divided along its height dimension using a 2D `ShardSpec`. |
+| Width sharded (legacy) | `TensorMemoryLayout::WIDTH_SHARDED` | The tensor is divided along its width dimension using a 2D `ShardSpec`. |
+| Block sharded (legacy) | `TensorMemoryLayout::BLOCK_SHARDED` | The tensor is divided into a 2D grid of rectangular blocks using a 2D `ShardSpec`. |
+| ND sharded | `TensorMemoryLayout::ND_SHARDED` | The tensor is sharded across arbitrary dimensions using an `NdShardSpec`. Used when there is no equivalent legacy 2D shard specification. |
+
+**Key distinction:** ND sharded tensors that can be equivalently expressed as a legacy 2D sharding strategy (height, width, or block) will use the corresponding legacy `TensorMemoryLayout` value (`HEIGHT_SHARDED`, `WIDTH_SHARDED`, or `BLOCK_SHARDED`) rather than `ND_SHARDED`. The `ND_SHARDED` value is reserved for cases where the sharding pattern cannot be represented by any of the legacy 2D strategies.

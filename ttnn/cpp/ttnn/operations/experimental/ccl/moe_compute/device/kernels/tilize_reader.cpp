@@ -730,14 +730,8 @@ void kernel_main() {
         cb_push_back(total_chunks_cb_id, one_page);
 
         // ========== Write expert_activation buffer to DRAM ==========
-        // Write activated rows + sentinel row (with -1 in token_id) to DRAM
-        // Cap off expert_activation buffer with sentinel row
-        uint32_t* sentinel_row_ptr =
-            reinterpret_cast<uint32_t*>(expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-        sentinel_row_ptr[0] = static_cast<uint32_t>(-1);  // token_id = -1 indicates end
-
-        // Write to DRAM: activated rows + sentinel = (num_activated_tokens + 1) rows
-        uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
+        // Write to DRAM: activated rows (num_activated_tokens) rows
+        uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
         uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
         noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         // Barrier for this write is at the very end of the kernel
@@ -930,7 +924,7 @@ void kernel_main() {
             // Wait until previous chunk arrives on the matmul cores before reading in another chunk of tokens.
             // Since both the reader and writer use NoC1, we want writer to have priority access so that chunks
             // arrive at the matmul cores earlier. Also, to do linked mcast transactions we need NoC to be completely
-            // idle during mcast. The very last wait is technically redundent since we won't be reading in another chunk
+            // idle during mcast. The very last wait is technically redundant since we won't be reading in another chunk
             // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
             // last linked mcast completes.
             noc_semaphore_wait(

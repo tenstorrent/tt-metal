@@ -11,9 +11,9 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
+ttnn::Tensor strided_all_gather_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -44,4 +44,4 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         mm_block_ht,
         mm_block_wt);
 }
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

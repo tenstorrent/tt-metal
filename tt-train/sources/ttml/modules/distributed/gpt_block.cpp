@@ -48,7 +48,8 @@ DistributedGPTBlock::DistributedGPTBlock(
     register_module(m_attention, "attention");
 }
 
-autograd::TensorPtr DistributedGPTBlock::operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+autograd::TensorPtr DistributedGPTBlock::operator()(
+    const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     auto residual = input;
     auto x = (*m_ln1)(input);
     x = (*m_attention)(x, mask);

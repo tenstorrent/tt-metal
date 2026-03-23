@@ -21,7 +21,7 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct IntImgProgramFactory {
     static constexpr std::array<const char*, 3> KERNEL_PATHS{

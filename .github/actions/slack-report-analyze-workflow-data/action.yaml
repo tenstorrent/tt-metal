@@ -7,11 +7,11 @@ inputs:
   channel_id:
     description: "Channel ID for the Slack channel (required if using Bot Token)"
     required: false
-  regressed_workflows:
-    description: "JSON array from analyze step output 'regressed_workflows'"
-    required: true
-  alert_all_message:
-    description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
+  regressed_workflows_path:
+    description: "Path to a JSON file containing regressed workflows"
+    required: false
+  alert_all_message_path:
+    description: "Path to a text file containing the Slack-ready alert text"
     required: false
 outputs:
   slack_ts:
@@ -24,12 +24,28 @@ runs:
       id: build
       shell: bash
       env:
-        ALERT_RAW: ${{ inputs.alert_all_message }}
-        REGRESSED_RAW: ${{ inputs.regressed_workflows }}
+        ALERT_PATH: ${{ inputs.alert_all_message_path }}
+        REGRESSED_PATH: ${{ inputs.regressed_workflows_path }}
       run: |
         set -euo pipefail
         tmp_file="$(mktemp)"
-        printf '%s' "$REGRESSED_RAW" > "$tmp_file"
+        cleanup_tmp_file() {
+          rm -f "$tmp_file"
+        }
+        trap cleanup_tmp_file EXIT
+
+        if [ -n "${REGRESSED_PATH:-}" ] && [ -f "$REGRESSED_PATH" ]; then
+          cp "$REGRESSED_PATH" "$tmp_file"
+        else
+          printf '%s' '[]' > "$tmp_file"
+        fi
+
+        if [ -n "${ALERT_PATH:-}" ] && [ -f "$ALERT_PATH" ]; then
+          ALERT_RAW="$(cat "$ALERT_PATH")"
+        else
+          ALERT_RAW=""
+        fi
+
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
           echo "⚠️ Failed to parse regression list JSON. Skipping Slack notification."
           echo "has_regressions=false" >> "$GITHUB_OUTPUT"

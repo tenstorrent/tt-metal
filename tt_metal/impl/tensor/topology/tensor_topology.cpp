@@ -4,6 +4,8 @@
 
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
+#include <tt_stl/reflection.hpp>
+
 namespace tt::tt_metal {
 
 TensorTopology TensorTopology::create_fully_replicated_tensor_topology(

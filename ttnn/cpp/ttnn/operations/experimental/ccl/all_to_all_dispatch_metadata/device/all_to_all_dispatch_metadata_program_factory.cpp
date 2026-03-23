@@ -542,6 +542,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         0,
         linearized_mesh_coord,
 
+        dispatch_devices,
+
         // scores tensor args
         scores_tensor_cb_id,
         scores_pages,
@@ -558,10 +560,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     const auto& writer_compile_time_args = reader_compile_time_args;
 
-    std::map<std::string, std::string> reader_defines = {
-        {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
-    };
-
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/device/kernels/dataflow/"
@@ -570,8 +568,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+            .compile_args = reader_compile_time_args});
 
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel

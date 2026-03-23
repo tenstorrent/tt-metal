@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.pool import golden_adaptive_avg_pool2d, golden_adaptive_max_pool2d
 
 
 def randomize_tensor(tensor_map, tensor_shape):
@@ -44,17 +45,14 @@ def run_adaptive_pool2d(
         pytest.skip(f"Skipping memory-intensive case [1, 64, 224, 224] -> [{out_h}, {out_w}] with {dtype} due to OOM")
 
     torch.manual_seed(0)
-    torch_input = randomize_tensor(tensor_map, input_shape)
-
-    # Convert to TTNN format [1, 1, NHW, C]
-    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))
-    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)
+    # Create tensor directly in [1, 1, NHW, C] format used by both golden and TTNN ops
+    nhwc_shape = (1, 1, in_n * in_h * in_w, in_c)
+    torch_input = randomize_tensor(tensor_map, nhwc_shape)
 
     if dtype == ttnn.bfloat8_b:
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Call the appropriate TTNN function
     if pool_type == "avg":
@@ -69,8 +67,15 @@ def run_adaptive_pool2d(
             dram_slice_config=dram_slice_config,
             applied_shard_scheme=sharding,
         )
-        # PyTorch reference
-        torch_output = torch.nn.functional.adaptive_avg_pool2d(torch_input, (out_h, out_w))
+
+        torch_output = golden_adaptive_avg_pool2d(
+            input_tensor=torch_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            output_size=(out_h, out_w),
+        )
     else:  # max
         ttnn_output = ttnn.adaptive_max_pool2d(
             input_tensor=ttnn_input,
@@ -83,22 +88,26 @@ def run_adaptive_pool2d(
             dram_slice_config=dram_slice_config,
             applied_shard_scheme=sharding,
         )
-        # PyTorch reference
-        torch_output = torch.nn.functional.adaptive_max_pool2d(torch_input, (out_h, out_w))
 
-    # Reshape TTNN output from [1, 1, N*out_h*out_w, C] to [N, C, out_h, out_w]
-    ttnn_output = ttnn.to_torch(ttnn_output).reshape(in_n, out_h, out_w, in_c)
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # NHWC -> NCHW
+        torch_output = golden_adaptive_max_pool2d(
+            input_tensor=torch_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            output_size=(out_h, out_w),
+        )
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    # DRAM slicing returns (N, H, W, C) while golden returns (1, 1, NHW, C) - normalize shape
+    if ttnn_output.shape != torch_output.shape:
+        ttnn_output = ttnn_output.reshape(1, 1, -1, in_c)
 
     # Test for equivalence with pool-type-specific tolerances
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if pool_type == "avg":
         rtol = 0.01  # Relaxed rtol for avg pool due to bfloat16 scalar precision limitations
-        pcc_threshold = 0.985
-    else:  # max
-        pcc_threshold = 1
-        if dtype == ttnn.bfloat8_b:
-            pcc_threshold = 0.99
 
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
@@ -114,5 +123,3 @@ def run_adaptive_pool2d(
         assert (
             isequal
         ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output: [{out_h}, {out_w}]"
-
-    assert_with_pcc(torch_output, ttnn_output, pcc_threshold)

@@ -35,7 +35,7 @@ CoreCoord choose_additional_core(
         CoreCoord(2, 5),
         CoreCoord(3, 5),
         CoreCoord(6, 5),
-        CoreCoord(7, 5),
+        CoreCoord(0, 5),
     };
 
     // try optimal core first
@@ -116,7 +116,7 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
     // tensor details
     const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
     const uint32_t num_pages_per_shard = input_nd_shard_spec.shard_shape.volume() / num_tile_elements;
-    const uint32_t num_shards = input_tensors.at(0).logical_volume() / (num_tile_elements * num_pages_per_shard);
+    const uint32_t num_shards = input_tensors.at(0).physical_volume() / (num_tile_elements * num_pages_per_shard);
     const uint32_t num_pages_per_slice = input_tensors.at(0).buffer()->num_pages();
     const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
 

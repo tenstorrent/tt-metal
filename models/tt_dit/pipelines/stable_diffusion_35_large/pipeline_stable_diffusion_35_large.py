@@ -350,7 +350,7 @@ class StableDiffusion3Pipeline:
         if model_checkpoint_path is not None:
             checkpoint_name = model_checkpoint_path
             logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
-        # defatult config per mesh shape
+        # default config per mesh shape
         default_config = {
             (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
             (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},

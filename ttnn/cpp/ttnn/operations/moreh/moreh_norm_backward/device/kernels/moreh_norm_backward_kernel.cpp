@@ -149,7 +149,7 @@ void kernel_main() {
 
         cb_pop_front(cb_dy, onetile);
 
-        // muliply abs sign
+        // multiply abs sign
         mul_tiles_to_cb(cb_sign, cb_tmp4, cb_dx, 0, 0);
     }
 

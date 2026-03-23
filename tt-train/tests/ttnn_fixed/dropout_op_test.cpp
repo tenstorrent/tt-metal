@@ -5,12 +5,12 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/experimental/dropout/dropout.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class DropoutTest : public ::testing::Test {
@@ -86,6 +86,7 @@ TEST_F(DropoutTest, TestProb) {
 }
 
 TEST_F(DropoutTest, TestKeepRatioApproximatelyNormal) {
+    // TODO: Enable once RNG is improved. Tracking issue: https://github.com/tenstorrent/tt-metal/issues/38149
     GTEST_SKIP() << "Currently random number generator using in the WH is not perfect. This Test show that "
                     "distribution is not normal.";
     // -------------------------------------------------------------------

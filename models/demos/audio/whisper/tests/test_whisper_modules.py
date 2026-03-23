@@ -568,7 +568,9 @@ def test_ttnn_whisper(
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize("num_decode_iterations", [5])
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 1000000}], indirect=True
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 1000000, "num_command_queues": 2}],
+    indirect=True,
 )
 def test_traced_decoder_executor(
     mesh_device,

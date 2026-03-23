@@ -4,7 +4,6 @@
 
 #include "serialization.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
@@ -19,6 +18,7 @@
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::serialization {
 
@@ -61,7 +61,7 @@ inline void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
             << " Actual: " << bytes.size() << ", type: " << typeid(ttnn::Shape).name();
         throw std::invalid_argument(oss.str());
     }
-    ttnn::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
+    ttsl::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
     std::memcpy(data.data(), bytes.data(), bytes.size());
     value = ttnn::Shape(std::move(data));
 }

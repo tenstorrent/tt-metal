@@ -4,15 +4,14 @@
 
 #include "moe_gate_mm_nanobind.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "moe_gate_mm.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm::detail {
 
 void bind_moe_gate_mm(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moe_gate_mm", "ttnn.experimental.deepseek.moe.">(
         mod,
-        ttnn::experimental::deepseek::moe::moe_gate_mm,
         R"doc(
         Experimental, high-performance MoE Gate MM operation for DeepSeek.
 
@@ -23,14 +22,13 @@ void bind_moe_gate_mm(nb::module_& mod) {
             layer_id: The layer for which the MoE Gate MM operation is being performed
             column_id: The column in the 16x8 grid in which this MoE gate is being performed
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("w_tensor"),
-            nb::arg("output_tensor"),
-            nb::arg("layer_id"),
-            nb::arg("column_id"),
-        });
+        &ttnn::experimental::deepseek::moe::moe_gate_mm,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("w_tensor"),
+        nb::arg("output_tensor"),
+        nb::arg("layer_id"),
+        nb::arg("column_id"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm::detail

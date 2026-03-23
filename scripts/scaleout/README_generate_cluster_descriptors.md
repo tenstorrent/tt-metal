@@ -36,7 +36,7 @@ The script runs the topology discovery tool on multiple hosts in parallel using 
 ### Required Parameters
 
 - `--mapping-file <file>`: Output YAML file path that maps rank numbers to cluster descriptor file paths
-- `--output-dir <dir>`: Directory where cluster descriptor files will be saved
+- `--output-dir <dir>`: Directory where cluster descriptor files will be saved. **Must be a shared filesystem** (e.g. NFS) when running multi-host so all hosts can read/write the same directory.
 - `--base-name <name>`: Base name for cluster descriptor files (e.g., `my_cluster_desc`)
 
 ### Optional Parameters
@@ -235,6 +235,11 @@ rank_to_cluster_mock_cluster_desc:
 
 - Ensure write permissions to the output directory
 - Check that the topology tool is executable
+
+### Multi-Host: Only One File Generated
+
+- `--output-dir` must point to a **shared filesystem** (NFS or similar) that all hosts can access
+- With a local path like `./cluster_descs`, each host writes to its own filesystem; use a shared path like `/data/cluster_descs` instead
 
 ## Notes
 

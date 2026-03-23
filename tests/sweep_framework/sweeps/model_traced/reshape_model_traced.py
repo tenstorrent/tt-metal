@@ -8,108 +8,152 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("reshape", all_cases=False)
+model_traced_params = loader.get_suite_parameters("reshape")
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "target_shape": [(1, 32, 1, 32)],
-        "storage_type": [
-            "StorageType::DEVICE"
-        ],  # NOTE: HOST storage does not work properly for reshape - always use DEVICE
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
-    target_shape,
+    output_memory_config=None,
+    target_shape=None,
+    shape=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        input_shape_tuple = tuple(input_shape)
-    else:
-        input_shape_tuple = input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape_tuple)
+    # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
+    # secondary shape (e.g. padded output shape) used by some internal paths
+    tgt_shape = target_shape or shape or kwargs.get("arg1", None)
+    if tgt_shape is None:
+        tgt_shape = (1, 32, 1, 32)  # fallback for sample
 
-    torch_output_tensor = torch.reshape(torch_input_tensor_a, target_shape)
+    if isinstance(tgt_shape, list):
+        tgt_shape = tuple(tgt_shape)
+    elif isinstance(tgt_shape, dict) and "value" in tgt_shape:
+        import re
 
-    # Check if shard shape is tile-aligned
-    # If shard shape height or width is not divisible by tile size (32), use ROW_MAJOR layout
-    actual_layout = input_a_layout
-    shard_spec = None
-    shard_shape = None
+        m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape["value"]))
+        if m:
+            tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
-    # Handle both dict (from JSON) and MemoryConfig object
-    if isinstance(input_a_memory_config, dict):
-        # Memory config can be a dict with 'data' key containing the actual config
-        data = input_a_memory_config.get("data", input_a_memory_config)
-        shard_spec = data.get("shard_spec") if isinstance(data, dict) else None
-        if shard_spec is not None and isinstance(shard_spec, dict):
-            shard_shape = shard_spec.get("shape")
-    elif hasattr(input_a_memory_config, "shard_spec"):
-        # MemoryConfig object
-        shard_spec = input_a_memory_config.shard_spec
-        if shard_spec is not None:
-            # ShardSpec object has shape attribute
-            if hasattr(shard_spec, "shape"):
-                shard_shape = shard_spec.shape
+    # arg2 may be a padded output shape; extract if present
+    arg2 = kwargs.get("arg2", None)
+    if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
+        import re
 
-    if shard_shape is not None and isinstance(shard_shape, (list, tuple)) and len(shard_shape) >= 2:
-        shard_height, shard_width = shard_shape[0], shard_shape[1]
-        # Check if shard dimensions are tile-aligned (must be divisible by 32)
-        if shard_height % 32 != 0 or shard_width % 32 != 0:
-            # Shard shape is not tile-aligned, use ROW_MAJOR layout
-            actual_layout = ttnn.ROW_MAJOR_LAYOUT
+        m = re.search(r"\[([0-9, ]+)\]", str(arg2["value"]))
+        if m:
+            arg2 = tuple(int(x) for x in m.group(1).split(","))
+    if isinstance(arg2, list):
+        arg2 = tuple(arg2)
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    # NOTE: HOST storage does not work properly for reshape operation - always use DEVICE
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=actual_layout,
-        device=device,
-        memory_config=input_a_memory_config,
+    in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+        in_shape
     )
 
+    import math
+
+    input_numel = math.prod(in_shape)
+    tgt_numel = math.prod(tgt_shape)
+    has_padded_shape = tgt_numel != input_numel and arg2 is not None and math.prod(arg2) == input_numel
+    if has_padded_shape:
+        torch_output = torch.reshape(torch_input, arg2)
+        slices = tuple(slice(0, s) for s in tgt_shape)
+        torch_output = torch_output[slices]
+    else:
+        torch_output = torch.reshape(torch_input, tgt_shape)
+
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor = create_tensor_on_mesh(
+                torch_input,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.reshape(input_tensor_a, target_shape, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    if tgt_numel != input_numel and arg2 is not None:
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+    else:
+        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
+    pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

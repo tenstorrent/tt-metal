@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>

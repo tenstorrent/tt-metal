@@ -5,6 +5,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -83,14 +84,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     }
     std::string requestor_kernel_path = kernels_dir + requestor_kernel_filename + ".cpp";
 
-    auto requestor_kernel = CreateKernel(
-        program,
-        requestor_kernel_path,
-        master_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = test_config.noc_id,
-            .compile_args = requestor_compile_args});
+    KernelHandle requestor_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        requestor_kernel = experimental::quasar::CreateKernel(
+            program,
+            requestor_kernel_path,
+            master_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = requestor_compile_args});
+    } else {
+        requestor_kernel = CreateKernel(
+            program,
+            requestor_kernel_path,
+            master_core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = test_config.noc_id,
+                .compile_args = requestor_compile_args});
+    }
 
     // Runtime Arguments
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);

@@ -1,7 +1,7 @@
 add_library(ttnn_op_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
-target_precompile_headers(ttnn_op_reduction REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_reduction TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_reduction)
 set_target_properties(
     ttnn_op_reduction
@@ -29,7 +29,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES argmax/argmax.hpp generic/generic_reductions.hpp
+        FILES argmax/argmax.hpp generic/generic_reductions.hpp reduction_common/reduction_common.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

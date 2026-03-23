@@ -72,7 +72,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
 
     l_shape = [batch_size, l_width * num_cores]
     ms_shape = [batch_size, ms_width * num_cores]
-    intermediate_shape = [batch_size, (l_width + ms_width) * num_cores]
+    intermediate_shape = [2, batch_size, (l_width + ms_width) * num_cores]  # R1 and R2
 
     scale_value = 1.0
     per_device_chunk_size = 1024
@@ -96,7 +96,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     )
     shard_spec_l = ttnn.ShardSpec(shard_grid, [batch_size, l_width], ttnn.ShardOrientation.ROW_MAJOR)
     shard_spec_ms = ttnn.ShardSpec(shard_grid, [batch_size, ms_width], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_int = ttnn.ShardSpec(shard_grid, [batch_size, (l_width + ms_width)], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_int = ttnn.ShardSpec(shard_grid, [2 * batch_size, (l_width + ms_width)], ttnn.ShardOrientation.ROW_MAJOR)
 
     mem_config_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_l
@@ -183,16 +183,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
         mesh_mapper=mesh_mapper,
     )
 
-    r1_recv_mesh = ttnn.from_torch(
-        torch.zeros(intermediate_shape, dtype=torch.bfloat16),
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_int,
-        mesh_mapper=mesh_mapper2,
-    )
-    r2_recv_mesh = ttnn.from_torch(
+    interm_recv_mesh = ttnn.from_torch(
         torch.zeros(intermediate_shape, dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
@@ -285,8 +276,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
         input_l_mesh,
         input_ms_mesh,
         output_l_mesh,
-        r1_recv_mesh,
-        r2_recv_mesh,
+        interm_recv_mesh,
         forwarder_scratch_mesh,
         semaphores,
         scale_fp32=scale_value,
@@ -312,6 +302,11 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
 
     logger.info(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
     assert match, f"L tensor mismatch! Max diff: {max_diff}"
+
+    # Reduction order should be deterministic so all devices produce identical results.
+    for i in range(1, num_devices):
+        dev_eq = torch.equal(output_l_torch[i], out_l_root)
+        assert dev_eq, f"L tensor mismatch on device {i}"
 
     # ========================================================================
     # Verify scatter output (only when scatter is enabled)

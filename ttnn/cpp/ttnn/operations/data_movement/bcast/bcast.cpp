@@ -8,10 +8,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
 // Does a broadcast
-Tensor BcastOperation::invoke(
+Tensor bcast(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     BcastOpMath bcast_op,
@@ -78,7 +78,7 @@ Tensor BcastOperation::invoke(
         }
     }
 
-    // Bcast only works with tile layout, so we need to tilize the input tensors if neccessary
+    // Bcast only works with tile layout, so we need to tilize the input tensors if necessary
     auto padded_shape_a = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_a.padded_shape());
     auto padded_shape_b = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_b.padded_shape());
     Tensor formatted_a = ttnn::tilize_with_val_padding(
@@ -92,5 +92,4 @@ Tensor BcastOperation::invoke(
     return ttnn::prim::bcast(
         formatted_a, formatted_b, bcast_op, bcast_dim, output_memory_config, in_place, output_tensor);
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

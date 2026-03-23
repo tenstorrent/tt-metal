@@ -21,8 +21,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
-
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
     tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
@@ -232,7 +230,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                     simde_mm256_sub_epi32(exp_vector0, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
                                     select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                                   // mantissa initial condition
                             } else {
                                 man1 = simde_mm256_blendv_epi8(
                                     man_shifted, man1, select_mask);  // Choose new mantissa or keep old mantissa based
@@ -247,7 +245,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
                                     simde_mm256_setzero_si256(),
                                     select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on
-                                                   // mantissa intiial condition
+                                                   // mantissa initial condition
                             }
                         }
 

@@ -90,7 +90,7 @@
  */
 
 void kernel_main() {
-    // Compiletime args
+    // Compile time args
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -175,10 +175,12 @@ void kernel_main() {
         // After bitonic merging, the top Kt tiles contain the locally optimal
         // TopK elements. Extract these and prepare for sending to the final core.
 
-        // Configure data formats for tile copying and prepare value tiles
+        // Configure data formats for tile copying and prepare value tiles.
+        // Pack using values_cb format: input_transposed_cb may be bf16 (higher-precision
+        // intermediate) while values_cb is the original bfp8/bfp4 output format.
         reconfig_data_format_srca(input_transposed_cb_index);
         copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
-        pack_reconfig_data_format(input_transposed_cb_index);
+        pack_reconfig_data_format(values_cb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
         cb_wait_front(input_transposed_cb_index, Kt);

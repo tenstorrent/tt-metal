@@ -35,7 +35,7 @@ ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
 /**
  * Scalar broadcast multiply with configurable fp32 accumulation
  */
-template <bool fp32_dest_acc_en = false>
+template <bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void deepseek_mul_tiles_bcast_scalar(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
@@ -54,12 +54,10 @@ ALWI void deepseek_mul_tiles_bcast_scalar(
 /**
  * Init for binary dest reuse multiply
  */
-template <
-    bool fp32_dest_acc_en = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
+template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, fp32_dest_acc_en, binary_reuse_dest>(false, false, icb0)));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
 }
 
@@ -68,10 +66,10 @@ ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_lin
  * dest[idst] = dest[idst] * cb[in_tile_index]
  */
 template <
-    bool fp32_dest_acc_en = false,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index, uint32_t idst) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, fp32_dest_acc_en, binary_reuse_dest>(icb, in_tile_index)));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(icb, in_tile_index)));
     MATH((llk_math_eltwise_binary<ELWMUL, BroadcastType::NONE, fp32_dest_acc_en, MATH_FIDELITY, binary_reuse_dest>(
         icb, icb, idst, true)));
 }

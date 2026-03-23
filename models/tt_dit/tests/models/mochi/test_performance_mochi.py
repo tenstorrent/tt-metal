@@ -23,9 +23,8 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, topology, num_links",
     [
-        # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 2), 0, 1, (1, 4), 0, 1, ttnn.Topology.Linear, 2],
-        [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 2],
+        [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 2],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 1],
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 4],  # note sp <-> tp switch for VAE for memory efficiency.
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 2],  # note sp <-> tp switch for VAE for memory efficiency.
@@ -47,6 +46,7 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
+    model_location_generator,
     model_name: str,
     image_w: int,
     image_h: int,
@@ -96,7 +96,10 @@ def test_mochi_pipeline_performance(
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
     logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
-    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
+    tt_pipe = TTMochiPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=model_location_generator(model_name),
+    )
 
     # Test prompts
     prompts = [
@@ -238,6 +241,15 @@ def test_mochi_pipeline_performance(
             "denoising": 1320,
             "vae": 55,
             "total": 1385,
+        }
+    elif tuple(mesh_device.shape) == (2, 2) and vae_mesh_shape == (1, 4):
+        assert is_blackhole(), "2x2 is only supported for blackhole"
+        # Tighten these once we have a stable BH QuietBox baseline in CI.
+        expected_metrics = {
+            "encoder": 8.0,
+            "denoising": 2600,
+            "vae": 90,
+            "total": 2700,
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {

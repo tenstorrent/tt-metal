@@ -92,7 +92,7 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 

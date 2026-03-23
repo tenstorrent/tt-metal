@@ -9,9 +9,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-Tensor InterleavedToShardedPartialOperation::invoke(
+Tensor interleaved_to_sharded_partial(
     const Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2>& shard_shape,
@@ -62,4 +62,4 @@ Tensor InterleavedToShardedPartialOperation::invoke(
         data_type_arg.value_or(input_tensor.dtype()));
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

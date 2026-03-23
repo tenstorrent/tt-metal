@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -25,7 +26,6 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     const UntilizeTensorReturnValue& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::tt_metal::Program program{};
@@ -50,7 +50,8 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         uint32_t output_shard_width;
         if (output.shard_spec().has_value()) {
             output_shard_width = output.shard_spec().value().shape[1];
@@ -146,17 +147,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
+    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
 
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;

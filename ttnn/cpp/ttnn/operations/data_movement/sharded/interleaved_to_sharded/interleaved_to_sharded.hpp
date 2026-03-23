@@ -4,32 +4,25 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct InterleavedToShardedOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const MemoryConfig& sharded_memory_config,
-        const std::optional<DataType>& data_type_arg,
-        const std::optional<bool>& keep_l1_aligned = std::nullopt,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const std::variant<CoreCoord, CoreRangeSet>& grid,
-        std::array<uint32_t, 2> shard_shape,
-        TensorMemoryLayout shard_scheme,
-        tt::tt_metal::ShardOrientation shard_orientation,
-        const std::optional<DataType>& data_type_arg,
-        const std::optional<bool>& keep_l1_aligned = std::nullopt);
-};
+ttnn::Tensor interleaved_to_sharded(
+    const ttnn::Tensor& input_tensor,
+    const MemoryConfig& sharded_memory_config,
+    const std::optional<DataType>& data_type_arg = std::nullopt,
+    const std::optional<bool>& keep_l1_aligned = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 
-}  // namespace operations::data_movement
+ttnn::Tensor interleaved_to_sharded(
+    const ttnn::Tensor& input_tensor,
+    const std::variant<CoreCoord, CoreRangeSet>& grid,
+    std::array<uint32_t, 2> shard_shape,
+    TensorMemoryLayout shard_scheme,
+    tt::tt_metal::ShardOrientation shard_orientation,
+    const std::optional<DataType>& data_type_arg = std::nullopt,
+    const std::optional<bool>& keep_l1_aligned = std::nullopt);
 
-constexpr auto interleaved_to_sharded = ttnn::register_operation<
-    "ttnn::interleaved_to_sharded",
-    ttnn::operations::data_movement::InterleavedToShardedOperation>();
 }  // namespace ttnn

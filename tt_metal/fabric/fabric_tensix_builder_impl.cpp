@@ -968,14 +968,15 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
                     break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
-                    fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};
+                    fabric_stream_ids = {
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id};
                     break;
                 case tt::tt_fabric::Topology::Mesh:
                 case tt::tt_fabric::Topology::Torus:
                     fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id};
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id,
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id,
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id};
                     break;
                 default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
             }

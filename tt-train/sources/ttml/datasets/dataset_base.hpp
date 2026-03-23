@@ -34,7 +34,7 @@ public:
 
     [[nodiscard]] std::vector<Sample> get_batch(std::span<size_t> indices) const {
         std::vector<Sample> batch;
-        auto size = get_size();
+        [[maybe_unused]] auto size = get_size();
         for (size_t index : indices) {
             assert(index < size);
             batch.push_back(get_item(index));

@@ -19,7 +19,7 @@ namespace ckernel {
  * available on the compute engine.
  *
  * @tparam data_format Template argument specifying the data type.
- * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b.
  *
  * Return value: None
  *

@@ -394,7 +394,7 @@ void kernel_main() {
                                 continue;
                             }
 
-                            // cases: the tile covers at least a window (potentailly multiple windows)
+                            // cases: the tile covers at least a window (potentially multiple windows)
                             uint32_t covered_window_q_start_idx, covered_window_k_start_idx, covered_window_q_end_idx,
                                 covered_window_k_end_idx;
                             do {

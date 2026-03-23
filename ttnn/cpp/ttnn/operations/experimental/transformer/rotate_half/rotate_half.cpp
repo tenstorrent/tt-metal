@@ -8,9 +8,9 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+Tensor rotate_half(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     using namespace tt::constants;
     using tt::tt_metal::PadValue;
 
@@ -31,4 +31,4 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
     return ttnn::prim::rotate_half(formatted_input, memory_config.value_or(input_tensor.memory_config()));
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

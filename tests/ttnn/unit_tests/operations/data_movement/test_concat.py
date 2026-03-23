@@ -169,6 +169,15 @@ def test_concat(device, height, width, dim, dtype):
             ttnn.TILE_LAYOUT,
             False,
         ),
+        # Regression test for HEIGHT_SHARDED concat hang (unet decoder_2 op 32)
+        (
+            [((1, 1, 4096, 256), (64, 256)), ((1, 1, 4096, 256), (64, 256))],
+            (64, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.TILE_LAYOUT,
+            False,
+        ),
     ),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])

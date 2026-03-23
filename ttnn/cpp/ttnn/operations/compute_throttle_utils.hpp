@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <ostream>
 #include <string>
 #include <map>
 
@@ -18,6 +19,18 @@ enum class ThrottleLevel : uint32_t {
     LEVEL_4 = 4,
     LEVEL_5 = 5
 };
+
+inline std::ostream& operator<<(std::ostream& os, ThrottleLevel level) {
+    switch (level) {
+        case ThrottleLevel::NO_THROTTLE: return os << "ThrottleLevel::NO_THROTTLE";
+        case ThrottleLevel::LEVEL_1: return os << "ThrottleLevel::LEVEL_1";
+        case ThrottleLevel::LEVEL_2: return os << "ThrottleLevel::LEVEL_2";
+        case ThrottleLevel::LEVEL_3: return os << "ThrottleLevel::LEVEL_3";
+        case ThrottleLevel::LEVEL_4: return os << "ThrottleLevel::LEVEL_4";
+        case ThrottleLevel::LEVEL_5: return os << "ThrottleLevel::LEVEL_5";
+        default: return os << "ThrottleLevel(" << static_cast<uint32_t>(level) << ")";
+    }
+}
 
 void add_stagger_defines_if_needed(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
 void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);

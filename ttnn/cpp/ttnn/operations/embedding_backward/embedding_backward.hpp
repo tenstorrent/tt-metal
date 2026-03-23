@@ -8,21 +8,12 @@
 
 namespace ttnn {
 
-namespace operations::embedding_backward {
-
-struct EmbeddingBackwardOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor_arg,
-        const Tensor& weight_tensor_arg,
-        const Tensor& output_gradient_tensor_arg,
-        std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-}  // namespace operations::embedding_backward
-
-constexpr auto embedding_bw =
-    ttnn::register_operation<"ttnn::embedding_bw", ttnn::operations::embedding_backward::EmbeddingBackwardOperation>();
+Tensor embedding_bw(
+    const Tensor& input_tensor_arg,
+    const Tensor& weight_tensor_arg,
+    const Tensor& output_gradient_tensor_arg,
+    std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn

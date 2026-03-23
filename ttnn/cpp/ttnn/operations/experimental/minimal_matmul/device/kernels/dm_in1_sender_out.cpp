@@ -277,6 +277,7 @@ void kernel_main() {
                     cb_id_ternary_a,
                     cb_id_ternary_b,
                     ternary_a_tile_size,
+                    ternary_b_tile_size,
                     m_tile,
                     m_tile_end,
                     n_tile,

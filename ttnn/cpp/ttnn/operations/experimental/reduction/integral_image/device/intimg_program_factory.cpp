@@ -16,7 +16,7 @@
 namespace {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 enum class IntImgCB : uint32_t {
     START,

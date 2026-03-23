@@ -33,6 +33,11 @@ Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(
 }
 
 void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
+    // Skip gradient addition if not required. Part of branch pruning autograd optimization.
+    if (!m_requires_grad) {
+        return;
+    }
+
     if (!is_grad_initialized()) {
         auto value_shape = m_value.get_tensor().logical_shape();
         if (grad.logical_shape() != value_shape) {

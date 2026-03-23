@@ -30,6 +30,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
 )
+tt_reuse_precompile_headers(test_lab_eltwise_binary TTNN::PCH)
 
 add_executable(test_lab_multicast)
 
@@ -56,3 +57,4 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
 )
+tt_reuse_precompile_headers(test_lab_multicast TTNN::PCH)

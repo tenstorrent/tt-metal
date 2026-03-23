@@ -1,0 +1,22 @@
+name: "PR - Sanity tests"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
+jobs:
+  trigger-post-commit:
+    if: ${{ github.event.pull_request.head.repo.fork == true }}
+    uses: ./.github/workflows/sanity-tests.yaml
+    secrets: inherit

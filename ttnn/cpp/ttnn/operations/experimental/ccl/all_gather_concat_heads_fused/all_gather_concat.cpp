@@ -6,11 +6,12 @@
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+
 #include <utility>
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteAllGatherConcat::invoke(
+ttnn::Tensor all_gather_concat(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const int32_t dim,
@@ -39,4 +40,4 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

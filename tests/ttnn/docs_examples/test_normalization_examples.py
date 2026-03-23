@@ -30,7 +30,8 @@ def test_group_norm(device):
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Prepare TTNN input
-    # Determine how to shard the input tensor
+    # Determine how to shard the input tensor - this example uses height sharding
+    # For interleaved (non-sharded) tensors, use ttnn.determine_expected_group_norm_dram_grid_size instead to determine the grid size.
     sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
         device=device,
         num_channels=C,
@@ -48,7 +49,15 @@ def test_group_norm(device):
         memory_config=sharded_mem_config,
     )
 
-    # Input mask - this is needed for each group to be able to select the correct elements of the input tensor
+    # To prepare the input tensors, we need to know how many cores split the channel dimension.
+    # For height sharding (as in this example) this is always 1; for block sharding it depends on the shard orientation.
+    num_cores_across_channel = ttnn.get_group_norm_cores_across_channel(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        grid_size,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Create the input mask which helps each group select the correct elements of the input tensor
     # In general, it will have dimensions of [1, num_groups, 32, 32*block_wt]
 
     # In this example, C=64 and num_groups=2, so each group is 32 channels (i.e. one tile) wide
@@ -61,7 +70,7 @@ def test_group_norm(device):
     input_mask_tensor = ttnn.create_group_norm_input_mask(
         num_channel=C,
         num_groups=num_groups,
-        num_cores_across_channel=1,  # As explained in the Limitations, supply 1 for height sharded input tensors
+        num_cores_across_channel=num_cores_across_channel,
         data_type=ttnn.bfloat8_b,
     )
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
@@ -69,10 +78,12 @@ def test_group_norm(device):
     # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
     # First they will zero padded if needed (does not apply to this example)
     # Then reshaped to be [1, 1, tiles_per_core_total, 32], which in this case will be [1, 1, 2, 32]
-
-    # As with the input mask, we supply a core count of 1 for height sharded input tensors
-    gamma = ttnn.create_group_norm_weight_bias_rm(input_tensor=torch_weight, num_channels=C, num_cores_x=1)
-    beta = ttnn.create_group_norm_weight_bias_rm(input_tensor=torch_bias, num_channels=C, num_cores_x=1)
+    gamma = ttnn.create_group_norm_weight_bias_rm(
+        input_tensor=torch_weight, num_channels=C, num_cores_x=num_cores_across_channel
+    )
+    beta = ttnn.create_group_norm_weight_bias_rm(
+        input_tensor=torch_bias, num_channels=C, num_cores_x=num_cores_across_channel
+    )
 
     gamma_t = ttnn.from_torch(
         gamma,
@@ -211,6 +222,30 @@ def test_rms_norm_distributed(device):
 
     # For reference, this two-step process is equivalent to the following
     # output = ttnn.rms_norm(input_tensor, weight=weight)
+
+
+def test_dit_rms_norm_unary_fused(device):
+    # Fused RMSNorm + SiLU activation in a single kernel pass.
+    # Equivalent to: ttnn.silu(ttnn.rms_norm(x, weight=weight))
+    seq_len, hidden_dim = 64, 128
+    input_tensor = ttnn.rand([1, 1, seq_len, hidden_dim], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.rand([1, hidden_dim], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Pass activation as a string — or use ttnn.UnaryOpType.SILU
+    output = ttnn.experimental.dit_rms_norm_unary_fused(
+        input_tensor,
+        weight=weight,
+        activation="silu",
+    )
+    logger.info(f"dit_rms_norm_unary_fused (silu, string) result shape: {output.shape}")
+
+    # Pass activation as a ttnn.UnaryOpType
+    output2 = ttnn.experimental.dit_rms_norm_unary_fused(
+        input_tensor,
+        weight=weight,
+        activation=ttnn.UnaryOpType.SILU,
+    )
+    logger.info(f"dit_rms_norm_unary_fused (silu, UnaryOpType) result shape: {output2.shape}")
 
 
 def test_batch_norm(device):

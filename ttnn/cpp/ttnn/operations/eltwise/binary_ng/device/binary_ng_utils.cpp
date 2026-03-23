@@ -494,7 +494,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(

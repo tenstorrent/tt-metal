@@ -22,7 +22,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -31,7 +31,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>

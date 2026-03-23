@@ -1,33 +1,34 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-//
+
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
-#include <utility>
-//
+
 using address_t = uint32_t;
-//
+
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr uint32_t stick_size = get_compile_time_arg_val(1);
-//
+
 void kernel_main() {
-    // Args
+    // Common runtime args (multicast once per kernel, not unicast per core)
+    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+    // CRTA[1] = output_addr (unused by reader, reserved for consistency with writer)
+    const uint32_t stick_start_id = get_common_arg_val<uint32_t>(2);
+    const uint32_t input_halo_dim_size = get_common_arg_val<uint32_t>(3);
+    const uint32_t num_sticks_to_read = get_common_arg_val<uint32_t>(4);
+    const uint32_t num_sticks_per_halo_dim = get_common_arg_val<uint32_t>(5);
+
+    // Per-core runtime args (only work distribution — truly unique per core)
     uint32_t arg_idx = 0;
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);  // not used in reader
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rows_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
-    //
+
     constexpr auto src_args = TensorAccessorArgs<2>();
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
-    //
+
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
         const uint32_t outer_idx = linear_row / input_halo_dim_size;

@@ -5,30 +5,19 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn {
-namespace operations::experimental::transformer {
+namespace ttnn::experimental {
 
-struct RotaryEmbeddingOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const Tensor& cos_cache,
-        const Tensor& sin_cache,
-        std::optional<uint32_t> token_index = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-};
+ttnn::Tensor rotary_embedding(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    std::optional<uint32_t> token_index = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-}  // namespace operations::experimental::transformer
-
-namespace experimental {
-
-constexpr auto rotary_embedding = ttnn::register_operation<
-    "ttnn::experimental::rotary_embedding",
-    ttnn::operations::experimental::transformer::RotaryEmbeddingOperation>();
-
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

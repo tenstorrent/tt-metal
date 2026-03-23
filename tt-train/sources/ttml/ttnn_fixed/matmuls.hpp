@@ -7,7 +7,11 @@
 
 namespace ttml::ttnn_fixed {
 tt::tt_metal::Tensor matmul(
-    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a = false, bool transpose_b = false);
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a = false,
+    bool transpose_b = false,
+    std::optional<tt::tt_metal::Tensor> output_tensor = std::nullopt);
 
 std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
     const tt::tt_metal::Tensor& a,

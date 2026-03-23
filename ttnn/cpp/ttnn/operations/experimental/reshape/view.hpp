@@ -10,7 +10,7 @@
 namespace ttnn::experimental {
 
 ttnn::Tensor view(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
-ttnn::Tensor view(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, ttsl::Span<const int32_t> shape_vector);
 ttnn::Tensor view(
     const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
 

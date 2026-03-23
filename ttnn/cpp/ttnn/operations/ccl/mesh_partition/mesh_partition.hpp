@@ -10,20 +10,11 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
-namespace operations::ccl {
 
-struct ExecuteMeshPartition {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
-};
-
-}  // namespace operations::ccl
-
-constexpr auto mesh_partition =
-    ttnn::register_operation<"ttnn::mesh_partition", ttnn::operations::ccl::ExecuteMeshPartition>();  // namespace
-                                                                                                      // ttnn
+ttnn::Tensor mesh_partition(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn

@@ -4,12 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 class ConcatOpTest : public ::testing::Test {
 protected:

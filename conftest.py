@@ -455,6 +455,10 @@ def device(request, device_params):
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    device.cache_entries_counter = CacheEntriesCounter(device)
+
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
@@ -576,6 +580,10 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -1135,6 +1143,67 @@ def reset_tensix(tt_open_devices=None):
         )
     else:
         logger.info("tt-smi reset completed successfully")
+
+
+@pytest.fixture(autouse=True)
+def ttnn_graph_report(request):
+    """
+    Automatically generate graph reports when config enables it.
+
+    Only activates when enable_logging, enable_graph_report, and report_path
+    are all set. Skipped when a graph capture is already active (e.g. a test
+    that manages its own capture).
+    """
+    import ttnn
+
+    if not getattr(ttnn.CONFIG, "enable_logging", False):
+        yield
+        return
+    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+        yield
+        return
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
+
+    report_path = Path(report_path)
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    if enable_detailed_buffer_report:
+        ttnn.graph.enable_detailed_buffer_tracing()
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        yield
+    finally:
+        if not ttnn.graph.is_graph_capture_active():
+            logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+        else:
+            report_path.mkdir(parents=True, exist_ok=True)
+            json_path = report_path / "graph_capture.json"
+            ttnn.graph.end_graph_capture_to_file(str(json_path))
+            if json_path.exists():
+                from ttnn.graph_report import import_report
+
+                import_report(json_path, report_path)
+
+            config_path = report_path / "config.json"
+            ttnn.save_config_to_json_file(config_path)
+
+        if enable_detailed_buffer_report:
+            ttnn.graph.disable_detailed_buffer_tracing()
 
 
 @pytest.fixture(scope="function", autouse=True)

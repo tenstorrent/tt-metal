@@ -9,14 +9,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
 
 
 @torch.no_grad()
@@ -80,27 +79,27 @@ def test_decoder_inference(
         prefetcher.init(mode=Mode.PREFILL)
 
     model_args = ModelArgs(
-        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        cache_hf=True,
+        prefetcher=prefetcher,
+        use_hf_rope=False,
     )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
-    reference_model = model_args.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model = model_args.reference_decoder(load_checkpoint=True)
 
     generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
+    rot_mats_fn = get_rot_mats_hf if model_args.use_hf_rope else get_rot_mats
+
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_rot_mats(
+    rot_mats = rot_mats_fn(
         head_dim=model_args.head_dim,
         device=mesh_device,
         seq_len=max_seq_len,
@@ -117,16 +116,19 @@ def test_decoder_inference(
         )
     else:
         rot_mats_local = None
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    transformation_mats = {"prefill": transformation_mats_prefill}
+
+    transformation_mats = {}
+    if not model_args.use_hf_rope:
+        transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+        transformation_mats_prefill = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        transformation_mats = {"prefill": transformation_mats_prefill}
 
     # Setup page table
     page_table_tt = None
@@ -183,12 +185,16 @@ def test_decoder_inference(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))
-        freqs_cis_i = precompute_freqs_cis(
+
+        cos, sin = precompute_freqs(
             model_args.head_dim,
             model_args.max_seq_len * 2,
             model_args.rope_theta,
             model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        )[positions]
+            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+            model_args.rope_scaling.rope_type.value if model_args.rope_scaling else "llama3",
+        )
+        freqs_cis_i = torch.complex(cos, sin)[positions]
 
         # Reference model
         attn_mask = torch.triu(torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min), diagonal=1)

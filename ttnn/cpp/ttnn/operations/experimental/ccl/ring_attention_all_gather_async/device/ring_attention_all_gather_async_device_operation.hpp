@@ -32,7 +32,7 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

@@ -6,7 +6,7 @@
 #include <ttnn/types.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/operations/core/core.hpp>
-#include <ttnn/operations/creation.hpp>
+#include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include <array>

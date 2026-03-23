@@ -55,6 +55,10 @@ def prefill_forward(
     total_seq_len = hidden_states.shape[-2]
     hidden_size = hidden_states.shape[-1]
     seq_len = total_seq_len // batch_size  # Per-user sequence length
+    if seq_len > 32 * 1024:
+        activation_dtype = ttnn.bfloat8_b
+    else:
+        activation_dtype = ttnn.bfloat16
 
     # Validate prefill mode
     if seq_len <= 1:
@@ -62,6 +66,7 @@ def prefill_forward(
 
     # QKV projection
     xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    hidden_states.deallocate(True)  # Free input activations after projection
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
     if batch_size > 1:
@@ -108,11 +113,16 @@ def prefill_forward(
             ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table_flat, batch_idx=0)
             k_fill.deallocate(True)
             v_fill.deallocate(True)
+            page_table_flat.deallocate(True)
         else:
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
             ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+            if page_len < tt_k.shape[2]:
+                tt_k_sliced.deallocate(True)
+            if page_len < tt_v.shape[2]:
+                tt_v_sliced.deallocate(True)
 
     else:
         # Non-paged attention
@@ -153,9 +163,7 @@ def prefill_forward(
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
     tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    # Note: apply_output_projection already deallocates its input tensor internally
-
+    tt_sdpa_out.deallocate(True)
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
-
-    return tt_out
+    tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    return tt_out_result

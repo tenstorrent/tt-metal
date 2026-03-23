@@ -5,6 +5,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -29,6 +32,7 @@ void kernel_main() {
     constexpr auto mask_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_attn = 4;
+    experimental::CircularBuffer cb_id_attn_obj(cb_id_attn);
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
@@ -52,6 +56,9 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);
+
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
@@ -65,16 +72,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_blks; ++i) {
         for (uint32_t j = 0; j < Wt; j += blk) {
             uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
-            cb_reserve_back(cb_id_in0, rem);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-
+            cb_id_in0_obj.reserve_back(rem);
+            uint32_t write_offset = 0;
             for (uint32_t r = 0; r < rem; ++r) {
-                noc_async_read_tile(curr_tile, src_a, l1_write_addr);  // TODO(AP): data type size
+                noc.async_read(
+                    src_a, cb_id_in0_obj, src0_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = write_offset});
                 curr_tile++;
-                l1_write_addr += src0_tile_bytes;
+                write_offset += src0_tile_bytes;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, rem);
+            noc.async_read_barrier();
+            cb_id_in0_obj.push_back(rem);
         }
 
 #if FUSED_SCALE_MASK
@@ -83,15 +90,20 @@ void kernel_main() {
 // of slice of tensor that was assigned to our core, then we skip to next batch
 #if CAUSAL_MASK
         for (uint32_t j = 0; j < Wt; j += blk) {
-            cb_reserve_back(cb_id_attn, blk);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_attn);
+            cb_id_attn_obj.reserve_back(blk);
+            uint32_t mask_write_offset = 0;
             for (uint32_t wb = 0; wb < blk; ++wb) {
-                noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
-                l1_write_addr += mask_tile_bytes;
+                noc.async_read(
+                    addr_mask,
+                    cb_id_attn_obj,
+                    mask_tile_bytes,
+                    {.page_id = mask_id},
+                    {.offset_bytes = mask_write_offset});
+                mask_write_offset += mask_tile_bytes;
                 ++mask_id;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_attn, blk);
+            noc.async_read_barrier();
+            cb_id_attn_obj.push_back(blk);
         }
         ++ht;
         ++mask_ht;
@@ -107,15 +119,20 @@ void kernel_main() {
         if (read_mask) {
             for (uint32_t j = 0; j < Wt; j += blk) {
                 // This is only executed every blk wts
-                cb_reserve_back(cb_id_attn, blk);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_attn);
+                cb_id_attn_obj.reserve_back(blk);
+                uint32_t mask_write_offset = 0;
                 for (uint32_t wb = 0; wb < blk; ++wb) {
-                    noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
-                    l1_write_addr += mask_tile_bytes;
+                    noc.async_read(
+                        addr_mask,
+                        cb_id_attn_obj,
+                        mask_tile_bytes,
+                        {.page_id = mask_id},
+                        {.offset_bytes = mask_write_offset});
+                    mask_write_offset += mask_tile_bytes;
                     ++mask_id;
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id_attn, blk);
+                noc.async_read_barrier();
+                cb_id_attn_obj.push_back(blk);
             }
             read_mask = false;
         }

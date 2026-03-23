@@ -45,7 +45,7 @@ tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 

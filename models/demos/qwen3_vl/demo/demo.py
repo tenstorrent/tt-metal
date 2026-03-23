@@ -16,9 +16,10 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
-    merge_vision_tokens,
+    get_pad_embedding,
+    merge_vision_tokens_ttnn,
     multimodal_rope_from_hf,
-    preprocess_inputs_prefill,
+    preprocess_inputs_prefill_ttnn,
     sample_host,
 )
 from models.demos.qwen3_vl.tt.generator import Generator
@@ -429,7 +430,12 @@ def test_demo(
         image_embeds, deepstack_visual_embeds = (
             visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             if "pixel_values" in inputs
-            else (torch.tensor([], dtype=torch.bfloat16), None)
+            else (
+                ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
+                ),
+                None,
+            )
         )
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
@@ -437,40 +443,50 @@ def test_demo(
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens(
-            inputs.input_ids,
+        text_embeds_tt = ttnn.from_torch(
             text_embeds,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                model_args.mesh_device, dims=(None, 2), mesh_shape=model_args.cluster_shape
+            ),
+        )
+        input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
+            inputs.input_ids,
+            text_embeds_tt,
             image_embeds,
             reference_model.config,
             deepstack_visual_embeds=deepstack_visual_embeds,
+            model_args=model_args,
         )
         pad_token_id = tokenizer.pad_token_id
+        max_prompt_len = max(x.shape[0] for x in input_embeds)
         assert (
-            model_args.max_seq_len >= max(len(x) for x in input_embeds) + max_generated_tokens
-        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max(len(x) for x in input_embeds)}) + max generated tokens ({max_generated_tokens})"
+            model_args.max_seq_len >= max_prompt_len + max_generated_tokens
+        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max_prompt_len}) + max generated tokens ({max_generated_tokens})"
+        pad_embedding_tt = get_pad_embedding(reference_model, pad_token_id, model_args)
         (
             input_prefill_pt,
             deepstack_visual_embeds,
             decoding_pos,  # Position where decoding should start for each user
             prefill_lens,
-        ) = preprocess_inputs_prefill(
+        ) = preprocess_inputs_prefill_ttnn(
             input_embeds,
             model_args,
             inputs.attention_mask,
-            pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
+            pad_embedding=pad_embedding_tt,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
         # Get user-specific rotary position embeddings
-        cos, sin, rope_deltas = multimodal_rope_from_hf(
-            inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
-        )
+        cos, sin, rope_deltas = multimodal_rope_from_hf(inputs, reference_model, model_args, pad_token_id=pad_token_id)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
         # [INFO] prefill_forward_text is read-only of the cos/sin matrices
         logits = generator.prefill_forward_text(
-            input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            ttnn.unsqueeze(input_prefill_pt[0], 0),  # Just warmup prefill for 1 user
             rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,

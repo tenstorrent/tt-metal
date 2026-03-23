@@ -45,7 +45,7 @@ struct ScalarInfo {
 // scalar per core is not sufficient to create correct result. Those scenarios are ceil_mode == true and (ceil_pad_h > 0
 // || ceil_pad_w > 0) or count_include_pad == false || (pad_h > 0 || pad_w > 0). Both of these scenarios can be
 // irrelevant if the divisor_override is set, in which case we don't calculate the divisor since it is already passed as
-// an argument. It only adds scalars that are different than the scalar preeceding it not to have duplicates of data,
+// an argument. It only adds scalars that are different than the scalar preceding it not to have duplicates of data,
 // this is why we use start and end indices to know how many sequential output elements should be multiplied by the same
 // scalar value.
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
@@ -60,7 +60,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             config.pad_t + config.pad_b,
             config.pad_l + config.pad_r,
             config.divisor_override),
-        "Avg pool scalars config should be calulated only for ceil_mode == true and "
+        "Avg pool scalars config should be calculated only for ceil_mode == true and "
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
@@ -202,7 +202,7 @@ static Tensor create_scalar_config_tensor(
             break;
         }
         case TensorMemoryLayout::WIDTH_SHARDED: {
-            // With width sharded layout scalars should be calulated only once, so we push them back num_shards_c times
+            // With width sharded layout scalars should be calculated only once, so we push them back num_shards_c times
             // but have only one array of scalars
             uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
             push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, repeats);

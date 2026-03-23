@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import pandas as pd
 
@@ -188,7 +190,7 @@ class TestCppPostProc:
 matmul_test_perf_counters = {
     "name": "Matmul_perf_counters",
     "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
-    "capture_perf_counters_groups": ["fpu"],
+    "capture_perf_counters_groups": ["all"],
 }
 
 
@@ -215,6 +217,38 @@ class TestPerfCountersSingleOp:
             "MATH Util Median (%)": 0.0,
             "MATH Util Max (%)": 0.0,
             "Avg Math util on full grid (%)": 0.0,
+            "Unpacker0 Write Efficiency Min (%)": 0.0,
+            "Unpacker0 Write Efficiency Median (%)": 0.0,
+            "Unpacker0 Write Efficiency Max (%)": 0.0,
+            "Unpacker0 Write Efficiency Avg (%)": 0.0,
+            "Unpacker1 Write Efficiency Min (%)": 0.0,
+            "Unpacker1 Write Efficiency Median (%)": 0.0,
+            "Unpacker1 Write Efficiency Max (%)": 0.0,
+            "Unpacker1 Write Efficiency Avg (%)": 0.0,
+            "Unpacker Write Efficiency Min (%)": 0.0,
+            "Unpacker Write Efficiency Median (%)": 0.0,
+            "Unpacker Write Efficiency Max (%)": 0.0,
+            "Unpacker Write Efficiency Avg (%)": 0.0,
+            "Packer Efficiency Min (%)": 0.0,
+            "Packer Efficiency Median (%)": 0.0,
+            "Packer Efficiency Max (%)": 0.0,
+            "Packer Efficiency Avg (%)": 0.0,
+            "FPU Execution Efficiency Min (%)": 0.0,
+            "FPU Execution Efficiency Median (%)": 0.0,
+            "FPU Execution Efficiency Max (%)": 0.0,
+            "FPU Execution Efficiency Avg (%)": 0.0,
+            "Math Pipeline Utilization Min (%)": 0.0,
+            "Math Pipeline Utilization Median (%)": 0.0,
+            "Math Pipeline Utilization Max (%)": 0.0,
+            "Math Pipeline Utilization Avg (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Min (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Median (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Max (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Avg (%)": 0.0,
+            "Unpacker-to-Math Data Flow Min (%)": 0.0,
+            "Unpacker-to-Math Data Flow Median (%)": 0.0,
+            "Unpacker-to-Math Data Flow Max (%)": 0.0,
+            "Unpacker-to-Math Data Flow Avg (%)": 0.0,
         }
         # Just check presence of float columns
         verify_columns(received_columns, expected_columns, verify_float)
@@ -281,6 +315,41 @@ class TestOpSupportCount:
         assert (
             actual_count == expected_count
         ), f"Expected to detect {expected_count} ops, but detected {actual_count} ops"
+
+
+slow_dispatch_test = {
+    "name": "SlowDispatch",
+    "command": "pytest tests/ttnn/tracy/test_profiler_sync.py::test_with_ops",
+}
+
+
+@pytest.fixture(scope="class")
+def run_slow_dispatch_test(request):
+    assert "command" in request.param, "Bad test setup, command not found in test setup dict"
+    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
+    prev_value = os.environ.get("TT_METAL_SLOW_DISPATCH_MODE")
+    os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+    try:
+        run_device_profiler(request.param["command"], request.param["name"])
+    finally:
+        if prev_value is None:
+            os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        else:
+            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = prev_value
+    return request.param
+
+
+@pytest.mark.parametrize(
+    "run_slow_dispatch_test",
+    [pytest.param(slow_dispatch_test, id=slow_dispatch_test["name"])],
+    indirect=True,
+)
+class TestSlowDispatch:
+    def test_slow_dispatch_profiling(self, run_slow_dispatch_test):
+        name = run_slow_dispatch_test["name"]
+        filename = get_latest_ops_log_filename(name)
+        df = pd.read_csv(filename)
+        assert len(df) > 0, "Expected at least one op in the slow dispatch profiler output"
 
 
 op_support_count_with_sum_profiling_enabled_test = {

@@ -13,7 +13,7 @@ set_directory_properties(
 )
 
 ############################################
-# Project setup
+# Project setup stage
 ############################################
 
 # For single-config generators, default to RelWithDebInfo if unspecified
@@ -104,8 +104,8 @@ set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
-# Reduce verbose "-- Up-to-date:" messages during install steps (e.g. cmake --install / target install)
-set(CMAKE_INSTALL_MESSAGE LAZY)
+# Suppress all "-- Installing:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE NEVER)
 
 ############################################################################################################################
 # Project Options
@@ -259,11 +259,15 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(metal_common_pch)
+endif()
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)

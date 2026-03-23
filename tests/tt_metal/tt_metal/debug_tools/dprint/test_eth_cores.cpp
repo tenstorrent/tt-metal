@@ -12,12 +12,11 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/arch.hpp>
@@ -36,8 +35,9 @@ const std::string golden_output =
     R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456

@@ -21,7 +21,7 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct AccumulationProgramFactory {
     enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
@@ -72,7 +72,8 @@ struct AccumulationProgramFactory {
         const std::variant<DataMovementConfig, ComputeConfig>& config,
         const std::vector<uint32_t>& runtime_args = {});
 
-    static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
+    static uint32_t calc_input_tile_offset(
+        const Shape& input_shape, const int32_t& dim, uint32_t tile_height = 32, uint32_t tile_width = 32);
 };
 
 }  // namespace ttnn::prim

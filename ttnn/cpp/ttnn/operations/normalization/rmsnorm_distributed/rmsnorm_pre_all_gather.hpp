@@ -11,22 +11,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
-namespace operations::normalization {
 
-struct ExecuteRMSNormPreAllGather {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        DataType dtype = DataType::BFLOAT16,
-        const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<bool>& use_2d_core_grid = std::nullopt);
-};
-
-}  // namespace operations::normalization
-
-constexpr auto rms_norm_pre_all_gather = ttnn::
-    register_operation<"ttnn::rms_norm_pre_all_gather", ttnn::operations::normalization::ExecuteRMSNormPreAllGather>();
+ttnn::Tensor rms_norm_pre_all_gather(
+    const ttnn::Tensor& input_tensor,
+    DataType dtype = DataType::BFLOAT16,
+    const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<bool>& use_2d_core_grid = std::nullopt);
 
 }  // namespace ttnn

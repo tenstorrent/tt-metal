@@ -7,22 +7,13 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct ShardedToInterleavedPartialOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& cache_tensor,
-        int64_t num_slices,
-        int64_t slice_index,
-        const std::optional<MemoryConfig>& memory_config_arg,
-        const std::optional<DataType>& data_type_arg);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto sharded_to_interleaved_partial = ttnn::register_operation<
-    "ttnn::sharded_to_interleaved_partial",
-    ttnn::operations::data_movement::ShardedToInterleavedPartialOperation>();
+ttnn::Tensor sharded_to_interleaved_partial(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& cache_tensor,
+    int64_t num_slices,
+    int64_t slice_index,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace ttnn

@@ -6,46 +6,35 @@
 
 #include <optional>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "non_zero_indices.hpp"
-#include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
 
 void bind_non_zero(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    const auto* doc = R"doc(
         Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements.
 
         Args:
-        input_tensor (ttnn.Tensor): Input Tensor should be 1D and in row major layout.
+            input_tensor (ttnn.Tensor): Input Tensor should be 1D and in row major layout.
 
         Keyword Args:
-        memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
-        List of ttnn.Tensor: the output tensors.
-    )doc",
-        ttnn::nonzero.base_name());
+            List of ttnn.Tensor: the output tensors.
+    )doc";
 
-    using OperationType = decltype(ttnn::nonzero);
-
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"nonzero">(
         mod,
-        ttnn::nonzero,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::overload_t(
+            &ttnn::nonzero, nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace

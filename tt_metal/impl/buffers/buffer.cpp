@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include "context/context_types.hpp"
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -75,7 +76,7 @@ void validate_buffer_parameters(
     TT_FATAL(
         size % page_size == 0,
         "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
-        "buffer size should be divisble by the page size",
+        "buffer size should be divisible by the page size",
         page_size,
         size);
 }
@@ -214,7 +215,7 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
 bool is_sharded(const TensorMemoryLayout& layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        layout == TensorMemoryLayout::BLOCK_SHARDED);
+        layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::ND_SHARDED);
 }
 
 UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
@@ -425,7 +426,9 @@ void Buffer::allocate_impl() {
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
 #if defined(TRACY_ENABLE)
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+        if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+                .rtoptions()
+                .get_profiler_buffer_usage_enabled()) {
             TracyAllocN(
                 reinterpret_cast<const void*>(address_), size_, get_buffer_location_name(buffer_type_, device_->id()));
         }
@@ -457,7 +460,9 @@ void Buffer::deallocate_impl() {
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+            if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+                    .rtoptions()
+                    .get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
                     reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
             }

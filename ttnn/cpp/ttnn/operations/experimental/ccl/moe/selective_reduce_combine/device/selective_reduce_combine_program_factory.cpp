@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/work_split.hpp>
+#include <ranges>
 #include <vector>
+
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -103,14 +105,11 @@ auto launch_mux_workers(
 }
 
 void add_termination_master_rt_args(
-    const std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>>& mux_neigbor_core_maps,
-    std::vector<uint32_t>& writer_runtime_args) {
-    for (const auto& m : mux_neigbor_core_maps) {
-        for (const auto& c : m) {
-            const auto& mux_virtual_core = c.second;
-            writer_runtime_args.push_back(mux_virtual_core.x);
-            writer_runtime_args.push_back(mux_virtual_core.y);
-        }
+    const std::map<ttnn::MeshCoordinate, CoreCoord>& mux_neigbor_core_map, std::vector<uint32_t>& writer_runtime_args) {
+    for (const auto& c : mux_neigbor_core_map) {
+        const auto& mux_virtual_core = c.second;
+        writer_runtime_args.push_back(mux_virtual_core.x);
+        writer_runtime_args.push_back(mux_virtual_core.y);
     }
 }
 
@@ -166,6 +165,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
     const auto& dense_token_counts_tensor = tensor_args.dense_token_counts_tensor;
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
     const auto& output_tensor = tensor_return_value;
     const auto batch_size = operation_attributes.batch_size;
@@ -238,39 +238,54 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // dense_token_maps_tensor page buffer
+    // tensor pages are padded for alignment
+    const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
     constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
-    // stash offset and count value for each local expert in uint32_t
-    const uint32_t dense_token_maps_tensor_extra_size_bytes = 2 * 4 * experts_per_device;
-    const uint32_t aligned_dense_token_maps_buffer_size =
-        tt::align(aligned_dense_token_maps_page_size_bytes + dense_token_maps_tensor_extra_size_bytes, l1_alignment);
+    const uint32_t aligned_dense_token_maps_buffer_size_bytes =
+        tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
     const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
     CircularBufferConfig cb_dense_token_maps_config =
         CircularBufferConfig(
-            aligned_dense_token_maps_buffer_size, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
-            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_buffer_size);
+            aligned_dense_token_maps_buffer_size_bytes, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
+            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_page_size_bytes);
 
     // active token counts page buffer
+    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
+    // offset into token maps, number of tokens, offset into activations
+    const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
     const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
     const auto token_counts_element_size = dense_token_counts_tensor.element_size();
-    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
-    const uint32_t aligned_token_counts_buffer_size =
-        tt::align(token_counts_element_size * experts_per_device, dram_alignment);
+    const uint32_t aligned_token_counts_buffer_size = tt::align(
+        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
+    // token activations metadata
+    // page size: total tokens * (2 * experts_per_device + 1 + 3) * sizeof(uint32_t)
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
+    const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
+    constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
+    CircularBufferConfig cb_token_activations_config =
+        CircularBufferConfig(
+            aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
+            .set_page_size(token_activations_cb_id, token_activations_page_size_bytes);
+
     // client interface
-    constexpr auto num_headers = 3;  // data unicast headers and atomic inc "multicast" headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_3;
+    constexpr auto num_headers = 3;  // data unicast headers and atomic inc multicast headers
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
     // create circular buffers
-    CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
+    const auto data_cb_handle = CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_dense_token_maps_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_counts_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_activations_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, client_interface_cb_config);
 
     // fabric routing info
@@ -291,8 +306,13 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"token_counts_cb_id", token_counts_cb_id},
+        {"token_activations_cb_id", token_activations_cb_id},
+        {"token_activations_page_size_bytes", token_activations_page_size_bytes},
+        {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
+        {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
         {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
@@ -301,6 +321,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(dense_token_counts_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(token_activations_tensor.buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1,
@@ -327,6 +348,9 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
+        {"token_activations_cb_id", token_activations_cb_id},
+        {"token_counts_cb_id", token_counts_cb_id},
+        {"activations_stride_elm", activations_stride_elm},
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
@@ -337,9 +361,11 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"noc_y_end", end_coord.y},
         {"experts", experts},
         {"global_num_tokens", total_tokens},
+        {"token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
+        {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"alignment", l1_alignment},
         {"num_devices", num_devices_total},
         {"src_chip_id", src_chip_id},
@@ -348,7 +374,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_mux_workers", num_links * neighbors.size()}};
+        {"num_mux_workers_per_link", neighbors.size()}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -381,11 +407,16 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         needed_worker_core_range_set,
         writer_config);
 
-    const auto& termination_master_core = sender_cores[0];
-    const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
-    const auto termination_master_semaphore_id = CreateSemaphore(program, {termination_master_core}, 0);
-
+    const auto termination_master_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
     const uint32_t num_workers_per_link = num_worker_cores / num_links;
+
+    const auto idx = std::views::iota(std::size_t{0}, sender_cores.size());
+    auto termination_master_cores = idx |
+                                    std::views::filter([=](std::size_t i) { return i % num_workers_per_link == 0; }) |
+                                    std::views::transform([&](std::size_t i) { return sender_cores[i]; });
+
+    auto termination_master_core_iter = termination_master_cores.begin();
+
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
@@ -393,6 +424,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         std::vector<uint32_t> reader_runtime_args = {
             dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
+            token_activations_tensor.buffer()->address(),   // token_activations_addr
             token_parallel_idx,                             // token_parallel_core_id
         };
 
@@ -405,7 +437,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             cross_device_semaphore.address()    // global_semaphore_addr
         };
 
-        const bool is_termination_master = (sender_core == termination_master_core);
+        const bool is_termination_master = (sender_core == *termination_master_core_iter);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
 
@@ -418,14 +450,14 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
                 sender_core,
                 mux_kernel_config,
                 program,
-                termination_master_virtual_core,
+                mesh_device->worker_core_from_logical_core(*termination_master_core_iter),
                 writer_runtime_args,
                 termination_master_semaphore_id);
         }
 
-        // termination master is responsible for tearing down all mux workers, needs their coordinates
+        // termination master is responsible for tearing down mux workers for given link, needs their coordinates
         if (is_termination_master) {
-            detail::add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
+            detail::add_termination_master_rt_args(*core_map_iter, writer_runtime_args);
         }
 
         SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
@@ -442,6 +474,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         if (++link_worker_idx == num_workers_per_link) {
             link_worker_idx = 0;
             ++core_map_iter;
+            ++termination_master_core_iter;
         }
     }
 
@@ -449,6 +482,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         std::move(program),
         {.reader_kernel_id = ternary_reader_kernel_id,
          .writer_kernel_id = unary_writer_kernel_id,
+         .data_cb_handle = data_cb_handle,
          .cores = sender_cores,
          .init_semaphore = init_semaphore,
          .cross_device_semaphore = cross_device_semaphore}};
@@ -470,7 +504,11 @@ void UnifiedSelectReduce::override_runtime_arguments(
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& reader_kernel_id = shared_variables.reader_kernel_id;
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
+        const auto& data_cb_handle = shared_variables.data_cb_handle;
         const auto& cores = shared_variables.cores;
+
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
@@ -478,6 +516,7 @@ void UnifiedSelectReduce::override_runtime_arguments(
 
             reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(3) = (uint32_t)shared_variables.init_semaphore.address();

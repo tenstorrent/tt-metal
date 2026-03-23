@@ -30,11 +30,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -51,8 +50,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
-
-// #include <tt-metalium/kernel_types.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -41,7 +41,8 @@ def layer_norm(
     Example:
         >>> layer_norm_desc_1 = models.experimental.ops.descriptors.normalization.layer_norm(input1, weight=w1, bias=b1, cores=cores1)
         >>> layer_norm_desc_2 = models.experimental.ops.descriptors.normalization.layer_norm(input2, weight=w2, bias=b2, cores=cores2)
-        >>> out_1, out_2 = models.experimental.ops.descriptors.composite.launch([layer_norm_desc_1, layer_norm_desc_2])
+        >>> layer_norm_desc_1.launch()
+        >>> layer_norm_desc_2.launch()
     """
     device = input_tensor.device()
     arch = device.arch()

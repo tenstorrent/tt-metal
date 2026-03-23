@@ -8,8 +8,6 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
@@ -33,6 +31,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);               // (S / TILE_H)
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // num of heads per group
+    constexpr uint32_t pairs_per_seq = Ht / 2;
     constexpr auto query_args = TensorAccessorArgs<4>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -56,7 +55,48 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    // while we process one q_chunk (head of Q), we stream all K and V chunks (heads of K and V)
+#ifdef BALANCED_PARALLELISM
+    // Balanced parallelism mode: read Q/K/V for pairs of rows (light + heavy).
+    // Each pair combines an early-sequence row (few K/V tiles) with a late-sequence row (many tiles),
+    // so every core reads roughly the same amount of data.
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
+    auto read_row = [&](const uint32_t global_row_idx) {
+        const uint32_t q_start_idx = global_row_idx * qWt;
+        read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
+        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
+        const uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+        const uint32_t q_row_tile = global_row_idx % Ht;
+        const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
+
+        for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
+            const uint32_t kv_start_idx = kv_offset + h * qWt;
+            read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+        }
+    };
+
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
+
+        // Map pair index to sequence and position within sequence
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
+
+        // Calculate the two row indices for this pair (light = early in seq, heavy = late in seq)
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+
+        read_row(light_global_row);
+        read_row(heavy_global_row);
+    }
+#else
+    // Standard mode: process rows sequentially
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
         const uint32_t q_start_idx = global_row_idx * qWt;
@@ -100,4 +140,5 @@ void kernel_main() {
             read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }
     }
+#endif
 }

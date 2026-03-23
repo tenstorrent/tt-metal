@@ -4,6 +4,7 @@
 
 #include "ttnn-nanobind/device.hpp"
 
+#include <tt-metalium/device_types.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>

@@ -138,15 +138,16 @@ def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_
     k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     # Call the sampling operation
-    output_tensor = ttnn.sampling(
-        input_values_tensor,
-        input_indices_tensor,
-        k=k_tensor,
-        p=p_tensor,
-        temp=temp,
-        seed=seed,
-        sub_core_grids=sub_core_grids,
-    )
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.sampling(
+            input_values_tensor,
+            input_indices_tensor,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp,
+            seed=seed,
+            sub_core_grids=sub_core_grids,
+        )
 
     # Convert the output tensor back to torch
     output = ttnn.to_torch(output_tensor)
@@ -270,16 +271,17 @@ def test_sampling_callback(shape, k, p, seed, device):
         pytest.skip("Test is not passing with watcher enabled, github issue #29020")
 
     torch.manual_seed(seed)
-    num_program_cache_entries_list = []
-    for _ in range(2):
+    for i in range(2):
         run_sampling(shape, k, p, seed, device)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
 
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0
 
 
 @pytest.mark.parametrize(
@@ -296,13 +298,14 @@ def test_sampling_callback(shape, k, p, seed, device):
 )
 def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
     torch.manual_seed(seed)
-    num_program_cache_entries_list = []
-    for _ in range(2):
+    for i in range(2):
         run_sampling(shape, k, p, seed, device, sub_core_grids)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
 
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0

@@ -80,6 +80,7 @@ jobs:
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
+
   fail-fast:
     if: failure()
     runs-on: ubuntu-latest
@@ -128,6 +129,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -152,6 +154,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
@@ -170,6 +173,7 @@ jobs:
       ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
 
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
@@ -181,10 +185,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
-        ]
+        # run t3k tests on CIv1 for now in order to have dedicated machine
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -204,10 +208,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
-        ]
+        # run t3k tests on CIv1 for now in order to have dedicated machine
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
+            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -239,6 +243,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fetch-depth: 1
 
   metalium-basic-tests:
     if: ${{
@@ -251,9 +256,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-        ]
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","p150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -273,9 +278,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-        ]
+        platform: ${{ github.event_name == 'merge_group'
+            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
+            || fromJSON('["N150-viommu","p150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -292,19 +297,12 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 }
-        ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
     with:
+      enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
       merge-gate-call: true
 
   # TT-CNN Unit tests
@@ -394,8 +392,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
-          "P150b",
+          "N150-viommu",
+          "P150b-viommu-prio",
         ]
     uses: ./.github/workflows/triage.yaml
     with:
@@ -437,4 +435,4 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "S0985AN7TC5"
+          owner: "S0985AN7TC5,U0AK4BVCFM0"

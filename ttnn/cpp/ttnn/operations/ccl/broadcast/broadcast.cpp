@@ -9,9 +9,9 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
 
-ttnn::Tensor ExecuteBroadcast::invoke(
+ttnn::Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     const uint32_t num_links,
@@ -25,4 +25,4 @@ ttnn::Tensor ExecuteBroadcast::invoke(
         input_tensor, sender_coord, num_links, memory_config, topology_, cluster_axis, subdevice_id);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

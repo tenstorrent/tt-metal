@@ -16,17 +16,24 @@ import ttnn
 TILE_SIZE = ttnn.TILE_SIZE  # 32
 
 
-def get_rot_transformation_mat() -> torch.Tensor:
+def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
     """
     Create rotation transformation matrix for RoPE.
 
-    Returns a [1, 1, 32, 32] tensor with the pattern:
-    - rot_emb_matrix[i, i+1] = 1 for even i
-    - rot_emb_matrix[i+1, i] = -1 for even i
+    Constructs a permutation matrix that pairs adjacent dimensions with
+    signs (+1, -1) for the RoPE rotation:
+        [0, 1] → +1 at (0,1), -1 at (1,0)
+        [2, 3] → +1 at (2,3), -1 at (3,2)
+        ...
 
-    This is used by ttnn.experimental.rotary_embedding_llama.
+    Used by ttnn.experimental.rotary_embedding_llama.
+
+    Args:
+        dhead: Matrix dimension. Must equal TILE_SIZE. Use TILE_SIZE for decode.
+
+    Returns:
+        torch.Tensor of shape [1, 1, dhead, dhead].
     """
-    dhead = TILE_SIZE  # Always 32 for RoPE op
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
@@ -146,13 +153,13 @@ def program_config_to_str(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAM
     return serialize_config(cfg)
 
 
-def program_config_to_dict(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-    return {
-        "in0_block_w": program_config.in0_block_w,
-        "per_core_M": program_config.per_core_M,
-        "per_core_N": program_config.per_core_N,
-        "fused_activation": str(program_config.fused_activation),
-    }
+def program_config_to_dict(program_config):
+    if hasattr(program_config, "to_json"):
+        d = json.loads(program_config.to_json())
+        d["type"] = type(program_config).__name__
+        return d
+    else:
+        return {"type": type(program_config).__name__, "repr": repr(program_config)}
 
 
 def serialize_config(cfg_dict: dict, fmt: str = "json") -> str:

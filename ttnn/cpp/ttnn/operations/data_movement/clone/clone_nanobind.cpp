@@ -8,7 +8,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "clone.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(nb::module_& mod) {
@@ -32,16 +32,15 @@ void bind_clone_operation(nb::module_& mod) {
             * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"clone">(
         mod,
-        ttnn::clone,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::clone,
             nb::arg("input"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-        });
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::clone

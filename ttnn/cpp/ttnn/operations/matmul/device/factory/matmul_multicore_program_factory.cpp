@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -100,7 +100,8 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
+    uint32_t last_ktile_h = 0;
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w, (uint32_t)last_ktile_h};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 

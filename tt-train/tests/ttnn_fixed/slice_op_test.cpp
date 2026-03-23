@@ -4,10 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 class SliceOpTest : public ::testing::Test {
 protected:
@@ -30,9 +29,9 @@ TEST_F(SliceOpTest, Slice_BROKEN) {
 
     // Example: slice out the last row, columns 1 to 5
 
-    ttnn::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
-    ttnn::SmallVector<uint32_t> start_index = {0U, 0U, H - 1, 1U};
-    ttnn::SmallVector<uint32_t> end_index = {N, C, H, 5U};
+    ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
+    ttsl::SmallVector<uint32_t> start_index = {0U, 0U, H - 1, 1U};
+    ttsl::SmallVector<uint32_t> end_index = {N, C, H, 5U};
 
     // Expected output: shape {1, 1, 1, 4}, values from a(0,0,H-1,1) to a(0,0,H-1,4)
     xt::xarray<float> b = {{{{a(0, 0, H - 1, 1), a(0, 0, H - 1, 2), a(0, 0, H - 1, 3), a(0, 0, H - 1, 4)}}}};

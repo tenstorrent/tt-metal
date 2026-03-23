@@ -415,7 +415,7 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
 }
 
 // BlockRep represents a repeated sequence of data blocks, mixed blocks, and padding blocks.
-// It is convient to pass to the device kernels because a single data structure made of 4 ints
+// It is convenient to pass to the device kernels because a single data structure made of 4 ints
 // can represent pure data rows, pure padding rows or a mixture thereof.
 struct BlockRep {
     // number of data blocks
@@ -484,7 +484,7 @@ struct BlockRep {
 
 // FullRep is a repeated sequence of data rows followed by pure padding. It represents the row
 // pattern seen from the outer-most dimension of a 4D tensor when padding is added to the second
-// or the thrird dimension.
+// or the third dimension.
 struct FullRep {
     BlockRep rep;
     BlockRep pad;

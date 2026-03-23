@@ -4,10 +4,10 @@
 
 #include "core/clip_grad_norm.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "core/compute_kernel_config.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::core {
 

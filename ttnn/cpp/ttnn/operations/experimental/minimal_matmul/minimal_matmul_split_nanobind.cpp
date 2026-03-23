@@ -4,16 +4,13 @@
 
 #include "minimal_matmul_split_nanobind.hpp"
 
-#include <optional>
-
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
 #include "minimal_matmul_split.hpp"
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
@@ -21,9 +18,8 @@ namespace ttnn::operations::experimental::minimal_matmul::detail {
 namespace nb = nanobind;
 
 void bind_minimal_matmul_split(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"minimal_matmul_split", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::minimal_matmul_split,
         R"doc(
         minimal_matmul_split(input_tensor, weight_tensor, *, chunks=3, dim=-1, bias_tensor=None, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
@@ -105,18 +101,18 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         - All tensors must be in TILE layout
         - Weight and bias must have 1 in all leading dimensions (dims < -2)
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::kw_only(),
-            nb::arg("chunks") = 3,
-            nb::arg("dim") = -1,
-            nb::arg("bias_tensor") = nb::none(),
-            nb::arg("fused_activation") = nb::none(),
-            nb::arg("config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::minimal_matmul_split,
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::kw_only(),
+        nb::arg("chunks") = 3,
+        nb::arg("dim") = -1,
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("fused_activation") = nb::none(),
+        nb::arg("config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::detail

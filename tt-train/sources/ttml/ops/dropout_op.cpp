@@ -4,7 +4,6 @@
 
 #include "dropout_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 
@@ -12,6 +11,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/experimental/dropout/dropout.hpp"
 
 namespace ttml::ops {
 
@@ -32,8 +32,7 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
         tensor->add_grad(res);
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }

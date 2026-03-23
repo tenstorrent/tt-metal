@@ -160,7 +160,7 @@ class VariableSizeImageTransform(object):
     @staticmethod
     def get_factors(n: int) -> Set[int]:
         """
-        Calculate all factors of a given number, i.e. a dividor that leaves
+        Calculate all factors of a given number, i.e. a divisor that leaves
         no remainder. For example, if n=12, it will return {1, 2, 3, 4, 6, 12}.
 
         Args:
@@ -179,7 +179,7 @@ class VariableSizeImageTransform(object):
 
     def find_supported_resolutions(self, max_num_chunks: int, patch_size: int) -> torch.Tensor:
         """
-        Computes all of the allowed resoltuions for a fixed number of chunks
+        Computes all of the allowed resolutions for a fixed number of chunks
         and patch_size. Useful for when dividing an image into chunks.
 
         Args:

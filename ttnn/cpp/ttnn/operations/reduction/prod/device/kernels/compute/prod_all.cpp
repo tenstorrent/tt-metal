@@ -11,11 +11,16 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint_pages.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
-    const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
     const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
+    const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
+
+    experimental::CircularBuffer input_cb_obj(input_cb);
+    experimental::CircularBuffer partial_prod_cb_obj(partial_prod_cb);
+    experimental::CircularBuffer final_output_cb_obj(final_output_cb);
 
     const int one_tile = 1;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
@@ -26,16 +31,16 @@ void kernel_main() {
     pack_reconfig_data_format(final_output_cb);
 
     // Ultimate goal is to have a single tile in the final output cb
-    cb_reserve_back(final_output_cb, one_tile);
+    final_output_cb_obj.reserve_back(one_tile);
 
     // Copy the first tile to DST[0]
-    cb_wait_front(input_cb, one_tile);
+    input_cb_obj.wait_front(one_tile);
     tile_regs_acquire();
 
     copy_tile_to_dst_init_short(input_cb);
     copy_tile(input_cb, 0, 0);  // copy from c_in[0] to DST[0]
 
-    cb_pop_front(input_cb, one_tile);
+    input_cb_obj.pop_front(one_tile);
     mul_tiles_init(input_cb, partial_prod_cb);
 
     // When we have more than one tile, we can do the tile-wise multiplication of them all to yield one final tile
@@ -44,27 +49,26 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
+        partial_prod_cb_obj.reserve_back(one_tile);
         pack_tile(0, partial_prod_cb);
-
-        cb_reserve_back(partial_prod_cb, one_tile);
-        cb_push_back(partial_prod_cb, one_tile);
+        partial_prod_cb_obj.push_back(one_tile);
         tile_regs_release();
 
         // Load the next input tile and multiply it with the partial prod
-        cb_wait_front(input_cb, one_tile);
+        input_cb_obj.wait_front(one_tile);
 
         tile_regs_acquire();
 
         mul_tiles(input_cb, partial_prod_cb, /*tile0=*/0, /*tile1=*/0, /*dst_tile=*/0);
 
-        cb_pop_front(input_cb, one_tile);
-        cb_pop_front(partial_prod_cb, one_tile);
+        input_cb_obj.pop_front(one_tile);
+        partial_prod_cb_obj.pop_front(one_tile);
     }
 
     tile_regs_commit();
     tile_regs_wait();
 
     pack_tile(0, final_output_cb);
-    cb_push_back(final_output_cb, one_tile);
+    final_output_cb_obj.push_back(one_tile);
     tile_regs_release();
 }

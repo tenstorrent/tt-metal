@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -42,7 +42,7 @@ class DeepseekV3LMHead(nn.Module):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )

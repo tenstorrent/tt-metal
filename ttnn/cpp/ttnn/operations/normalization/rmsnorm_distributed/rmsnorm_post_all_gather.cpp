@@ -8,9 +8,9 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
+ttnn::Tensor rms_norm_post_all_gather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& stats,
     float epsilon,
@@ -54,4 +54,4 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}));
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

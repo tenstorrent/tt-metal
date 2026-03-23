@@ -24,7 +24,7 @@ MultiHeadAttention::MultiHeadAttention(uint32_t embedding_dim_, uint32_t num_hea
 }
 
 ttml::autograd::TensorPtr MultiHeadAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     auto qkv = (*m_qkv_linear)(x);
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_num_heads);

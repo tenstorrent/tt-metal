@@ -4,6 +4,7 @@
 
 #include "dispatch.hpp"
 #include <cstdint>
+#include "context/context_types.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -32,8 +33,10 @@ void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        const DeviceAddr l1_base_address = device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
-        const DeviceAddr l1_size = device->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
+        const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
+        HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+        const DeviceAddr l1_base_address = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
 
         TT_FATAL(address >= l1_base_address, "Region in L1 is out of bounds");
         TT_FATAL(address + size_bytes <= l1_base_address + l1_size, "Region in L1 is out of bounds");

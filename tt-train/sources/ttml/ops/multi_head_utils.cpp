@@ -4,12 +4,15 @@
 
 #include "multi_head_utils.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::ops {
 
@@ -42,13 +45,15 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
         qkv->add_grad(result);
     };
 
-    auto links_q = autograd::get_links(qkv);
     // grad_q function depends on gradients of q, k and v
-    out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qkv);
+    out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
-    auto links_kv = autograd::get_links(qkv, out_q);
-    out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
-    out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+    // Only add sync nodes if out_q has a node (i.e., gradients are needed)
+    if (q_node.has_value()) {
+        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qkv, out_q));
+        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qkv, out_q));
+    }
     return {out_q, out_k, out_v};
 }
 
@@ -75,8 +80,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
         x->add_grad(grad_result);
     };
 
-    auto links = autograd::get_links(x);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, x));
 
     return out;
 }
@@ -113,13 +117,15 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
         kvs->add_grad(kvs_grad);
     };
 
-    auto links_q = autograd::get_links(qs, kvs);
     // grad_q function depends on gradients of q, k and v
-    out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
+    out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
-    auto links_kv = autograd::get_links(qs, out_q);
-    out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
-    out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+    // Only add sync nodes if out_q has a node (i.e., gradients are needed)
+    if (q_node.has_value()) {
+        out_k->set_node(autograd::add_backward_node_always([]() {}, out_k, qs, kvs));
+        out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qs, kvs));
+    }
     return {out_q, out_k, out_v};
 }
 

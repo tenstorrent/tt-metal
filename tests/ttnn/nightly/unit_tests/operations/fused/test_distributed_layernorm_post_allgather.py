@@ -165,8 +165,6 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 def test_layernorm_part_2_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
 ):
-    if fp32_enabled == False:
-        pytest.skip("Skipping when fp32_enabled=False due to unexpected kernel behavior")
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
 
@@ -190,7 +188,6 @@ def test_layernorm_part_2_with_program_cache(
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
-@pytest.mark.skip(reason="#34410")
 def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device):
     dummy_tensors = []
 

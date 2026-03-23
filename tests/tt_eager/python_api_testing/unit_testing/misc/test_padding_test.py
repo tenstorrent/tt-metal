@@ -106,26 +106,40 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
     inp = torch.rand(*input_tensor_shape)
     ones = torch.ones(*input_tensor_shape)
 
-    # Create tensor on host
-    a = ttnn.Tensor(
-        inp.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
-    b = ttnn.Tensor(
-        ones.reshape(-1).tolist(),
-        input_tensor_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    # Tensor.pad() preserves the original logical shape while only setting
+    # padded_shape, which causes data at non-zero offsets to be lost during
+    # tile-layout conversion. Build the padded tensors in PyTorch so the
+    # logical shape equals the full output shape.
+    inp_padded = torch.full(output_tensor_shape, pad_value, dtype=torch.float32)
+    inp_padded[
+        input_tensor_start[0] : output_tensor_end[0],
+        input_tensor_start[1] : output_tensor_end[1],
+        input_tensor_start[2] : output_tensor_end[2],
+        input_tensor_start[3] : output_tensor_end[3],
+    ] = inp
 
-    # Pad inputs on host
-    a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
-    b_pad = b.pad(output_tensor_shape, input_tensor_start, pad_value)
+    ones_padded = torch.full(output_tensor_shape, pad_value, dtype=torch.float32)
+    ones_padded[
+        input_tensor_start[0] : output_tensor_end[0],
+        input_tensor_start[1] : output_tensor_end[1],
+        input_tensor_start[2] : output_tensor_end[2],
+        input_tensor_start[3] : output_tensor_end[3],
+    ] = ones
+
+    a_pad = ttnn.Tensor(
+        inp_padded.reshape(-1).tolist(),
+        output_tensor_shape,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
+    b_pad = ttnn.Tensor(
+        ones_padded.reshape(-1).tolist(),
+        output_tensor_shape,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
 
     # Run add op on device with padded tensors
-
     a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
     b_dev = b_pad.to(ttnn.TILE_LAYOUT).to(device)
     out_dev = ttnn.add(a_dev, b_dev)

@@ -36,7 +36,7 @@ struct Conv2dConfig {
     bool reallocate_halo_output = true;
 
     // If true, config tensors for Conv2D are stored in DRAM instead of L1_SMALL. L1_SMALL is persistent storage and
-    // get's quickly used up for large CNNs.
+    // gets quickly used up for large CNNs.
     bool config_tensors_in_dram = false;
 
     // Has to be a multiple of 32.

@@ -8,10 +8,11 @@
 #include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteAllToAllAsync::invoke(
+ttnn::Tensor all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
@@ -53,13 +54,13 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
     std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
     return ttnn::experimental::all_to_all_async_generic(
         input_tensor,
-        optional_persistent_output_buffer,
         in_dim,
         out_dim,
+        optional_persistent_output_buffer,
         num_links,
         memory_config,
         topology,
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

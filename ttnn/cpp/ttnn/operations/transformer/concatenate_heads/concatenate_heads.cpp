@@ -9,10 +9,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer {
+namespace ttnn::transformer {
 
-ttnn::Tensor ExecuteConcatenateHeads::invoke(
-    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     // Additional validation for concatenate_heads wrapper
     const auto& input_logical_shape = input_tensor.logical_shape();
     const auto head_size = input_logical_shape[-1];
@@ -37,4 +36,4 @@ ttnn::Tensor ExecuteConcatenateHeads::invoke(
     return ttnn::squeeze(output, 1);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer

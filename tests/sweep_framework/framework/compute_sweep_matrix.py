@@ -71,18 +71,12 @@ def get_lead_models_mesh_runner_config():
             "suite_name": "model_traced",
         },
         {
-            # Multi-chip operations - runs on Galaxy (32-chip topology)
-            # Handles all mesh shapes larger than 1x1
+            # Multi-chip operations - pinned to g04glx03 Galaxy runner
             "mesh_shapes": ["1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"],
             "test_group_name": "lead-models-galaxy",
             "arch": "wormhole_b0",
-            "runs_on": [
-                "topology-6u",  # 32-chip galaxy topology
-                "arch-wormhole_b0",  # Wormhole B0 architecture
-                "in-service",  # Available for use
-                "pipeline-functional",  # Functional pipeline
-            ],
-            "runner_label": "topology-6u",
+            "runs_on": "g04glx03",
+            "runner_label": "g04glx03",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },
@@ -135,6 +129,12 @@ def compute_lead_models_matrix(modules, batch_size):
         for mesh_shape in runner_config["mesh_shapes"]:
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
+        # Route modules without a mesh suffix to the first (default) runner config,
+        # which is conventionally the single-chip N150 runner.
+        is_default_runner = runner_config == config[0]
+        if is_default_runner:
+            runner_modules.extend(unmatched_modules)
+
         if not runner_modules:
             continue
 
@@ -142,12 +142,13 @@ def compute_lead_models_matrix(modules, batch_size):
         # The VectorExportSource will automatically load mesh-variant JSONs
         base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
 
-        # For Galaxy runners (multi-chip), use smaller batches (8 ops per batch)
+        # For Galaxy runners (multi-chip), split into 3 parallel jobs
         # For single-chip runners, use the standard batch size
         is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
         if is_galaxy:
-            # Galaxy: 8 operations per batch
-            runner_batches = chunk_modules(base_modules, 8)
+            galaxy_jobs = 3
+            galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
+            runner_batches = chunk_modules(base_modules, galaxy_batch_size)
         else:
             # Standard batching for single-chip
             runner_batches = chunk_modules(base_modules, batch_size)
@@ -180,6 +181,12 @@ def compute_lead_models_matrix(modules, batch_size):
     for mesh_shape, mods in sorted(mesh_shape_modules.items()):
         unique_base = len(set(strip_mesh_suffix(m) for m in mods))
         print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
+    if unmatched_modules:
+        unique_base = len(set(strip_mesh_suffix(m) for m in unmatched_modules))
+        print(
+            f"  no mesh suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
+            file=sys.stderr,
+        )
 
     return include_entries, batches, []  # No CCL batches for lead models
 

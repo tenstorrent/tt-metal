@@ -69,7 +69,7 @@ class ProgramConfig:
 
     # Chunking parameters
     sequence_chunk_size: int = 4 * 1024
-    down_split_size: int = 1024
+    base_down_split_size: int = 1024
 
     def __post_init__(self):
         """Validate configuration on creation"""
@@ -83,10 +83,10 @@ class ProgramConfig:
         if self.sequence_chunk_size % 32 != 0:
             raise ValueError(f"sequence_chunk_size must be multiple of 32, got {self.sequence_chunk_size}")
 
-        if self.down_split_size <= 0:
-            raise ValueError(f"down_split_size must be positive, got {self.down_split_size}")
-        if self.down_split_size % 32 != 0:
-            raise ValueError(f"down_split_size must be multiple of 32, got {self.down_split_size}")
+        if self.base_down_split_size <= 0:
+            raise ValueError(f"down_split_size must be positive, got {self.base_down_split_size}")
+        if self.base_down_split_size % 32 != 0:
+            raise ValueError(f"down_split_size must be multiple of 32, got {self.base_down_split_size}")
 
     def _validate_cores(self, name: str, cores: tuple[int, int]):
         """Validate core grid dimensions"""
@@ -96,6 +96,13 @@ class ProgramConfig:
         core_x, core_y = cores
         if core_x <= 0 or core_y <= 0:
             raise ValueError(f"{name} must have positive dimensions, got {cores}")
+
+    def get_down_split_size(self, seqlen: int) -> int:
+        if seqlen <= 32 * 1024:
+            return self.base_down_split_size
+        else:
+            # For very long sequences, decrease split size to avoid OOM
+            return self.base_down_split_size // 2
 
     def _build_matmul_config(
         self,

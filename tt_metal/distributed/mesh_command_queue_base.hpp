@@ -7,6 +7,7 @@
 #include "mesh_command_queue.hpp"
 
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_target_device.hpp"
 
 #include <mutex>
 #include <functional>
@@ -42,6 +43,8 @@ protected:
     virtual MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
+
+    tt::TargetDevice get_target_device_type() const;
 
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers

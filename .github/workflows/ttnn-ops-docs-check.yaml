@@ -94,11 +94,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "ttnn_ops_docs_check_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U08DCK9MA1E # Miłosz Gajewski
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

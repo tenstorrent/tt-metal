@@ -40,8 +40,8 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     const Tensor& joint_tensor_q = tensor_args.joint_q;
     const Tensor& joint_tensor_k = tensor_args.joint_k;
     const Tensor& joint_tensor_v = tensor_args.joint_v;
-    const Tensor& output_tensor = output_tensors.output;
-    const Tensor& joint_output_tensor = output_tensors.joint_output;
+    const Tensor& output_tensor = output_tensors[JOINT_SDPA_OUTPUT_IDX];
+    const Tensor& joint_output_tensor = output_tensors[JOINT_SDPA_JOINT_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -581,8 +581,8 @@ void JointSDPAProgramFactory::override_runtime_arguments(
     auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
     // Get addresses for output tensors
-    auto* out_buffer = output_tensors.output.buffer();
-    auto* joint_out_buffer = output_tensors.joint_output.buffer();
+    auto* out_buffer = output_tensors[JOINT_SDPA_OUTPUT_IDX].buffer();
+    auto* joint_out_buffer = output_tensors[JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();

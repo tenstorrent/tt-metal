@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
@@ -64,10 +65,22 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         "TT_METAL_FABRIC_TRIMMING_PROFILE and TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE are mutually exclusive. "
         "Capture mode instruments routers to record usage; import mode applies a previously captured profile to "
         "optimize router construction. Enable only one at a time.");
+    TT_FATAL(
+        !(rtoptions.has_fabric_trimming_override() && rtoptions.get_enable_channel_trimming_capture()),
+        "TT_METAL_FABRIC_TRIMMING_OVERRIDE and TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE are mutually exclusive. "
+        "Capture mode instruments routers to record usage; override mode applies forced channel settings. "
+        "Enable only one at a time.");
     if (rtoptions.has_fabric_trimming_profile()) {
         const auto& path = rtoptions.get_fabric_trimming_profile_path();
         log_info(tt::LogFabric, "Loading channel trimming profile: {}", path);
         channel_trimming_overrides_ = load_channel_trimming_overrides(path);
+    }
+
+    // Load global overrides from override file if specified
+    if (rtoptions.has_fabric_trimming_override()) {
+        const auto& override_path = rtoptions.get_fabric_trimming_override_path();
+        log_info(tt::LogFabric, "Loading channel trimming global overrides: {}", override_path);
+        channel_trimming_global_overrides_ = load_channel_trimming_global_overrides(override_path);
     }
 
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
@@ -266,6 +279,19 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // Set router type based on detection
     config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+
+    if (config.requires_vc1) {
+        auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+        auto tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
+        bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
+        bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        config.requires_vc2 = rtoptions.get_enable_fabric_vc2() && is_blackhole && !is_udm_mode && !is_mux_extension;
+        TT_FATAL(
+            !rtoptions.get_enable_fabric_vc2(),
+            "TT_METAL_ENABLE_FABRIC_VC2 is not yet supported — VC2 feature is under development");
+    }
 
     return config;
 }

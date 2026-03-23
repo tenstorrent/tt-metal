@@ -43,19 +43,21 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_sender_idx"),
         0,
         0,
-        0>;
+        0,
+        0xFFFFFFFF,
+        0,
+        get_named_compile_time_arg_val("sampling_gather_cb")>;
 
-    constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
     deepseek_b1_ops::Sampling::ReaderArgs args{
-        get_common_arg_val<uint32_t>(0),
-        get_common_arg_val<uint32_t>(1),
-        get_common_arg_val<uint32_t>(2),
-        get_common_arg_val<uint32_t>(3),
-        get_common_arg_val<uint32_t>(4),
-        get_common_arg_val<uint32_t>(5),
-        get_common_arg_val<uint32_t>(6),
-        get_common_arg_val<uint32_t>(7),
-        get_write_ptr(gather_cb),
+        .scores_addr = get_common_arg_val<uint32_t>(0),
+        .indices_addr = get_common_arg_val<uint32_t>(1),
+        .output_addr = get_common_arg_val<uint32_t>(2),
+        .final_noc_x = get_common_arg_val<uint32_t>(3),
+        .final_noc_y = get_common_arg_val<uint32_t>(4),
+        .scratch_addr = get_common_arg_val<uint32_t>(5),
+        .global_sem_addr = get_common_arg_val<uint32_t>(6),
+        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(7),
+        .gather_addr = 0,
     };
 
     deepseek_b1_ops::Sampling::

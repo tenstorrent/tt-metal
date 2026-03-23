@@ -3387,9 +3387,7 @@ def test_conv2d_sdxl_refiner(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override, throttle",
     (
-        # 1024x1024 resolution
-
-        # VAE
+        ################################################################## START: VAE 1024x1024 resolution ##################################################################
         # Decoder
         # kernel 3x3
         (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  8,   32, 3),
@@ -3406,21 +3404,35 @@ def test_conv2d_sdxl_refiner(
         (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                      None, 1,     0, 0),
 
         # Encoder
-
         # kernel 3x3
         (1, 128, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  4,    64, 0),
         (1, 256, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  1024, 0),
-
         # input_channels 3,
         (1,   3, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   1024, 0),
-
         # input_channels 8,
         (1, 512,   8, 128,   128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 2,     0,  0),
-
         # stride 2x2
         (1, 128,   128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   256, 0),
         (1, 256,   256,  512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 4,   1024, 0),
         (1, 512,   512,  256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 2,   512, 0),
+        ################################################################### END: VAE 1024x1024 resolution ###################################################################
+
+        ################################################################### START: VAE 512x512 resolution ###################################################################
+        # Decoder
+        # kernel 3x3
+        (1, 128, 128, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  8,   32, 3),
+        (1, 256, 128, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 16,   32, 0),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 16,  512, 0),
+        (1, 256, 256, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  4,  512, 0),
+        (1, 512, 512,  64,  64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False,                      None,  1,  512, 0),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  256, 0),
+        (1, 512, 256, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  512, 0),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  256, 0),
+        # output_channels 3
+        (1, 128,   3, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 2,   256, 0),
+        # input_channels 4
+        (1,   4, 512,  64,  64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                      None, 1,     0, 0),
+        #################################################################### END: VAE 512x512 resolution ####################################################################
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)

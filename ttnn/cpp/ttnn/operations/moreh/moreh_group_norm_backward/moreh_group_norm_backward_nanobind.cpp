@@ -12,16 +12,18 @@
 #include <nanobind/stl/vector.h>
 
 #include "moreh_group_norm_backward.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 
 void bind_moreh_group_norm_backward_operation(nb::module_& mod) {
-    bind_registered_operation(
+    const auto* doc = "Moreh Group Norm Backward Operation";
+
+    ttnn::bind_function<"moreh_group_norm_backward">(
         mod,
-        ttnn::moreh_group_norm_backward,
-        "Moreh Group Norm Backward Operation",
-        ttnn::nanobind_arguments_t{
+        doc,
+        ttnn::overload_t(
+            &ttnn::moreh_group_norm_backward,
             nb::arg("output_grad"),
             nb::arg("input"),
             nb::arg("mean"),
@@ -36,8 +38,6 @@ void bind_moreh_group_norm_backward_operation(nb::module_& mod) {
             nb::arg("input_grad_memory_config") = nb::none(),
             nb::arg("gamma_grad_memory_config") = nb::none(),
             nb::arg("beta_grad_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()
-
-        });
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

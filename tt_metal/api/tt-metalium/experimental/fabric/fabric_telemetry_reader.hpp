@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>

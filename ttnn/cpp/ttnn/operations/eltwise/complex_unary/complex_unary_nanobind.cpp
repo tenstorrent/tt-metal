@@ -4,28 +4,19 @@
 
 #include "complex_unary_nanobind.hpp"
 
-#include <string>
-#include <optional>
-
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::complex_unary {
 
-namespace {
-
-template <typename complex_unary_operation_t>
-void bind_complex_unary_tensor(
-    nb::module_& mod, const complex_unary_operation_t& operation, const std::string& description) {
-    auto doc = fmt::format(
+void py_module(nb::module_& mod) {
+    ttnn::bind_function<"real">(
+        mod,
         R"doc(
-        {2}
+        Performs complex operations for real of :attr:`input_tensor`.
 
         Args:
             input_tensor (ComplexTensor): the input tensor.
@@ -37,30 +28,95 @@ void bind_complex_unary_tensor(
             ttnn.Tensor: the output tensor.
 
         )doc",
+        &ttnn::real,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
-
-    bind_registered_operation(
+    ttnn::bind_function<"imag">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> Tensor { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
-}
-
-template <typename complex_unary_operation_t>
-void bind_complex_unary_complextensor(
-    nb::module_& mod, const complex_unary_operation_t& operation, const std::string& description) {
-    auto doc = fmt::format(
         R"doc(
-        {2}
+        Performs complex operations for imag of :attr:`input_tensor`.
+
+        Args:
+            input_tensor (ComplexTensor): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        )doc",
+        &ttnn::imag,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+
+    ttnn::bind_function<"angle">(
+        mod,
+        R"doc(
+        Performs complex operations for angle of :attr:`input_tensor`.
+
+        Args:
+            input_tensor (ComplexTensor): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        )doc",
+        &ttnn::angle,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+
+    ttnn::bind_function<"is_imag">(
+        mod,
+        R"doc(
+        Returns boolean tensor if value of :attr:`input_tensor` is imag.
+
+        Args:
+            input_tensor (ComplexTensor): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        )doc",
+        &ttnn::is_imag,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+
+    ttnn::bind_function<"is_real">(
+        mod,
+        R"doc(
+        Returns boolean tensor if value of :attr:`input_tensor` is real.
+
+        Args:
+            input_tensor (ComplexTensor): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        )doc",
+        &ttnn::is_real,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
+
+    ttnn::bind_function<"conj">(
+        mod,
+        R"doc(
+        Returns complex conjugate value of complex tensor :attr:`input_tensor`.
 
         Args:
             input_tensor (ComplexTensor): the input tensor.
@@ -72,49 +128,30 @@ void bind_complex_unary_complextensor(
             ttnn.Tensor: the output tensor.
 
         )doc",
+        &ttnn::conj,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
-
-    bind_registered_operation(
+    ttnn::bind_function<"polar">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> ComplexTensor { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
-}
+        R"doc(
+        Perform an polar to Cartesian transformation on :attr:`input_tensor`, input_tensor.real(r), input_tensor.imag(theta) into x + i*y generating a complex tensor.
 
-}  // namespace
+        Args:
+            input_tensor (ComplexTensor): the input tensor.
 
-void py_module(nb::module_& mod) {
-    bind_complex_unary_tensor(
-        mod, ttnn::real, R"doc(Performs complex operations for real of :attr:`input_tensor`.)doc");
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
 
-    bind_complex_unary_tensor(
-        mod, ttnn::imag, R"doc(Performs complex operations for imag of :attr:`input_tensor`.)doc");
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-    bind_complex_unary_tensor(
-        mod, ttnn::angle, R"doc(Performs complex operations for angle of :attr:`input_tensor`.)doc");
-
-    bind_complex_unary_tensor(
-        mod, ttnn::is_imag, R"doc(Returns boolean tensor if value of :attr:`input_tensor` is imag.)doc");
-
-    bind_complex_unary_tensor(
-        mod, ttnn::is_real, R"doc(Returns boolean tensor if value of :attr:`input_tensor` is real.)doc");
-
-    bind_complex_unary_complextensor(
-        mod, ttnn::conj, R"doc(Returns complex conjugate value of complex tensor :attr:`input_tensor`.)doc");
-
-    bind_complex_unary_complextensor(
-        mod,
-        ttnn::polar,
-        R"doc(Perform an polar to Cartesian transformation on :attr:`input_tensor`, input_tensor.real(r), input_tensor.imag(theta) into x + i*y generating a complex tensor.)doc");
+        )doc",
+        &ttnn::polar,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::complex_unary

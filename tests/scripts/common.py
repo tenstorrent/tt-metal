@@ -200,7 +200,7 @@ def run_single_test(
     namespace: str,
     test_entry: TestEntry,
     timeout,
-    tt_arch="grayskull",
+    tt_arch="wormhole_b0",
     capture_output=False,
     build_full_path_to_test=default_build_full_path_to_test,
 ):
@@ -224,9 +224,7 @@ def run_single_test(
 
     if reset_tensix:
         logger.warning("Detected error on test that uses silicon - resetting")
-        if tt_arch == "grayskull":
-            run_process_and_get_result("tt-smi -tr all")
-        elif tt_arch == "wormhole_b0":
+        if tt_arch in ("wormhole_b0", "blackhole"):
             run_process_and_get_result("tt-smi -wr all wait")
         else:
             raise Exception(f"Unrecognized arch for tensix-reset: {tt_arch}")

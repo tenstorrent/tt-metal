@@ -559,3 +559,77 @@ def test_get_weight_config_returns_normalized_paths(tmp_path: Path) -> None:
     # The saved path should be relative (as a string)
     assert "weights" in saved_config["w"]["path"]
     assert not Path(saved_config["w"]["path"]).is_absolute()
+
+
+def test_get_weight_config_with_relative_base_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that relative cache roots are normalized and still persist relative SavedWeight paths."""
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            assert weight_cache_path.is_absolute()
+            (weight_cache_path / "weights").mkdir(parents=True, exist_ok=True)
+            rel_path = Path("weights") / f"w{TENSOR_CACHE_EXTENSION}"
+            (weight_cache_path / rel_path).write_bytes(b"unit-test")
+            return {"w": SavedWeight(path=rel_path, memory_config=ttnn.DRAM_MEMORY_CONFIG)}
+
+    monkeypatch.chdir(tmp_path)
+
+    mesh_device = _FakeMeshDevice(shape=(4, 8))
+    hf_config = _make_hf_config(num_hidden_layers=61)
+    base_cache = Path("relative_weight_cache")
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+    )
+
+    assert cfg["w"].path.is_absolute()
+    assert cfg["w"].path.exists()
+
+    config_path = (
+        tmp_path
+        / base_cache
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+        / "config.json"
+    )
+    with config_path.open() as f:
+        saved_config = json.load(f)
+
+    saved_path = Path(saved_config["w"]["path"])
+    assert saved_path == Path("weights") / f"w{TENSOR_CACHE_EXTENSION}"
+
+
+def test_get_weight_config_with_custom_cache_subdir_name(tmp_path: Path) -> None:
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            (weight_cache_path / "weights").mkdir(parents=True, exist_ok=True)
+            rel_path = Path("weights") / f"w{TENSOR_CACHE_EXTENSION}"
+            (weight_cache_path / rel_path).write_bytes(b"unit-test")
+            return {"w": SavedWeight(path=rel_path, memory_config=ttnn.DRAM_MEMORY_CONFIG)}
+
+    mesh_device = _FakeMeshDevice(shape=(8, 8))
+    hf_config = _make_hf_config(num_hidden_layers=61)
+    base_cache = tmp_path / "weight_cache"
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+        cache_subdir_name="61_layers_mtp",
+    )
+
+    assert cfg["w"].path.is_absolute()
+    assert cfg["w"].path.exists()
+    assert (
+        base_cache / "61_layers_mtp" / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}" / "config.json"
+    ).exists()

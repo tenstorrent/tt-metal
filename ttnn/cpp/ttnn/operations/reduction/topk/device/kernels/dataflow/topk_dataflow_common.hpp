@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 /**
  * Generate index tiles for TopK multicore local processing phase.
  *

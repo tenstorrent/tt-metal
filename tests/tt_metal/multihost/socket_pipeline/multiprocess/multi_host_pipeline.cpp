@@ -19,7 +19,8 @@
 #include <chrono>
 #include <numeric>
 #include <optional>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -747,12 +748,9 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
 PhysicalSystemDescriptor create_physical_system_descriptor() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-    const auto& driver = cluster.get_driver();
-
-    return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
 
 // Single-galaxy pipeline test helper (multi-process). 5 stages, 4 ranks: stage 4 (loopback) on rank 0.

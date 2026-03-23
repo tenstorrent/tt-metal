@@ -1,40 +1,14 @@
-cmake_minimum_required(VERSION 3.18...4.2)
-
-project(
-    ml-framework-cpp
-    LANGUAGES
-        C
-        CXX
-)
-
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)
-set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
-
-option(ENABLE_LIBCXX "Enable using libc++" OFF)
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
-    find_library(LIBC++ c++)
-    find_library(LIBC++ABI c++abi)
-    if(NOT LIBC++ OR NOT LIBC++ABI)
-        message(
-            FATAL_ERROR
-            "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
-        )
-    endif()
-    # making it global settings for now
-    add_compile_options(-stdlib=libc++)
-    add_link_options(-stdlib=libc++)
+# tt-train must be built as part of tt-metal, not standalone
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    message(
+        FATAL_ERROR
+        "tt-train cannot be built standalone. "
+        "Build from the tt-metal root directory using: ./build_metal.sh --build-tt-train"
+    )
 endif()
 
-message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
+# tt-train source root for use by subdirectories
+set(TT_TRAIN_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE INTERNAL "tt-train source root")
 
 # Add cmake directory to module path for flatbuffers helper
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)

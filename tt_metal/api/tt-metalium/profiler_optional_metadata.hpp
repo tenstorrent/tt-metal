@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;

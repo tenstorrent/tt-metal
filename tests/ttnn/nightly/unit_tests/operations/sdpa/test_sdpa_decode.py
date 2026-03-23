@@ -269,6 +269,61 @@ def test_sdpa_decode_paged_attention_regressions(
         )
 
 
+@pytest.mark.timeout(120)
+def test_sdpa_decode_tree_reduction_power_of_2_regression(device):
+    """Regression test for issue #38521: tree-reduction round count off-by-one for power-of-2 core counts.
+
+    The formula `32 - __builtin_clz(num_cores_per_head)` computes floor(log2(n)) + 1,
+    not ceil(log2(n)). For powers of 2 these differ by 1. With num_cores_per_head=64:
+        32 - __builtin_clz(64) = 7, but ceil(log2(64)) = 6.
+    This caused a TT_FATAL because 7 > MAX_TREE_REDUCTION_ROUNDS (6), even though
+    64 cores genuinely fits in 6 binary-tree reduction rounds.
+
+    By omitting program_config the op uses the full device grid with no
+    max_cores_per_head_batch cap. With b=1 and nkv=1 this gives
+    num_cores_per_head == total_device_cores. When that count is a power of 2
+    (e.g. 64 on WH 8x8) the off-by-one fires.
+
+    The fix: `(n <= 1) ? 0 : (32 - __builtin_clz(n - 1))`.
+    """
+    import torch
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    if num_cores < 2 or (num_cores & (num_cores - 1)) != 0:
+        pytest.skip(
+            f"Device grid {grid.x}x{grid.y}={num_cores} cores is not a power of 2; "
+            "bug only triggers on power-of-2 core counts"
+        )
+
+    b, nkv, nh, s, d = 1, 1, 8, 2048, 128
+
+    torch.manual_seed(1234)
+    Q = torch.randn(1, b, nh, d)
+    K = torch.randn(b, nkv, s, d)
+    V = torch.randn(b, nkv, s, d)
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_K = ttnn.as_tensor(K, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+
+    start_indices_tt = ttnn.Tensor(torch.tensor([s // 2] * b, dtype=torch.int32), ttnn.int32).to(device)
+
+    # Call without program_config so the op uses the full device grid.
+    # With b=1, nkv=1: num_cores_per_head = total device cores (power of 2).
+    # Before the fix, the tree-reduction round formula was off by one → TT_FATAL.
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        cur_pos_tensor=start_indices_tt,
+        scale=d**-0.5,
+        memory_config=dram,
+    )
+    assert tt_out is not None
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [

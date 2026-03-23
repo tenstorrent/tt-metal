@@ -29,6 +29,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
         unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
+inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_math_set_fp32_dest_acc_(enable); }
+
 inline void llk_math_reconfig_remap(const bool remap_enable) { _llk_math_reconfig_remap_(remap_enable); }
 
 inline void llk_math_wait_for_dest_available() {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
@@ -166,6 +166,7 @@ void physical_system_descriptor_to_proto(
         proto_asic_desc->set_asic_location(*asic_desc.asic_location);
         proto_asic_desc->set_board_type(board_type_to_proto(asic_desc.board_type));
         proto_asic_desc->set_unique_id(*asic_desc.unique_id);
+        proto_asic_desc->set_umd_unique_id(asic_desc.umd_unique_id);
         proto_asic_desc->set_host_name(asic_desc.host_name);
     }
 
@@ -235,12 +236,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     if (!target_device_type.has_value()) {
         throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
     }
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
-        PhysicalSystemDescriptor::null_cluster,
-        nullptr,
-        nullptr,
-        *target_device_type,
-        false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(*target_device_type);
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -265,6 +261,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.asic_location = ASICLocation{proto_asic_desc.asic_location()};
         asic_desc.board_type = proto_to_board_type(proto_asic_desc.board_type());
         asic_desc.unique_id = AsicID{proto_asic_desc.unique_id()};
+        // For backward compatibility: if umd_unique_id is not set (defaults to 0 in proto3),
+        // we need to find the ChipId from the cluster descriptor. However, since we don't have
+        // access to cluster_desc_ here, we use -1 as a sentinel (0 is a valid ChipId).
+        asic_desc.umd_unique_id =
+            proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
 
         asic_descriptors[asic_id] = asic_desc;
@@ -367,13 +368,18 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
     return result;
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_proto(
+    const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto) {
+    return std::move(*proto_to_physical_system_descriptor(psd_proto));
+}
+
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
     tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return deserialize_physical_system_descriptor_from_proto(proto_desc);
 }
 
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
@@ -390,6 +396,6 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
     }
 
-    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+    return deserialize_physical_system_descriptor_from_proto(physical_system_descriptor);
 }
 }  // namespace tt::tt_metal

@@ -4,6 +4,7 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -31,6 +32,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <ttnn/api/ttnn/types.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -38,6 +40,7 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -116,7 +119,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshMapperConfig::Replicate>(mod, "PlacementReplicate");
     nb::class_<MeshMapperConfig::Shard>(mod, "PlacementShard");
 
-    nb::class_<MeshDevice>(mod, "MeshDevice");
+    nb::class_<MeshDevice>(mod, "MeshDevice", nb::dynamic_attr());
     nb::class_<MeshDeviceView>(mod, "MeshDeviceView");
     nb::class_<MeshShape>(mod, "MeshShape", "Shape of a mesh device.");
     nb::class_<MeshCoordinate>(mod, "MeshCoordinate", "Coordinate within a mesh device.");
@@ -289,6 +292,12 @@ void py_module(nb::module_& mod) {
            Returns:
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
+        .def_prop_ro(
+          "core_grid",
+          [](const MeshDevice& device) {
+            const auto& sz = device.compute_with_storage_grid_size();
+            return ttnn::CoreGrid(sz.x, sz.y);
+          })
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
@@ -373,6 +382,18 @@ void py_module(nb::module_& mod) {
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
         .def("get_view", &MeshDevice::get_view, nb::rv_policy::reference_internal)
+        .def(
+            "get_system_mesh_id",
+            &MeshDevice::get_system_mesh_id,
+            R"doc(
+               Get the system mesh ID assigned by the control plane.
+
+               This ID uniquely identifies the mesh in the system and is used for
+               inter-mesh communication and fabric routing.
+
+               Returns:
+                   int: The system mesh ID as an unsigned integer.
+           )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -597,7 +618,7 @@ void py_module(nb::module_& mod) {
     py_mesh_mapper_config.def(
         "__init__",
         [](MeshMapperConfig* t,
-           tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
+           ttsl::SmallVector<MeshMapperConfig::Placement> placements,
            const std::optional<MeshShape>& mesh_shape_override) {
             new (t) MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
         },
@@ -652,7 +673,7 @@ void py_module(nb::module_& mod) {
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
     py_mesh_composer_config
         .def(
-            nb::init<tt::stl::SmallVector<int>, const std::optional<MeshShape>&>(),
+            nb::init<ttsl::SmallVector<int>, const std::optional<MeshShape>&>(),
             nb::arg("dims"),
             nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
@@ -1011,6 +1032,9 @@ void py_module(nb::module_& mod) {
                 >>> ttnn.distributed_context_barrier()
                 >>> # All processes continue from here
         )doc");
+
+    auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
 }
 
 }  // namespace ttnn::distributed

@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp"
 
-namespace ttnn::operations::data_movement::nonzero {
+namespace ttnn {
 
-std::vector<Tensor> ExecuteNonZeroIndices::invoke(
+std::vector<Tensor> nonzero(
     const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto [output_0, output_1] = ttnn::prim::nonzero(input_tensor, input_memory_config);
@@ -19,4 +19,4 @@ std::vector<Tensor> ExecuteNonZeroIndices::invoke(
     return output_tensor_vec;
 }
 
-}  // namespace ttnn::operations::data_movement::nonzero
+}  // namespace ttnn

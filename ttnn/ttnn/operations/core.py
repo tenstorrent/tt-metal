@@ -251,7 +251,9 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
+    preserve_nan_values: bool = False,
     col_tilize: bool = False,
+    fast_approx: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -282,6 +284,7 @@ def from_torch(
             host data and is unrelated to Tile-level transpose flags (transpose_within_face /
             transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
             Defaults to `False`.
+        fast_approx (bool, optional): If True, use a fast dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -323,6 +326,17 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
+    import torch
+    import numpy as np
+
+    if isinstance(tensor, np.ndarray):
+        # We use bf16 as an intermediate type between types unsupported by ttnn (e.g., int64)
+        # and types unsupported by Torch/NumPy (e.g., bfloat8).
+        # This allows type conversion: int64 -> bf16 -> bf8/4.
+        # NumPy does not support bfloat16, so we use a Torch tensor instead.
+        # float32 as an intermediate type is not used due to limited amount of L1 memory.
+        tensor = torch.from_numpy(tensor)
+
     return ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
@@ -333,7 +347,9 @@ def from_torch(
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
+        fast_approx=fast_approx,
     )
 
 

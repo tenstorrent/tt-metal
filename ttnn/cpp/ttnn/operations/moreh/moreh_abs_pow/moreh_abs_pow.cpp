@@ -6,8 +6,9 @@
 
 #include "ttnn/operations/moreh/moreh_abs_pow/device/moreh_abs_pow_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_abs_pow {
-Tensor MorehAbsPow::invoke(
+namespace ttnn {
+
+Tensor moreh_abs_pow(
     const Tensor& input,
     const float p,
     const std::optional<Tensor>& output,
@@ -15,4 +16,5 @@ Tensor MorehAbsPow::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_abs_pow(input, p, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_abs_pow
+
+}  // namespace ttnn

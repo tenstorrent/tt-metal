@@ -155,7 +155,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
         # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
-        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st ouput of the subclass method indexed as [0].
+        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st output of the subclass method indexed as [0].
         pt_out = reference_model.forward(
             pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
         )[0] * full_text_mask.squeeze(1)

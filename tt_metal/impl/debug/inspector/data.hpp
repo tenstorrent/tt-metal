@@ -29,6 +29,7 @@ private:
         rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
     void rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results);
     void rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results);
+    void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);

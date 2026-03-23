@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -21,56 +21,36 @@
 namespace ttnn::operations::experimental::ccl {
 
 namespace {
-template <typename ccl_operation_t>
-void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    // namespace py = nanobind;
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const std::vector<ttnn::Tensor>& input_tensor,
-               std::vector<ttnn::Tensor>& persistent_output_buffer,
-               const int32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               const uint32_t num_links,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const std::optional<MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensor,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    num_links,
-                    memory_config,
-                    subdevice_id);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffer"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology"),
-            nb::arg("subdevice_id") = nb::none()});
+
+std::vector<ttnn::Tensor> ring_attention_all_gather_async_wrapper(
+    const std::vector<ttnn::Tensor>& input_tensor,
+    std::vector<ttnn::Tensor>& persistent_output_buffer,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<uint32_t>& num_links,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    return ttnn::experimental::ring_attention_all_gather_async(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        cluster_axis,
+        mesh_device,
+        topology,
+        num_links.value_or(1),
+        memory_config,
+        subdevice_id);
 }
 
 }  // namespace
 
 void bind_ring_attention_all_gather_async(nb::module_& mod) {
-    bind_ring_attention_all_gather_async(
+    ttnn::bind_function<"ring_attention_all_gather_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::ring_attention_all_gather_async,
         R"doc(
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
@@ -104,7 +84,20 @@ void bind_ring_attention_all_gather_async(nb::module_& mod) {
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
 
-        )doc");
+        )doc",
+        ttnn::overload_t(
+            ring_attention_all_gather_async_wrapper,
+            nb::arg("input_tensor"),
+            nb::arg("persistent_output_buffer"),
+            nb::arg("dim"),
+            nb::kw_only(),
+            nb::arg("multi_device_global_semaphore"),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("cluster_axis"),
+            nb::arg("mesh_device"),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology"),
+            nb::arg("subdevice_id") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

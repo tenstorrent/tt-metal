@@ -7,15 +7,16 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_sum {
-Tensor MorehSum::invoke(
+namespace ttnn {
+
+Tensor moreh_sum(
     const Tensor& input,
     const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     const bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.padded_shape().rank());
+    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.padded_shape().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;
@@ -28,4 +29,5 @@ Tensor MorehSum::invoke(
     log_debug(tt::LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims.front(), keepdim);
     return ttnn::prim::moreh_sum(temp_input, dims.front(), keepdim, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_sum
+
+}  // namespace ttnn

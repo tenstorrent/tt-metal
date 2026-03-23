@@ -18,6 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
+#include "tt_metal/api/tt-metalium/cluster.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -562,7 +563,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     };
 
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    uint32_t last_ktile_h = 0;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w, last_ktile_h};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -1331,6 +1333,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                 "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp",
             .core_ranges = worker_cores,
             .compile_time_args = writer_ct_args,
+            .defines = {{"USE_WORKER_MUX", "1"}},
             .runtime_args = {{worker_fwd_core, fwd_writer_rt}, {worker_bwd_core, bwd_writer_rt}},
             .config = tt::tt_metal::WriterConfigDescriptor{},
         });

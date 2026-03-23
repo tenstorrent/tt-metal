@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tt-metalium/constants.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
@@ -46,9 +45,11 @@ void kernel_main() {
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
 
     const uint32_t eps_val = get_arg_val<uint32_t>(2);
     const uint32_t out_addr = get_arg_val<uint32_t>(3);
@@ -67,18 +68,16 @@ void kernel_main() {
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
     constexpr uint32_t cb_in = tt::CBIndex::c_29;
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
-    constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
-
+    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out =
-        (fuse_gamma or fuse_beta)
-            ? (((fuse_gamma and not fuse_beta) or (not fuse_gamma and fuse_beta)) ? cb_in : cb_out0)
-            : cb_out0;
+    constexpr uint32_t cb_out = (fuse_gamma or fuse_beta) ? cb_out0 : cb_reread_write_out;
 #endif
+
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_out);
+    constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
 
     // input mask
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);

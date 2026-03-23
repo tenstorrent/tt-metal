@@ -17,7 +17,7 @@
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"

@@ -11,13 +11,15 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <llrt/rtoptions.hpp>
 #include <memory>
+#include "impl/context/context_types.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
 
 namespace tt::tt_metal {
 
 class DPrintServer {
 public:
     // Constructor/destructor, reads dprint options from RTOptions.
-    DPrintServer(llrt::RunTimeOptions& rtoptions);
+    DPrintServer(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     ~DPrintServer();
 
     // Sets whether the print server is muted. Calling this function while a kernel is running may
@@ -45,8 +47,9 @@ public:
     // return true and the print server will be terminated.
     bool hang_detected();
 
+    class Impl;  // Abstract base; defined in dprint_server.cpp.
+
 private:
-    class Impl;
     std::unique_ptr<Impl> impl_;  // Pointer to implementation
 };
 

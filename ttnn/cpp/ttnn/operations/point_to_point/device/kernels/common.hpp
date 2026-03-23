@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
+#pragma once
+
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 namespace tt::point_to_point::common {

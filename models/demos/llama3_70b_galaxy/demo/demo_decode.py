@@ -800,6 +800,7 @@ def test_llama_demo(
     start_pos,
     optimizations,
     mesh_device,
+    device_params,
     is_ci_env,
     reset_seeds,
     request,

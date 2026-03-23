@@ -172,7 +172,7 @@ void topk_group_scores(
     pack_reconfig_data_format(cb_sorted_group_order);
     pack_tile(2, cb_sorted_group_order);
     cb_pop_front(cb_group_summed_scores, 1);
-    // don't pop group indices as it gets re-used for the next tile heights
+    // don't pop group indices as it gets reused for the next tile heights
     release_dst();
 
     cb_push_back(cb_sorted_group_order, 1);

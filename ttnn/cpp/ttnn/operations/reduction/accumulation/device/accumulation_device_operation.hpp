@@ -21,7 +21,7 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct AccumulationDeviceOperation {
     using operation_attributes_t = AccumulationParams;

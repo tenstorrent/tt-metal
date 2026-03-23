@@ -11,7 +11,7 @@
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
-tokens satisfying cumulative probabilty > p condition.
+tokens satisfying cumulative probability > p condition.
 
 Top-k Sampling:
 Samples from the top-k subset by comparing cumulative sums of probabilities with a random threshold to select the
@@ -224,22 +224,23 @@ void kernel_main() {
     constexpr auto k_args = TensorAccessorArgs<temp_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(7);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(9);
-    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(10);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(12);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_id_k = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_id_p = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
-    constexpr uint32_t core_id = get_compile_time_arg_val(17);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
+    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
+    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(args_base + 2);
+    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(args_base + 3);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 4);
+    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
+    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
+    constexpr uint32_t out_stick_size = get_compile_time_arg_val(args_base + 8);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
+    constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
+    constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
+    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(args_base + 12);
+    constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 13);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 14);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 15);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t

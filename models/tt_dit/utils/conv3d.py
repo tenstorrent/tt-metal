@@ -22,20 +22,25 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
-    config_to_blocking = {
-        # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
-        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
-        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
-        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
-        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
-        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
-        # (16, 384, (3, 3, 3)): (16, 32, 1, 1, 1),
-        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
-        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
-        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
-    }
+def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
+    if weights_dtype == ttnn.float32:
+        # Use smaller block size to reduce memory use.
+        config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
+    else:
+        config_to_blocking = {
+            # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+            # Keep the old padded conv_out tuning for the new unpadded C_out=3 path.
+            (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
+            (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
+            (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
+            (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
+            (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
+            (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
+            (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+            (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+            (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
+            (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+        }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
@@ -46,7 +51,7 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
         W_out_block=W_out_block,
@@ -75,7 +80,7 @@ def count_convs(module: Module) -> int:
 
 def conv_pad_height(tensor_BTHWC, h_factor):
     """
-    For Wan2.2, in some parallism schemes height can't be fractured by the factor.
+    For Wan2.2, in some parallelism schemes height can't be fractured by the factor.
     This function pads the height to the next multiple of the factor.
     """
     B, T, H, W, C = tensor_BTHWC.shape
@@ -113,29 +118,3 @@ def aligned_channels(channels):
     if channels % ALIGNMENT != 0:
         channels = channels + ALIGN_PAD
     return channels
-
-
-def prepare_conv3d_weights(weight, bias, conv_config):
-    """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    padded_C_in = aligned_channels(C_in)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = conv_config.C_in_block
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert (
-        num_C_in_blocks * C_in_block == C_in_aligned
-    ), f"num_C_in_blocks * C_in_block == C_in_aligned, got {num_C_in_blocks} * {C_in_block} != {C_in_aligned}"
-
-    # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    return w, bias.reshape(1, -1)

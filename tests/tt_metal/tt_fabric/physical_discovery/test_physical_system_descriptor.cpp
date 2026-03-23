@@ -14,7 +14,9 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -30,16 +32,18 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(),
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        rtoptions,
-        run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     // Run discovery again to ensure that state is cleared before re-discovery
-    physical_system_desc.run_discovery();
+    physical_system_desc.clear();
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
+        driver_ref,
+        distributed_context,
+        rtoptions.get_target_device(),
+        /*run_global_discovery*/ true,
+        /*run_live_discovery*/ true);
+    physical_system_desc.merge(std::move(new_psd));
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
     EXPECT_EQ(hostnames.size(), *(distributed_context->size()));
@@ -79,6 +83,13 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
 
     for (const auto& [chip_id, asic_id] : unique_chip_ids) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
+    }
+
+    // Validate UMD unique ID mapping (AsicID -> ChipId)
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        auto expected_chip_id = asic_id_to_chip_id.at(asic);
+        EXPECT_EQ(physical_system_desc.get_umd_unique_id(asic), expected_chip_id)
+            << "get_umd_unique_id(asic_id) should match cluster's ChipId for asic " << *asic;
     }
 
     // Local Connectivity
@@ -145,19 +156,42 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     }
 }
 
+TEST(PhysicalDiscovery, TestUmdUniqueIdSerializationRoundtrip) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+
+    auto unique_chip_ids = cluster.get_unique_chip_ids();
+    std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : unique_chip_ids) {
+        asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
+    }
+
+    // Serialize and deserialize
+    auto bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(physical_system_desc);
+    auto deserialized = tt::tt_metal::deserialize_physical_system_descriptor_from_bytes(bytes);
+
+    // Verify umd_unique_id is preserved for each local asic
+    auto my_host = physical_system_desc.my_host_name();
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        auto expected_chip_id = asic_id_to_chip_id.at(asic);
+        EXPECT_EQ(deserialized.get_umd_unique_id(asic), expected_chip_id)
+            << "umd_unique_id should be preserved after serialize/deserialize for asic " << *asic;
+    }
+}
+
 TEST(PhysicalDiscovery, PrintHostTopology) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(),
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        rtoptions,
-        run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 
     if (*(distributed_context->rank()) == 0) {
         auto all_hostnames = physical_system_desc.get_all_hostnames();
@@ -187,9 +221,75 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         GTEST_SKIP() << "Splitting a Galaxy into 2x4 Cross-Tray slices is only supported for Blackhole Galaxy Systems.";
     }
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+
+    // Each rank builds its local PCI device ID -> logical ID mapping.
+    // UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs.
+    // chips_with_mmio maps chip_id (logical) -> pci_device_id.
+    const auto& chips_with_mmio = cluster.get_cluster_desc()->get_chips_with_mmio();
+    uint32_t num_devices = static_cast<uint32_t>(chips_with_mmio.size());
+
+    std::vector<uint32_t> local_mapping(2 * num_devices);
+    {
+        size_t idx = 0;
+        for (const auto& [logical_id, pcie_id] : chips_with_mmio) {
+            local_mapping[2 * idx] = static_cast<uint32_t>(pcie_id);
+            local_mapping[(2 * idx) + 1] = static_cast<uint32_t>(logical_id);
+            idx++;
+        }
+    }
+
+    auto my_host = physical_system_desc.my_host_name();
+    uint32_t hostname_buf_len = static_cast<uint32_t>(my_host.size() + 1);
+
+    // All ranks must agree on buffer sizes for gather. Use all_reduce(MAX) to
+    // handle any variation across hosts (e.g. different device counts or hostname lengths).
+    uint32_t max_num_devices = 0;
+    uint32_t max_hostname_len = 0;
+    distributed_context->all_reduce(
+        tt::stl::Span<uint32_t>(&num_devices, 1), tt::stl::Span<uint32_t>(&max_num_devices, 1), ReduceOp::MAX);
+    distributed_context->all_reduce(
+        tt::stl::Span<uint32_t>(&hostname_buf_len, 1), tt::stl::Span<uint32_t>(&max_hostname_len, 1), ReduceOp::MAX);
+
+    // Pad local buffers to the agreed-upon sizes.
+    local_mapping.resize(2 * max_num_devices, UINT32_MAX);
+
+    std::vector<char> my_hostname_buf(max_hostname_len, '\0');
+    std::copy(my_host.begin(), my_host.end(), my_hostname_buf.begin());
+
+    int world_size = *distributed_context->size();
+
+    // Gather every rank's hostname and PCI-to-logical mapping at rank 0.
+    std::vector<char> all_hostnames_buf(world_size * max_hostname_len, '\0');
+    distributed_context->gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(my_hostname_buf.data()), my_hostname_buf.size()),
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(all_hostnames_buf.data()), all_hostnames_buf.size()),
+        Rank{0});
+
+    std::vector<uint32_t> all_mappings(world_size * 2 * max_num_devices, UINT32_MAX);
+    distributed_context->gather(
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(local_mapping.data()), local_mapping.size() * sizeof(uint32_t)),
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(all_mappings.data()), all_mappings.size() * sizeof(uint32_t)),
+        Rank{0});
     if (*distributed_context->rank() == 0) {
+        // Reconstruct per-host PCI-to-logical mapping from gathered data.
+        std::unordered_map<std::string, std::unordered_map<uint32_t, uint32_t>> host_pcie_to_logical;
+        for (int r = 0; r < world_size; r++) {
+            std::string hostname(&all_hostnames_buf[r * max_hostname_len]);
+            auto& mapping = host_pcie_to_logical[hostname];
+            for (uint32_t i = 0; i < max_num_devices; i++) {
+                uint32_t pcie_id = all_mappings[(r * 2 * max_num_devices) + (2 * i)];
+                if (pcie_id == UINT32_MAX) {
+                    break;
+                }
+                mapping[pcie_id] = all_mappings[(r * 2 * max_num_devices) + (2 * i) + 1];
+            }
+        }
+
         // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
         // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
         const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
@@ -220,7 +320,10 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
                         const auto& asic_location = pcie_id_to_asic_location.at(hostname).at(pcie_device);
                         if (std::find(asic_locations.begin(), asic_locations.end(), asic_location) !=
                             asic_locations.end()) {
-                            device_mapping[hostname][slice_id].push_back(pcie_device);
+                            auto it = host_pcie_to_logical[hostname].find(pcie_device);
+                            uint32_t logical_id =
+                                (it != host_pcie_to_logical[hostname].end()) ? it->second : pcie_device;
+                            device_mapping[hostname][slice_id].push_back(logical_id);
                         }
                     }
                 }
@@ -240,11 +343,11 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
-
     // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as
     // logical IDs (BDF-sorted indices), not PCI device IDs. The cluster descriptor's chip_id is the
     // logical ID; chips_with_mmio maps chip_id (logical) -> pci_device_id.
@@ -253,24 +356,50 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
         pcie_id_to_logical_id[static_cast<uint32_t>(pcie_id)] = static_cast<uint32_t>(logical_id);
     }
 
-    // Generate a YAML File with the tray to device mapping (using logical IDs for TT_VISIBLE_DEVICES)
     YAML::Node tray_to_pcie_device_mapping;
-    YAML::Node device_mapping;  // Create a separate node for the device mapping
+    YAML::Node device_mapping;
     for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(my_host)) {
-        std::vector<uint32_t> logical_devices_vec;
-        for (uint32_t pcie_id : pcie_devices) {
-            auto it = pcie_id_to_logical_id.find(pcie_id);
-            if (it != pcie_id_to_logical_id.end()) {
-                logical_devices_vec.push_back(it->second);
-            }
+        // Convert unordered_set to vector for YAML serialization
+        std::vector<uint32_t> logical_ids;
+        for (const auto& pcie_device : pcie_devices) {
+            logical_ids.push_back(pcie_id_to_logical_id.at(pcie_device));
         }
-        std::sort(logical_devices_vec.begin(), logical_devices_vec.end());
-        device_mapping[tray_id] = logical_devices_vec;
+        device_mapping[tray_id] = logical_ids;
     }
     tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
     std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
     outfile << tray_to_pcie_device_mapping;
+    outfile.close();
+}
+
+TEST(PhysicalMappingGeneration, GeneratePCIeToLogicalMapping) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto my_host = physical_system_desc.my_host_name();
+
+    // Build PCI device ID -> logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs.
+    std::unordered_map<uint32_t, uint32_t> pcie_id_to_logical_id;
+    for (const auto& [logical_id, pcie_id] : cluster.get_cluster_desc()->get_chips_with_mmio()) {
+        pcie_id_to_logical_id[static_cast<uint32_t>(pcie_id)] = static_cast<uint32_t>(logical_id);
+    }
+
+    YAML::Node host_mapping;
+    for (const auto& [pcie_id, logical_id] : pcie_id_to_logical_id) {
+        host_mapping[std::to_string(pcie_id)] = logical_id;
+    }
+
+    YAML::Node root;
+    root[my_host] = host_mapping;
+
+    std::string out_filename = my_host + "_pcie_to_logical.yaml";
+    std::ofstream outfile(out_filename);
+    outfile << root;
     outfile.close();
 }
 

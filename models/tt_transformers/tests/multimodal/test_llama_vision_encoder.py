@@ -41,7 +41,7 @@ def test_vision_encoder_inference(mesh_device, reset_seeds):
     return_intermediate = [int(l) for l in return_intermediate.split(",")]
 
     model_repo_name = os.getenv("HF_MODEL")
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
+    # config contains parameters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionModel(config.vision_config)

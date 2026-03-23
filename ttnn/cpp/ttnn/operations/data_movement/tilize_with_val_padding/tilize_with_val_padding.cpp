@@ -58,10 +58,14 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
     return output_shape;
 }
 
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const PadValue pad_value,
+    const tt::tt_metal::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -91,15 +95,15 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    bool enough_space_width = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::tilize_with_val_padding(
             input_tensor,
-            squeeze_output_shape(output_padded_shape),
+            operations::data_movement::squeeze_output_shape(output_padded_shape),
             pad_value,
             memory_config.value_or(input_tensor.memory_config()),
             output_dtype.value_or(input_tensor.dtype()),
@@ -109,13 +113,13 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
             sub_core_grids);
     };
 
-    return build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
+    return operations::data_movement::build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
 }
 
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& output_padded_shape,
-    const PadValue pad_value,
+    const tt::tt_metal::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -132,7 +136,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
         return create_device_tensor(spec, input_tensor.device());
     }
 
-    return invoke(
+    return tilize_with_val_padding(
         input_tensor,
         ttnn::Shape{output_padded_shape},
         pad_value,
@@ -142,7 +146,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
         sub_core_grids);
 }
 
-ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
+ttnn::Tensor tilize_with_zero_padding(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -169,14 +173,14 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         return create_device_tensor(spec, input_tensor.device());
     }
 
-    PadValue pad_value;
+    tt::tt_metal::PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
     } else {
         pad_value = (uint32_t)0;
     }
-    return ExecuteTilizeWithValPadding::invoke(
+    return tilize_with_val_padding(
         input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

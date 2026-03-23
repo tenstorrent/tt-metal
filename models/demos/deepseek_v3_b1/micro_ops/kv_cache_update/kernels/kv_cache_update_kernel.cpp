@@ -31,7 +31,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     deepseek_b1_ops::KVCacheUpdate::WriterArgs args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
-        .pos_addr = get_common_arg_val<uint32_t>(1),
+        .local_cur_pos = 0,
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
@@ -57,5 +57,12 @@ void kernel_main() {
 #endif
 
     deepseek_b1_ops::KVCacheUpdate::Op<Core::is_nope_core, Core::is_rope_core> op;
+#if defined(COMPILE_FOR_BRISC)
+    {
+        uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
+        volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+        op.set_local_cur_pos(args, pos_ptr[0]);
+    }
+#endif
     op(args);
 }

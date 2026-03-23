@@ -5,7 +5,6 @@
 #include <fmt/format.h>
 
 #include <CLI/CLI.hpp>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 #include <string>
 
@@ -20,6 +19,7 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -53,10 +53,10 @@ int main(int argc, char** argv) {
     CLI::App app{"Linear Regression DDP Example"};
     argv = app.ensure_utf8(argv);
 
-    uint32_t batch_size = 128;
-    const size_t training_samples_count = 1000;
-    const size_t num_features = 32;
-    const size_t num_targets = 32;
+    uint32_t batch_size = 1024;
+    const size_t training_samples_count = 100000;
+    const size_t num_features = 64;
+    const size_t num_targets = 64;
     const float noise = 0.0F;
     const bool bias = true;
 
@@ -65,8 +65,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 4;
-    uint32_t mesh_cols = 8;
+    uint32_t mesh_rows = 32;
+    uint32_t mesh_cols = 1;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 32x1\n", mesh_shape_str);
         return 1;
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
             std::move(target.begin(), target.end(), std::back_inserter(targets));
         }
 
-        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, /* cluster_axis */ 0);
         auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
             data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
         auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(

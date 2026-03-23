@@ -12,16 +12,15 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "tt_stl/assert.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "split_query_key_value_and_split_heads.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::transformer::split_query_key_value_and_split_heads,
+    const auto* const doc =
         R"doc(
             Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
             Then, reshapes and permutes the output tensors, to make them ready for computing attention scores.
@@ -72,29 +71,25 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
                 num_kv_heads (int, optional): num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`. Defaults to `None`.
                 transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                use_falcon7b_backend (bool): Whether to use the specialized Falcon7B backend for splitting QKV heads. Defaults to `false`.
 
             Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
 
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::transformer::split_query_key_value_and_split_heads)& self,
-               const Tensor& input_tensor,
-               const std::optional<Tensor>& kv_input_tensor,
-               const uint32_t num_heads,
-               const std::optional<uint32_t> num_kv_heads,
-               const bool transpose_key,
-               const std::optional<MemoryConfig>& memory_config)
-                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
-                return self(input_tensor, kv_input_tensor, num_heads, num_kv_heads, transpose_key, memory_config);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("kv_input_tensor") = nb::none(),
-            nb::kw_only(),
-            nb::arg("num_heads"),
-            nb::arg("num_kv_heads") = nb::none(),
-            nb::arg("transpose_key") = true,
-            nb::arg("memory_config") = nb::none()});
+        )doc";
+
+    ttnn::bind_function<"split_query_key_value_and_split_heads", "ttnn.transformer.">(
+        mod,
+        doc,
+        &ttnn::transformer::split_query_key_value_and_split_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("kv_input_tensor") = nb::none(),
+        nb::kw_only(),
+        nb::arg("num_heads"),
+        nb::arg("num_kv_heads") = nb::none(),
+        nb::arg("transpose_key") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_falcon7b_backend") = false);
 }
 
 }  // namespace ttnn::operations::transformer

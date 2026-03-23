@@ -39,7 +39,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -76,11 +75,6 @@ jobs:
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -119,6 +113,12 @@ jobs:
         if: always()
   quick-wh-glx-quick:
     if: ${{ inputs.blackhole == false && inputs.scheduled == false }}
+    name: quick-wh-glx-quick (mlperf=${{ matrix.mlperf }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # We only have MLPerf in AUS2, so we want to split out tests that don't need it
+        mlperf: [true, false]
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -130,14 +130,11 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-        TT_METAL_ENABLE_ERISC_IRAM: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ matrix.mlperf && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
@@ -155,16 +152,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run quick tests
+      - name: Run quick tests (non-mlperf)
+        if: ${{ !matrix.mlperf }}
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-
-          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          # Running only decode and prefill-128 tests with HF weights for moe and mlp layer
-          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.3 and (mode_decode or mode_prefill_seq_128)" --timeout 180 --durations=0;
-          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.0 and (mode_decode or mode_prefill_seq_128)" --timeout 60 --durations=0;
 
           # CCL smoke tests - exactly one representative test from each op category
           pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
@@ -175,6 +168,9 @@ jobs:
 
           pytest "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]" --timeout=300;
           pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
+
+          pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "Wan_shape_1 and check" --timeout=300;
+          pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1 and wh_4x8_1link" --timeout=300;
 
           # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
@@ -187,11 +183,17 @@ jobs:
           pytest "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
           pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U053W15B6JF # Djordje Ivanovic
+      - name: Run quick tests (mlperf)
+        if: ${{ matrix.mlperf }}
+        timeout-minutes: 10
+        env:
+          DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          # Running only decode and prefill-128 tests with HF weights for moe and mlp layer
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.3 and (mode_decode or mode_prefill_seq_128)" --timeout 180 --durations=0;
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.0 and (mode_decode or mode_prefill_seq_128)" --timeout 60 --durations=0;
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -215,7 +217,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -242,11 +243,6 @@ jobs:
         run: |
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: UJ45FEC7M # Allan Liu
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

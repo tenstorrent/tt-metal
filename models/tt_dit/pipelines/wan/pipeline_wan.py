@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -135,6 +135,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -249,18 +250,24 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
+            dtype=vae_dtype,
         )
 
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            # This is the best dynamic loading strategy across all supported device configurations.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
-            self.transformer.set_unload_set(self.transformer_2)
-            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            if ttnn.device.is_blackhole():
+                self.transformer.set_unload_set(self.transformer_2)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            else:
+                # WH T3K has tighter DRAM — include VAE in the unload chain so
+                # transformers and VAE never coexist in DRAM across pipeline runs.
+                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
 
-        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
-        # Cache warmup: Load in reverse order of use to ensure the first models stay loaded before call.
+        # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
         self._prepare_transformer1()
         self._prepare_text_encoder()
@@ -271,6 +278,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if getattr(self, "vae", None) else 4
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
+
+        # Precompute VAE latent normalization constants (avoids recreating every call)
+        self._vae_latents_mean = torch.tensor(self.vae.config.latents_mean, dtype=self.vae.dtype).view(
+            1, self.vae.config.z_dim, 1, 1, 1
+        )
+        self._vae_latents_std = torch.tensor(self.vae.config.latents_std, dtype=self.vae.dtype).view(
+            1, self.vae.config.z_dim, 1, 1, 1
+        )
 
     @staticmethod
     def create_pipeline(
@@ -297,11 +312,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
-            device_configs[(1, 8)] = {
-                "sp_axis": 0,
-                "tp_axis": 1,
+            device_configs[(2, 4)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -387,6 +402,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
 
@@ -397,6 +413,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer_2",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 
@@ -956,6 +973,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._current_timestep = None
 
+        if profiler:
+            profiler.start("vae", profiler_iteration)
+
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
@@ -963,15 +983,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
-            latents_mean = (
-                torch.tensor(self.vae.config.latents_mean)
-                .view(1, self.vae.config.z_dim, 1, 1, 1)
-                .to(latents.device, latents.dtype)
-            )
-            latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
-                latents.device, latents.dtype
-            )
-            latents = latents / latents_std + latents_mean
+            latents = latents * self._vae_latents_std + self._vae_latents_mean
 
             # VAE on device
             tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
@@ -979,7 +991,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            tt_latents_BTHWC = bf16_tensor_2dshard(
+            tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -987,25 +999,26 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.height_parallel.mesh_axis: 2,
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
+                dtype=self.tt_vae.dtype,
             )
-            with profiler("vae", profiler_iteration) if profiler else nullcontext():
-                self._prepare_vae()
-                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+            self._prepare_vae()
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = ttnn.to_torch(
-                tt_video_BCTHW,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
-                ),
-            )
+            video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
+            if output_type == "np":
+                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+            else:
+                video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
+
+        if profiler:
+            profiler.end("vae", profiler_iteration)
 
         # Offload all models
         # self.maybe_free_model_hooks()

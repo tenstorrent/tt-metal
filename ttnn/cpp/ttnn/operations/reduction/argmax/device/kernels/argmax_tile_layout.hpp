@@ -278,7 +278,7 @@ void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
     uint32_t sent_count = 0;
     while (collected_count > 0) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
-        // Otherwise, argmax values are accumulated directly in the outut CB.
+        // Otherwise, argmax values are accumulated directly in the output CB.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
             auto* dst_cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);

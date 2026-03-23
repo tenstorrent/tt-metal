@@ -13,7 +13,7 @@ on:
           - llama3.1-8b
           - llama3.3-70b-galaxy
       sku:
-        description: "Select SKU to test"
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
         type: choice
@@ -45,6 +45,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
 
 permissions:
   packages: write
@@ -88,4 +93,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "1"

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
 
@@ -24,6 +25,9 @@ struct SliceTileProgramFactory {
 
     static void override_runtime_arguments(
         cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
 }  // namespace ttnn::prim

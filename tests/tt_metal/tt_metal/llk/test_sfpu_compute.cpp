@@ -25,12 +25,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -259,6 +258,7 @@ bool run_sfpu_all_same_buffer(
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);

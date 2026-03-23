@@ -10,6 +10,8 @@ from models.common.tensor_utils import (
     pad_dim_to_size,
     pad_to_shape,
     parse_shard_dims_from_mesh_mapper_config,
+    program_config_to_dict,
+    program_config_to_str,
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
@@ -151,6 +153,32 @@ def test_parse_shard_dims_from_mesh_mapper_config():
     assert parse_shard_dims_from_mesh_mapper_config(config6) == []
 
 
+def test_get_rot_transformation_mat_tile_size():
+    """Verify decode transformation matrix is TILE_SIZE x TILE_SIZE with correct pattern."""
+    mat = get_rot_transformation_mat(dhead=32)
+    assert mat.shape == (1, 1, 32, 32)
+    # Permutation pattern: even→odd = +1, odd→even = -1
+    assert mat[0, 0, 0, 1].item() == 1.0
+    assert mat[0, 0, 1, 0].item() == -1.0
+    assert mat[0, 0, 2, 3].item() == 1.0
+    assert mat[0, 0, 3, 2].item() == -1.0
+    # Diagonal is zero
+    assert mat[0, 0, 0, 0].item() == 0.0
+    assert mat[0, 0, 1, 1].item() == 0.0
+
+
+def test_get_rot_transformation_mat_large():
+    """Verify the matrix works for arbitrary dhead (e.g., head_dim=128 for prefill)."""
+    mat = get_rot_transformation_mat(dhead=128)
+    assert mat.shape == (1, 1, 128, 128)
+    # Pattern extends to last pair
+    assert mat[0, 0, 126, 127].item() == 1.0
+    assert mat[0, 0, 127, 126].item() == -1.0
+    # Off-pattern entries are zero
+    assert mat[0, 0, 0, 2].item() == 0.0
+    assert mat[0, 0, 0, 3].item() == 0.0
+
+
 def test_get_rot_transformation_mat():
     """
     Test that get_rot_transformation_mat produces the correct rotation matrix for RoPE.
@@ -217,6 +245,57 @@ def test_zeros_like_paged_cache():
     assert torch.all(result == 0)
 
 
+def test_program_config_to_dict_with_to_json():
+    """Test program_config_to_dict for a config that has to_json (matmul configs)."""
+    import json
+
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4, per_core_M=1, per_core_N=2)
+    d = program_config_to_dict(cfg)
+
+    assert isinstance(d, dict)
+    assert d["type"] == "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"
+    assert d["in0_block_w"] == 4
+    assert d["per_core_M"] == 1
+    assert d["per_core_N"] == 2
+    assert "fused_activation" in d
+
+    json_str = json.dumps(d, sort_keys=True)
+    roundtrip = json.loads(json_str)
+    assert roundtrip == d
+
+
+def test_program_config_to_dict_without_to_json():
+    """Test program_config_to_dict for a config that lacks to_json (SDPAProgramConfig)."""
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=256,
+        k_chunk_size=256,
+    )
+    d = program_config_to_dict(cfg)
+
+    assert isinstance(d, dict)
+    assert d["type"] == "SDPAProgramConfig"
+    assert "repr" in d
+    assert "SDPAProgramConfig" in d["repr"]
+    assert "q_chunk_size=256" in d["repr"]
+    assert "k_chunk_size=256" in d["repr"]
+
+
+def test_program_config_to_str():
+    """Test program_config_to_str returns valid sorted JSON."""
+    import json
+
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2, per_core_M=3, per_core_N=4)
+    result = program_config_to_str(cfg)
+
+    parsed = json.loads(result)
+    assert parsed["in0_block_w"] == 2
+    assert parsed["per_core_M"] == 3
+    assert parsed["per_core_N"] == 4
+
+    assert result == json.dumps(parsed, sort_keys=True)
+
+
 if __name__ == "__main__":
     test_pad_dim_to_size()
     print("  ✓ test_pad_dim_to_size")
@@ -239,6 +318,11 @@ if __name__ == "__main__":
     test_parse_shard_dims_from_mesh_mapper_config()
     print("  ✓ test_parse_shard_dims_from_mesh_mapper_config")
 
+    test_get_rot_transformation_mat_tile_size()
+    print("  ✓ test_get_rot_transformation_mat_tile_size")
+
+    test_get_rot_transformation_mat_large()
+    print("  ✓ test_get_rot_transformation_mat_large")
     test_get_rot_transformation_mat()
     print("  ✓ test_get_rot_transformation_mat")
 
@@ -247,5 +331,14 @@ if __name__ == "__main__":
 
     test_zeros_like_paged_cache()
     print("  ✓ test_zeros_like_paged_cache")
+
+    test_program_config_to_dict_with_to_json()
+    print("  ✓ test_program_config_to_dict_with_to_json")
+
+    test_program_config_to_dict_without_to_json()
+    print("  ✓ test_program_config_to_dict_without_to_json")
+
+    test_program_config_to_str()
+    print("  ✓ test_program_config_to_str")
 
     print("\nAll tensor_utils tests passed! ✓")

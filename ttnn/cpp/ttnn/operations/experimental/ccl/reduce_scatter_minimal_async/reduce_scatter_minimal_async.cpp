@@ -7,9 +7,9 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
+ttnn::Tensor reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
@@ -98,4 +98,4 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     return result.at(1);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

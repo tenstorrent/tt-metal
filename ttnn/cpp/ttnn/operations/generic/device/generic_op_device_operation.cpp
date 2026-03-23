@@ -45,7 +45,7 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     return tensor_args.output_tensor;
 }
 
-tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
         return *program_descriptor.custom_program_hash;
     }
@@ -108,7 +108,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     return hash;
 }
 
-tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     size_t hash = 0;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {

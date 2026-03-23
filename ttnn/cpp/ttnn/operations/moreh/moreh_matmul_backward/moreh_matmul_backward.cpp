@@ -22,7 +22,11 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
     return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
+}  // namespace ttnn::operations::moreh::moreh_matmul_backward
+
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_matmul_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
@@ -31,7 +35,7 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     const std::optional<const Tensor>& other_grad,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    if (is_dot_backward(output_grad, input, other)) {
+    if (operations::moreh::moreh_matmul_backward::is_dot_backward(output_grad, input, other)) {
         return ttnn::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
     }
 
@@ -43,14 +47,14 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     if (input_requires_grad) {
         TT_FATAL(input_grad.has_value(), "Input gradient is marked required but not provided.");
         const auto& input_grad_tensor = input_grad.value();
-        if (moreh_matmul::is_same_batch_dim(output_grad, input_grad_tensor)) {
+        if (operations::moreh::moreh_matmul::is_same_batch_dim(output_grad, input_grad_tensor)) {
             ttnn::moreh_matmul(
                 output_grad, other, false, true, input_grad_tensor, std::nullopt, memory_config, compute_kernel_config);
         } else {
             const auto& temp_input_grad = ttnn::moreh_matmul(
                 output_grad, other, false, true, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
-            auto reduce_dims =
-                moreh_matmul::find_reduce_dim(temp_input_grad.padded_shape(), input_grad_tensor.padded_shape());
+            auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
+                temp_input_grad.padded_shape(), input_grad_tensor.padded_shape());
             ttnn::moreh_sum(
                 temp_input_grad, reduce_dims, true, input_grad_tensor, memory_config, compute_kernel_config);
         }
@@ -60,14 +64,14 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     if (other_requires_grad) {
         TT_FATAL(other_grad.has_value(), "Other gradient is marked required but not provided.");
         const auto& other_grad_tensor = other_grad.value();
-        if (moreh_matmul::is_same_batch_dim(output_grad, other_grad_tensor)) {
+        if (operations::moreh::moreh_matmul::is_same_batch_dim(output_grad, other_grad_tensor)) {
             ttnn::moreh_matmul(
                 input, output_grad, true, false, other_grad_tensor, std::nullopt, memory_config, compute_kernel_config);
         } else {
             const auto& temp_other_grad = ttnn::moreh_matmul(
                 input, output_grad, true, false, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
-            auto reduce_dims =
-                moreh_matmul::find_reduce_dim(temp_other_grad.padded_shape(), other_grad_tensor.padded_shape());
+            auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
+                temp_other_grad.padded_shape(), other_grad_tensor.padded_shape());
             ttnn::moreh_sum(
                 temp_other_grad, reduce_dims, true, other_grad_tensor, memory_config, compute_kernel_config);
         }
@@ -77,4 +81,4 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     return outputs;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_matmul_backward
+}  // namespace ttnn

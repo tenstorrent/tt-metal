@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"
+#include <fmt/format.h>
 
 #include <unordered_set>
 #include <vector>
@@ -57,3 +59,7 @@ MeshContainer<PhysicalMeshCoordinate> get_system_mesh_coordinate_translation_map
 }
 
 }  // namespace tt::tt_metal::distributed
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::PhysicalMeshCoordinate& coord) {
+    return fmt::format("PhysicalMeshCoordinate(mesh_id={}, chip_id={})", *coord.mesh_id(), coord.chip_id());
+}

@@ -124,6 +124,10 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_XIELU_INCLUDE
+#include "api/compute/eltwise_unary/xielu.h"
+#endif
+
 #if SFPU_OP_LOGSIGMOID_INCLUDE
 #include "api/compute/logsigmoid.h"
 #endif
@@ -178,6 +182,10 @@
 
 #if SFPU_OP_HARDMISH_INCLUDE
 #include "api/compute/eltwise_unary/hardmish.h"
+#endif
+
+#if SFPU_OP_LGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/lgamma.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

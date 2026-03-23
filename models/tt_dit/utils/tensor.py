@@ -74,8 +74,8 @@ def bf16_tensor_host(
     )
 
 
-def bf16_tensor_2dshard(
-    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT
+def typed_tensor_2dshard(
+    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
 ) -> ttnn.Tensor:
     assert len(shard_mapping) == 2
     assert all(0 <= k <= 1 and 0 <= v < len(x.shape) for k, v in shard_mapping.items())
@@ -86,11 +86,20 @@ def bf16_tensor_2dshard(
     return ttnn.from_torch(
         x,
         layout=layout,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=device,
         mesh_mapper=mesh_mapper,
     )
+
+
+def bf16_tensor_2dshard(
+    x: torch.Tensor,
+    device: ttnn.Device,
+    shard_mapping: dict[int, int],
+    layout=ttnn.TILE_LAYOUT,
+) -> ttnn.Tensor:
+    return typed_tensor_2dshard(x, device, shard_mapping, layout, dtype=ttnn.bfloat16)
 
 
 def from_torch(
@@ -252,7 +261,7 @@ def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     """
     assert (
         x.shape[dim] % abs(math.prod(sizes)) == 0
-    ), f"The total number of elements in the new shape {sizes} must be equal or a factor of the number of elements (when using infered dimensions) in the original shape {x.shape[dim]}"
+    ), f"The total number of elements in the new shape {sizes} must be equal or a factor of the number of elements (when using inferred dimensions) in the original shape {x.shape[dim]}"
     new_shape = list(x.shape)
     if dim == -1:
         new_shape[-1:] = sizes

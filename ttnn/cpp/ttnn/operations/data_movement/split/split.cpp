@@ -63,7 +63,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 
     const ttnn::SmallVector<int32_t> steps(input_shape.rank(), 1);
     ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
-    const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+    const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
 
     ends[dim] = 0;
     for (const auto& s : split_sizes) {

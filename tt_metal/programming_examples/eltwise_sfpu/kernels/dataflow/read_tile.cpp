@@ -4,6 +4,10 @@
 
 #include <cstdint>
 
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
+
 void kernel_main() {
     // Read parameters from the kernel arguments
     uint32_t in0_addr = get_arg_val<uint32_t>(0);
@@ -25,17 +29,20 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<0>();
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
 
+    // Create Device 2.0 experimental Noc and CircularBuffer objects
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0_buf(cb_in0);
+
     // Loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
         // First make sure there is space in the circular buffers to be written to.
-        cb_reserve_back(cb_in0, 1);
-        uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr);  // read the tile into the circular buffer
-                                                   // We can overlap async reads and writes
-                                                   // to reduce the data movement overhead.
+        cb_in0_buf.reserve_back(1);
+        // read the tile into the circular buffer
+        // We can overlap async reads and writes to reduce the data movement overhead.
+        noc.async_read(in0, cb_in0_buf, tile_size_bytes, {.page_id = i}, {.offset_bytes = 0});
 
-        noc_async_read_barrier();  // Wait until tile reads are done
-        cb_push_back(cb_in0, 1);   // mark the tiles as ready. From this point forward kernels
+        noc.async_read_barrier();  // Wait until tile reads are done
+        cb_in0_buf.push_back(1);   // mark the tiles as ready. From this point forward kernels
                                    // calling `cb_wait_front` will see this tile
     }
 }

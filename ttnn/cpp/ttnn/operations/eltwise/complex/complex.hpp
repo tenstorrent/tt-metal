@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include <functional>
 #include <array>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::complex {
@@ -27,16 +25,11 @@ struct ComplexTensor {
 template <std::size_t I>
 const Tensor& get(const ComplexTensor&);
 
-struct CreateComplexTensor {
-    static ComplexTensor invoke(const Tensor& real, const Tensor& imag);
-};
+ComplexTensor complex_tensor(const Tensor& real, const Tensor& imag);
 
 }  // namespace operations::complex
 
 using ComplexTensor = operations::complex::ComplexTensor;
-
-constexpr auto complex_tensor =
-    ttnn::register_operation<"ttnn::complex_tensor", operations::complex::CreateComplexTensor>();
 
 }  // namespace ttnn
 

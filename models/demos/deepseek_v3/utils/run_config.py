@@ -390,9 +390,18 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
-    return ttnn.load_tensor(
+    # Load tensor directly to device to properly handle sharded layouts
+    tensor = ttnn.load_tensor(
         saved_weight.path,
-    ).to(
         device=device,
-        mem_config=saved_weight.memory_config,
     )
+
+    # If a specific memory config is provided and the tensor doesn't already have it,
+    # convert to the target memory config
+    if saved_weight.memory_config is not None:
+        current_mem_config = tensor.memory_config()
+        # Check if we need to convert (e.g., if loaded as INTERLEAVED but should be SHARDED)
+        if current_mem_config.memory_layout != saved_weight.memory_config.memory_layout:
+            tensor = ttnn.to_memory_config(tensor, saved_weight.memory_config)
+
+    return tensor

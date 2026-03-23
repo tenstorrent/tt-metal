@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/views/xview.hpp>
 
@@ -57,6 +56,7 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
         auto tensor = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 1U, tensor_size}), device));
         auto grad_tensor = core::from_xtensor(expected_grads[i], device);
         tensor->set_grad(grad_tensor);
+        tensor->set_requires_grad(true);
         tensors.push_back(tensor);
     }
 

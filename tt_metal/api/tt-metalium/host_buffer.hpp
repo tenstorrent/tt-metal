@@ -43,7 +43,7 @@ public:
 
     // Constructor for `HostBuffer` based on the borrowed data.
     template <typename T>
-    HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin);
+    HostBuffer(ttsl::Span<T> borrowed_data, MemoryPin pin);
 
     HostBuffer(const HostBuffer& other);
     HostBuffer& operator=(const HostBuffer& other);
@@ -51,22 +51,22 @@ public:
     HostBuffer& operator=(HostBuffer&& other) noexcept;
     void swap(HostBuffer& other) noexcept;
 
-    tt::stl::Span<std::byte> view_bytes() & noexcept;
-    tt::stl::Span<const std::byte> view_bytes() const& noexcept;
-    tt::stl::Span<std::byte> view_bytes() && noexcept = delete;
-    tt::stl::Span<const std::byte> view_bytes() const&& noexcept = delete;
+    ttsl::Span<std::byte> view_bytes() & noexcept;
+    ttsl::Span<const std::byte> view_bytes() const& noexcept;
+    ttsl::Span<std::byte> view_bytes() && noexcept = delete;
+    ttsl::Span<const std::byte> view_bytes() const&& noexcept = delete;
 
     template <typename T>
-    tt::stl::Span<T> view_as() &;
+    ttsl::Span<T> view_as() &;
 
     template <typename T>
-    tt::stl::Span<const T> view_as() const&;
+    ttsl::Span<const T> view_as() const&;
 
     template <typename T>
-    tt::stl::Span<T> view_as() && = delete;
+    ttsl::Span<T> view_as() && = delete;
 
     template <typename T>
-    tt::stl::Span<const T> view_as() const&& = delete;
+    ttsl::Span<const T> view_as() const&& = delete;
 
     // Returns the memory pin of the host buffer.
     MemoryPin pin() const { return pin_; }
@@ -74,7 +74,7 @@ public:
 private:
     friend class experimental::HostBufferPinnedMemoryHelper;
     MemoryPin pin_;
-    tt::stl::Span<std::byte> view_;
+    ttsl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
     std::shared_ptr<experimental::PinnedMemory> pinned_memory_ = nullptr;
 };
@@ -82,7 +82,7 @@ private:
 template <typename T>
 HostBuffer::HostBuffer(const std::shared_ptr<std::vector<T>>& data) : type_info_(&typeid(T)) {
     const size_t size_bytes = data->size() * sizeof(T);
-    view_ = tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
+    view_ = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
 }
 
@@ -95,22 +95,22 @@ HostBuffer::HostBuffer(const std::vector<T>& data) :
     HostBuffer(std::shared_ptr<std::vector<T>>(std::make_shared<std::vector<T>>(data))) {}
 
 template <typename T>
-HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
+HostBuffer::HostBuffer(ttsl::Span<T> borrowed_data, MemoryPin pin) :
     pin_(std::move(pin)),
     view_(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
     type_info_(&typeid(T)) {}
 
 template <typename T>
-tt::stl::Span<T> HostBuffer::view_as() & {
+ttsl::Span<T> HostBuffer::view_as() & {
     TT_FATAL(*type_info_ == typeid(T), "Requested type T does not match the underlying buffer type.");
-    return tt::stl::Span<T>(reinterpret_cast<T*>(view_.data()), view_.size() / sizeof(T));
+    return ttsl::Span<T>(reinterpret_cast<T*>(view_.data()), view_.size() / sizeof(T));
 }
 
 template <typename T>
-tt::stl::Span<const T> HostBuffer::view_as() const& {
+ttsl::Span<const T> HostBuffer::view_as() const& {
     TT_FATAL(*type_info_ == typeid(T), "Requested type T does not match the underlying buffer type.");
-    return tt::stl::Span<const T>(reinterpret_cast<const T*>(view_.data()), view_.size() / sizeof(T));
+    return ttsl::Span<const T>(reinterpret_cast<const T*>(view_.data()), view_.size() / sizeof(T));
 }
 
 // Compares data buffers by their data.

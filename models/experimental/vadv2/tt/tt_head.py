@@ -664,7 +664,7 @@ class TtVADHead:
         min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
         min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
@@ -827,7 +827,7 @@ class TtVADHead:
         min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
         min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
 
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
