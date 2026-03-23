@@ -29,12 +29,14 @@ import torch
 class TorchReduceModule(torch.nn.Module):
     """Reference implementation for post-combine reduction (sum over topk)."""
 
-    def __init__(self, topk_dim: int = 1):
+    def __init__(self, topk_dim: int = 2):
         """
         Initialize reduce module.
 
         Args:
-            topk_dim: Dimension of the topk axis in input tensor
+            topk_dim: Dimension of the topk axis in the full input tensor
+                      (including the leading num_chips dimension).
+                      For input [num_chips, seq_len, topk, hidden_dim], topk_dim=2.
         """
         super().__init__()
         self.topk_dim = topk_dim
@@ -62,6 +64,6 @@ class TorchReduceModule(torch.nn.Module):
 
         # 1. Sum over topk dimension (collapse expert contributions)
         # [num_chips, seq_len, topk, hidden_dim] -> [num_chips, seq_len, hidden_dim]
-        reduced = combine_output.sum(dim=self.topk_dim + 1)  # +1 because of leading chips dim
+        reduced = combine_output.sum(dim=self.topk_dim)
 
         return reduced

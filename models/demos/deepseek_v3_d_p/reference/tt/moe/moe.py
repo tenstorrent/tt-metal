@@ -177,8 +177,8 @@ class TorchMoe(nn.Module):
         )
 
         # Create reduce module (sums over topk dimension)
-        # topk_dim=1 because combined_output shape is (dispatch_group_size, seq_len, topk, hidden)
-        self.reduce_module = TorchReduceModule(topk_dim=1)
+        # topk_dim=2 because combined_output shape is (dispatch_group_size, seq_len, topk, hidden)
+        self.reduce_module = TorchReduceModule(topk_dim=2)
 
     def forward(
         self,

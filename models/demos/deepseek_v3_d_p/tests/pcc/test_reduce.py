@@ -107,7 +107,7 @@ def test_ttnn_reduce(
 
     # Compute reference output using torch
     torch_reduce = TorchReduceModule(
-        topk_dim=1,  # topk is dim 1 in [seq, topk, hidden]
+        topk_dim=2,  # topk is dim 2 in [chips, seq, topk, hidden]
     )
     torch_shards = torch_reduce(torch_combine_output, weights=torch_gate_weights)
     logger.debug(f"Torch reference output: {len(torch_shards)} shards of shape {torch_shards[0].shape}")
