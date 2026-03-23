@@ -102,6 +102,8 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
+TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
+
 
 @dataclass
 class TensorConfig:
@@ -113,6 +115,489 @@ class TensorConfig:
     memory_config: Dict
     storage_type: str = "StorageType::DEVICE"  # Default to DEVICE
     tensor_placement: Optional[Dict] = None  # Per-tensor placement info (PlacementShard/Replicate)
+
+
+# ---------------------------------------------------------------------------
+# Standalone helpers for converting traced JSON values to ttnn objects.
+# These are used by sweep modules that receive raw dicts from traced configs
+# (e.g. list-of-tensors args like concat's arg0).
+# ---------------------------------------------------------------------------
+
+_DTYPE_MAP = {
+    "BFLOAT16": ttnn.bfloat16,
+    "BFLOAT8_B": ttnn.bfloat8_b,
+    "BFLOAT4_B": ttnn.bfloat4_b,
+    "FLOAT32": ttnn.float32,
+    "UINT8": ttnn.uint8,
+    "UINT16": ttnn.uint16,
+    "UINT32": ttnn.uint32,
+    "INT32": ttnn.int32,
+}
+
+_LAYOUT_MAP = {
+    "TILE": ttnn.TILE_LAYOUT,
+    "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+}
+
+
+def parse_dtype(dtype_val):
+    """Convert a dtype string from traced JSON to a ttnn dtype object.
+
+    Handles both formats: 'DataType.BFLOAT16' and 'ttnn.bfloat16'.
+    Returns ttnn objects unchanged.
+    """
+    if isinstance(dtype_val, str):
+        key = dtype_val.replace("DataType.", "").replace("ttnn.", "").upper()
+        return _DTYPE_MAP.get(key, ttnn.bfloat16)
+    return dtype_val
+
+
+def parse_layout(layout_val):
+    """Convert a layout string from traced JSON to a ttnn layout object.
+
+    Handles both formats: 'Layout.ROW_MAJOR' and 'ttnn.ROW_MAJOR_LAYOUT'.
+    Returns ttnn objects unchanged.
+    """
+    if isinstance(layout_val, str):
+        key = layout_val.replace("Layout.", "").replace("ttnn.", "").replace("_LAYOUT", "").upper()
+        return _LAYOUT_MAP.get(key, ttnn.TILE_LAYOUT)
+    return layout_val
+
+
+def dict_to_core_grid(value):
+    """Convert a CoreGrid dict from traced JSON to a ttnn.CoreGrid object.
+
+    Handles: {"type": "CoreGrid", "value": "ttnn.CoreGrid(x=8, y=7)"}
+    Returns ttnn.CoreGrid objects and None unchanged.
+    """
+    if value is None or isinstance(value, ttnn.CoreGrid):
+        return value
+    if isinstance(value, dict):
+        val_str = str(value.get("value", ""))
+        import re
+
+        m = re.search(r"x\s*=\s*(\d+).*y\s*=\s*(\d+)", val_str)
+        if m:
+            return ttnn.CoreGrid(y=int(m.group(2)), x=int(m.group(1)))
+    if isinstance(value, str):
+        import re
+
+        m = re.search(r"x\s*=\s*(\d+).*y\s*=\s*(\d+)", value)
+        if m:
+            return ttnn.CoreGrid(y=int(m.group(2)), x=int(m.group(1)))
+    return None
+
+
+def dict_to_compute_kernel_config(cfg):
+    """Convert a compute_kernel_config dict from traced JSON to a WormholeComputeKernelConfig.
+
+    Handles: {"math_fidelity": "MathFidelity.HiFi2", "math_approx_mode": "False", ...}
+    Returns WormholeComputeKernelConfig objects and None unchanged.
+    """
+    if cfg is None:
+        return None
+    # If already a WormholeComputeKernelConfig, return as-is
+    if hasattr(cfg, "__class__") and "ComputeKernelConfig" in cfg.__class__.__name__:
+        return cfg
+    if not isinstance(cfg, dict):
+        return cfg
+
+    fidelity_str = str(cfg.get("math_fidelity", "HiFi4"))
+    if "HiFi2" in fidelity_str:
+        math_fidelity = ttnn.MathFidelity.HiFi2
+    elif "HiFi3" in fidelity_str:
+        math_fidelity = ttnn.MathFidelity.HiFi3
+    elif "LoFi" in fidelity_str:
+        math_fidelity = ttnn.MathFidelity.LoFi
+    else:
+        math_fidelity = ttnn.MathFidelity.HiFi4
+
+    def _to_bool(v):
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() not in ("false", "0", "none", "")
+
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        math_approx_mode=_to_bool(cfg.get("math_approx_mode", False)),
+        fp32_dest_acc_en=_to_bool(cfg.get("fp32_dest_acc_en", False)),
+        packer_l1_acc=_to_bool(cfg.get("packer_l1_acc", True)),
+    )
+
+
+def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_config=None):
+    """Convert a program_config dict from traced JSON to a proper ProgramConfig object.
+
+    Supports two modes:
+    1. Explicit type: dict has "type" field naming the config class → dispatch directly
+    2. Heuristic (legacy): infer type from keys present in the dict
+    """
+    if cfg is None:
+        return None
+    # If already a program config object, return as-is
+    if not isinstance(cfg, dict):
+        return cfg
+
+    # --- Explicit type dispatch (new traced format) ---
+    explicit_type = cfg.get("type", "")
+
+    # String-repr configs: {"type": "...", "value": "ClassName(...)"}
+    if "value" in cfg and isinstance(cfg.get("value"), str):
+        return _parse_string_repr_program_config(explicit_type, cfg["value"])
+
+    if explicit_type:
+        return _build_program_config_by_type(explicit_type, cfg)
+
+    # --- Heuristic fallback (legacy format without "type" field) ---
+    return _build_program_config_heuristic(cfg, input_b_memory_config, input_a_memory_config)
+
+
+def _parse_string_repr_program_config(type_name: str, value_str: str):
+    """Parse program configs stored as string repr: 'ClassName(param=val, ...)'."""
+    import re
+
+    if "SDPAProgramConfig" in type_name or "SDPAProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        q_chunk_m = re.search(r"q_chunk_size=(\d+)", value_str)
+        k_chunk_m = re.search(r"k_chunk_size=(\d+)", value_str)
+        exp_m = re.search(r"exp_approx_mode=(\w+)", value_str)
+        if not grid_m or not q_chunk_m or not k_chunk_m:
+            return None
+        exp_val = False
+        if exp_m:
+            exp_val = exp_m.group(1).lower() not in ("false", "0")
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            q_chunk_size=int(q_chunk_m.group(1)),
+            k_chunk_size=int(k_chunk_m.group(1)),
+            exp_approx_mode=exp_val,
+        )
+
+    if "LayerNormShardedMultiCoreProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        sub_w = re.search(r"subblock_w=(\d+)", value_str)
+        blk_h = re.search(r"block_h=(\d+)", value_str)
+        blk_w = re.search(r"block_w=(\d+)", value_str)
+        inplace = re.search(r"inplace=(\d+)", value_str)
+        if not grid_m or not sub_w or not blk_h or not blk_w:
+            return None
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            subblock_w=int(sub_w.group(1)),
+            block_h=int(blk_h.group(1)),
+            block_w=int(blk_w.group(1)),
+            inplace=bool(int(inplace.group(1))) if inplace else False,
+        )
+
+    if "LayerNormDefaultProgramConfig" in value_str:
+        return ttnn.LayerNormDefaultProgramConfig()
+
+    if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
+        grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
+        sub_w = re.search(r"subblock_w=(\d+)", value_str)
+        blk_h = re.search(r"block_h=(\d+)", value_str)
+        blk_w = re.search(r"block_w=(\d+)", value_str)
+        if not grid_m or not sub_w or not blk_h or not blk_w:
+            return None
+        return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
+            subblock_w=int(sub_w.group(1)),
+            block_h=int(blk_h.group(1)),
+            block_w=int(blk_w.group(1)),
+        )
+
+    if "SoftmaxDefaultProgramConfig" in value_str:
+        return ttnn.SoftmaxDefaultProgramConfig()
+
+    return None
+
+
+def _build_program_config_by_type(type_name: str, cfg: dict):
+    """Build a program config object using the explicit type name."""
+    fused_activation = cfg.get("fused_activation")
+    if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
+        fused_activation = None
+
+    grid = cfg.get("compute_with_storage_grid_size")
+    core_coord = None
+    if grid and isinstance(grid, dict):
+        core_coord = ttnn.CoreCoord(int(grid["x"]), int(grid["y"]))
+
+    try:
+        if type_name == "MatmulMultiCoreReuseMultiCastProgramConfig":
+            kwargs = dict(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fused_activation=fused_activation,
+            )
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+
+        if type_name == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
+            kwargs = dict(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
+                mcast_in0=bool(cfg.get("mcast_in0", True)),
+                fused_activation=fused_activation,
+            )
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
+
+        if type_name == "MatmulMultiCoreReuseProgramConfig":
+            return ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                in0_block_w=int(cfg["in0_block_w"]),
+                out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+                out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+            )
+
+        if type_name == "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig":
+            return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=int(cfg["in0_block_w"]),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fused_activation=fused_activation,
+            )
+
+        if type_name == "MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig":
+            return ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+                in0_block_w=int(cfg["in0_block_w"]),
+                per_core_M=int(cfg["per_core_M"]),
+                per_core_N=int(cfg["per_core_N"]),
+                fused_activation=fused_activation,
+            )
+
+        if type_name == "SDPAProgramConfig":
+            # Structured format: {"compute_grid": [8, 8], "q_chunk_size": 64, ...}
+            grid_val = cfg.get("compute_grid") or cfg.get("compute_with_storage_grid_size")
+            if isinstance(grid_val, list) and len(grid_val) == 2:
+                grid_coord = ttnn.CoreCoord(int(grid_val[0]), int(grid_val[1]))
+            elif isinstance(grid_val, dict):
+                grid_coord = ttnn.CoreCoord(int(grid_val["x"]), int(grid_val["y"]))
+            else:
+                return None
+            exp_val = cfg.get("exp_approx_mode", False)
+            if isinstance(exp_val, str):
+                exp_val = exp_val.lower() not in ("false", "0")
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid_coord,
+                q_chunk_size=int(cfg["q_chunk_size"]),
+                k_chunk_size=int(cfg["k_chunk_size"]),
+                exp_approx_mode=bool(exp_val),
+            )
+
+        if type_name == "LayerNormShardedMultiCoreProgramConfig":
+            return ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                subblock_w=int(cfg["subblock_w"]),
+                block_h=int(cfg["block_h"]),
+                block_w=int(cfg["block_w"]),
+                inplace=bool(int(cfg.get("inplace", 0))),
+            )
+
+        if type_name == "LayerNormDefaultProgramConfig":
+            return ttnn.LayerNormDefaultProgramConfig()
+
+        if type_name == "SoftmaxShardedMultiCoreProgramConfig":
+            return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=core_coord,
+                subblock_w=int(cfg["subblock_w"]),
+                block_h=int(cfg["block_h"]),
+                block_w=int(cfg["block_w"]),
+            )
+
+        if type_name == "SoftmaxDefaultProgramConfig":
+            return ttnn.SoftmaxDefaultProgramConfig()
+
+    except Exception as e:
+        logger.warning(f"Failed to build {type_name}: {e}")
+        return None
+
+    # Unknown type — fall back to heuristic
+    return _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_memory_config=None)
+
+
+def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_memory_config=None):
+    """Legacy heuristic: infer matmul program config type from dict keys."""
+    required_keys = {"in0_block_w", "per_core_M", "per_core_N"}
+    if not required_keys.issubset(cfg.keys()):
+        return None
+
+    fused_activation = cfg.get("fused_activation")
+    if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
+        fused_activation = None
+
+    grid = cfg.get("compute_with_storage_grid_size")
+
+    if grid and isinstance(grid, dict):
+        core_coord = ttnn.CoreCoord(int(grid["x"]), int(grid["y"]))
+        base_kwargs = dict(
+            compute_with_storage_grid_size=core_coord,
+            in0_block_w=int(cfg["in0_block_w"]),
+            out_subblock_h=int(cfg.get("out_subblock_h", 1)),
+            out_subblock_w=int(cfg.get("out_subblock_w", 1)),
+            per_core_M=int(cfg["per_core_M"]),
+            per_core_N=int(cfg["per_core_N"]),
+        )
+
+        if "transpose_mcast" in cfg:
+            kwargs = {
+                **base_kwargs,
+                "transpose_mcast": bool(cfg["transpose_mcast"]),
+                "fused_activation": fused_activation,
+            }
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            try:
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
+            except Exception:
+                return None
+
+        if "fuse_batch" in cfg:
+            kwargs = {
+                **base_kwargs,
+                "fuse_batch": bool(cfg["fuse_batch"]),
+                "mcast_in0": bool(cfg.get("mcast_in0", True)),
+                "fused_activation": fused_activation,
+            }
+            if cfg.get("out_block_h") is not None:
+                kwargs["out_block_h"] = int(cfg["out_block_h"])
+            if cfg.get("out_block_w") is not None:
+                kwargs["out_block_w"] = int(cfg["out_block_w"])
+            try:
+                return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
+            except Exception:
+                return None
+
+        try:
+            return ttnn.MatmulMultiCoreReuseProgramConfig(**base_kwargs)
+        except Exception:
+            return None
+
+    # No compute_with_storage_grid_size: DRAMSharded types (4 keys)
+    # Requires BOTH input B to be DRAM-sharded AND input A to be sharded.
+    kwargs = dict(
+        in0_block_w=int(cfg["in0_block_w"]),
+        per_core_M=int(cfg["per_core_M"]),
+        per_core_N=int(cfg["per_core_N"]),
+        fused_activation=fused_activation,
+    )
+
+    def _is_dram_sharded(mc):
+        if mc is None:
+            return False
+        if isinstance(mc, dict):
+            mc_data = mc.get("data", mc)
+            ml = str(mc_data.get("memory_layout", ""))
+            bt = str(mc_data.get("buffer_type", ""))
+            return "SHARDED" in ml and "DRAM" in bt
+        mc_str = str(mc)
+        return "SHARDED" in mc_str and "DRAM" in mc_str
+
+    def _is_sharded(mc):
+        if mc is None:
+            return False
+        if isinstance(mc, dict):
+            mc_data = mc.get("data", mc)
+            return "SHARDED" in str(mc_data.get("memory_layout", ""))
+        return "SHARDED" in str(mc)
+
+    if _is_dram_sharded(input_b_memory_config) and _is_sharded(input_a_memory_config):
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(**kwargs)
+
+    return None
+
+
+def dict_to_memory_config(mem_cfg):
+    """Convert a memory_config dict from traced JSON to a ttnn.MemoryConfig object.
+
+    Handles both tracer format ('BufferType.DRAM') and serialized format ('DRAM').
+    Returns ttnn.MemoryConfig objects and None unchanged.
+    """
+    if mem_cfg is None or isinstance(mem_cfg, ttnn.MemoryConfig):
+        return mem_cfg
+
+    if not isinstance(mem_cfg, dict):
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    # Handle serialized format: {"type": "ttnn._ttnn.tensor.MemoryConfig", "data": {...}}
+    if "type" in mem_cfg and "data" in mem_cfg:
+        mem_cfg = mem_cfg["data"]
+
+    buffer_type_raw = mem_cfg.get("buffer_type", "")
+    memory_layout_raw = mem_cfg.get("memory_layout", "")
+
+    if not buffer_type_raw or not memory_layout_raw:
+        return ttnn.DRAM_MEMORY_CONFIG
+
+    # Coerce to str so `in` works regardless of whether the value is a
+    # string ("BufferType.DRAM") or an already-deserialized ttnn enum.
+    buffer_type_str = str(buffer_type_raw)
+    memory_layout_str = str(memory_layout_raw)
+
+    buffer_type_ttnn = ttnn.BufferType.L1 if "L1" in buffer_type_str else ttnn.BufferType.DRAM
+
+    if "INTERLEAVED" in memory_layout_str:
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
+
+    # Determine sharded layout
+    if "WIDTH_SHARDED" in memory_layout_str:
+        layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    elif "HEIGHT_SHARDED" in memory_layout_str:
+        layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    elif "BLOCK_SHARDED" in memory_layout_str:
+        layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    else:
+        layout = ttnn.TensorMemoryLayout.INTERLEAVED
+
+    shard_spec_data = mem_cfg.get("shard_spec")
+    if shard_spec_data == "None":
+        shard_spec_data = None
+    if not shard_spec_data or not isinstance(shard_spec_data, dict):
+        return ttnn.MemoryConfig(layout, buffer_type_ttnn)
+
+    grid_list = shard_spec_data.get("grid", [])
+    shard_shape = shard_spec_data.get("shape", [])
+    orientation_str = str(shard_spec_data.get("orientation", "ROW_MAJOR"))
+
+    if not grid_list or not shard_shape:
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
+
+    core_ranges = set()
+    for range_dict in grid_list:
+        start = range_dict.get("start", {})
+        end = range_dict.get("end", {})
+        if "x" in start and "y" in start and "x" in end and "y" in end:
+            core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])))
+
+    if not core_ranges:
+        return ttnn.MemoryConfig(layout, buffer_type_ttnn)
+
+    shard_grid = ttnn.CoreRangeSet(core_ranges)
+    orientation = ttnn.ShardOrientation.COL_MAJOR if orientation_str == "COL_MAJOR" else ttnn.ShardOrientation.ROW_MAJOR
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+
+    return ttnn.MemoryConfig(layout, buffer_type_ttnn, shard_spec)
 
 
 class MasterConfigLoader:
@@ -338,8 +823,8 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                2. TTNN_MASTER_JSON_PATH env var (optional explicit path)
+                3. TTNN_OPERATIONS_MASTER_JSON (canonical: ttnn_operations_master.json)
                 4. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
@@ -353,18 +838,13 @@ class MasterConfigLoader:
                 MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
-            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
-
-            if os.path.exists(reconstructed_v2_path):
-                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
-                master_file_path = reconstructed_v2_path
-            elif os.path.exists(default_trace_path):
-                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
-                master_file_path = default_trace_path
-            else:
-                master_file_path = None
+            env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+            if env_path and os.path.exists(env_path):
+                logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
+                master_file_path = env_path
+            elif os.path.exists(TTNN_OPERATIONS_MASTER_JSON):
+                logger.info(f"✅ Using canonical master JSON: {TTNN_OPERATIONS_MASTER_JSON}")
+                master_file_path = TTNN_OPERATIONS_MASTER_JSON
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -582,6 +1062,11 @@ class MasterConfigLoader:
         else:
             return ttnn.TILE_LAYOUT  # Default
 
+    @staticmethod
+    def _is_memory_config_dict(value) -> bool:
+        """Check if a value looks like a raw memory config dictionary."""
+        return isinstance(value, dict) and "memory_layout" in value and "buffer_type" in value
+
     def _is_valid_sharding_config(self, memory_config: Dict, tensor_shape: list = None) -> bool:
         """
         Check if a sharding configuration is valid for the current hardware.
@@ -662,12 +1147,21 @@ class MasterConfigLoader:
 
         # Parse SHARDED configs
         elif "SHARDED" in memory_layout:
-            # Parse shard_spec - REQUIRED for sharded configs
+            # Map memory layout first (needed for both with/without shard_spec)
+            if "WIDTH_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            elif "HEIGHT_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            elif "BLOCK_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else:
+                raise ValueError(f"Unknown sharded layout: {memory_layout}")
+
             shard_spec_dict = memory_config.get("shard_spec")
+            if shard_spec_dict == "None":
+                shard_spec_dict = None
             if not shard_spec_dict or not isinstance(shard_spec_dict, dict):
-                raise ValueError(
-                    f"Sharded memory layout '{memory_layout}' requires shard_spec, " f"but got: {shard_spec_dict}"
-                )
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
 
             # Extract grid, shape, and orientation from shard_spec
             grid_list = shard_spec_dict.get("grid")
@@ -712,17 +1206,6 @@ class MasterConfigLoader:
             # Create ShardSpec
             shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
 
-            # Map memory layout
-            if "WIDTH_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            elif "HEIGHT_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            elif "BLOCK_SHARDED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            else:
-                raise ValueError(f"Unknown sharded layout: {memory_layout}")
-
-            # Create and return sharded memory config
             return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
 
         else:
@@ -742,34 +1225,63 @@ class MasterConfigLoader:
 
     @staticmethod
     def parse_enum_value(value, default=None):
-        """Parse enum types that were captured as {'type': 'EnumName'} during tracing.
+        """Parse traced enum/object dicts into proper ttnn objects or JSON-safe values.
 
-        For enums without captured values, we return a sensible default.
-        Currently handles:
-        - Topology: defaults to Linear
+        Converts simple enums that serialize cleanly as strings:
+        - {"type": "DataType", "repr": "DataType.BFLOAT16"} -> ttnn.bfloat16
+        - {"type": "Layout", "repr": "Layout.TILE"} -> ttnn.TILE_LAYOUT
+        - {"type": "Topology", "value": "Topology.Linear"} -> ttnn.Topology.Linear
+
+        Keeps complex objects as dicts (they survive JSON round-trip and are
+        converted to ttnn objects by the sweep test's run() function):
+        - {"type": "CoreGrid", "value": "ttnn.CoreGrid(x=8, y=7)"} -> kept as dict
+        - {"math_fidelity": ..., ...} -> kept as dict (compute_kernel_config)
         """
-        if isinstance(value, dict) and "type" in value:
-            enum_type = value["type"]
+        if not isinstance(value, dict):
+            return value
 
-            # Check if there's a 'value' field with the actual enum value
-            if "value" in value:
-                enum_value = value["value"]
+        enum_type = value.get("type")
 
-                # Parse based on type
-                if enum_type == "Topology":
-                    if "Linear" in enum_value or "LINEAR" in enum_value:
-                        return ttnn.Topology.Linear
-                    elif "Ring" in enum_value or "RING" in enum_value:
-                        return ttnn.Topology.Ring
-                    else:
-                        return default if default is not None else ttnn.Topology.Linear
-            else:
-                # No value field - use type-based defaults
-                if enum_type == "Topology":
-                    # Default to Linear topology (most common, safest)
-                    return default if default is not None else ttnn.Topology.Linear
+        if enum_type == "DataType":
+            repr_str = value.get("repr", "")
+            return parse_dtype(repr_str)
 
-        # Not an enum dict, return as-is
+        if enum_type == "Layout":
+            repr_str = value.get("repr", "")
+            return parse_layout(repr_str)
+
+        if enum_type == "Topology":
+            repr_str = value.get("repr", value.get("value", ""))
+            if "Ring" in str(repr_str):
+                return ttnn.Topology.Ring
+            return ttnn.Topology.Linear
+
+        if enum_type == "SigmoidMode":
+            repr_str = value.get("repr", "")
+            if "AccurateWithFastExp" in repr_str:
+                return ttnn.SigmoidMode.AccurateWithFastExp
+            if "Accurate" in repr_str:
+                return ttnn.SigmoidMode.Accurate
+            return ttnn.SigmoidMode.Fast
+
+        if enum_type == "TensorMemoryLayout":
+            repr_str = value.get("repr", "")
+            if "HEIGHT_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if "WIDTH_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            if "BLOCK_SHARDED" in repr_str:
+                return ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            return ttnn.TensorMemoryLayout.INTERLEAVED
+
+        if enum_type == "ShardOrientation":
+            repr_str = value.get("repr", "")
+            if "COL_MAJOR" in repr_str:
+                return ttnn.ShardOrientation.COL_MAJOR
+            return ttnn.ShardOrientation.ROW_MAJOR
+
+        # CoreGrid, compute_kernel_config, program_config, etc. stay as dicts
+        # so they survive JSON serialization. The sweep test's run() converts them.
         return value
 
     def _get_generic_parameters(self, operation_name: str, configs: List) -> Dict:
@@ -842,65 +1354,58 @@ class MasterConfigLoader:
 
                     arg_idx += 1
 
+                # Process named keyword arguments (inside try so bad configs get skipped)
+                for key, value in named_kwargs.items():
+                    tensor_config = self._extract_tensor_config(value)
+                    if tensor_config:
+                        parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                        parsed_layout = self.parse_layout(tensor_config.layout)
+                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                        if parsed_mem_config is None:
+                            logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
+                            continue
+
+                        config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
+                        config_dict[f"{key}_dtype"] = parsed_dtype
+                        config_dict[f"{key}_layout"] = parsed_layout
+                        config_dict[f"{key}_memory_config"] = parsed_mem_config
+                        config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
+                    elif self._is_memory_config_dict(value):
+                        try:
+                            config_dict[key] = self.parse_memory_config(value)
+                        except ValueError as mem_err:
+                            config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                            logger.debug(
+                                f"Could not parse '{key}' for config_hash={config_hash_display}: {mem_err}. Setting to None."
+                            )
+                            config_dict[key] = None
+                    else:
+                        parsed_value = self.parse_enum_value(value)
+                        if parsed_value == value:
+                            parsed_value = self.parse_special_float(value)
+                        config_dict[key] = parsed_value
+
             except Exception as e:
-                # Add config_hash context to error
                 config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
                 logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
-            # If no tensors found, add a minimal entry with just the source info
-            # This ensures configs pass through even if tensor extraction fails
-            if not positional_tensors:
-                config_dict["traced_source"] = source
-                config_dict["traced_machine_info"] = machine_info
-                config_dict["config_hash"] = config_hash
-                traced_config_list.append(config_dict)
-                continue
-
             # Add positional tensor parameters with consistent naming
-            # Always use input_a_, input_b_, input_c_ pattern (even for unary)
-            for i, tensor in enumerate(positional_tensors):
-                suffix = chr(97 + i)  # a, b, c, ...
-                config_dict[f"input_{suffix}_shape"] = tensor["shape"]
-                config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
-                config_dict[f"input_{suffix}_layout"] = tensor["layout"]
-                config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
-                config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+            if positional_tensors:
+                for i, tensor in enumerate(positional_tensors):
+                    suffix = chr(97 + i)  # a, b, c, ...
+                    config_dict[f"input_{suffix}_shape"] = tensor["shape"]
+                    config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
+                    config_dict[f"input_{suffix}_layout"] = tensor["layout"]
+                    config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
+                    config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
 
-            config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
-
-            # Process named keyword arguments
-            # Named tensor kwargs preserve their semantic names (e.g., weight, bias_tensor)
-            # Scalar/bool kwargs are passed as-is
-            for key, value in named_kwargs.items():
-                # Check if it's a tensor kwarg
-                tensor_config = self._extract_tensor_config(value)
-                if tensor_config:
-                    # Named tensor kwarg - use its name (e.g., weight_shape, bias_shape)
-                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                    parsed_layout = self.parse_layout(tensor_config.layout)
-                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                    if parsed_mem_config is None:
-                        logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
-                        continue
-
-                    config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
-                    config_dict[f"{key}_dtype"] = parsed_dtype
-                    config_dict[f"{key}_layout"] = parsed_layout
-                    config_dict[f"{key}_memory_config"] = parsed_mem_config
-                    config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
-                elif key == "memory_config" and isinstance(value, dict) and "memory_layout" in value:
-                    config_dict[key] = self.parse_memory_config(value)
-                elif isinstance(value, dict) and value.get("type") == "DataType":
-                    config_dict[key] = self.parse_dtype(value.get("repr", ""))
-                else:
-                    # Scalar/bool kwarg - pass as-is (preserve name)
-                    # Try enum parsing first, then float parsing
-                    parsed_value = self.parse_enum_value(value)
-                    if parsed_value == value:  # If enum parsing didn't change it, try float
-                        parsed_value = self.parse_special_float(value)
-                    config_dict[key] = parsed_value
+                if "output_memory_config" not in config_dict:
+                    if "memory_config" in config_dict:
+                        config_dict["output_memory_config"] = config_dict["memory_config"]
+                    else:
+                        config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
 
             # Add metadata
             config_dict["traced_source"] = source
@@ -924,7 +1429,8 @@ class MasterConfigLoader:
                     seen_keys.add(k)
 
         # Build tuples with all parameters
-        param_values = [[cfg.get(k) for k in all_keys] for cfg in traced_config_list]
+        # Use "__ABSENT__" sentinel for keys missing from a config (vs explicit None)
+        param_values = [[cfg.get(k, "__ABSENT__") for k in all_keys] for cfg in traced_config_list]
         return {",".join(all_keys): [tuple(v) for v in param_values]}
 
     def get_suite_parameters(

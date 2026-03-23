@@ -62,7 +62,7 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
-    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)
@@ -80,8 +80,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # todo)) refactor this code to make the intent clear, which is data parallelism
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         return xs_1BSH
 

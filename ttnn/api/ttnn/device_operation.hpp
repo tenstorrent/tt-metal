@@ -5,11 +5,10 @@
 #pragma once
 
 #include <concepts>
+#include <exception>
 #include <optional>
-#include <random>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -18,9 +17,8 @@
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/concepts.hpp>
-#include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/core.hpp"
+#include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
@@ -437,8 +435,8 @@ typename device_operation_t::tensor_return_value_t launch(
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
-    tt::tt_metal::GraphTracker::instance().track_function_start(
-        detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
+    const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
+    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
     auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {

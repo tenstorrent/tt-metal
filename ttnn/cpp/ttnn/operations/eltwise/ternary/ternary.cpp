@@ -15,6 +15,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
 
+using namespace ttnn::operations::ternary;
+
 namespace ttnn::operations::ternary {
 
 namespace ternary_utils {
@@ -149,7 +151,7 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
         condition,
         t_true,
         scalar_false,
@@ -172,7 +174,7 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_false.dtype());
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
         condition,
         t_false,
         scalar_true,
@@ -190,16 +192,16 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
-    //  TODO: add sub_core_grids functionality to Unary Infra
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
 }
 
 }  // namespace
 
-Tensor WhereOperation::invoke(
+}  // namespace ttnn::operations::ternary
+
+namespace ttnn {
+
+Tensor where(
     const Tensor& predicate,
     const TensorScalarVariant& value_true,
     const TensorScalarVariant& value_false,
@@ -216,27 +218,24 @@ Tensor WhereOperation::invoke(
 
 template <typename T>
     requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
-Tensor WhereOperation::invoke(
+Tensor where(
     const Tensor& predicate,
     const T& value_true,
     const T& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
-template Tensor WhereOperation::invoke<int32_t>(
+template Tensor where<int32_t>(
     const Tensor&,
     const int32_t&,
     const int32_t&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
-template Tensor WhereOperation::invoke<uint32_t>(
+template Tensor where<uint32_t>(
     const Tensor&,
     const uint32_t&,
     const uint32_t&,
@@ -244,11 +243,11 @@ template Tensor WhereOperation::invoke<uint32_t>(
     const std::optional<Tensor>&,
     const std::optional<CoreRangeSet>&);
 
-Tensor AddcmulOperation::invoke(
+Tensor addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
-    ScalarVariant value,
+    operations::ternary::ScalarVariant value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
@@ -262,8 +261,7 @@ Tensor AddcmulOperation::invoke(
         input_a.dtype());
 
     // Only TTT variant is supported for addcmul
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
@@ -293,7 +291,7 @@ Tensor AddcmulOperation::invoke(
         std::nullopt);
 }
 
-Tensor AddcdivOperation::invoke(
+Tensor addcdiv(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -303,8 +301,7 @@ Tensor AddcdivOperation::invoke(
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
     // Only TTT variant is supported for addcdiv
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
@@ -333,13 +330,13 @@ Tensor AddcdivOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(input.logical_shape(), end.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
     bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
@@ -364,14 +361,13 @@ Tensor LerpOperation::invoke(
         std::nullopt);
 }
 
-Tensor LerpOperation::invoke(
+Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        input.logical_shape(), end.logical_shape(), weight.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input.dtype()) || is_block_float(end.dtype()) || is_block_float(weight.dtype());
@@ -398,4 +394,4 @@ Tensor LerpOperation::invoke(
         std::nullopt);
 }
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn

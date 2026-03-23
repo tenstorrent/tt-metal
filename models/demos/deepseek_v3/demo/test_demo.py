@@ -3,9 +3,12 @@
 
 import json
 import os
+import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
@@ -13,6 +16,71 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+
+
+@lru_cache(maxsize=1)
+def get_total_model_layers(model_path: Path) -> int:
+    with open(model_path / "config.json", "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    total_layers = config.get("num_hidden_layers")
+    if not isinstance(total_layers, int):
+        raise ValueError(f"Expected integer num_hidden_layers in {(model_path / 'config.json')}, got {total_layers!r}")
+    return total_layers
+
+
+def is_allowed_unicode_letter(char: str) -> bool:
+    """True for Latin and Greek script letters per Unicode character name."""
+    if not char.isalpha():
+        return False
+    name = unicodedata.name(char, "")
+    return name.startswith("LATIN ") or name.startswith("GREEK ")
+
+
+def find_disallowed_non_ascii_letter(text: str) -> tuple[int, str] | None:
+    """Find the first disallowed non-ASCII letter in the text."""
+    for char_index, char in enumerate(text):
+        if char.isascii() or not char.isalpha() or is_allowed_unicode_letter(char):
+            continue
+        return char_index, char
+    return None
+
+
+def validate_english_keyboard_output(results: dict) -> None:
+    generations = results.get("generations", [])
+    for generation_index, generation in enumerate(generations, start=1):
+        generated_text = generation.get("text")
+        if generated_text is None:
+            continue
+        if not isinstance(generated_text, str):
+            raise ValueError(
+                "Generated output text must be a string or None: "
+                f"generation_index={generation_index}, got={type(generated_text).__name__}"
+            )
+
+        bad_char = find_disallowed_non_ascii_letter(generated_text)
+        if bad_char is None:
+            continue
+
+        bad_char_index, bad_char = bad_char
+        unicode_name = unicodedata.name(bad_char, "UNKNOWN")
+        raise ValueError(
+            "Generated output contains disallowed non-Latin letter: "
+            f"generation_index={generation_index}, char_index={bad_char_index}, "
+            f"char={bad_char!r}, codepoint=U+{ord(bad_char):04X}, unicode_name={unicode_name}. "
+            "Punctuation/symbols and Latin letters (including accents, e.g. é) are allowed; "
+            "other scripts (e.g. CJK) are not."
+        )
+
+
+def maybe_validate_english_keyboard_output(results: dict, override_num_layers: int | None) -> None:
+    total_layers = get_total_model_layers(MODEL_PATH)
+    num_layers = override_num_layers if override_num_layers is not None else total_layers
+    if num_layers < total_layers:
+        logger.info(f"Output validation is skipped as {num_layers} < {total_layers} layers.")
+        return
+
+    validate_english_keyboard_output(results)
 
 
 def _demo_case(
@@ -25,6 +93,8 @@ def _demo_case(
     sample_on_device: bool,
     artifact_name: str | None,
     profile_decode: bool,
+    stop_at_eos: bool | None,
+    expect_full_length: bool,
     case_id: str,
     marks=None,
 ):
@@ -38,6 +108,8 @@ def _demo_case(
             "sample_on_device": sample_on_device,
             "artifact_name": artifact_name,
             "profile_decode": profile_decode,
+            "stop_at_eos": stop_at_eos,
+            "expect_full_length": expect_full_length,
         },
         id=case_id,
         marks=marks,
@@ -45,16 +117,16 @@ def _demo_case(
 
 
 # Test matrix:
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+
-# | id               | max_prompts | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+
-# | tg_light_stress  | 56          | 2              | 128            | 5                   | True         | True             | None                     | False          |
-# | dual_full_demo   | 256         | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          |
-# | dual_stress_demo | 56          | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          |
-# | quad_full_demo   | 512         | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          |
-# | quad_stress_demo | 56          | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          |
-# | profile_decode   | 1           | 1              | 13             | 5                   | True         | True             | None                     | True           |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | id               | max_prompts | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | tg_stress        | 56          | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | dual_full_demo   | 256         | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
+# | dual_stress_demo | 56          | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
+# | quad_full_demo   | 512         | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
+# | quad_stress_demo | 56          | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
+# | profile_decode   | 1           | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
 
 
 @pytest.mark.parametrize(
@@ -66,11 +138,13 @@ def _demo_case(
             repeat_batches=2,
             max_new_tokens=128,
             override_num_layers=5,
-            enable_trace=True,
+            enable_trace=False,
             sample_on_device=True,
             artifact_name=None,
             profile_decode=False,
-            case_id="tg_light_stress",
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="tg_stress",
             marks=pytest.mark.requires_device(["TG"]),
         ),
         _demo_case(
@@ -82,6 +156,8 @@ def _demo_case(
             sample_on_device=True,
             artifact_name="dual_demo_full_results",
             profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
             case_id="dual_full_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
@@ -94,6 +170,8 @@ def _demo_case(
             sample_on_device=True,
             artifact_name="dual_demo_stress_results",
             profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
             case_id="dual_stress_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
@@ -106,6 +184,8 @@ def _demo_case(
             sample_on_device=True,
             artifact_name="quad_demo_full_results",
             profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
             case_id="quad_full_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
@@ -118,6 +198,8 @@ def _demo_case(
             sample_on_device=True,
             artifact_name="quad_demo_stress_results",
             profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
             case_id="quad_stress_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
@@ -130,6 +212,8 @@ def _demo_case(
             sample_on_device=True,
             artifact_name=None,
             profile_decode=True,
+            stop_at_eos=False,
+            expect_full_length=True,
             case_id="profile_decode",
             marks=pytest.mark.timeout(1800),
         ),
@@ -158,11 +242,19 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     )
     if case["override_num_layers"] is not None:
         run_kwargs["override_num_layers"] = case["override_num_layers"]
+    if case["stop_at_eos"] is not None:
+        run_kwargs["stop_at_eos"] = case["stop_at_eos"]
 
     results = run_demo(**run_kwargs)
+    maybe_validate_english_keyboard_output(results, case["override_num_layers"])
 
-    # Check output
-    assert len(results["generations"][0]["tokens"]) == case["max_new_tokens"]
+    # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
+    # should always produce the requested token count.
+    generated_lengths = [len(generation["tokens"]) for generation in results["generations"]]
+    if case["expect_full_length"]:
+        assert all(length == case["max_new_tokens"] for length in generated_lengths)
+    else:
+        assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
     # Save results to JSON for artifact upload (QUAD tests only)
     if case["artifact_name"] is not None:
