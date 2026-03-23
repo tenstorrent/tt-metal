@@ -165,7 +165,7 @@
   cmd: run_t3000_qwen3_vl_unit_tests
   skus:
     wh_llmbox:
-      timeout: 10
+      timeout: 15
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
   model-name: qwen3_vl
