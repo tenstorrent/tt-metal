@@ -8,10 +8,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import numpy as np
-import ml_dtypes
-
-import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
 
@@ -28,31 +24,16 @@ class LayerNorm(AbstractModuleBase):
         bias: bool = True,
         use_composite_layernorm: bool = False,
     ) -> None:
-        """Initialize layer norm.
-
-        Args:
-            embedding_dim: Dimension of embeddings
-            bias: Whether to use bias (beta) parameter
-        """
         super().__init__()
 
         self.embedding_dim = embedding_dim
         self.use_composite_layernorm = use_composite_layernorm
 
-        # Layer norm requires gamma (scale) and beta (shift) parameters
         ln_shape = (1, 1, 1, embedding_dim)
-        gamma_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_np, layout=ttnn.Layout.TILE
-        )
-        self.gamma = Parameter(gamma_tensor)
+        self.gamma = Parameter(ttml.init.ones()(ln_shape))
 
         if bias:
-            beta_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_np, layout=ttnn.Layout.TILE
-            )
-            self.beta = Parameter(beta_tensor)
+            self.beta = Parameter(ttml.init.zeros()(ln_shape))
         else:
             self.beta = None
 
@@ -71,9 +52,7 @@ class LayerNorm(AbstractModuleBase):
         else:
             layernorm_op = ttml.ops.layernorm.layernorm
 
-        return layernorm_op(
-            x, self.gamma.tensor, self.beta.tensor if self.beta else None
-        )
+        return layernorm_op(x, self.gamma.tensor, self.beta.tensor if self.beta else None)
 
 
 class GPTBlock(AbstractModuleBase):
@@ -87,35 +66,29 @@ class GPTBlock(AbstractModuleBase):
         bias: bool = True,
         use_composite_layernorm: bool = False,
     ) -> None:
-        """Initialize GPT block.
-
-        Args:
-            embedding_dim: Dimension of embeddings
-            num_heads: Number of attention heads
-            dropout: Dropout probability
-            bias: Whether to use bias in layer norm
-        """
         super().__init__()
 
         self.embedding_dim = embedding_dim
-        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # Layer norms
         self.ln1 = LayerNorm(embedding_dim, bias, use_composite_layernorm)
         self.ln2 = LayerNorm(embedding_dim, bias, use_composite_layernorm)
 
         # Attention and MLP
-        self.attention = MultiHeadAttention(embedding_dim, num_heads, dropout)
-
-        # MLP (matching C++ mlp = GPTMLP(embedding_size, dropout_prob))
-        self.mlp = GPTMLP(embedding_dim, dropout)
+        self.attention = MultiHeadAttention(
+            embedding_dim,
+            num_heads,
+            dropout,
+        )
+        self.mlp = GPTMLP(
+            embedding_dim,
+            dropout,
+        )
 
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
-    def forward(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         """Forward pass of GPT block.
 
         Args:
