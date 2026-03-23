@@ -132,9 +132,11 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         return;
     }
 
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+
     if (is_dram_backed()) {
         const uint32_t dram_backed_command_queues_size =
-            MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
+            ctx.hal().get_dev_size(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
         TT_ASSERT(dram_backed_command_queues_size > 0);
         TT_FATAL(
             (dram_backed_command_queues_size % num_hw_cqs) == 0,
@@ -142,8 +144,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
             dram_backed_command_queues_size,
             num_hw_cqs);
         this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
-        TT_ASSERT((this->cq_size % MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
-        const IDevice* device = MetalContext::instance().device_manager()->get_active_device(this->device_id);
+        TT_ASSERT((this->cq_size % ctx.hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
+        const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
@@ -153,7 +155,6 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     }
 
     // Real hardware initialization below
-    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(device_id);
     char* hugepage_start = static_cast<char*>(ctx.get_cluster().host_dma_address(0, mmio_device_id, channel));
@@ -407,11 +408,11 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
 
 void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
     if (is_dram_backed()) {
-        const IDevice* device =
-            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
+        auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+        const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
-        MetalContext::instance().get_cluster().read_dram_vec(
+        ctx.get_cluster().read_dram_vec(
             this->cq_sysmem_start +
                 (this->get_issue_queue_limit(cq_id) - this->get_dram_region_base_addr() - this->channel_offset),
             this->get_completion_queue_size(cq_id),
@@ -554,18 +555,17 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     if (is_dram_backed()) {
-        const IDevice* device =
-            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
+        const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(this->get_dram_region_bank_id());
-        MetalContext::instance().get_cluster().write_dram_vec(
+        ctx.get_cluster().write_dram_vec(
             this->cq_sysmem_start + (cq_interface.offset - this->get_dram_region_base_addr() - this->channel_offset) +
                 cq_interface.cq_start,
             this->get_issue_queue_size(cq_id),
             this->device_id,
             dram_channel,
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
-        MetalContext::instance().get_cluster().write_dram_vec(
+        ctx.get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
             this->device_id,
@@ -594,13 +594,13 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
-    const uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-        CommandQueueHostAddrType::COMPLETION_Q_RD);
+    auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+    const uint32_t completion_q_rd_ptr =
+        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
 
     if (is_dram_backed()) {
-        const IDevice* device =
-            MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
-        MetalContext::instance().get_cluster().write_dram_vec(
+        const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
+        ctx.get_cluster().write_dram_vec(
             &read_ptr_and_toggle,
             sizeof(uint32_t),
             this->device_id,
@@ -610,7 +610,6 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     }
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
-    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(this->device_id);
     ctx.get_cluster().write_sysmem(
