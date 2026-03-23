@@ -173,14 +173,6 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    // Apply reconfig based on mode
-    if constexpr (reconfig_input(reconfig_mode)) {
-        reconfig_data_format(input_cb, scaler_cb);
-    }
-    if constexpr (reconfig_output(reconfig_mode)) {
-        pack_reconfig_data_format(output_cb);
-    }
-
     // Auto-detect FP32 dest accumulation mode from compile-time define
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
 
@@ -188,11 +180,19 @@ ALWI void reduce(
     // All other combinations use reduce_tile LLK (row-0 scaler).
     constexpr bool use_matmul = (reduce_type == PoolType::SUM || reduce_type == PoolType::AVG)
                                 && reduce_dim == ReduceDim::REDUCE_ROW;
+
+    // Apply reconfig based on mode
+    if constexpr (reconfig_input(reconfig_mode)) {
+        if constexpr (use_matmul) {
+            reconfig_data_format(scaler_cb, input_cb);
+        } else {
+            reconfig_data_format(input_cb, scaler_cb);
+        }
+    }
+    if constexpr (reconfig_output(reconfig_mode)) {
+        pack_reconfig_data_format(output_cb);
+    }
     // Initialization
-    // mm_init_short only reconfigures unpack+math for matmul, leaving the packer
-    // (pack_hw_configure, pack_dest_init) in whatever state the caller set up.
-    // Full mm_init would override pack_dest_init which corrupts the dest-to-pack
-    // mapping for subsequent non-matmul operations (e.g. reduce_init + reduce_tile).
     if constexpr (use_matmul) {
         mm_init_short(input_cb, scaler_cb);
     } else {
