@@ -114,6 +114,19 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: QwQ-32B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/QwQ-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/QwQ-32B
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
+  model: qwq-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Falcon-7B unit tests
   cmd: |
     pytest --timeout 300 models/demos/ttnn_falcon7b/tests/test_falcon_decoder.py
