@@ -4,15 +4,31 @@
 
 #include "topk_router_gpt_nanobind.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/bind_function.hpp"
 #include "topk_router_gpt.hpp"
+
+namespace ttnn::operations::experimental::topk_router_gpt {
+
+// Free-function wrapper around the registered operation
+std::tuple<ttnn::Tensor, ttnn::Tensor> topk_router_gpt_func(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& bias_tensor,
+    uint32_t k,
+    uint32_t num_experts) {
+    return ttnn::experimental::topk_router_gpt(input_tensor, weight_tensor, bias_tensor, k, num_experts);
+}
+
+}  // namespace ttnn::operations::experimental::topk_router_gpt
 
 namespace ttnn::operations::experimental::topk_router_gpt::detail {
 
 void bind_topk_router_gpt(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"topk_router_gpt", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::topk_router_gpt,
         R"doc(
         Fused multi-core matmul for GPT-OSS MoE router.
 
@@ -26,14 +42,13 @@ void bind_topk_router_gpt(nb::module_& mod) {
             k: Number of top experts (metadata)
             num_experts: Total number of experts
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("weight_tensor"),
-            nb::arg("bias_tensor"),
-            nb::arg("k") = 4,
-            nb::arg("num_experts") = 128,
-        });
+        &ttnn::operations::experimental::topk_router_gpt::topk_router_gpt_func,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("weight_tensor"),
+        nb::arg("bias_tensor"),
+        nb::arg("k") = 4,
+        nb::arg("num_experts") = 128);
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt::detail
