@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -21,7 +20,6 @@ from transformers.models.qwen3_next.modeling_qwen3_next import (
 )
 from torch import nn
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
 from models.experimental.tt_symbiote.modules.gated_deltanet import TTNNGatedDeltaNet
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
@@ -269,7 +267,6 @@ def test_qwen3_coder_next(mesh_device):
         _seed_torch_for_generate()
     model.generate(**warm_in, max_new_tokens=2, use_cache=True, **wk)
 
-    DispatchManager.clear_timings()
     prompt_len = int(inputs["input_ids"].shape[-1])
     max_new = _compute_max_new_tokens(model, tokenizer, prompt_len)
     main_in = _clone_model_inputs(inputs)
@@ -281,4 +278,3 @@ def test_qwen3_coder_next(mesh_device):
     output_ids = outputs[0][prompt_len:].tolist()
     content = tokenizer.decode(output_ids, skip_special_tokens=True)
     print(f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{content}")
-    DispatchManager.save_stats_to_file("qwen3_coder_next_timing_stats.csv")
