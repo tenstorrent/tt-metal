@@ -502,7 +502,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        num_batch_compute,       // batch_nnz
+        num_batch_compute,       // in0 batch
+        num_batch_compute,       // in1 batch
         out_block_tiles,         // out_block_num_tiles
 
         false,             // untilize_out

@@ -500,7 +500,8 @@ tt_metal::Program create_program_mcast_in0_in1(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        B                        // batch
+        B,                       // in0 batch
+        B                        // in1 batch
     };
 
     // Create compute kernel

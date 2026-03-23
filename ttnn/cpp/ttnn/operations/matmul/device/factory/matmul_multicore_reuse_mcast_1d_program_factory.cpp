@@ -676,7 +676,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
+        B,                       // in0_batch
+        B,                       // in1_batch
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
