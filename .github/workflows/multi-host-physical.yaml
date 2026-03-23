@@ -97,7 +97,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
@@ -153,7 +153,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run tooling and MPI tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
@@ -205,7 +205,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
@@ -257,7 +257,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run quad galaxy unit tests
         if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run

@@ -243,8 +243,11 @@ static void handle_rank_failure(
     if (failed_ranks_cache) {
         auto parsed = parse_failed_ranks_string(failed);
         if (!parsed.empty()) {
-            std::lock_guard lock(*failed_ranks_cache_mutex);
-            *failed_ranks_cache = std::move(parsed);
+            // Scoped so the mutex is never held across MPI revoke / throw / _exit below.
+            {
+                std::lock_guard lock(*failed_ranks_cache_mutex);
+                *failed_ranks_cache = std::move(parsed);
+            }
         }
     }
 
@@ -506,6 +509,14 @@ static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
 // std::terminate() calls (e.g. exceptions thrown in thread-pool workers).
 // Revokes MPI_COMM_WORLD so surviving ranks detect the failure via ULFM,
 // then calls _exit(kUlfmExitCode) to bypass MPI_Finalize.
+//
+// Async-signal-safety note: This is NOT a POSIX signal handler. Per C++
+// [except.terminate], std::terminate runs in the thread that invoked it, after
+// exception handling is abandoned — not in the async-signal execution context.
+// MPIX_Comm_revoke is therefore appropriate here (contrast mpi_finalize_alarm_handler,
+// which must only use async-signal-safe operations). Do not call std::terminate
+// from a custom signal handler and expect MPI calls here to be safe; if you need
+// that pattern, revoke from normal thread context instead.
 //
 // To switch to fault-tolerant mode: remove this handler and instead set
 // FailurePolicy::FAULT_TOLERANT on your MPIContext, then catch

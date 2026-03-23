@@ -131,7 +131,7 @@ inline void kill_rank_and_recover(
 }
 
 // ---------------------------------------------------------------------------
-//  Fault-tolerant test macros (Section 4.4 of ulfm-rank-reinit-architecture.md)
+//  Fault-tolerant test macros (see ttnn/ttnn/distributed/ULFM.md)
 //
 //  EXPECT_EQ_SURVIVING_RANKS / ASSERT_EQ_SURVIVING_RANKS:
 //    Like the ALL_RANKS variants but semantically indicate that the

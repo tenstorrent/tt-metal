@@ -22,8 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Use the wrapper script to find mpirun-ulfm
 MPIRUN="$SCRIPT_DIR/mpirun_wrapper.sh"
 
-TT_METAL_HOME=$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)
-TEST_BIN="$TT_METAL_HOME/build/test/tt_metal/fault_tolerance_tests"
+TT_METAL_HOME="$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)"
+TEST_BIN="${TT_METAL_HOME}/build/test/tt_metal/fault_tolerance_tests"
 
 if [ ! -x "$TEST_BIN" ]; then
     echo "ERROR: fault_tolerance_tests binary not found at $TEST_BIN" >&2

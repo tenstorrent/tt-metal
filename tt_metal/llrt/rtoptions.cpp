@@ -283,6 +283,9 @@ std::filesystem::path get_rank_scoped_logs_root(const std::string& logs_dir, int
     if (gethostname(hostname.data(), kHostNameMax) != 0 || hostname.front() == '\0') {
         return logs_root;
     }
+    // POSIX allows truncation without a trailing NUL when the name length == len;
+    // keep the reserved byte at hostname[kHostNameMax] as terminator.
+    hostname[kHostNameMax] = '\0';
     return logs_root / fmt::format("{}_rank_{}", hostname.data(), rank);
 }
 
@@ -335,7 +338,8 @@ int get_rank_from_env() {
 
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+RunTimeOptions::RunTimeOptions() :
+    system_kernel_dir("/usr/share/tenstorrent/kernels/"), cached_mpi_rank_(get_rank_from_env()) {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT)).value_or(false)) {
@@ -384,11 +388,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
-    // Cache MPI rank before InitializeFromEnvVars so rank-scoped helpers
-    // (e.g. get_rank_scoped_logs_root for inspector_settings.log_path) see the
-    // correct value. get_rank_from_env() reads only MPI launcher env vars and
+    // cached_mpi_rank_ is set in the ctor initializer list before InitializeFromEnvVars
+    // so rank-scoped helpers (e.g. get_rank_scoped_logs_root for inspector_settings.log_path)
+    // see the correct value. get_rank_from_env() reads only MPI launcher env vars and
     // does not depend on any Metal env vars parsed inside InitializeFromEnvVars.
-    this->cached_mpi_rank_ = get_rank_from_env();
 
     InitializeFromEnvVars();
 

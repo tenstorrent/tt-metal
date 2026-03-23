@@ -31,7 +31,7 @@ DEFAULT_CACHE_FALLBACK = Path("/tmp/tt-metal-cache")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
-# --- Exit code conventions (Section 4.2 of ulfm-rank-reinit-architecture.md) ---
+# --- Exit code conventions (see ttnn/ttnn/distributed/ULFM.md) ---
 # These structured exit codes allow CI to distinguish "test bug" from
 # "infrastructure flake", enabling smarter retry policies.
 EXIT_SUCCESS = 0  # All ranks completed successfully
@@ -739,9 +739,9 @@ def validate_path_safety(path_str: str, var_name: str) -> None:
     if not path_str:
         return  # Empty paths are handled by defaults elsewhere
 
-    path = Path(path_str)
+    path = Path(path_str).expanduser()
 
-    # Check for parent directory traversal using pathlib parts
+    # Check for parent directory traversal using pathlib parts (pre-resolve)
     if ".." in path.parts:
         raise ValueError(
             f"{var_name} contains parent directory traversal (..): {path_str}. "
@@ -752,10 +752,22 @@ def validate_path_safety(path_str: str, var_name: str) -> None:
     if not path.is_absolute():
         raise ValueError(f"{var_name} must be an absolute path, got: {path_str}")
 
-    # Check for sensitive system directories using pathlib
-    path_normalized = path.resolve()
+    # Resolve symlinks and re-check traversal so a benign-looking path cannot
+    # escape via symlinks (e.g. /tmp/x -> /etc).
+    try:
+        path_resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"{var_name} could not be resolved: {path_str}") from exc
+
+    if ".." in path_resolved.parts:
+        raise ValueError(
+            f"{var_name} resolves to a path containing parent directory traversal (..): {path_str}. "
+            "This is not allowed for security reasons."
+        )
+
+    # Check for sensitive system directories using resolved path
     for sensitive_path in SENSITIVE_SYSTEM_PATHS:
-        if path_normalized.is_relative_to(sensitive_path):
+        if path_resolved.is_relative_to(sensitive_path):
             raise ValueError(
                 f"{var_name} points to a sensitive system directory: {path_str}. "
                 f"Please choose a different path under /tmp, /home, or a dedicated application directory."
@@ -1012,6 +1024,8 @@ def build_mpi_command(
         cmd.extend(build_rank_environment_args(binding, config, launcher_env))
         program_to_run = program
         if debug_gdbserver:
+            if not isinstance(binding.rank, int) or binding.rank < 0:
+                raise ValueError(f"debug-gdbserver requires a non-negative integer rank, got {binding.rank!r}")
             port = 20000 + binding.rank
             echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
             gdbserver_part = f"exec gdbserver :{port}"
@@ -1543,7 +1557,7 @@ def main(
             sys.exit(EXIT_TIMEOUT)  # 124, same convention as the Unix `timeout` command
 
         # Interpret the mpirun exit code to produce structured diagnostics
-        # for CI triage (Section 4.2 of ulfm-rank-reinit-architecture.md).
+        # for CI triage (see ttnn/ttnn/distributed/ULFM.md).
         interp = interpret_exit_code(proc.returncode)
         _log_exit_interpretation(interp)
         sys.exit(interp.ci_exit_code)
