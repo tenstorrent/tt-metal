@@ -101,12 +101,12 @@ class TextMLP(LightweightModule):
         # Load fused ff_proj: [hidden_dim -> 2*intermediate_dim]
         ff_proj = state_dict[f"{prefix}.ff_proj.weight"]
 
-        # Split into gate and up projections
+        # Split into up and gate projections
         # ff_proj shape: [2*intermediate_dim, hidden_dim]
-        # HuggingFace order: first half is GATE, second half is UP
-        # Output: silu(gate) * up
-        gate_proj = ff_proj[:intermediate_dim, :]
-        up_proj = ff_proj[intermediate_dim:, :]
+        # HuggingFace order: first half is UP (x), second half is GATE
+        # Output: silu(gate) * up  (i.e., silu(second_half) * first_half)
+        up_proj = ff_proj[:intermediate_dim, :]
+        gate_proj = ff_proj[intermediate_dim:, :]
 
         # Transpose for TTNN linear: [1, 1, hidden_dim, intermediate_dim]
         gate_proj_t = torch.transpose(gate_proj, -2, -1).unsqueeze(0).unsqueeze(0)
