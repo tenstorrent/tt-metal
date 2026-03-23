@@ -226,29 +226,28 @@ class TestUlfmGuardFastFail:
                 executed = True
             assert executed
 
-    def test_ulfm_error_calls_os_exit_70(self):
-        """ULFM error in fast_fail mode should call os._exit(70).
+    def test_ulfm_guard_ulfm_error_invokes_fast_fail_helper(self):
+        """ULFM error in fast_fail mode must route to ``_ulfm_fast_fail``.
 
-        We changed from sys.exit(70) to os._exit(70) so that Python atexit
-        handlers (including MPI_Finalize) are bypassed on a revoked
-        communicator.  os._exit() does NOT raise SystemExit — it terminates
-        the process directly — so we mock it instead of using pytest.raises.
+        Static analyzers treat ``os._exit`` as ``NoReturn``, so asserting on
+        ``os._exit`` *after* ``ulfm_guard`` is flagged as unreachable even when
+        tests patch ``os._exit``.  The actual ``os._exit(70)`` contract is
+        covered by :class:`TestUlfmFastFail` calling ``_ulfm_fast_fail`` with
+        ``os._exit`` mocked.
         """
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Get_rank.return_value = 0
             comm.Get_size.return_value = 4
-            # Don't have Revoke or Get_failed
             comm.Revoke = MagicMock()
 
-            # Create an MPI.Exception with a ULFM error code
             mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
 
-            with patch("os._exit") as mock_os_exit:
+            with patch.object(mf, "_ulfm_fast_fail") as mock_fast_fail:
                 with mf.ulfm_guard(comm, "Allreduce"):
                     raise mpi_exc
 
-            mock_os_exit.assert_called_once_with(70)
+            mock_fast_fail.assert_called_once_with(comm, 0, 54, "Allreduce")
 
     def test_non_ulfm_error_propagates(self):
         """Non-ULFM MPI errors should propagate normally."""
@@ -262,26 +261,23 @@ class TestUlfmGuardFastFail:
                     raise mpi_exc
 
     def test_fast_fail_diagnostic_to_stderr(self, capsys):
-        """fast_fail should print structured diagnostic to stderr."""
+        """``_ulfm_fast_fail`` prints structured diagnostic to stderr.
+
+        Exercises the same stderr path ``ulfm_guard`` uses in fast_fail mode,
+        without nesting ``ulfm_guard`` + patched ``os._exit`` (which some static
+        analyzers treat as unreachable follow-on code).
+        """
         with _fresh_mpi_fault_import() as mf:
             comm = MagicMock()
             comm.Get_rank.return_value = 2
             comm.Get_size.return_value = 8
             comm.Revoke = MagicMock()
-            # No Get_failed method
             del comm.Get_failed
 
-            mpi_exc = mf.MPI.Exception("proc failed", error_code=54)
-
-            # os._exit() must be mocked: it terminates the process directly
-            # without raising SystemExit, so pytest.raises(SystemExit) won't
-            # catch it and the test process would be killed instead.
             with patch("os._exit"):
-                with mf.ulfm_guard(comm, "Barrier"):
-                    raise mpi_exc
+                mf._ulfm_fast_fail(comm, 2, 54, "Barrier")
 
             captured = capsys.readouterr()
-            # Diagnostic should mention rank, operation, and error info
             assert "Rank 2" in captured.err or "rank 2" in captured.err.lower()
             assert "Barrier" in captured.err
 
@@ -308,10 +304,16 @@ class TestUlfmGuardFaultTolerant:
                 with mf.ulfm_guard(comm, "Scatter", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
-            err = exc_info.value
-            assert err.rank == 0
-            assert err.error_code == 54
-            assert err.operation == "Scatter"
+            # Runtime: ``raise mpi_exc`` is caught inside ``ulfm_guard``; the guard raises
+            # ``MPIRankFailureError`` from its ``except MPI.Exception`` branch (fault_tolerant
+            # path — no ``os._exit``). ``pytest.raises`` captures that exception and completes
+            # normally, so ``exc_info.value`` and the assertions below are correct and run
+            # after the ``with`` block. Static analyzers often mis-model this pattern as
+            # unreachable; ``pyright: ignore[reportUnreachableCode]`` suppresses that false positive.
+            err = exc_info.value  # pyright: ignore[reportUnreachableCode]
+            assert err.rank == 0  # pyright: ignore[reportUnreachableCode]
+            assert err.error_code == 54  # pyright: ignore[reportUnreachableCode]
+            assert err.operation == "Scatter"  # pyright: ignore[reportUnreachableCode]
 
     def test_fault_tolerant_with_failed_ranks(self):
         """If Get_failed is available, exception includes world rank list."""
@@ -335,7 +337,7 @@ class TestUlfmGuardFaultTolerant:
                 with mf.ulfm_guard(comm, "Allreduce", policy=mf.UlfmFailurePolicy.FAULT_TOLERANT):
                     raise mpi_exc
 
-            assert exc_info.value.failed_ranks == [0, 1]
+            assert exc_info.value.failed_ranks == [0, 1]  # pyright: ignore[reportUnreachableCode]
 
     def test_success_path_in_fault_tolerant(self):
         """No exception means no error — guard passes through."""
