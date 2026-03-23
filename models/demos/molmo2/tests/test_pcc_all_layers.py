@@ -5,8 +5,11 @@
 """
 Full PCC comparison test for all text model layers.
 
-Compares TTNN implementation against PyTorch reference layer by layer,
-using FP32/bfloat16 for maximum precision.
+Compares TTNN text path with ``bfloat8_b`` **weights** (``TextBlock``, ``TextRMSNorm`` /
+``ln_f``, ``lm_head``) against a CPU reference. RoPE cos/sin tables stay ``bfloat16`` because
+``TextRotarySetup`` uses ``ROW_MAJOR`` for decode embedding tables, and TTNN requires
+``TILE`` layout for ``bfloat8_b``. Activations stay ``bfloat16`` on device. The reference runs
+under ``autocast(bfloat16)`` so precision tracks TTNN bf16 activations + bf8 linear weights.
 """
 
 
@@ -17,6 +20,10 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+
+# Linear / norm weights on device use bf8 (TILE). RoPE tables use bf16 (ROW_MAJOR decode path).
+TTNN_WEIGHT_DTYPE = ttnn.bfloat8_b
+TTNN_ROPE_TABLE_DTYPE = ttnn.bfloat16
 
 
 def calculate_pcc(ref, out):
@@ -205,7 +212,7 @@ def test_all_layers_pcc():
             max_seq_len=8192,
             rope_theta=rope_theta,
             batch_size=1,
-            datatype=ttnn.bfloat16,
+            datatype=TTNN_ROPE_TABLE_DTYPE,
         )
         transformation_mats = rotary_setup.get_transformation_mats()
         rot_mats = rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
@@ -214,25 +221,29 @@ def test_all_layers_pcc():
         ttnn_hidden = ref_hidden.clone()
 
         logger.info("=" * 80)
-        logger.info("Layer-by-layer PCC comparison (using bfloat16 for TTNN)")
+        logger.info(
+            "Layer-by-layer PCC (TTNN bf8: block+ln_f+lm_head; RoPE tables bf16; bf16 activations; CPU ref autocast bf16)"
+        )
         logger.info("=" * 80)
 
         for layer_num in range(num_layers):
-            # Reference forward
-            ref_out = ref_block_forward(
-                ref_hidden,
-                state_dict,
-                layer_num,
-                num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
-                head_dim=head_dim,
-                hidden_dim=hidden_dim,
-                intermediate_dim=intermediate_dim,
-                rms_norm_eps=rms_norm_eps,
-                rope_theta=rope_theta,
-            )
+            # Reference forward (bf16 autocast aligns with TTNN bf16 activations + bf8 weights)
+            with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+                ref_out = ref_block_forward(
+                    ref_hidden,
+                    state_dict,
+                    layer_num,
+                    num_heads=num_heads,
+                    num_kv_heads=num_kv_heads,
+                    head_dim=head_dim,
+                    hidden_dim=hidden_dim,
+                    intermediate_dim=intermediate_dim,
+                    rms_norm_eps=rms_norm_eps,
+                    rope_theta=rope_theta,
+                )
+            ref_out = ref_out.float()
 
-            # TTNN forward
+            # TTNN forward (bfloat8_b stored weights; MLP/attention use CPU→bf16 paths where implemented)
             ttnn_block = TextBlock(
                 mesh_device=device,
                 state_dict=state_dict,
@@ -246,7 +257,7 @@ def test_all_layers_pcc():
                 rope_theta=rope_theta,
                 rms_norm_eps=rms_norm_eps,
                 state_dict_prefix="model.transformer.blocks",
-                dtype=ttnn.bfloat16,  # Use bfloat16 for weights
+                dtype=TTNN_WEIGHT_DTYPE,
             )
 
             hidden_ttnn = ttnn.from_torch(
@@ -296,14 +307,15 @@ def test_all_layers_pcc():
         logger.info("Final layers")
         logger.info("=" * 80)
 
-        # Reference ln_f
+        # Reference ln_f + lm_head (bf16 autocast vs bf8 lm_head on device)
         ref_ln_f = RefRMSNorm(hidden_dim, rms_norm_eps)
         ref_ln_f.weight.data = state_dict["model.transformer.ln_f.weight"]
-        ref_normed = ref_ln_f(ref_hidden)
-
-        # Reference lm_head
         lm_head = state_dict["lm_head.weight"]
-        ref_logits = F.linear(ref_normed, lm_head)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            ref_normed = ref_ln_f(ref_hidden)
+            ref_logits = F.linear(ref_normed, lm_head)
+        ref_normed = ref_normed.float()
+        ref_logits = ref_logits.float()
 
         # TTNN ln_f
         from models.demos.molmo2.tt.text_rmsnorm import TextRMSNorm
@@ -314,6 +326,7 @@ def test_all_layers_pcc():
             hidden_dim=hidden_dim,
             eps=rms_norm_eps,
             state_dict_prefix="model.transformer.ln_f",
+            dtype=TTNN_WEIGHT_DTYPE,
         )
 
         hidden_ttnn_final = ttnn.from_torch(
@@ -335,7 +348,7 @@ def test_all_layers_pcc():
         lm_head_ttnn = ttnn.from_torch(
             lm_head_t,
             device=device,
-            dtype=ttnn.bfloat16,  # Use bfloat16
+            dtype=TTNN_WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
