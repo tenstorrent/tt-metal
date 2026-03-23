@@ -9,7 +9,6 @@
 #include <variant>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -26,16 +25,6 @@ namespace ttnn {
 namespace operations::creation {
 
 namespace detail {
-
-// Non-type template parameters (NTTPs) disallow floating point values
-// This works around that limitation by using a structural type
-// https://godbolt.org/z/hxKje3MYe
-template <class T>
-struct boxed {
-    T value;
-    consteval boxed(T value) noexcept : value(value) {}
-    consteval auto invoke() const noexcept -> T { return value; }
-};
 
 template <typename T>
 Tensor arange_impl(
@@ -150,33 +139,6 @@ Tensor full_impl(
     }
 }
 
-template <detail::boxed FillValue>
-struct FullWith {
-    static constexpr auto fill_value = FillValue.invoke();
-
-    static Tensor invoke(
-        const ttnn::Shape& shape,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return full_impl(
-            shape,
-            fill_value,
-            dtype,
-            layout,
-            device.has_value() ? &device->get() : nullptr,
-            memory_config,
-            std::nullopt);
-    }
-};
-
-struct Zeros : FullWith<0.0f> {};
-struct Ones : FullWith<1.0f> {};
-
-inline constexpr Zeros zeros{};
-inline constexpr Ones ones{};
-
 template <typename T>
 Tensor full_like_impl(
     const Tensor& tensor,
@@ -219,179 +181,178 @@ Tensor full_like_impl(
         optional_output_tensor);
 }
 
-template <detail::boxed FillValue>
-struct FullLikeWith {
-    static constexpr auto fill_value = FillValue.invoke();
+Tensor zeros(
+    const ttnn::Shape& shape,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return full_impl(
+        shape, 0.0f, dtype, layout, device.has_value() ? &device->get() : nullptr, memory_config, std::nullopt);
+}
 
-    static Tensor invoke(
-        const Tensor& tensor,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+Tensor ones(
+    const ttnn::Shape& shape,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return full_impl(
+        shape, 1.0f, dtype, layout, device.has_value() ? &device->get() : nullptr, memory_config, std::nullopt);
+}
+
+template <typename FillValueType>
+    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+Tensor full(
+    const ttnn::Shape& shape,
+    const FillValueType fill_value,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return full_impl(
+        shape,
+        fill_value,
+        dtype,
+        layout,
+        device.has_value() ? &device->get() : nullptr,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor empty(
+    const ttnn::Shape& shape,
+    const DataType& dtype,
+    const Layout& layout,
+    MeshDevice* device,
+    const MemoryConfig& memory_config) {
+    return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+}
+
+template <typename BufferType>
+Tensor from_buffer(
+    std::vector<BufferType>&& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
+    TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+    TensorSpec spec(
+        shape,
+        TensorLayout(
+            dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
+    return Tensor::from_vector<BufferType>(std::move(buffer), spec, device);
+}
+
+template <typename BufferType>
+Tensor from_buffer(
+    const std::vector<BufferType>& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
+    TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+    TensorSpec spec(
+        shape,
+        TensorLayout(
+            dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
+    return Tensor::from_vector<BufferType>(buffer, spec, device);
+}
+
+template <typename FillValueType>
+    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+Tensor full_like(
+    const Tensor& tensor,
+    const FillValueType fill_value,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+}
+
+Tensor zeros_like(
+    const Tensor& tensor,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return full_like_impl(tensor, 0.0f, dtype, layout, device, memory_config, optional_output_tensor);
+}
+
+Tensor ones_like(
+    const Tensor& tensor,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    return full_like_impl(tensor, 1.0f, dtype, layout, device, memory_config, optional_output_tensor);
+}
+
+Tensor empty_like(
+    const Tensor& tensor,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    Layout layout_value = layout.value_or(tensor.layout());
+    DataType dtype_value = dtype.value_or(tensor.dtype());
+    MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+    MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
+    return create_device_tensor(
+        TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)), device_ptr);
+}
+
+Tensor arange(
+    const int64_t start,
+    const int64_t stop,
+    const int64_t step = 1,
+    const DataType dtype = ttnn::DataType::BFLOAT16,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+    const Layout layout = Layout::ROW_MAJOR) {
+    auto concrete_arange = [&]<typename BufferType>() {
+        return detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
+    };
+
+    switch (dtype) {
+        case DataType::BFLOAT16: return concrete_arange.template operator()<::bfloat16>();
+        case DataType::FLOAT32: return concrete_arange.template operator()<float>();
+        case DataType::UINT16: return concrete_arange.template operator()<uint16_t>();
+        case DataType::UINT32: return concrete_arange.template operator()<uint32_t>();
+        case DataType::INT32: return concrete_arange.template operator()<int32_t>();
+        default: TT_THROW("Unsupported dtype");
     }
-};
+}
 
-struct ZerosLike : FullLikeWith<0.0f> {};
-struct OnesLike : FullLikeWith<1.0f> {};
-
-inline constexpr ZerosLike zeros_like{};
-inline constexpr OnesLike ones_like{};
-
-struct Empty {
-    static Tensor invoke(
-        const ttnn::Shape& shape,
-        const DataType& dtype,
-        const Layout& layout,
-        MeshDevice* device,
-        const MemoryConfig& memory_config) {
-        return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
-    }
-};
-
-struct FromBuffer {
-    template <typename BufferType>
-    static Tensor invoke(
-        std::vector<BufferType>&& buffer,
-        const Shape& shape,
-        const DataType dtype,
-        MeshDevice* device,
-        const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
-        TensorSpec spec(
-            shape,
-            TensorLayout(
-                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
-        return Tensor::from_vector<BufferType>(std::move(buffer), spec, device);
-    }
-
-    template <typename BufferType>
-    static Tensor invoke(
-        const std::vector<BufferType>& buffer,
-        const Shape& shape,
-        const DataType dtype,
-        MeshDevice* device,
-        const std::optional<Layout>& layout = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
-        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
-        TensorSpec spec(
-            shape,
-            TensorLayout(
-                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
-        return Tensor::from_vector<BufferType>(buffer, spec, device);
-    }
-};
-
-struct EmptyLike {
-    static Tensor invoke(
-        const Tensor& tensor,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        Layout layout_value = layout.value_or(tensor.layout());
-        DataType dtype_value = dtype.value_or(tensor.dtype());
-        MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
-        return create_device_tensor(
-            TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device_ptr);
-    }
-};
-
-struct Full {
-    template <typename FillValueType>
-        requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static Tensor invoke(
-        const ttnn::Shape& shape,
-        const FillValueType fill_value,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return full_impl(
-            shape,
-            fill_value,
-            dtype,
-            layout,
-            device.has_value() ? &device->get() : nullptr,
-            memory_config,
-            optional_output_tensor);
-    }
-};
-
-struct FullLike {
-    template <typename FillValueType>
-        requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static Tensor invoke(
-        const Tensor& tensor,
-        const FillValueType fill_value,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-    }
-};
-
-struct Arange {
-    static Tensor invoke(
-        const int64_t stop,
-        const DataType dtype = DataType::BFLOAT16,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-        const Layout layout = Layout::ROW_MAJOR) {
-        return Arange::invoke(0, stop, 1, dtype, device, memory_config, layout);
-    }
-
-    static Tensor invoke(
-        const int64_t start,
-        const int64_t stop,
-        const int64_t step = 1,
-        const DataType dtype = ttnn::DataType::BFLOAT16,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-        const Layout layout = Layout::ROW_MAJOR) {
-        auto concrete_arange = [&]<typename BufferType>() {
-            return detail::arange_impl<BufferType>(start, stop, step, layout, device, memory_config);
-        };
-
-        switch (dtype) {
-            case DataType::BFLOAT16: return concrete_arange.template operator()<::bfloat16>();
-            case DataType::FLOAT32: return concrete_arange.template operator()<float>();
-            case DataType::UINT16: return concrete_arange.template operator()<uint16_t>();
-            case DataType::UINT32: return concrete_arange.template operator()<uint32_t>();
-            case DataType::INT32: return concrete_arange.template operator()<int32_t>();
-            default: TT_THROW("Unsupported dtype");
-        }
-    }
-};
+Tensor arange(
+    const int64_t stop,
+    const DataType dtype = DataType::BFLOAT16,
+    std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+    const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
+    const Layout layout = Layout::ROW_MAJOR) {
+    return arange(0, stop, 1, dtype, device, memory_config, layout);
+}
 
 }  // namespace operations::creation
 
-constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
-constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();
-constexpr auto ones = ttnn::decorators::register_operation<"ttnn::ones", ttnn::operations::creation::Ones>();
-constexpr auto empty = ttnn::decorators::register_operation<"ttnn::empty", ttnn::operations::creation::Empty>();
-constexpr auto from_buffer =
-    ttnn::decorators::register_operation<"ttnn::from_buffer", ttnn::operations::creation::FromBuffer>();
-
-constexpr auto full_like =
-    ttnn::decorators::register_operation<"ttnn::full_like", ttnn::operations::creation::FullLike>();
-constexpr auto zeros_like =
-    ttnn::decorators::register_operation<"ttnn::zeros_like", ttnn::operations::creation::ZerosLike>();
-constexpr auto ones_like =
-    ttnn::decorators::register_operation<"ttnn::ones_like", ttnn::operations::creation::OnesLike>();
-constexpr auto empty_like =
-    ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
-
-constexpr auto arange = ttnn::decorators::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
+using operations::creation::arange;
+using operations::creation::empty;
+using operations::creation::empty_like;
+using operations::creation::from_buffer;
+using operations::creation::full;
+using operations::creation::full_like;
+using operations::creation::ones;
+using operations::creation::ones_like;
+using operations::creation::zeros;
+using operations::creation::zeros_like;
 
 }  // namespace ttnn
