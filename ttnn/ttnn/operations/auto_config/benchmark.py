@@ -57,7 +57,6 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 128, "K": 4096, "N": 11008},
     {"M": 128, "K": 11008, "N": 4096},
     {"M": 32, "K": 4096, "N": 4096},
-    {"M": 32, "K": 4096, "N": 4096},
     # Attention shapes
     {"M": 2048, "K": 128, "N": 2048},
     {"M": 128, "K": 2048, "N": 128},
@@ -65,6 +64,17 @@ DEFAULT_SWEEP_SHAPES = [
     {"M": 384, "K": 1024, "N": 1024},
     {"M": 768, "K": 3072, "N": 768},
 ]
+
+# Import GPT/LLM attention training shapes for expanded coverage
+try:
+    from ttnn.operations.auto_config.math_fidelity import GPT_ATTENTION_SHAPES
+    for m, k, n, _desc in GPT_ATTENTION_SHAPES:
+        shape = {"M": ((m + 31) // 32) * 32, "K": ((k + 31) // 32) * 32, "N": ((n + 31) // 32) * 32}
+        if shape not in DEFAULT_SWEEP_SHAPES:
+            DEFAULT_SWEEP_SHAPES.append(shape)
+except ImportError:
+    pass  # math_fidelity module not available
+
 
 
 def run_benchmark(
@@ -101,6 +111,21 @@ def run_benchmark(
     try:
         dt = ttnn.bfloat16 if dtype == "bfloat16" else ttnn.bfloat8_b
 
+        # Build compute_kernel_config with appropriate math fidelity
+        try:
+            from ttnn.operations.auto_config.math_fidelity import default_fidelity, fidelity_to_ttnn_string
+            fidelity_str = fidelity_to_ttnn_string(default_fidelity(str(dt), str(dt)))
+            math_fidelity = getattr(ttnn.MathFidelity, fidelity_str.split(".")[-1], ttnn.MathFidelity.HiFi4)
+        except (ImportError, AttributeError):
+            math_fidelity = ttnn.MathFidelity.HiFi4
+
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         for shape_idx, shape in enumerate(shapes):
             M, K, N = shape["M"], shape["K"], shape["N"]
 
@@ -134,6 +159,7 @@ def run_benchmark(
                             out = ttnn.matmul(
                                 input_a, input_b,
                                 program_config=candidate.config,
+                                compute_kernel_config=compute_kernel_config,
                             )
                             ttnn.synchronize_device(device)
                             ttnn.deallocate(out)
@@ -148,6 +174,7 @@ def run_benchmark(
                             out = ttnn.matmul(
                                 input_a, input_b,
                                 program_config=candidate.config,
+                                compute_kernel_config=compute_kernel_config,
                             )
                         else:
                             out = ttnn.matmul(input_a, input_b)
