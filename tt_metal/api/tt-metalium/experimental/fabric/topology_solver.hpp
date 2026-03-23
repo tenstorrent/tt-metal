@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -371,8 +372,9 @@ public:
      *
      * @param target_groups Vector of sets; each set is target nodes (e.g. fabric nodes per rank)
      * @param global_groups Vector of sets; each set is global nodes (e.g. ASICs per host)
+     * @return false if this would contradict required, forbidden, or same-rank feasibility (state unchanged)
      */
-    void set_same_rank_groups_constraint(
+    bool set_same_rank_groups_constraint(
         const std::vector<std::set<TargetNode>>& target_groups, const std::vector<std::set<GlobalNode>>& global_groups);
 
     const std::vector<std::set<TargetNode>>& get_same_rank_target_groups() const { return same_rank_target_groups_; }
@@ -391,12 +393,14 @@ public:
     /**
      * @brief Validate constraints - returns false if invalid
      *
-     * If saved_state is provided and validation fails, restores the saved state before returning false
+     * If saved_state is provided and validation fails, restores the saved state before returning false.
+     * Per-target: std::nullopt means the target had no valid_mappings_ entry before the attempted change
+     * (restore erases the key); a set value restores that target's previous allowed globals.
      *
      * @param saved_state Optional pointer to saved state to restore on failure
      * @return true if constraints are valid, false otherwise
      */
-    bool validate(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
+    bool validate(const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* saved_state = nullptr);
 
     /**
      * @brief Set quiet mode for constraint validation messages
@@ -438,6 +442,10 @@ private:
     // Validate that all cardinality constraints are compatible with required constraints
     // and that they are satisfiable together
     bool validate_cardinality_constraints() const;
+
+    // Same-rank: each non-empty target partition must admit some global partition P such that every
+    // target in the partition still allows at least one mapping into P (via is_valid_mapping).
+    bool validate_same_rank_groups_feasible() const;
 };
 
 /**

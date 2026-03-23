@@ -851,11 +851,13 @@ void configure_pgd_psd_host_alignment_constraints(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<uint32_t, AsicID>& constraints) {
+    // Collect hostname map for all asics in physical graph
     std::map<std::string, std::set<AsicID>> host_to_asics;
     for (const AsicID& asic_id : physical_graph.get_nodes()) {
         host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
     }
 
+    // Collect all targets from PGD grouping info
     std::set<uint32_t> all_targets;
     for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
         if (node_id >= grouping_info.items.size()) {
@@ -875,6 +877,7 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
+    // Check if some host can hold the mesh
     const size_t mesh_target_count = all_targets.size();
     bool some_host_can_hold_mesh = false;
     for (const auto& [_, asics] : host_to_asics) {
@@ -884,6 +887,7 @@ void configure_pgd_psd_host_alignment_constraints(
         }
     }
 
+    // Greedy minimal host cover algo to find the smallest set of hosts that can hold the mesh
     std::set<AsicID> preferred_asics_minimal_host_cover;
     if (!some_host_can_hold_mesh) {
         std::vector<std::string> hostnames_by_size;
@@ -893,6 +897,7 @@ void configure_pgd_psd_host_alignment_constraints(
                 hostnames_by_size.push_back(hn);
             }
         }
+        // Sort hosts by size descending, then alphabetically ascending
         std::sort(hostnames_by_size.begin(), hostnames_by_size.end(), [&](const std::string& a, const std::string& b) {
             size_t sa = host_to_asics.at(a).size();
             size_t sb = host_to_asics.at(b).size();
@@ -915,6 +920,7 @@ void configure_pgd_psd_host_alignment_constraints(
     std::vector<std::set<uint32_t>> target_groups;
     target_groups.push_back(std::move(all_targets));
 
+    // Find groups that can hold the mesh
     std::vector<std::set<AsicID>> global_groups;
     global_groups.reserve(host_to_asics.size());
     for (auto& [_, asics] : host_to_asics) {
@@ -927,6 +933,7 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
+    // Set same-rank groups constraint if some host can hold the mesh
     if (some_host_can_hold_mesh) {
         bool success = constraints.set_same_rank_groups_constraint(target_groups, global_groups);
         if (!success) {
@@ -938,6 +945,8 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
+    // If the rank groups constraint fails because they are constrained to too small a group of hosts, set a preferred
+    // constraint to the minimal host cover and allow the solver to choose the best one.
     log_debug(
         tt::LogFabric,
         "PGD host alignment: mesh size {} exceeds every host's ASIC count; preferring minimal host cover ({} ASICs)",

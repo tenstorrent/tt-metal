@@ -16,9 +16,10 @@
 #endif
 
 #include <algorithm>
-#include <sstream>
 #include <chrono>
+#include <optional>
 #include <set>
+#include <sstream>
 #include <climits>   // For INT_MAX
 #include <cstddef>   // For SIZE_MAX
 #include <unordered_set>
@@ -213,11 +214,10 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, GlobalNode global_node) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     auto it = valid_mappings_.find(target_node);
-    if (it != valid_mappings_.end()) {
-        saved_state[target_node] = it->second;
-    }
+    saved_state[target_node] =
+        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
 
     // If this global node is already reserved, add target_node to the reserved set
     auto reserved_it = reserved_global_nodes_.find(global_node);
@@ -243,11 +243,10 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     auto it = valid_mappings_.find(target_node);
-    if (it != valid_mappings_.end()) {
-        saved_state[target_node] = it->second;
-    }
+    saved_state[target_node] =
+        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
 
     // If any of these global nodes are already reserved, add target_node to the reserved set
     for (const auto& global_node : global_nodes) {
@@ -274,12 +273,11 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
         auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
-            saved_state[target_node] = it->second;
-        }
+        saved_state[target_node] =
+            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
     // If this global node is already reserved, add all target_nodes to the reserved set
@@ -308,12 +306,11 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
         auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
-            saved_state[target_node] = it->second;
-        }
+        saved_state[target_node] =
+            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
     // For each target node, ensure it can map to any of the global nodes
@@ -378,13 +375,37 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::validate(
-    const std::map<TargetNode, std::set<GlobalNode>>* saved_state) {
+    const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* saved_state) {
+    auto restore_saved_valid_mappings =
+        [this](const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* ss) {
+            if (ss == nullptr) {
+                return;
+            }
+            for (const auto& [target, opt] : *ss) {
+                if (!opt.has_value()) {
+                    valid_mappings_.erase(target);
+                } else {
+                    valid_mappings_[target] = *opt;
+                }
+            }
+        };
+
+    // When no per-call partial rollback is provided, snapshot all required mappings so filter / checks
+    // can be rolled back on failure (e.g. set_same_rank_groups_constraint, forbidden-only adds).
+    std::optional<std::map<TargetNode, std::set<GlobalNode>>> full_valid_mappings_rollback;
+    if (saved_state == nullptr) {
+        full_valid_mappings_rollback = valid_mappings_;
+    }
+
     // Filter out invalid mappings (e.g., those that conflict with reserved global nodes)
     // This ensures that valid_mappings_ only contains mappings that pass is_valid_mapping
     // We need to check against reserved nodes, so we check each mapping
     for (auto& [target, valid_set] : valid_mappings_) {
         std::set<GlobalNode> filtered_set;
         for (const auto& global : valid_set) {
+            if (forbidden_pairs_.find({target, global}) != forbidden_pairs_.end()) {
+                continue;
+            }
             // Check if this global node is reserved and if target is allowed
             auto reserved_it = reserved_global_nodes_.find(global);
             if (reserved_it != reserved_global_nodes_.end()) {
@@ -409,12 +430,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
     }
 
     if (!conflicted_targets.empty()) {
-        // Restore saved state if provided
         if (saved_state != nullptr) {
-            // Restore only the affected nodes from saved_state
-            for (const auto& [target, saved_valid_set] : *saved_state) {
-                valid_mappings_[target] = saved_valid_set;
-            }
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
         }
 
         std::ostringstream oss;
@@ -440,12 +459,23 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
         return false;
     }
 
-    // Validate cardinality constraints are still satisfiable with current required constraints
-    // (only if we didn't restore saved state, as that means validation passed before)
-    if (saved_state == nullptr) {
-        if (!validate_cardinality_constraints()) {
-            return false;
+    if (!validate_same_rank_groups_feasible()) {
+        if (saved_state != nullptr) {
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
         }
+        return false;
+    }
+
+    // Validate cardinality constraints are still satisfiable with current required constraints
+    if (!validate_cardinality_constraints()) {
+        if (saved_state != nullptr) {
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
+        }
+        return false;
     }
 
     return true;
@@ -522,11 +552,74 @@ MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const 
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::set_same_rank_groups_constraint(
+bool MappingConstraints<TargetNode, GlobalNode>::set_same_rank_groups_constraint(
     const std::vector<std::set<TargetNode>>& target_groups,
     const std::vector<std::set<GlobalNode>>& global_groups) {
+    auto saved_targets = same_rank_target_groups_;
+    auto saved_globals = same_rank_global_groups_;
     same_rank_target_groups_ = target_groups;
     same_rank_global_groups_ = global_groups;
+    if (!validate()) {
+        same_rank_target_groups_ = std::move(saved_targets);
+        same_rank_global_groups_ = std::move(saved_globals);
+        return false;
+    }
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasible() const {
+    const auto& target_groups = same_rank_target_groups_;
+    const auto& global_groups = same_rank_global_groups_;
+    if (target_groups.empty()) {
+        return true;
+    }
+    if (global_groups.empty()) {
+        return true;
+    }
+    for (const auto& tset : target_groups) {
+        if (tset.empty()) {
+            continue;
+        }
+        bool some_partition_works = false;
+        for (const auto& g_partition : global_groups) {
+            if (g_partition.empty()) {
+                continue;
+            }
+            bool every_target_has_candidate_in_partition = true;
+            for (const TargetNode& t : tset) {
+                bool has_candidate = false;
+                for (const GlobalNode& g : g_partition) {
+                    if (is_valid_mapping(t, g)) {
+                        has_candidate = true;
+                        break;
+                    }
+                }
+                if (!has_candidate) {
+                    every_target_has_candidate_in_partition = false;
+                    break;
+                }
+            }
+            if (every_target_has_candidate_in_partition) {
+                some_partition_works = true;
+                break;
+            }
+        }
+        if (!some_partition_works) {
+            if (!quiet_mode_) {
+                log_info(
+                    tt::LogFabric,
+                    "Constraint validation failed: a same-rank target group has no global partition where every "
+                    "member still allows at least one mapping (check required, forbidden, and reserved constraints).");
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "Constraint validation failed: same-rank target group infeasible with current constraints.");
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -541,12 +634,20 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
         forbidden_pairs_.insert({target_node, global_node});
+        if (!validate()) {
+            forbidden_pairs_.erase({target_node, global_node});
+            return false;
+        }
         return true;
     }
 
-    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
+        {target_node, std::make_optional(it->second)}};
     it->second.erase(global_node);
-    return validate(&saved_state);
+    if (!validate(&saved_state)) {
+        return false;
+    }
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -557,10 +658,17 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
         for (const auto& global_node : global_nodes) {
             forbidden_pairs_.insert({target_node, global_node});
         }
+        if (!validate()) {
+            for (const auto& global_node : global_nodes) {
+                forbidden_pairs_.erase({target_node, global_node});
+            }
+            return false;
+        }
         return true;
     }
 
-    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
+        {target_node, std::make_optional(it->second)}};
     for (const auto& global_node : global_nodes) {
         it->second.erase(global_node);
     }
@@ -570,16 +678,22 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
         forbidden_pairs_.insert({target_node, global_node});
         auto it = valid_mappings_.find(target_node);
         if (it != valid_mappings_.end()) {
-            saved_state[target_node] = it->second;
+            saved_state[target_node] = std::make_optional(it->second);
             it->second.erase(global_node);
         }
     }
-    return saved_state.empty() ? true : validate(&saved_state);
+    const bool ok = validate(saved_state.empty() ? nullptr : &saved_state);
+    if (!ok) {
+        for (const auto& target_node : target_nodes) {
+            forbidden_pairs_.erase({target_node, global_node});
+        }
+    }
+    return ok;
 }
 
 template <typename TargetNode, typename GlobalNode>
