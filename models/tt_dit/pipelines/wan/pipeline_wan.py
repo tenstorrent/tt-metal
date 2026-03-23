@@ -4,7 +4,6 @@
 
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 
-import hashlib
 import html
 import os
 from contextlib import nullcontext
@@ -33,7 +32,7 @@ from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
@@ -418,35 +417,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 
-    @staticmethod
-    def _conv3d_cin_key(tt_model):
-        """Hash C_in_block values from all conv3d layers for cache key.
-
-        prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
-        are only valid for the same C_in_block values.
-        """
-        cin_blocks = []
-
-        def _collect(module):
-            if hasattr(module, "conv_config") and hasattr(module.conv_config, "C_in_block"):
-                cin_blocks.append(str(module.conv_config.C_in_block))
-            for _, child in module.named_children():
-                _collect(child)
-
-        _collect(tt_model)
-        if not cin_blocks:
-            return ""
-        return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
-
     def _prepare_vae(self):
+        blocking_key = conv3d_blocking_hash(self.tt_vae)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae",
+            subfolder=subfolder,
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
-            extra_key=self._conv3d_cin_key(self.tt_vae),
         )
 
     def _get_t5_prompt_embeds(
