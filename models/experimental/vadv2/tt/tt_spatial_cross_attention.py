@@ -320,7 +320,6 @@ class TtMSDeformableAttention3D:
 
             ttnn.deallocate(reference_xy_reshaped)
             ttnn.deallocate(sampling_locations_reshaped)
-            ttnn.deallocate(sampling_locations_add)
 
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
