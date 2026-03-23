@@ -9,22 +9,26 @@
 from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
+from .embedding import Embedding
 from .linear import LinearLayer
 from .lora import LoraConfig, LoraLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 __all__ = [
+    # C++ bindings
+    "InferenceMode",
+    "ModuleBase",
+    "RunMode",
+    # Python classes
     "AbstractModuleBase",
     "Buffer",
-    "InferenceMode",
+    "Embedding",
     "LinearLayer",
     "LoraConfig",
     "LoraLinear",
     "LoraModel",
-    "ModuleBase",
     "ModuleDict",
     "ModuleList",
     "Parameter",
-    "RunMode",
 ]

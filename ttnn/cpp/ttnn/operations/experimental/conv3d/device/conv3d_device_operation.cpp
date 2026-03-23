@@ -47,15 +47,13 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
-    // input and weight must both be interleaved, bfloat16 or float32
-    TT_FATAL(!input_tensor_a.memory_config().is_sharded(), "Activation tensor must be interleaved.");
+    // Validate data types. Memory layout can be interleaved or sharded.
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32,
         "Activation tensor must be bfloat16 or float32. got {}",
         input_tensor_a.dtype());
 
     const auto& weight_tensor = tensor_args.weight_tensor;
-    TT_FATAL(!weight_tensor.memory_config().is_sharded(), "Weight tensor must be interleaved.");
     TT_FATAL(
         weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32,
         "Weight tensor must be bfloat16 or float32. got {}",
@@ -69,7 +67,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.bias_tensor.has_value()) {
         const auto& bias_tensor = tensor_args.bias_tensor.value();
-        TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.layout() == Layout::TILE, "Bias tensor must be tiled.");
         TT_FATAL(
             bias_tensor.dtype() == input_tensor_a.dtype(),
@@ -234,12 +231,20 @@ Tensor Conv3dDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& bias_tensor = tensor_args.bias_tensor;
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.logical_shape(),
+        weight_tensor.dtype(),
+        weight_tensor.memory_config(),
+        weight_tensor.logical_shape(),
+        bias_tensor.has_value());
 
     return hash;
 }

@@ -89,3 +89,21 @@ def generate_mm_weights(shape, dtype):
     # # Alternatively, we could pass the original shape and use fan_out
     # torch.nn.init.kaiming_normal_(torch_mm_weights.T, mode="fan_in", nonlinearity="linear")
     # return torch_mm_weights
+
+
+# Hardcoded optimal DRAM bank to logical worker assignment for Blackhole to avoid differences from harvesting
+def get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, noc):
+    import ttnn
+
+    assert noc == ttnn.NOC.NOC_0, "Only NOC_0 is supported for now"
+    assert device.arch() == ttnn.Arch.BLACKHOLE, "Only Blackhole is supported for now"
+    return [
+        ttnn.CoreCoord(0, 9),
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(0, 7),
+        ttnn.CoreCoord(0, 3),
+        ttnn.CoreCoord(7, 9),
+        ttnn.CoreCoord(7, 1),
+        ttnn.CoreCoord(7, 6),
+        ttnn.CoreCoord(7, 4),
+    ]

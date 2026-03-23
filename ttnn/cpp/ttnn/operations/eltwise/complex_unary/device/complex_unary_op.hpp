@@ -7,7 +7,9 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::complex_unary {
 
@@ -31,57 +33,5 @@ Tensor _is_real(const ComplexTensor& input, const MemoryConfig& output_mem_confi
 // ComplexTensor return type
 ComplexTensor _conj(const ComplexTensor& input, const MemoryConfig& output_mem_config);
 ComplexTensor _polar(const ComplexTensor& input, const MemoryConfig& output_mem_config);
-
-template <ComplexUnaryOpType OpType>
-struct OpHandler;
-
-template <>
-struct OpHandler<ComplexUnaryOpType::REAL> {
-    static Tensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _real(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::IMAG> {
-    static Tensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _imag(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::ANGLE> {
-    static Tensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _angle(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::IS_IMAG> {
-    static Tensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _is_imag(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::IS_REAL> {
-    static Tensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _is_real(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::CONJ> {
-    static ComplexTensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _conj(input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<ComplexUnaryOpType::POLAR> {
-    static ComplexTensor handle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-        return _polar(input, output_mem_config);
-    }
-};
 
 }  // namespace ttnn::operations::complex_unary

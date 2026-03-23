@@ -8,7 +8,7 @@ training_config:
   max_steps: 10
   use_clip_grad_norm: false # TODO: fix clip grad norm when TP is enabled
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/llama8b_galaxy_tp_dp.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b_galaxy_tp_dp.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

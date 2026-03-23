@@ -17,7 +17,6 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
-#include "tt_metal.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -257,7 +256,9 @@ public:
     // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
     // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
     // it.
+    // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
+        ContextId context_id,
         IDevice* device,
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,

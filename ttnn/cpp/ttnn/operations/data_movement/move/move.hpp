@@ -8,15 +8,7 @@
 #include <optional>
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct MoveOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto move = ttnn::register_operation<"ttnn::move", ttnn::operations::data_movement::MoveOperation>();
+Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn

@@ -16,6 +16,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
@@ -273,14 +274,17 @@ class LMHeadStage(StageKind):
         intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
         ttnn_gamma = self._weights.final_norm
         ttnn_b = self._weights.lm_head
-        torch_indices_flat = torch.arange(LMHeadStage.N_TOTAL, dtype=torch.int32).reshape(1, LMHeadStage.N_TOTAL)
+        torch_indices_flat = torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int32).reshape(
+            1, LogicalModelDimensions.VOCAB_SIZE
+        )
+        indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
         ttnn_indices = ttnn.from_torch(
-            torch_indices_flat.repeat(num_devices, 1, 1),
+            torch_indices_flat,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=indices_mem_config,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=indices_mesh_mapper,
         )
         ttnn_scores = ttnn.from_torch(
             torch.zeros((LMHeadStage.M, LMHeadStage.N_TOTAL), dtype=torch.bfloat16),

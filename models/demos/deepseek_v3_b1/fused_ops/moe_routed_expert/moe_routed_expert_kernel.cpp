@@ -224,9 +224,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;
 
     // Reader runtime args
@@ -429,7 +427,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_local_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("reduce_packet_cb"),
-        get_named_compile_time_arg_val("reduce_packet_header_cb"),
         get_named_compile_time_arg_val("reduce_num_hops"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
@@ -469,7 +466,8 @@ void kernel_main() {
     using GateMMCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
         get_named_compile_time_arg_val("gate_mm_out_w"),
         false,  // transpose
-        get_named_compile_time_arg_val("gate_mm_fused_activation")>;
+        get_named_compile_time_arg_val("gate_mm_fused_activation"),
+        get_named_compile_time_arg_val("gate_mm_fused_activation_approx_mode")>;
     deepseek_b1_ops::Matmul::ComputeArgs gate_mm_args{
         get_named_compile_time_arg_val("gate_mm_in0"),
         get_named_compile_time_arg_val("gate_mm_in1"),
@@ -598,9 +596,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_device_role"),
         get_named_compile_time_arg_val("reduce_num_tiles"),
         get_named_compile_time_arg_val("reduce_local_cb"),
-        get_named_compile_time_arg_val("reduce_received_cb_r1"),
-        get_named_compile_time_arg_val("reduce_received_cb_r2"),
-        get_named_compile_time_arg_val("reduce_received_cb_r3"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
         get_named_compile_time_arg_val("reduce_output_cb"),
         get_named_compile_time_arg_val("reduce_scratch_cb"),
         get_named_compile_time_arg_val("is_reduce_fabric_core")>;

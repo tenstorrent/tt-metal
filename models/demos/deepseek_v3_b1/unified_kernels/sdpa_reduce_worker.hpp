@@ -82,6 +82,7 @@ struct SdpaRoundConfig {
     uint32_t fwd_slot_addr;
     uint32_t fwd_sem_addr;
     uint32_t base_slot_idx;
+    uint32_t header_addr;
 };
 
 /**
@@ -89,7 +90,6 @@ struct SdpaRoundConfig {
  * Template parameters encode size constants for zero-overhead abstraction.
  */
 template <
-    uint32_t cb_packet_slot,
     uint32_t l1_alignment,
     uint32_t slot_size,
     uint32_t ms_tile_size_bytes,
@@ -110,9 +110,6 @@ struct SdpaChunkSender {
     uint64_t sem_noc;      // Fabric destination semaphore
     uint64_t fwd_sem_noc;  // Forwarder semaphore
 
-    // Cached header address (set once per round, reused for all packets)
-    uint32_t header_addr;
-
     // Derived constants
     static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
     static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
@@ -126,16 +123,8 @@ struct SdpaChunkSender {
         sem_noc = get_noc_addr(current_core_x, current_core_y, cfg.sem_addr);
         fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_sem_addr);
 
-        cb_reserve_back(cb_packet_slot, 1);
-        header_addr = get_write_ptr(cb_packet_slot);
-
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
         (void)fabric_set_unicast_route(header, cfg.dst_chip_id, cfg.dst_mesh_id);
-    }
-
-    FORCE_INLINE void finish_round() {
-        cb_push_back(cb_packet_slot, 1);
-        cb_pop_front(cb_packet_slot, 1);
     }
 
     FORCE_INLINE SdpaFabricDest get_fabric_dest(uint32_t dst_addr) const {
@@ -161,7 +150,7 @@ struct SdpaChunkSender {
         const SdpaForwarderDest& fwd_dest,
         uint32_t src_addr,
         uint32_t payload_size) const {
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
         constexpr uint32_t ATOMIC_INC_VAL = 1;
         constexpr bool FLUSH_WRITES = false;
         header->to_noc_fused_unicast_write_atomic_inc(
@@ -169,7 +158,7 @@ struct SdpaChunkSender {
                 fabric_dest.dst_noc, fabric_dest.sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
             align(payload_size, l1_alignment));
 
-        noc_async_write(header_addr, fwd_dest.slot_noc, packet_header_size_bytes);
+        noc_async_write(cfg.header_addr, fwd_dest.slot_noc, packet_header_size_bytes);
         uint64_t fwd_payload_noc = fwd_dest.slot_noc + packet_header_size_bytes;
         noc_async_write(src_addr, fwd_payload_noc, payload_size);
         noc_async_writes_flushed();
@@ -333,7 +322,8 @@ ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_l2,
     uint32_t cb_l_out,
     bool neighbor_valid,
-    bool local_valid) {
+    bool local_valid,
+    bool swap_reduction_order) {
     // Only local valid - copy local data to output
     if (!neighbor_valid && local_valid) {
         // TODO: Can be optimized to just division
@@ -384,8 +374,25 @@ ALWI void sdpa_tail_streaming_conditional(
     }
 
     // Both valid - perform normal SDPA reduction
-    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, untilize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
+    if (swap_reduction_order) {
+        sdpa_tail_streaming<
+            SDPA_EXP_APPROX_MODE,
+            normalize,
+            untilize,
+            block_size,
+            scale_fp32,
+            num_l_chunks,
+            vector_mode>(cb_prev_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l2, cb_l1, cb_l_out);
+    } else {
+        sdpa_tail_streaming<
+            SDPA_EXP_APPROX_MODE,
+            normalize,
+            untilize,
+            block_size,
+            scale_fp32,
+            num_l_chunks,
+            vector_mode>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
+    }
 }
 
 #endif  // COMPILE_FOR_TRISC
@@ -439,7 +446,6 @@ struct SdpaReduceWorker {
         uint32_t cbLocalMs,
         uint32_t cbR1ResultL,
         uint32_t cbR1ResultMs,
-        uint32_t cbPacketSlot,
         uint32_t l1Alignment,
         uint32_t pageSizeBytes,
         uint32_t slotSize,
@@ -460,7 +466,6 @@ struct SdpaReduceWorker {
         static constexpr uint32_t cb_local_ms = cbLocalMs;
         static constexpr uint32_t cb_r1_result_l = cbR1ResultL;
         static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
-        static constexpr uint32_t cb_packet_slot = cbPacketSlot;
         static constexpr uint32_t l1_alignment = l1Alignment;
         static constexpr uint32_t page_size_bytes = pageSizeBytes;
         static constexpr uint32_t slot_size = slotSize;
@@ -562,6 +567,8 @@ struct SdpaReduceWorker {
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
         uint32_t r2_neighbor_r1_neighbor_idx;
+        uint32_t swap_r1_reduction_order;
+        uint32_t swap_r2_reduction_order;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -656,7 +663,6 @@ struct SdpaReduceWorker {
         // ==================================================================
         void writer_impl(const WriterArgs& args) {
             using Sender = SdpaChunkSender<
-                CTArgs::cb_packet_slot,
                 CTArgs::l1_alignment,
                 CTArgs::slot_size,
                 CTArgs::ms_tile_size_bytes,
@@ -666,6 +672,8 @@ struct SdpaReduceWorker {
 
             // Initialize sender with core coordinates
             Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};
+            PacketHeaderPool::reset();
+            auto* header = PacketHeaderPool::allocate_header(1);
 
             // ROUND 1: Send local input to R1 neighbor
             sender.setup_round(
@@ -677,9 +685,9 @@ struct SdpaReduceWorker {
                  args.r1_neighbor_sem_addr,
                  args.r1_fwd_slot_addr,
                  args.r1_fwd_sem_addr,
-                 args.r1_base_slot_idx});
+                 args.r1_base_slot_idx,
+                 reinterpret_cast<uint32_t>(header)});
             sender.send_all();
-            sender.finish_round();
 
             // ROUND 2: Send R1 result to R2 neighbor (streaming)
             sender.setup_round(
@@ -691,13 +699,10 @@ struct SdpaReduceWorker {
                  args.r2_neighbor_sem_addr,
                  args.r2_fwd_slot_addr,
                  args.r2_fwd_sem_addr,
-                 args.r2_base_slot_idx});
+                 args.r2_base_slot_idx,
+                 reinterpret_cast<uint32_t>(header)});
             sender.send_streaming();
-            sender.finish_round();
 
-            // Release the single MS tile from R1 result after R2 streaming send to
-            // preserve BRISC/TRISC synchronization semantics from post_sdpa.
-            cb_pop_front(CTArgs::cb_r1_result_ms, 1);
             noc_async_full_barrier();
 
             // SCATTER PHASE: Distribute output rows to destination cores
@@ -753,6 +758,8 @@ struct SdpaReduceWorker {
             bool local_valid = true;
             bool r1_neighbor_valid = true;
             bool r2_neighbor_valid = true;
+            bool swap_r1_reduction_order = false;
+            bool swap_r2_reduction_order = false;
 
             [[maybe_unused]] uint32_t device_idx = 0;
             [[maybe_unused]] uint32_t r1_neighbor_device_idx = 0;
@@ -772,6 +779,8 @@ struct SdpaReduceWorker {
                 r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
                 r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
                                     (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
+                swap_r1_reduction_order = args.swap_r1_reduction_order;
+                swap_r2_reduction_order = args.swap_r2_reduction_order;
             }
 
             uint32_t neighbor_cb_base_rd_ptr = 0;
@@ -802,7 +811,8 @@ struct SdpaReduceWorker {
                 CTArgs::cb_local_l,
                 CTArgs::cb_r1_result_l,
                 r1_neighbor_valid,
-                local_valid);
+                local_valid,
+                swap_r1_reduction_order);
 
             // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
             // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
@@ -842,7 +852,8 @@ struct SdpaReduceWorker {
                 CTArgs::cb_r1_result_l,
                 CTArgs::cb_l_out,
                 r2_neighbor_r1_valid,
-                local_r1_valid);
+                local_r1_valid,
+                swap_r2_reduction_order);
 
             // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
             // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
