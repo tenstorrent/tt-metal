@@ -402,7 +402,6 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
     if (is_mock_device()) {
         return 0;
     }
-    // log_info(tt::LogMetal, "completion_queue_read_ptr: {}", this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4);
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 

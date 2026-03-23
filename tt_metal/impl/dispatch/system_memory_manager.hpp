@@ -132,7 +132,6 @@ private:
     uint32_t bypass_buffer_write_offset = 0;
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
-    // std::shared_ptr<Buffer> dram_region_buffer;
 };
 
 }  // namespace tt::tt_metal
