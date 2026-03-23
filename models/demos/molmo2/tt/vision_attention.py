@@ -203,8 +203,8 @@ class VisionAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences
-        if seq_len > 2048:
+        # Reshape for long sequences (only when divisible for memory optimization)
+        if seq_len > 2048 and seq_len % 2048 == 0:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
         # QKV projection
@@ -219,7 +219,7 @@ class VisionAttention(LightweightModule):
         # Add bias
 
         # Reshape back if needed
-        if seq_len > 2048:
+        if seq_len > 2048 and seq_len % 2048 == 0:
             qkv = ttnn.reshape(qkv, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x)
@@ -263,8 +263,8 @@ class VisionAttention(LightweightModule):
             memory_config=matmul_output_memory_config,
         )
 
-        # Output projection
-        if seq_len > 1024:
+        # Output projection (reshape only when divisible for memory optimization)
+        if seq_len > 1024 and seq_len % 1024 == 0:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
         output = ttnn.linear(
@@ -275,7 +275,10 @@ class VisionAttention(LightweightModule):
             memory_config=matmul_output_memory_config,
         )
 
-        if seq_len > 1024:
+        # Add output bias
+        output = output + self.bo
+
+        if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         ttnn.deallocate(attn_output)
