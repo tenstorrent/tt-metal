@@ -421,7 +421,8 @@ ALWI void mm_block_init_short_with_both_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 #endif  // TODO: AM; add Quasar implementation
