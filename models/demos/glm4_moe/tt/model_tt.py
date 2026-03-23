@@ -1924,7 +1924,21 @@ class Glm4MoeTT:
 
         rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"], sin_neg_batch)
 
+        # Prefetcher shorthand variables — None during compile warmup, set before trace capture.
+        _gcb = None   # global circular buffer
+        _sdid = None  # worker sub_device_id
+        _pf_qkv_pc = None
+        _pf_oproj_pc = None
+        _pf_qkv_in_mc = None
+        _pf_qkv_out_mc = None
+        _pf_oproj_in_mc = None
+        _pf_oproj_out_mc = None
+
         # Run forward once (compile warm-up).
+        # Compile warmup runs WITHOUT the prefetcher SubDevice manager to avoid
+        # the constraint that every op must specify sub_device_id. The prefetcher
+        # is loaded after compile warmup, and compile_prefetch() pre-compiles the
+        # dram_prefetcher program before trace capture.
         logger.info("=== _capture_decode_trace: starting compile warmup ===")
         if use_intrace_main_embed:
             # In-trace embedding: ttnn.embedding(tokens_tt, embed_w) — same as trace capture.
@@ -1939,52 +1953,21 @@ class Glm4MoeTT:
             x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
             x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
         else:
-            # Clone embed_tt before feeding into layer stack because decoder_layer_tt
-            # deallocates its residual input (layer 0's x). embed_tt must survive
-            # for copy_host_to_device_tensor updates between trace replays.
             x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Start prefetcher before layer loop (if enabled)
-        _pf_garbage = None
-        if self.prefetcher:
-            _pf_garbage = self.prefetcher.start_prefetch()
-        # Must read global_circular_buffer AFTER start_prefetch() — ensure_ready() creates it lazily
-        _gcb = self.prefetcher.global_circular_buffer if self.prefetcher else None
-        _sdid = self.prefetcher.worker_sub_device_id if self.prefetcher else None
-        _pf_qkv_pc = self.prefetcher.qkv_program_config if self.prefetcher else None
-        _pf_oproj_pc = self.prefetcher.oproj_program_config if self.prefetcher else None
-        _pf_qkv_in_mc = self.prefetcher.qkv_input_mem_cfg if self.prefetcher else None
-        _pf_qkv_out_mc = self.prefetcher.qkv_output_mem_cfg if self.prefetcher else None
-        _pf_oproj_in_mc = self.prefetcher.oproj_input_mem_cfg if self.prefetcher else None
-        _pf_oproj_out_mc = self.prefetcher.oproj_output_mem_cfg if self.prefetcher else None
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid,
-                                prefetch_qkv_pc=_pf_qkv_pc, prefetch_oproj_pc=_pf_oproj_pc,
-                                prefetch_qkv_in_mc=_pf_qkv_in_mc, prefetch_qkv_out_mc=_pf_qkv_out_mc,
-                                prefetch_oproj_in_mc=_pf_oproj_in_mc, prefetch_oproj_out_mc=_pf_oproj_out_mc)
+                                active_batch=active)
             ttnn.deallocate(x, force=False)
             x = x_next
 
-        if _pf_garbage is not None:
-            self.prefetcher.stop_prefetch(_pf_garbage)
-            _pf_garbage = None
-
         # MTP compile warm-up: clone hidden state and run MTP in SAME sequence as trace
-        # This ensures all programs are compiled with the same op sequence as trace capture.
         mtp_hidden_warmup = None
         if self.mtp_enabled:
             mtp_hidden_warmup = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Final norm: use worker core range when prefetcher is active
-        # Must be within worker SubDevice (cols 1-6), avoiding sender cols 0,7.
-        _final_norm_cr_warmup = None
-        if _gcb is not None:
-            _final_norm_cr_warmup = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(5, 0))
-            ])
-        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size), worker_core_range=_final_norm_cr_warmup)
+        x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
         logits_tt = ttnn.linear(x, self.lm_head_w)
 
         # In-trace argmax compile warm-up: include sampling ops for ALL devices (including TG mesh).
@@ -2131,18 +2114,39 @@ class Glm4MoeTT:
         logger.info("Capturing decode trace for batch={}", active)
 
         # Prefetcher one-time setup: load SubDevice manager + create GlobalCB BEFORE trace.
-        # These are non-traceable ops that must happen once.
+        # Then compile_prefetch() runs dram_prefetcher once (without sync) to pre-compile
+        # the program.  This avoids SetRuntimeArgs writes inside trace capture.
         if self.prefetcher:
+            logger.info("=== PREFETCH: calling ensure_ready() ===")
             self.prefetcher.ensure_ready()
+            logger.info("=== PREFETCH: ensure_ready() done, compiling prefetcher program ===")
+            self.prefetcher.compile_prefetch()
+            logger.info("=== PREFETCH: compile_prefetch() done, reading configs ===")
+            _gcb = self.prefetcher.global_circular_buffer
+            _sdid = self.prefetcher.worker_sub_device_id
+            _pf_qkv_pc = self.prefetcher.qkv_program_config
+            _pf_oproj_pc = self.prefetcher.oproj_program_config
+            _pf_qkv_in_mc = self.prefetcher.qkv_input_mem_cfg
+            _pf_qkv_out_mc = self.prefetcher.qkv_output_mem_cfg
+            _pf_oproj_in_mc = self.prefetcher.oproj_input_mem_cfg
+            _pf_oproj_out_mc = self.prefetcher.oproj_output_mem_cfg
+            logger.info("=== PREFETCH: configs read, gcb={}, sdid={} ===", _gcb, _sdid)
 
         if self.tt_ccl is not None:
+            logger.info("=== PREFETCH: resetting CCL sem counters ===")
             self.tt_ccl.reset_sem_counters()
+            logger.info("=== PREFETCH: CCL sem counters reset done ===")
+        logger.info("=== PREFETCH: beginning trace capture ===")
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        logger.info("=== PREFETCH: trace capture begun, trace_id={} ===", trace_id)
 
         # Launch async DRAM prefetch INSIDE trace so it replays on every trace execution.
         _pf_garbage = None
         if self.prefetcher:
+            logger.info("=== PREFETCH: calling start_prefetch() ===")
             _pf_garbage = self.prefetcher.start_prefetch()
+            logger.info("=== PREFETCH: start_prefetch() done ===")
+
 
         # Embedding inside trace: either in-trace ttnn.embedding or clone of pre-allocated buffer.
         if use_intrace_main_embed:

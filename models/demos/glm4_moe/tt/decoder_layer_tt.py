@@ -347,12 +347,18 @@ class Glm4MoeDecoderLayer:
 
         def _cs():
             if not _COMP: return None
-            ttnn.synchronize_device(device)
+            try:
+                ttnn.synchronize_device(device)
+            except RuntimeError:
+                return None  # Inside trace capture — skip profiling
             return time.perf_counter_ns()
 
         def _ce(t0, comp):
             if t0 is None: return
-            ttnn.synchronize_device(device)
+            try:
+                ttnn.synchronize_device(device)
+            except RuntimeError:
+                return  # Inside trace capture — skip profiling
             ms = (time.perf_counter_ns() - t0) / 1e6
             if _lid in (0, 45, 91):  # Sample 3 layers
                 logger.info("TTCOMP L{} {} {:.1f}ms", _lid, comp, ms)

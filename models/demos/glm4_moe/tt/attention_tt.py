@@ -774,11 +774,15 @@ class Glm4MoeAttention(LightweightModule):
             B_phys = ((active_batch + 31) // 32) * 32
             if xqkv_shape[-2] != B_phys:
                 xqkv = ttnn.reshape(xqkv, (1, 1, B_phys, xqkv_shape[-1]), (1, 1, B_phys, xqkv_shape[-1]))
+            _slice_kw = dict(dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if sub_device_id is not None:
+                _slice_kw["sub_device_id"] = sub_device_id
+                # Restrict to worker sub-device cores (cols 1-6, rows 0-8 = 6x9)
+                _slice_kw["core_grid"] = ttnn.CoreGrid(y=6, x=4)
             xqkv = ttnn.matmul(
                 self._slice_mats[active_batch],
                 xqkv,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                **_slice_kw,
             )
             logical_batch_after_slice = active_batch // dp_size
         else:
@@ -886,12 +890,19 @@ class Glm4MoeAttention(LightweightModule):
             )
 
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+            # Worker grid: cols 1-6 when prefetcher active, else full 8 cols
+            _usel_grid = ttnn.CoreGrid(y=4, x=6) if sub_device_id is not None else ttnn.CoreGrid(y=4, x=8)
+            _usel_kw = dict(
+                core_grid=_usel_grid,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            if sub_device_id is not None:
+                _usel_kw["sub_device_id"] = sub_device_id
             attn_output = ttnn.matmul(
                 self._user_sel_mats[active_batch],
                 attn_output,
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                **_usel_kw,
             )
             B_phys_out = ((active_batch + 31) // 32) * 32
             attn_output = ttnn.reshape(attn_output, (1, 1, active_batch, attn_shape[-1]), (1, 1, B_phys_out, attn_shape[-1]))

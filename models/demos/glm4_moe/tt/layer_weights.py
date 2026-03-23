@@ -566,25 +566,35 @@ def convert_decoder_layer_weights(
         qkv_mapper = None
 
     _prefetch = _env_prefetch()
-    _qkv_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-    if _prefetch:
-        # Per-device QKV shape: [5120, 1792]. DRAM-shard across 12 cores.
-        _qkv_mem_cfg = create_dram_sharded_mem_config(device, 5120, 1792)
-        logger.info("  [DEBUG L{}] QKV using DRAM-sharded mem config for prefetch", layer_idx)
 
+    # DRAM-interleaved: used for compile warmup (ttnn.linear auto-selects program config)
+    # and prefill. DRAM-sharded crashes with "Only L1 buffers can have circular buffer".
     w_qkv = ttnn.as_tensor(
         qkv_cat,
         dtype=attn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=_qkv_mem_cfg,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=qkv_mapper,
-        cache_file_name=c("w_qkv", tp_variant + ("_dram_shard" if _prefetch else "")),
+        cache_file_name=c("w_qkv", tp_variant),
     )
-    # No interleaved copy needed: DRAM-sharded weights work for both prefill and decode.
-    # Llama Galaxy uses DRAM-sharded weights without interleaved copies.
-    # Keeping a second copy wastes ~34 MB/layer (3.1 GB for 92 layers) → OOM at layer ~78.
-    w_qkv_interleaved = None
+    # DRAM-sharded copy for prefetcher: dram_prefetcher needs WIDTH_SHARDED DRAM layout
+    # to correctly read per-bank weight shards. Only created when PREFETCH is enabled.
+    w_qkv_interleaved = None  # field name kept for struct compat; holds interleaved (standard) copy
+    if _prefetch:
+        # Swap: w_qkv becomes the sharded version (for prefetcher insert_tensor),
+        # w_qkv_interleaved becomes the interleaved version (for standard matmul).
+        w_qkv_interleaved = w_qkv  # this IS the interleaved one
+        w_qkv = ttnn.as_tensor(
+            qkv_cat,
+            dtype=attn_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_dram_sharded_mem_config(device, 5120, 1792),
+            mesh_mapper=qkv_mapper,
+            cache_file_name=c("w_qkv", tp_variant + "_dram_shard"),
+        )
+        logger.info("  [DEBUG L{}] QKV dual storage: interleaved + DRAM-sharded for prefetch", layer_idx)
     logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
 
     # ---- Fused QKV Bias ----
@@ -620,21 +630,27 @@ def convert_decoder_layer_weights(
     # Each device gets [1, 1, 1536, 5120]
     wo_mapper = _tp_mesh_mapper(device, shard_dim=2) if tp_size > 1 else _replicate_mapper(device)
     _ok = f"model.layers.{layer_idx}.self_attn.o_proj.weight"
-    _wo_mem_cfg = None  # default: DRAM interleaved
-    if _prefetch:
-        # Per-device O-proj shape: [1536, 5120]. DRAM-shard across 12 cores.
-        _wo_mem_cfg = create_dram_sharded_mem_config(device, 1536, 5120)
-        logger.info("  [DEBUG L{}] O-proj using DRAM-sharded mem config for prefetch", layer_idx)
+    _wo_torch = _maybe_dequant_fp8(state, _ok, state[_ok])
     w_o = _linear_weight_tt(
         device=device,
-        torch_weight_out_in=_maybe_dequant_fp8(state, _ok, state[_ok]),
-        cache_file=c("w_o", tp_variant + ("_dram_shard" if _prefetch else "")),
+        torch_weight_out_in=_wo_torch,
+        cache_file=c("w_o", tp_variant),
         dtype=attn_dtype,
         mesh_mapper=wo_mapper,
-        memory_config=_wo_mem_cfg,
+        memory_config=None,  # DRAM-interleaved (default)
     )
-    # No interleaved copy needed — same as QKV (saves ~15 MB/layer = 1.4 GB for 92 layers).
     w_o_interleaved = None
+    if _prefetch:
+        w_o_interleaved = w_o  # interleaved copy for standard matmul
+        w_o = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_wo_torch,
+            cache_file=c("w_o", tp_variant + "_dram_shard"),
+            dtype=attn_dtype,
+            mesh_mapper=wo_mapper,
+            memory_config=create_dram_sharded_mem_config(device, 1536, 5120),
+        )
+        logger.info("  [DEBUG L{}] O-proj dual storage: interleaved + DRAM-sharded for prefetch", layer_idx)
     logger.info("  [DEBUG L{}] w_o done", layer_idx)
 
     # ---- MLP Weights ----

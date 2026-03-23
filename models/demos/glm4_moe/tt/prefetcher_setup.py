@@ -204,17 +204,12 @@ class Glm4MoePrefetcherSetup:
         self.global_cb_size = 800 * 1088
         self.global_circular_buffer = None
 
-        # SubDevice setup — created here but NOT loaded until first decode.
+        # SubDevice setup — DEFERRED to ensure_ready() so that
+        # create_sub_device_manager doesn't interfere with prefill CCL ops.
         # Prefill runs before decode and needs the full grid (no SubDevice restriction).
-        self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-        self.worker_sub_device = ttnn.SubDevice([self.worker_core_range_set])
         self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
         self.worker_sub_device_id = ttnn.SubDeviceId(1)
-
-        self.mesh_sub_device_manager_id = mesh_device.create_sub_device_manager(
-            [self.prefetcher_sub_device, self.worker_sub_device], 0
-        )
-        # Do NOT load here — deferred to start_prefetch() so prefill can run on full grid.
+        self.mesh_sub_device_manager_id = None
         self._sub_device_loaded = False
 
         self.tensors = []
@@ -393,6 +388,14 @@ class Glm4MoePrefetcherSetup:
         must happen once before the first decode.
         """
         if not self._sub_device_loaded:
+            # Create SubDevice objects + manager on first call (deferred from __init__
+            # to avoid interfering with prefill CCL ops on TG mesh).
+            if self.mesh_sub_device_manager_id is None:
+                prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
+                worker_sub_device = ttnn.SubDevice([self.worker_core_range_set])
+                self.mesh_sub_device_manager_id = self.mesh_device.create_sub_device_manager(
+                    [prefetcher_sub_device, worker_sub_device], 0
+                )
             self.mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id)
             # Use both SubDevices for setup ops (address tensor shards onto sender
             # cores, GlobalCB touches both SubDevices).
@@ -400,7 +403,7 @@ class Glm4MoePrefetcherSetup:
                 [self.prefetcher_sub_device_id, self.worker_sub_device_id]
             )
             self._sub_device_loaded = True
-            logger.info("Prefetcher: SubDevice manager loaded (deferred from init)")
+            logger.info("Prefetcher: SubDevice manager created+loaded (deferred from init)")
         self.create_global_cb()
         # Build the address tensor once (reused in every start_prefetch call)
         if not hasattr(self, '_tt_tensors') or self._tt_tensors is None:
@@ -410,13 +413,44 @@ class Glm4MoePrefetcherSetup:
         # "Programs must be executed on a single sub-device" assertion.
         self.mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
 
+    def compile_prefetch(self):
+        """Pre-compile dram_prefetcher program OUTSIDE trace capture.
+
+        Must be called after ensure_ready() and before begin_trace_capture().
+        Runs dram_prefetcher once so the program is in the cache.  When the
+        same op is issued inside trace capture it hits the cache and avoids
+        any device-buffer writes (SetRuntimeArgs) that would violate trace constraints.
+
+        NOTE: We do NOT synchronize after dram_prefetcher — the prefetcher
+        kernel reads DRAM banks and fills the global CB, but with no consumer
+        it stalls after filling the triple buffer.  synchronize_device would
+        hang waiting for it.  Instead we just deallocate the garbage tensor
+        (which frees the output buffer) and let the kernel drain naturally
+        when the SubDevice manager is reset or the next operation runs.
+        """
+        # dram_prefetcher dispatches to BOTH SubDevices.
+        self.mesh_device.set_sub_device_stall_group(
+            [self.prefetcher_sub_device_id, self.worker_sub_device_id]
+        )
+        garbage = ttnn.dram_prefetcher(
+            self._tt_tensors,
+            num_layers=self.n_layers,
+            global_cb=self.global_circular_buffer,
+        )
+        # Do NOT synchronize — prefetcher stalls without consumers.
+        # Just deallocate the garbage tensor to free the output buffer.
+        ttnn.deallocate(garbage)
+        # Restore worker-only stall group for subsequent setup ops.
+        self.mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
+        logger.info("Prefetcher: compile_prefetch() done — program cached")
+
     def start_prefetch(self):
         """Launch async DRAM prefetch. Call INSIDE trace capture.
 
-        This issues the dram_prefetcher op and sets the stall group to
-        worker-only so compute overlaps with weight reads.
+        Assumes ensure_ready() and compile_prefetch() were already called
+        before trace capture.  Only issues the cached dram_prefetcher op
+        and adjusts the stall group — no device-buffer writes.
         """
-        self.ensure_ready()
         # dram_prefetcher dispatches to BOTH SubDevices (sender + receiver cores).
         # Temporarily expand stall group, then narrow back to worker-only.
         self.mesh_device.set_sub_device_stall_group(
@@ -432,8 +466,10 @@ class Glm4MoePrefetcherSetup:
         return garbage
 
     def stop_prefetch(self, garbage):
-        """Stop prefetch and clean up."""
+        """Stop prefetch and clean up.
+
+        Only deallocates the garbage tensor.  Stall group remains [worker_only]
+        (set by start_prefetch) so subsequent compute (norm, LM head, argmax)
+        executes on worker cores.  Matches Llama Galaxy pattern.
+        """
         ttnn.deallocate(garbage)
-        self.mesh_device.set_sub_device_stall_group(
-            [self.prefetcher_sub_device_id, self.worker_sub_device_id]
-        )
