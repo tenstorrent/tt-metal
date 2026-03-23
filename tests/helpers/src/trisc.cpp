@@ -34,17 +34,17 @@ extern "C"
 {
     extern void gcov_dump(void);
 }
-constexpr std::uint32_t mailboxes_start = 0x6DFB8;
+constexpr std::uint32_t mailboxes_start = 0x6DFC0;
 #else
-constexpr std::uint32_t mailboxes_start = 0x1FFB8;
+constexpr std::uint32_t mailboxes_start = 0x1FFC0;
 #endif
 
 #if defined(LLK_TRISC_UNPACK)
-constexpr std::uint32_t mailbox_offset = 0;
-#elif defined(LLK_TRISC_MATH)
 constexpr std::uint32_t mailbox_offset = sizeof(std::uint32_t);
-#elif defined(LLK_TRISC_PACK)
+#elif defined(LLK_TRISC_MATH)
 constexpr std::uint32_t mailbox_offset = 2 * sizeof(std::uint32_t);
+#elif defined(LLK_TRISC_PACK)
+constexpr std::uint32_t mailbox_offset = 3 * sizeof(std::uint32_t);
 #endif
 
 void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
@@ -55,7 +55,7 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 
 int main(void)
 {
-    mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
+    volatile std::uint32_t* const mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
 
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
     device_setup();

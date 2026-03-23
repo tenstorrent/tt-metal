@@ -30,8 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from .dump import TensixDump
 from .fused_operation import FusedOperation
-from .llk_params import BriscCmd, DataFormat, MailboxesPerf, format_dict
-from .logger import logger
+from .llk_params import DataFormat, MailboxesPerf, format_dict
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,
@@ -163,31 +162,6 @@ def set_tensix_soft_reset(
     )
 
 
-common_counter = 0
-
-
-def commit_brisc_command(
-    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=0.1
-):
-    global common_counter
-
-    if common_counter & 1:
-        write_words_to_device(location, Mailbox.BriscCommand1.value, [command.value])
-    else:
-        write_words_to_device(location, Mailbox.BriscCommand0.value, [command.value])
-
-    common_counter += 1
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        temp_value = read_word_from_device(location, Mailbox.BriscCounter.value, 0)
-        if temp_value == common_counter:
-            return
-
-    logger.error(f"{command.name} -> {hex(Mailbox.BriscCommand0.value)}")
-
-    raise TimeoutError("Polling brisc command timed out")
-
-
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
     soft_reset = get_register_store(location, 0).read_register(
         "RISCV_DEBUG_REG_SOFT_RESET_0"
@@ -304,7 +278,7 @@ def wait_for_tensix_operations_finished(elfs, core_loc="0,0", timeout=2):
         TensixDump.try_process_request(tensix_dumps, core_loc)
 
         if completed == mailboxes:
-            commit_brisc_command(core_loc, BriscCmd.RESET_TRISCS)
+            set_tensix_soft_reset(1, location=core_loc)
             return tensix_dumps
 
     handle_if_assert_hit(
@@ -321,8 +295,9 @@ def wait_for_tensix_operations_finished(elfs, core_loc="0,0", timeout=2):
 def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer) before each test."""
 
+    mailboxes_start_value = min([core.value for core in Mailbox])
     write_words_to_device(
-        location=location, addr=Mailbox.Unpacker, data=[0xA3, 0xA3, 0xA3]
+        location=location, addr=mailboxes_start_value, data=len(Mailbox) * [0xA3]
     )
 
 
