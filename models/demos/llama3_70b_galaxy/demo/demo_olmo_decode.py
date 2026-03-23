@@ -21,21 +21,19 @@ from time import time
 from datetime import datetime
 from loguru import logger
 import os
-import math
 import ttnn
 import pytest
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
-    precompute_freqs_yarn,
-    gather_cos_sin,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.olmo_model_config import TtOlmoModelArgs
+from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_simple
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import preprocess_inputs_prefill
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
@@ -207,34 +205,37 @@ def run_olmo_demo(
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device. Model is in prefill mode.")
 
-    # Encode prompts
+    # Create Generator — mirrors text_demo.py; handles semaphore reset, all-ISL warmup,
+    # and trace capture/execute via prefill_forward_text.
+    generator = Generator(tt_model, model_args, mesh_device)
+
+    # Encode prompts — mirrors text_demo.py: uses preprocess_inputs_prefill which calls
+    # model_args.encode_prompt() (applies ChatML via tokenizer.apply_chat_template for OLMo).
     if dummy_weights:
         encoded_prompts = [
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
+        input_tokens_prefill_pt = [
+            torch.tensor(encoded_prompts[b], dtype=torch.int32).unsqueeze(0) for b in range(batch_size)
+        ]
+        decoding_pos = [len(encoded_prompts[b]) for b in range(batch_size)]
     else:
-        # Apply ChatML template required by OLMo 3.1-32B-Think.
-        # Raw text encoding produces incoherent output because the model expects:
-        #   <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>
-        if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template is not None:
-            formatted_prompts = [
-                tokenizer.apply_chat_template(
-                    [{"role": "user", "content": p}],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                for p in input_prompts
-            ]
-            encoded_prompts = [tokenizer.encode(fp, add_special_tokens=False) for fp in formatted_prompts]
-            # Clamp each prompt to the target ISL to prevent the chat-template overhead
-            # (~56 tokens) from pushing the length past a power-of-2 boundary, which
-            # would double padded_prefill_len and break support_seqlens CCL buffer lookups.
-            # max_generated_tokens is always (target_ISL + small_decode_budget), so
-            # the largest power-of-2 ≤ max_generated_tokens equals the target ISL exactly.
-            target_prefill_len = 1 << (max_generated_tokens.bit_length() - 1)
-            encoded_prompts = [ep[:target_prefill_len] for ep in encoded_prompts]
-        else:
-            encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
+        input_tokens_prefill_pt, encoded_prompts, decoding_pos, _ = preprocess_inputs_prefill(
+            input_prompts,
+            model_args.tokenizer,
+            [model_args],
+            instruct_mode,
+            max_generated_tokens,
+            max_prefill_len=model_args.max_context_len,
+        )
+        # Clamp each prompt to the target ISL to prevent chat-template overhead from pushing
+        # past a power-of-2 boundary that would break support_seqlens CCL buffer lookups.
+        target_prefill_len = 1 << (max_generated_tokens.bit_length() - 1)
+        encoded_prompts = [ep[:target_prefill_len] for ep in encoded_prompts]
+        input_tokens_prefill_pt = [
+            torch.tensor(encoded_prompts[b], dtype=torch.int32).unsqueeze(0) for b in range(batch_size)
+        ]
+        decoding_pos = [len(encoded_prompts[b]) for b in range(batch_size)]
 
     eos_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 50256
     user_done = [False] * batch_size
@@ -250,152 +251,49 @@ def run_olmo_demo(
     prompt_lengths = [len(encoded_prompts[b]) for b in range(batch_size)]
     logger.info(f"Max prompt length: {max_prompt_length}, padded: {padded_prefill_len}")
 
-    # Compute YaRN RoPE for prefill
-    ttnn_cos, ttnn_sin, _ = precompute_freqs_yarn(
-        dim=model_args.head_dim,
-        end=model_args.max_seq_len * 2,
-        theta=model_args.rope_theta,
-        scaling_factor=model_args.rope_scaling_factor,
-        original_max_position_embeddings=model_args.original_max_position_embeddings,
-        beta_fast=model_args.yarn_beta_fast,
-        beta_slow=model_args.yarn_beta_slow,
-        attention_factor=model_args.yarn_attention_factor,
-    )
-    position_ids = torch.arange(padded_prefill_len)
-    cos_gathered, sin_gathered = gather_cos_sin(position_ids, ttnn_cos, ttnn_sin)
-    rot_mats_prefill = [
-        ttnn.from_torch(
-            cos_gathered,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        ),
-        ttnn.from_torch(
-            sin_gathered,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        ),
-    ]
-    tt_model.tt_rot_mats_prefill = rot_mats_prefill
+    # YaRN RoPE is now computed internally by prepare_prefill_inputs_host on first call
+    # (use_yarn=True for OLMo in get_prefill_rot_mat), so no manual setup is needed here.
 
-    # Get KV cache from model layers (needed for prefill to write to)
-    kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
+    # KV cache — wrap in list so generator.prefill_forward_text can unwrap with kv_cache[0]
+    kv_list = [layer.attention.layer_past for layer in tt_model.layers]
 
-    # Prepare page table for prefill
-    block_size = paged_attention_config.block_size if paged_attention else 64
-    num_prefill_blocks = math.ceil(padded_prefill_len / block_size)
+    # Stack tokens to [batch, max_prompt_len] as expected by Generator
+    tokens = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
-    # Pad prompts to padded_prefill_len
-    padded_prompts = [
-        encoded_prompts[b] + [eos_token_id] * (padded_prefill_len - len(encoded_prompts[b])) for b in range(batch_size)
-    ]
-
-    # --- Prefill with trace: warmup (compile), capture, execute ---
+    # --- Prefill via Generator (mirrors text_demo.py) ---
+    # On first call, prefill_forward_text automatically:
+    #   1. Calls warmup_prefill_traces which resets all CCL semaphores
+    #   2. Warms up traces for all support_seqlens [128, 1024, 2048, 4096, 8192]
+    #      — each ISL runs eager compile (self-resets semaphores) then trace capture
+    #   3. Executes the actual prefill for the requested ISL
+    # This is the same flow as text_demo.py, eliminating device-state hangs between runs.
     first_decode_tokens = []
     all_outputs_per_user = [[] for _ in range(batch_size)]
 
-    # Build inputs for user 0 (used for warmup + trace capture)
-    def _build_prefill_inputs(user_id):
-        user_tokens = torch.tensor(padded_prompts[user_id], dtype=torch.long).unsqueeze(0)
-        if paged_attention:
-            user_within_group = user_id % model_args.batch_size_per_device_group
-            pt_user = torch.ones(32, num_prefill_blocks, dtype=torch.int32) * -1
-            pt_user[user_id, :] = page_table[user_within_group, :num_prefill_blocks]
-        else:
-            pt_user = None
-        return user_tokens, pt_user
-
-    # Step 1: Warmup / compile run (eager, first user)
-    # Reset all CCL global semaphores before the first CCL op. Semaphore values in device
-    # L1 persist across Python process restarts; if a prior run left them non-zero the
-    # first CCL call below will deadlock waiting for a semaphore that never clears.
-    # synchronize_device after reset ensures all cross-chip Ethernet writes have fully
-    # propagated on every chip before the first CCL op starts.
-    logger.info("Resetting CCL global semaphores to clear any stale device state...")
-    tt_model.tt_ccl.reset_global_semaphores()
-
-    logger.info("Prefill warmup (compile)...")
+    logger.info("Starting prefill (compile + warmup on first call)...")
     profiler.start("compile_prefill")
-    warmup_tokens, warmup_pt = _build_prefill_inputs(0)
-    host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
-    device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-    transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
-    tt_out_warmup = tt_model.ttnn_prefill_forward(
-        *transformed_inputs,
-        kv_cache=kv_cache,
-        batch_size=1,
+    output_logits = generator.prefill_forward_text(
+        tokens,
+        page_table=page_table,
+        kv_cache=[kv_list],
+        prompt_lens=decoding_pos,
+        enable_trace=True,
+        sampling_params=None,  # return logits; greedy argmax done on host below
+        empty_slots=list(range(batch_size)),
     )
-    ttnn.synchronize_device(mesh_device)
     profiler.end("compile_prefill")
-    logger.info("Prefill warmup done.")
 
-    # For seqlens with pre-allocated CCL buffers (≤ 16384), use traced prefill.
-    # For larger seqlens (32k, 64k), skip trace and run in eager mode — the CCL
-    # barrier-sync fallback works in eager but deadlocks inside a captured trace.
-    MAX_TRACE_SEQLEN = max(tt_model.tt_ccl.support_seqlens)
-    use_trace = padded_prefill_len <= MAX_TRACE_SEQLEN
-    logger.info(f"Prefill seqlen={padded_prefill_len}, MAX_TRACE_SEQLEN={MAX_TRACE_SEQLEN}, use_trace={use_trace}")
-
-    if use_trace:
-        # Step 2: Capture prefill trace
-        logger.info("Capturing prefill trace...")
-        tt_model.set_enable_trace(True)
-        host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
-        device_inputs_trace = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-        prefill_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs_trace)
-        tt_out_trace = tt_model.ttnn_prefill_forward(
-            *transformed_inputs,
-            kv_cache=kv_cache,
-            batch_size=1,
+    # Greedy argmax on host-side logits → first decode token per user
+    # output_logits: [batch, 1, vocab_size]
+    first_decode_tokens = output_logits[:batch_size, 0, :].argmax(dim=-1).tolist()
+    for u in range(batch_size):
+        all_outputs_per_user[u] = list(encoded_prompts[u]) + [first_decode_tokens[u]]
+        decoded_tok = _safe_decode(tokenizer, [first_decode_tokens[u]])
+        logger.info(
+            f"Prefill user {u}: prompt_len={decoding_pos[u]}, first_token={first_decode_tokens[u]} ({decoded_tok})"
         )
-        ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Prefill trace captured.")
-
-    # Step 3: Execute trace (or eager) for each user
-    profiler.start("inference_prefill")
-    for user_id in range(batch_size):
-        prompt_len = prompt_lengths[user_id]
-        user_tokens, user_pt = _build_prefill_inputs(user_id)
-
-        host_inputs = tt_model.prepare_prefill_inputs_host(user_tokens, user_id=user_id, page_table=user_pt)
-
-        if use_trace:
-            copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs_trace)
-            ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=False)
-            tt_out = tt_out_trace
-        else:
-            # Eager mode for large seqlens (32k, 64k) — CCL barrier sync is safe outside trace
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-            transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
-            tt_out = tt_model.ttnn_prefill_forward(
-                *transformed_inputs,
-                kv_cache=kv_cache,
-                batch_size=1,
-            )
-
-        # process_output_prefill runs LM head + CCL outside the trace
-        first_tok = tt_model.process_output_prefill(tt_out, last_token_idx=prompt_len - 1)
-        ttnn.synchronize_device(mesh_device)
-        first_decode_tokens.append(int(first_tok[0]))
-
-        all_outputs_per_user[user_id] = encoded_prompts[user_id][:]
-        all_outputs_per_user[user_id].append(first_decode_tokens[-1])
-
-        if user_id < 4 or user_id % 8 == 0:
-            decoded_tok = _safe_decode(tokenizer, [first_decode_tokens[-1]])
-            logger.info(
-                f"Prefill user {user_id}: prompt_len={prompt_len}, first_token={first_decode_tokens[-1]} ({decoded_tok})"
-            )
 
     profiler.end("inference_prefill")
-    if use_trace:
-        ttnn.release_trace(mesh_device, prefill_trace_id)
-        tt_model.set_enable_trace(False)
     logger.info(f"Prefill complete for {batch_size} users.")
 
     # ===================== SWITCH TO DECODE MODE =====================
@@ -884,7 +782,7 @@ def run_olmo_demo(
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-1k-b1: ~1k-token prefill + 10 decode
+        (  # isl-1k-b1: ~1k-token prefill + 1000 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
@@ -892,7 +790,7 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            1034,  # ~1024 prefill + 10 decode
+            2024,  # ~1024 prefill + 1000 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
@@ -944,7 +842,7 @@ def run_olmo_demo(
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-8k-b1: ~8k-token prefill + 10 decode
+        (  # isl-8k-b1: ~8k-token prefill + 1000 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
@@ -952,7 +850,7 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            8201,  # 8191 prefill tokens + 10 decode (pads to 8192)
+            9192,  # 8192 prefill + 1000 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},

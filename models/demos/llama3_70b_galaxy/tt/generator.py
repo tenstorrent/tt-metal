@@ -141,7 +141,14 @@ class Generator(WarmupForwardMixin):
                     warmup_empty_slots,
                     tt_out_logits_all_users,
                 )
-        # trace_id_prefill dict check
+        # Reset all CCL global semaphores after warmup. Each trace execution cycles semaphore
+        # handles and may leave them in a non-zero state. Without this reset, the first actual
+        # prefill (especially for ISLs not in support_seqlens, i.e. eager mode 8k/16k/32k/64k)
+        # deadlocks waiting on semaphores that were left dirty by the last warmup trace.
+        logger.info("Resetting CCL global semaphores after warmup to clear trace-execution state")
+        self.model.tt_ccl.reset_global_semaphores()
+        if hasattr(self.model, "tt_ccl_prefill"):
+            self.model.tt_ccl_prefill.reset_global_semaphores()
         logger.info("Prefill traces warmup completed")
 
     def prefill_forward_text(
