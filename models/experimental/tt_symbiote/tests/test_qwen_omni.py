@@ -256,8 +256,14 @@ def test_qwen_omni(mesh_device):
     DispatchManager.clear_timings()
 
     # Inference: Generation of the output text and audio
+    # Use deterministic talker decoding to make waveform quality reproducible.
     text_ids, audio = model.generate(
-        **inputs, speaker="Ethan", thinker_return_dict_in_generate=True, use_audio_in_video=USE_AUDIO_IN_VIDEO
+        **inputs,
+        speaker="Ethan",
+        thinker_return_dict_in_generate=True,
+        use_audio_in_video=USE_AUDIO_IN_VIDEO,
+        talker_do_sample=False,
+        talker_max_new_tokens=1024,
     )
     DispatchManager.save_stats_to_file("qwen_omni_timing_stats.csv")
 

@@ -8,7 +8,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3Omni
 
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.utils.device_management import set_device
-from models.experimental.qwen3omni.tt.thinker_attention import TTNNQwen3OmniAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.thinker_attention import TTNNQwen3OmniAttention
 
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
