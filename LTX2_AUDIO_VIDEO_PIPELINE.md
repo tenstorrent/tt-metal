@@ -53,9 +53,9 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 ## Key Measurements
 | Test | Metric | Value | Notes |
 |------|--------|-------|-------|
-| Video-only per-layer | PCC | 0.998 | 1x1 mesh, split RoPE |
-| AV per-layer video | PCC | 0.998 | 1x1 mesh, with xattn fix |
-| AV per-layer audio | PCC | 0.999 | 1x1 mesh |
+| Video-only per-layer | PCC | 0.998 | 1x1 mesh, split RoPE. Note: an earlier test showed 0.9999 but that was before the SPLIT RoPE fix (wrong INTERLEAVED RoPE produced smaller outputs that happened to match better). Both video-only and AV have 0.998 with correct SPLIT RoPE — no discrepancy between them. |
+| AV per-layer video | PCC | 0.998 | 1x1 mesh, split RoPE, with xattn context modulation fix |
+| AV per-layer audio | PCC | 0.999 | 1x1 mesh, split RoPE |
 | Video-only e2e (5 steps, 256x256) | PSNR | 23-24 dB | vs CPU video-only ref |
 | AV e2e video (5 steps, 256x256) | PSNR | 21-24 dB | vs CPU AV ref, after xattn fix |
 | AV e2e video BEFORE fix | PSNR | 12-14 dB | missing context modulation |
