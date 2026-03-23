@@ -23,5 +23,3 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
-
-tt_reuse_precompile_headers(jit_compile_server TT::CommonPCH)
