@@ -111,7 +111,7 @@ class TtSharedExpert(LightweightModule):
                 shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
             )
 
-    def _to_sharded_ttnn(self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16) -> ttnn.Tensor:
+    def _to_sharded_ttnn(self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.DataType) -> ttnn.Tensor:
         """
         Convert torch weight to sharded ttnn tensor.
 
@@ -144,7 +144,7 @@ class TtSharedExpert(LightweightModule):
         return tt_weight
 
     def _create_sharded_weight_from_torch(
-        self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.bfloat16
+        self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.DataType
     ) -> ttnn.Tensor:
         """
         Convert HuggingFace torch weight to sharded ttnn tensor.
@@ -155,7 +155,7 @@ class TtSharedExpert(LightweightModule):
         torch_weight = torch_weight.T.contiguous()
         return self._to_sharded_ttnn(torch_weight, dims, name, dtype)
 
-    def _create_random_sharded_weight(self, shape: tuple, dims: tuple, name: str, dtype: ttnn.bfloat16) -> ttnn.Tensor:
+    def _create_random_sharded_weight(self, shape: tuple, dims: tuple, name: str, dtype: ttnn.DataType) -> ttnn.Tensor:
         """
         Create random sharded weight in TTNN format [in_features, out_features].
         """

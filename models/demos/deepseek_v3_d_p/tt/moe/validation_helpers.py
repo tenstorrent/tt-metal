@@ -614,7 +614,6 @@ def validate_dispatch_buffer_pcc(
     Returns:
         ValidationResult with match statistics
     """
-    from tests.ttnn.utils_for_testing import comp_pcc
 
     def compare_pcc(
         torch_slot: torch.Tensor,

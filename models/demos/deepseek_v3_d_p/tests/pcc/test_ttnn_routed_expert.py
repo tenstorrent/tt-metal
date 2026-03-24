@@ -17,6 +17,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -80,12 +81,12 @@ def run_torch_routed_experts(
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
-        # DeepSeek V3 routed expert dims: emb_dim=7168, hidden_dim=2048
-        (3200, 7168, 2048, 64, 2, 2, False),  # 8 experts per chip, isl=3200
-        # (3200, 7168, 2048, 8, 1, 2, True),
-        # (4096, 7168, 2048, 64, 2, 2, False),  # 8 experts per chip, isl=4096
+        # fmt: off
+        (320, 1024, 512, 64, 2, 2, True),
+        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False),
+        # fmt: on
     ],
-    # ids=["deepseek-v3-dims"],
+    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -208,7 +209,9 @@ def test_ttnn_routed_expert(
 
         # Create torch experts for PCC validation
         profiler.start("torch_expert_creation")
-        torch_experts = [TorchExpert(emb_dim, torch_weights=w) for w in torch_weights_list]
+        torch_experts = [
+            TorchExpert(emb_dim=emb_dim, hidden_dim=hidden_dim, torch_weights=w) for w in torch_weights_list
+        ]
         profiler.end("torch_expert_creation")
 
         # Run torch reference
