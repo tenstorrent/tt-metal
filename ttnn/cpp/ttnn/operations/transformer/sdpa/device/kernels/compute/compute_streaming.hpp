@@ -442,7 +442,7 @@ void mul_block_bcast_cols_acc(
  * when there's room, or appends a minimal extra batch otherwise.
  * Eliminates the separate init + acquire/release overhead for sum correction.
  */
-template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size, bool skip_init = false>
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
 void salad_correct_fused(
     uint32_t out_in_cb,
     uint32_t sum_in_cb,
@@ -460,16 +460,14 @@ void salad_correct_fused(
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    if constexpr (!skip_init) {
-        mul_bcast_cols_init_short(out_in_cb, bcast_cb);
-    }
+    mul_bcast_cols_init_short(out_in_cb, bcast_cb);
 
     cb_wait_front(out_in_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
     cb_wait_front(sum_in_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(bcast_cb, (q_subblock + 1) * tiles_per_row);
 
+    constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
-        const uint32_t last_batch_rem = tiles_per_column % col_batch;
         const uint32_t cur_cols =
             (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch_rem > 0 ? last_batch_rem : col_batch);
         const bool is_last_out_batch = (col_base + cur_cols >= tiles_per_column);
@@ -1145,12 +1143,28 @@ static void sdpa_inner_loop_step(
         }
 
         // Pipeline drain: SALAD for the last group
-        // Drain was hoisted into the last main-loop iteration above.
-        // Only first-K-chunk normalize remains.
         {
             constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
-            if (is_first_iter && is_last_iter) {
-                normalize_row(pushed_rows, drain_h);
+            if constexpr (total_v_row_groups == 1) {
+                // Single row group: the main loop never ran, so the drain must
+                // perform the full SALAD correction (sub_exp + correct) here.
+                if (!is_first_iter) {
+                    constexpr uint32_t drain_salad_row = 0;
+                    cb_reserve_back(cb_exp_max_diff, drain_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                    cb_push_back(cb_exp_max_diff, drain_h);
+                    salad_correct_row(drain_salad_row, 0, drain_h);
+                }
+                if (is_last_iter) {
+                    normalize_row(pushed_rows, drain_h);
+                }
+            } else {
+                // Drain was hoisted into the last main-loop iteration above.
+                // Only first-K-chunk normalize remains.
+                if (is_first_iter && is_last_iter) {
+                    normalize_row(pushed_rows, drain_h);
+                }
             }
         }
 
