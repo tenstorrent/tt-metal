@@ -232,7 +232,7 @@ std::vector<Tensor> ring_attention_all_gather_async(
         topology,
         num_links,
         memory_config,
-        std::move(sub_device_id));
+        sub_device_id);
     return ttnn::device_operation::launch<experimental::prim::RingAttentionAllGatherAsyncDeviceOperation>(
         params, inputs);
 }

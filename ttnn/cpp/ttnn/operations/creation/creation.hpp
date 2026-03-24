@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -16,7 +17,6 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
