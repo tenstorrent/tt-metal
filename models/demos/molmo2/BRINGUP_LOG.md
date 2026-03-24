@@ -55,32 +55,47 @@ python3 run.py --model Molmo2-8B --device t3k --workflow server --local-server -
 - Vision trace: Disabled for vLLM mode
 - Background trace capture: Disabled (--disable-trace-capture)
 
-**Next steps - Trace Support for tt-inference-server:**
+**Trace Support for tt-inference-server (2026-03-24):**
+**Status: IMPLEMENTED - Needs device testing**
 
-To enable traces (for better performance), implement:
+Implemented trace warmup methods for tt-inference-server integration:
 
-1. **`warmup_model_prefill()`** - Implement proper warmup:
-   - Allocate prefill trace tensors (hidden_states, cos, sin)
-   - Capture prefill trace with `ttnn.begin_trace_capture` / `ttnn.end_trace_capture`
-   - Store trace_id for reuse
+1. **`warmup_model_prefill(kv_cache, enable_trace, ...)`** - IMPLEMENTED ✓
+   - Initializes KV cache if needed
+   - Allocates prefill trace tensors (hidden_states, cos, sin)
+   - Captures prefill trace with `ttnn.begin_trace_capture` / `ttnn.end_trace_capture`
+   - Stores trace in `self.generator.prefill_traces[seq_len]`
 
-2. **`warmup_model_decode()`** - Implement proper warmup:
-   - Allocate decode trace tensors
-   - Capture decode trace
-   - Store trace_id for reuse
+2. **`warmup_model_decode(kv_cache, enable_trace, ...)`** - IMPLEMENTED ✓
+   - Initializes KV cache and position tensors
+   - Allocates decode trace tensors (hidden_states for single token)
+   - Captures decode trace with RoPE embedding lookup
+   - Stores in `self.generator.decode_trace_id`, `decode_trace_tensors`, `decode_trace_output`
 
-3. **Configuration:**
-   - Use `override_tt_config["trace_mode"]` to control traces:
-     - `"all"`: Enable both prefill and decode traces
-     - `"decode_only"`: Enable only decode traces
-     - `"none"`: Disable all traces (current default)
+3. **`warmup_model_vision()`** - IMPLEMENTED ✓
+   - Allocates vision trace tensors (embedded, idx, valid_mask, valid_token)
+   - Captures vision trace for ViT + pooling + projection
+   - Stores in `self.generator.vision_trace_id`, `vision_trace_tensors`, `vision_trace_outputs`
 
-4. **Vision trace:** Consider unified trace (vision + prefill combined) from demo.py
+4. **`decode_forward` with trace execution** - IMPLEMENTED ✓
+   - When `enable_trace=True` and decode trace is captured:
+     - Copies hidden_states to trace input tensor
+     - Executes trace with `ttnn.execute_trace()`
+     - Returns trace output tensor
+   - Position counters (`current_pos`, `rot_mat_idxs`) updated via `ttnn.plus_one` OUTSIDE trace
 
-Reference implementations:
-- `demo.py:_allocate_prefill_trace_tensors()` (lines 1036-1082)
-- `demo.py:_capture_prefill_trace()` (lines 1086-1107)
-- `demo.py:_allocate_unified_trace_tensors()` (lines 1129-1183)
+5. **`prefill_forward` trace** - Uses `self.generator.run_prefill(use_trace=enable_trace)`
+   - Trace capture/execution handled by demo.py's Molmo2Generator
+
+**Configuration:**
+- `override_tt_config["trace_mode"]` controls traces:
+  - `"all"`: Enable both prefill and decode traces
+  - `"decode_only"`: Enable only decode traces
+  - `"none"`: Disable all traces (current default)
+
+**Testing needed:**
+- Device hardware error prevents testing
+- Run `tt-smi -r` to reset device before testing
 
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**
