@@ -37,6 +37,8 @@ primary_host="${unique_hosts[0]}"
 remote_host="${unique_hosts[1]}"
 
 fail=0
+export TT_METAL_HOME
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$TT_METAL_HOME/build/lib}"
 common_mpi_args=(--with-ft ulfm --hostfile "$HOSTFILE" --map-by ppr:1:node --bind-to none -np 2)
 
 _extract_annotation_line() {
@@ -137,7 +139,7 @@ _run_expected_annotation_test \
     "fault_tolerant" \
     "yes" \
     env TT_METAL_GITHUB_ACTIONS_ANNOTATIONS=1 \
-    "$MPIRUN" -x TT_METAL_GITHUB_ACTIONS_ANNOTATIONS "${common_mpi_args[@]}" "$TEST_BIN" \
+    "$MPIRUN" -x TT_METAL_GITHUB_ACTIONS_ANNOTATIONS -x TT_METAL_HOME -x LD_LIBRARY_PATH "${common_mpi_args[@]}" "$TEST_BIN" \
     --gtest_filter=FaultTolerance.MPIRankFailureExceptionCarriesContext
 
 _run_expected_annotation_test \
@@ -145,7 +147,7 @@ _run_expected_annotation_test \
     "fast_fail" \
     "no" \
     env TT_METAL_GITHUB_ACTIONS_ANNOTATIONS=1 \
-    "$MPIRUN" -x TT_METAL_GITHUB_ACTIONS_ANNOTATIONS "${common_mpi_args[@]}" "$TEST_BIN" \
+    "$MPIRUN" -x TT_METAL_GITHUB_ACTIONS_ANNOTATIONS -x TT_METAL_HOME -x LD_LIBRARY_PATH "${common_mpi_args[@]}" "$TEST_BIN" \
     --gtest_filter=FaultTolerance.FastFailEmitsGithubAnnotation
 
 if [[ $fail -ne 0 ]]; then
