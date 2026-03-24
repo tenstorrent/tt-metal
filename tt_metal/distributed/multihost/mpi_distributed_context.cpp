@@ -274,21 +274,43 @@ static constexpr std::string_view kRankFailureAnnotationFile =
     return fmt::format("MPI rank failure {} on {}", failed_rank_name, failed_hostname);
 }
 
-[[nodiscard]] std::string best_effort_local_rank_hostname() {
-    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
-        return value;
-    }
+[[nodiscard]] bool hostname_is_generic_for_rank_diagnostics(std::string_view hostname) noexcept {
+    return hostname.empty() || hostname == kUnknownHostname || hostname == "localhost" ||
+           hostname == "localhost.localdomain" || hostname == "mpirun-host";
+}
 
+[[nodiscard]] std::string best_effort_mpi_processor_name() {
     std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name{};
     int processor_name_length = 0;
     if (MPI_Get_processor_name(processor_name.data(), &processor_name_length) != MPI_SUCCESS ||
         processor_name_length <= 0) {
-        return std::string{kUnknownHostname};
+        return {};
     }
 
     const auto capped_length = std::clamp(processor_name_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
     processor_name[static_cast<std::size_t>(capped_length)] = '\0';
     return processor_name.data();
+}
+
+[[nodiscard]] std::string best_effort_local_rank_hostname() {
+    // Prefer the rank-local processor name whenever MPI gives us a stable host
+    // identity. RUNNER_NAME is useful for the launcher host in CI, but tt-run
+    // forwards a single launcher-side RUNNER_NAME to every rank, so using it
+    // unconditionally collapses multihost jobs onto one hostname.
+    std::string mpi_processor_name = best_effort_mpi_processor_name();
+    if (!hostname_is_generic_for_rank_diagnostics(mpi_processor_name)) {
+        return mpi_processor_name;
+    }
+
+    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
+        return value;
+    }
+
+    if (!mpi_processor_name.empty()) {
+        return mpi_processor_name;
+    }
+
+    return std::string{kUnknownHostname};
 }
 
 [[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {

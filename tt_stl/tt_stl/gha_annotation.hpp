@@ -139,7 +139,10 @@ inline void append_escaped_text(fmt::memory_buffer& out, std::string_view text, 
 }
 
 inline void emit_annotation(const annotation& annotation, std::FILE* stream = stdout) {
-    fmt::print(stream, "{}\n", build_workflow_command(annotation));
+    // A leading newline helps GitHub workflow commands survive mpirun --tag-output:
+    // the launcher may consume the empty tagged line, leaving the actual command
+    // at column 0 where GitHub can parse it.
+    fmt::print(stream, "\n{}\n", build_workflow_command(annotation));
     std::fflush(stream);
 }
 
