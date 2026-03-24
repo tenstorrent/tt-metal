@@ -325,10 +325,30 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     // If user provided a shard spec (BLOCK_SHARDED on 1D grid), derive per_core values from it
     if (user_shard_spec.has_value()) {
         const auto& shard_shape = user_shard_spec->shape;
+        // Validate tile alignment
+        TT_FATAL(
+            shard_shape[0] % in0_tile.get_height() == 0,
+            "Shard height {} must be divisible by tile height {} for BLOCK_SHARDED on 1D grid",
+            shard_shape[0],
+            in0_tile.get_height());
+        TT_FATAL(
+            shard_shape[1] % in1_tile.get_width() == 0,
+            "Shard width {} must be divisible by tile width {} for BLOCK_SHARDED on 1D grid",
+            shard_shape[1],
+            in1_tile.get_width());
         per_core_M = shard_shape[0] / in0_tile.get_height();
         per_core_N = shard_shape[1] / in1_tile.get_width();
         // Also use the user's grid size for compute
         auto grid_bbox = user_shard_spec->grid.bounding_box();
+        uint32_t bbox_num_cores = (grid_bbox.end_coord.x - grid_bbox.start_coord.x + 1) *
+                                  (grid_bbox.end_coord.y - grid_bbox.start_coord.y + 1);
+        // Validate that grid is contiguous (no gaps)
+        TT_FATAL(
+            bbox_num_cores == user_shard_spec->grid.num_cores(),
+            "BLOCK_SHARDED on 1D grid requires a contiguous core grid without gaps. "
+            "Bounding box has {} cores but grid has {} cores.",
+            bbox_num_cores,
+            user_shard_spec->grid.num_cores());
         grid_size = CoreCoord{
             grid_bbox.end_coord.x - grid_bbox.start_coord.x + 1, grid_bbox.end_coord.y - grid_bbox.start_coord.y + 1};
     } else if (mcast_in0) {

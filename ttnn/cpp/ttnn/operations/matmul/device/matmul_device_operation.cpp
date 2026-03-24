@@ -181,8 +181,21 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             "Mismatch between computed {} and provided {} mem config buffer type",
             output_tensor_spec.memory_config().buffer_type(),
             attributes.output_mem_config.buffer_type());
+        // Don't warn when BLOCK_SHARDED on 1D grid is intentionally converted to HEIGHT/WIDTH_SHARDED
+        bool is_intentional_1d_conversion = false;
+        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+            attributes.output_mem_config.shard_spec().has_value()) {
+            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+            bool is_single_core = is_1d_column && is_1d_row;
+            // Only 1D grids (not single-core) trigger intentional conversion
+            if (!is_single_core && (is_1d_column || is_1d_row)) {
+                is_intentional_1d_conversion = true;
+            }
+        }
         if (attributes.output_mem_config.shard_spec().has_value() &&
-            output_tensor_spec.memory_config() != attributes.output_mem_config) {
+            output_tensor_spec.memory_config() != attributes.output_mem_config && !is_intentional_1d_conversion) {
             log_warning(
                 tt::LogOp,
                 "Mismatch between computed {} and provided {} mem config. Using computed config.",
