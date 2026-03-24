@@ -115,15 +115,44 @@ class MLAReference(nn.Module):
         # V is just the latent part of K
         value_states = key_states[:, :, :, : attn.kv_lora_rank]
 
-        # Memory-efficient attention via F.scaled_dot_product_attention
-        # This avoids materializing the full [heads, seq, seq] attention matrix
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states.expand(bsz, attn.num_heads, -1, -1),
-            value_states.expand(bsz, attn.num_heads, -1, -1),
-            is_causal=True,
-            scale=attn.softmax_scale,
-        )
+        # Memory-efficient chunked attention for CPU
+        # On CPU, F.scaled_dot_product_attention uses the math kernel which materializes
+        # the full [heads, seq, seq] attention matrix. To avoid OOM at long sequence lengths,
+        # we chunk along both the query sequence and head dimensions.
+        SEQ_CHUNK = 4096
+        HEAD_CHUNK = 16
+
+        if q_len <= SEQ_CHUNK and attn.num_heads <= HEAD_CHUNK:
+            attn_output = F.scaled_dot_product_attention(
+                query_states,
+                key_states.expand(bsz, attn.num_heads, -1, -1),
+                value_states.expand(bsz, attn.num_heads, -1, -1),
+                is_causal=True,
+                scale=attn.softmax_scale,
+            )
+        else:
+            attn_output = torch.empty_like(query_states[:, :, :, : attn.kv_lora_rank])
+            for h_start in range(0, attn.num_heads, HEAD_CHUNK):
+                h_end = min(h_start + HEAD_CHUNK, attn.num_heads)
+                q_heads = query_states[:, h_start:h_end, :, :]
+                k_heads = key_states.expand(bsz, h_end - h_start, -1, -1)
+                v_heads = value_states.expand(bsz, h_end - h_start, -1, -1)
+                for seq_start in range(0, q_len, SEQ_CHUNK):
+                    seq_end = min(seq_start + SEQ_CHUNK, q_len)
+                    q_chunk = q_heads[:, :, seq_start:seq_end, :]
+                    k_chunk = k_heads[:, :, :seq_end, :]
+                    v_chunk = v_heads[:, :, :seq_end, :]
+                    # Causal mask: Q at absolute position (seq_start + i) attends to K positions 0..(seq_start + i)
+                    q_pos = torch.arange(seq_start, seq_end, device=q_chunk.device).unsqueeze(1)
+                    k_pos = torch.arange(0, seq_end, device=q_chunk.device).unsqueeze(0)
+                    causal_mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+                    attn_output[:, h_start:h_end, seq_start:seq_end, :] = F.scaled_dot_product_attention(
+                        q_chunk,
+                        k_chunk,
+                        v_chunk,
+                        attn_mask=causal_mask,
+                        scale=attn.softmax_scale,
+                    )
 
         # KV b2 projection (V head expansion)
         kv_b2_proj = attn.kv_b_proj.weight.view(attn.num_heads, -1, attn.kv_lora_rank)[:, -attn.v_head_dim :].transpose(
