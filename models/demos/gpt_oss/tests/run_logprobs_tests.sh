@@ -16,7 +16,8 @@
 
 set -e
 
-cd "$(dirname "$0")"
+# Navigate to tt-metal repo root (script lives in models/demos/gpt_oss/tests/)
+cd "$(dirname "$0")/../../../.."
 
 export HF_MODEL=${HF_MODEL:-/localdev/gpt-oss-120b}
 export TT_CACHE_PATH=${TT_CACHE_PATH:-/localdev/gpt-oss-120b}
