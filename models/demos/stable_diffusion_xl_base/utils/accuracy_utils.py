@@ -56,35 +56,6 @@ def sdxl_get_prompts(
     return prompts
 
 
-def check_clip_scores(model_name, evaluation_range, prompts, clip_scores):
-    start_from, num_prompts = evaluation_range
-    targets = get_model_targets(model_name)
-    warning_threshold, error_threshold = (
-        targets["clip_score_thresholds"]["warning"],
-        targets["clip_score_thresholds"]["error"],
-    )
-
-    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
-    logger.info(
-        f"CLIP score error threshold: {error_threshold}, warning threshold: {warning_threshold}, for model {model_name}"
-    )
-    num_of_very_low_clip_scores = 0
-    for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < warning_threshold:
-            if clip_scores[idx] < error_threshold:
-                logger.error(
-                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
-                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
-                )
-                num_of_very_low_clip_scores += 1
-            else:
-                logger.warning(
-                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
-                )
-
-    assert num_of_very_low_clip_scores == 0, f"Found {num_of_very_low_clip_scores} images with very low CLIP scores"
-
-
 def calculate_accuracy_metrics(images, prompts, coco_statistics_path):
     assert len(images) == len(
         prompts
