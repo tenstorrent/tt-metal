@@ -203,6 +203,22 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
     };
 }
 
+constexpr static bool IS_8BIT_FORMAT(std::uint32_t format)
+{
+    // We can't use masked_data_format here since we require a whole byte for format recognition in this case
+    // in order to get exactly Fp8_e4m3.
+    switch (static_cast<DataFormat>(format))
+    {
+        case (DataFormat::Int8):
+        case (DataFormat::UInt8):
+        case (DataFormat::Fp8_e4m3):
+        case (DataFormat::Lf8):
+            return true;
+        default:
+            return false;
+    };
+}
+
 constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (static_cast<DataFormat>(masked_data_format(format)))

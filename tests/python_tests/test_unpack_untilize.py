@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -34,7 +34,7 @@ def test_unpack_untilize(formats, workers_tensix_coordinates):
             "BFP8 format is not supported for unpack_untilize operation for multiple tiles"
         )
 
-    input_dimensions = [32, 128]
+    input_dimensions = [32, 64]
     if formats.input_format == DataFormat.Float32:
         input_dimensions = [
             32,
@@ -72,6 +72,7 @@ def test_unpack_untilize(formats, workers_tensix_coordinates):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
+        dest_acc=DestAccumulation.Yes,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates).result
