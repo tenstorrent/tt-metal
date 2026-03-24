@@ -2,7 +2,19 @@ name: 🚀 LLK Run Performance Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      artifact_prefix:
+        description: "Prefix for artifact names"
+        required: false
+        default: ""
+        type: string
   workflow_call:
+    inputs:
+      artifact_prefix:
+        description: "Prefix for artifact names to avoid conflicts when multiple workflows run in the same workflow run"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -34,6 +46,7 @@ jobs:
       pytest_markers: "perf"
       timeout_minutes: 240
       use_durations: true
+      artifact_prefix: ${{ inputs.artifact_prefix }}
 
   setup-and-test-blackhole:
     name: "🕳️ Performance tests (Blackhole)"
@@ -46,6 +59,7 @@ jobs:
       pytest_markers: "perf"
       timeout_minutes: 240
       use_durations: true
+      artifact_prefix: ${{ inputs.artifact_prefix }}
 
   check-all-green:
     name: "✅ Check all green"
@@ -61,3 +75,4 @@ jobs:
         with:
           jobs: ${{ toJSON(needs) }}
           allowed-skips: build-images, setup-and-test-wormhole, setup-and-test-blackhole
+
