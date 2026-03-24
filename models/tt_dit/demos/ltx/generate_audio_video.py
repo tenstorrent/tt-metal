@@ -370,17 +370,27 @@ def main():
         audio_latent = audio_noise
 
     # Create audio attention mask for SDPA: mask out padded K positions.
-    # Shape: (1, 1, audio_N_local, audio_N_local) — broadcast over batch and heads.
-    # Real positions = 0 (attend), padded positions = -inf (don't attend).
+    # When SP > 1, ring attention does not support masks. Instead, K/V are gathered
+    # across SP devices so the mask must cover the FULL K sequence (audio_N), not
+    # just the local shard. Q dimension uses audio_N_local (local shard size) so
+    # the mask shape is (1, 1, audio_N_local, audio_N).
     tt_audio_attn_mask = None
     if audio_N > audio_N_real:
         audio_N_local = audio_N // sp_factor
-        audio_N_real_local = audio_N_real // sp_factor if audio_N_real % sp_factor == 0 else audio_N_real
-        # For SP > 1, each device sees audio_N_local tokens; first audio_N_real_local are real
-        mask = torch.zeros(1, 1, audio_N_local, audio_N_local)
-        mask[:, :, :, audio_N_real_local:] = float("-inf")  # Mask padded K positions
+        mask = torch.zeros(1, 1, audio_N_local, audio_N)
+        mask[:, :, :, audio_N_real:] = float("-inf")  # Mask ALL padded K positions
         tt_audio_attn_mask = bf16_tensor(mask, device=mesh)
-        logger.info(f"Audio attn mask: {mask.shape}, masking K positions [{audio_N_real_local}:{audio_N_local}]")
+        logger.info(f"Audio attn mask: {mask.shape}, masking K positions [{audio_N_real}:{audio_N}]")
+
+    # Create audio padding mask for A-to-V cross-attention: zero out padded tokens
+    # after SP-gather so they contribute nothing to video cross-attention context.
+    # Shape: (1, 1, audio_N, 1) — 1.0 for real tokens, 0.0 for padded.
+    tt_audio_padding_mask = None
+    if audio_N > audio_N_real:
+        pad_mask = torch.ones(1, 1, audio_N, 1)
+        pad_mask[:, :, audio_N_real:, :] = 0.0
+        tt_audio_padding_mask = bf16_tensor(pad_mask, device=mesh)
+        logger.info(f"Audio padding mask: zeroing positions [{audio_N_real}:{audio_N}]")
 
     # 4. Joint denoising loop
     logger.info(f"Starting AV denoising: {args.steps} steps")
@@ -424,6 +434,7 @@ def main():
                 skip_cross_attn=skip_cross_attn,
                 skip_self_attn_blocks=skip_self_attn_blocks,
                 audio_attn_mask=tt_audio_attn_mask,
+                audio_padding_mask=tt_audio_padding_mask,
             )
 
         # Pass 1: Conditional (positive prompts)
