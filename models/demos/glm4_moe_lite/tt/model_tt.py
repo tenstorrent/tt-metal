@@ -951,11 +951,17 @@ class Glm4MoeLiteDenseOnlyTT:
         logits_tt = ttnn.linear(x_last, self.lm_head_w)
         if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
             cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
+            _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+            _topo = (
+                ttnn.Topology.Ring
+                if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+                else ttnn.Topology.Linear
+            )
             logits_tt_full = ttnn.all_gather(
                 logits_tt,
                 dim=3,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
+                num_links=_nl,
+                topology=_topo,
                 cluster_axis=cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -1108,11 +1114,17 @@ class Glm4MoeLiteDenseOnlyTT:
             logits_tt = ttnn.linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
             if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
                 cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
+                _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+                _topo = (
+                    ttnn.Topology.Ring
+                    if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+                    else ttnn.Topology.Linear
+                )
                 logits_tt_full = ttnn.all_gather(
                     logits_tt,
                     dim=3,
-                    num_links=1,
-                    topology=ttnn.Topology.Linear,
+                    num_links=_nl,
+                    topology=_topo,
                     cluster_axis=cluster_axis,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
