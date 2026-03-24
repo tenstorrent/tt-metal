@@ -538,7 +538,12 @@ void WatcherServer::Impl::poll_watcher_data() {
                 server_killed_due_to_error_ = true;
                 break;
             }
-            throw e;
+            // Log and continue rather than re-throwing, which would call std::terminate()
+            // in this thread. This commonly happens on multi-chip systems (e.g. T3000) where
+            // remote device reads can timeout under heavy ethernet traffic.
+            log_warning(
+                LogLLRuntime, "Watcher dump #{} failed, will retry next interval: {}", dump_count_.load(), e.what());
+            fprintf(logfile_, "Dump #%d FAILED: %s\n", dump_count_.load(), e.what());
         }
 
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());

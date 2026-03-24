@@ -38,6 +38,13 @@ public:
 private:
     class Core;
     struct DumpData;
+
+    // Describes a core to be read during a watcher dump.
+    struct CoreReadRequest {
+        CoreCoord logical_coord;
+        HalProgrammableCoreType programmable_core_type;
+    };
+
     FILE* f;
     ChipId device_id;
     const std::vector<std::string>& kernel_names;
