@@ -423,10 +423,10 @@ def collect_and_dump_numeric_metrics(
                 if k >= 1:
                     row.extend(
                         [
-                            f"{max_atol / k:.6e}",
-                            f"{mean_atol / k:.6e}",
-                            f"{max_rtol / k:.6e}",
-                            f"{mean_rtol / k:.6e}",
+                            f"{max_abs_dif / k:.6e}",
+                            f"{mean_abs_dif / k:.6e}",
+                            f"{max_rel_dif / k:.6e}",
+                            f"{mean_rel_dif / k:.6e}",
                             f"{frob_val / k:.6e}",
                         ]
                     )
