@@ -195,86 +195,6 @@ class Generator(WarmupForwardMixin):
         for ccl_obj in ccl_refs:
             ccl_obj._prefill_column_mask = tt_column_mask
 
-    def _apply_bitmask_on_host(self, tt_logits, bitmask):
-        """Transfer sharded logits to host, unpack+apply bitmask, transfer back.
-
-        Debugging path: the on-device bitmask unpack/apply is bypassed in favour
-        of a host round-trip so the masking logic can be verified against the
-        host-side reference.
-
-        Args:
-            tt_logits: ttnn tensor on mesh_device, sharded across
-                cluster_shape[0] devices along the vocab dim.
-                Shape per device: (..., vocab_shard).
-            bitmask: packed int32 torch tensor on host.
-                Shape: (batch, packed_vocab_words).
-                bit=1 → allowed, bit=0 → disallowed.
-
-        Returns:
-            tt_logits (same object), modified in-place on device.
-        """
-        mesh_rows, mesh_cols = self.model.args.cluster_shape
-
-        ttnn.synchronize_device(self.mesh_device)
-
-        # --- device → host ---
-        # ShardTensor2dMesh(dims=(-1, None)): row axis shards vocab,
-        # col axis replicates.  Read col-0 canonical shard per row.
-        device_tensors = ttnn.get_device_tensors(tt_logits)
-        shards = []
-        for row in range(mesh_rows):
-            device_idx = row * mesh_cols
-            shard = ttnn.to_torch(device_tensors[device_idx]).to(torch.float32)
-            shards.append(shard)
-        full_logits = torch.cat(shards, dim=-1)
-
-        vocab_size = full_logits.shape[-1]
-        batch_dim = bitmask.shape[0]
-        logger.info(
-            f"Host bitmask application: logits shape={tuple(full_logits.shape)}, "
-            f"bitmask batch={batch_dim}, vocab_size={vocab_size}"
-        )
-
-        # Pad bitmask to cover padded vocab
-        padded_bitmask_words = (vocab_size + 31) // 32
-        if bitmask.shape[-1] < padded_bitmask_words:
-            pad = torch.zeros(
-                batch_dim,
-                padded_bitmask_words - bitmask.shape[-1],
-                dtype=bitmask.dtype,
-            )
-            bitmask = torch.cat([bitmask, pad], dim=-1)
-
-        # Unpack packed int32 → per-token bool mask (True = disallowed)
-        arange = torch.arange(32, dtype=torch.int32)
-        unpacked_mask = (torch.bitwise_right_shift(bitmask[:, :, None], arange[None, None, :]) & 1) == 0
-        unpacked_mask = unpacked_mask.reshape(batch_dim, -1)[:, :vocab_size]
-
-        # Apply mask to the batch dimension of the logits.
-        if full_logits.dim() == 4:
-            # (1, 1, batch, full_vocab) — standard layout
-            full_logits[0, 0].masked_fill_(unpacked_mask, -float("inf"))
-        elif full_logits.dim() == 2:
-            full_logits.masked_fill_(unpacked_mask, -float("inf"))
-        else:
-            full_logits.view(-1, vocab_size)[-batch_dim:].masked_fill_(unpacked_mask, -float("inf"))
-
-        # --- host → original device buffer (same pattern as start_bitmask_to_device) ---
-        logits_host = ttnn.from_torch(
-            full_logits,
-            device=None,
-            dtype=tt_logits.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(-1, None),
-                mesh_shape=self.model.args.cluster_shape,
-            ),
-        )
-        ttnn.copy_host_to_device_tensor(logits_host, tt_logits)
-        ttnn.synchronize_device(self.mesh_device)
-        return tt_logits
-
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -698,7 +618,9 @@ class Generator(WarmupForwardMixin):
                 bitmask_scattered = torch.zeros((self.model_args.max_batch_size, packed_vocab), dtype=bitmask.dtype)
                 for local_idx, slot in enumerate(empty_slots):
                     bitmask_scattered[slot, :] = bitmask[local_idx, :]
-                tt_logits_batch = self._apply_bitmask_on_host(tt_logits_batch, bitmask_scattered)
+                self.model.start_bitmask_to_device(bitmask_scattered)
+                self.model.complete_bitmask_to_device()
+                tt_logits_batch = self.model.apply_bitmask_to_logits(tt_logits_batch)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
@@ -1237,9 +1159,11 @@ class Generator(WarmupForwardMixin):
 
         if self.enable_split_sampling and not return_logits:
             if bitmask is not None:
-                tt_tok = self._apply_bitmask_on_host(tt_tok, bitmask)
+                self.model.start_bitmask_to_device(bitmask)
+                self.model.complete_bitmask_to_device()
+                tt_tok = self.model.apply_bitmask_to_logits(tt_tok)
             return self.model.sampling.sample(
-                logits=tt_tok,
+                logits=tt_tok,  # doesn't work with tt_out_tok=tt_tokens. Does it without?
                 enable_trace=False,
             )
 
@@ -1361,8 +1285,11 @@ class Generator(WarmupForwardMixin):
         )
 
         if self.enable_split_sampling and not return_logits:
+            # Apply bitmask outside trace to keep trace reusable.
             if bitmask is not None:
-                trace_tok_rm = self._apply_bitmask_on_host(trace_tok_rm, bitmask)
+                self.model.start_bitmask_to_device(bitmask)
+                self.model.complete_bitmask_to_device()
+                trace_tok_rm = self.model.apply_bitmask_to_logits(trace_tok_rm)
             return self.model.sampling.sample(
                 logits=trace_tok_rm,
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
