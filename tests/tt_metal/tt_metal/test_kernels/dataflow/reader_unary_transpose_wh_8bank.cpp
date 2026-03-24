@@ -4,7 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
 #include "experimental/circular_buffer.h"
+#endif
 #include "experimental/noc.h"
 #include "experimental/tensor.h"
 
@@ -19,15 +23,26 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(7);
     uint32_t scaler = get_arg_val<uint32_t>(8);
 
+    constexpr auto src_args = TensorAccessorArgs<0>();
+#ifdef ARCH_QUASAR
+    constexpr uint32_t dfb_in_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
+    experimental::DataflowBuffer dfb_in(dfb_in_id);
+#else
     constexpr uint32_t cb_id_in0 = 0;
+    experimental::CircularBuffer cb(cb_id_in0);
+#endif
 
     experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
+#ifdef ARCH_QUASAR
+    uint32_t tile_bytes = dfb_in.get_entry_size();
+#else
     uint32_t tile_bytes = cb.get_tile_size();
+#endif
 
+#ifndef ARCH_QUASAR
     if (scaler != 0) {
         union {
             float f;
@@ -50,11 +65,11 @@ void kernel_main() {
         }
         cb2.push_back(1);
     }
+#endif
 
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // this reader will read a NHW tensor in NWH order
@@ -62,12 +77,21 @@ void kernel_main() {
         i_tile = i_tile_N;
         for (uint32_t w = 0; w < Wt; w++) {
             for (uint32_t h = 0; h < Ht; h++) {
+#ifdef ARCH_QUASAR
+                dfb_in.reserve_back(onetile);
+
+                noc.async_read(s, dfb_in, tile_bytes, {.page_id = i_tile}, {});
+                noc.async_read_barrier();
+
+                dfb_in.push_back(onetile);
+#else
                 cb.reserve_back(onetile);
 
                 noc.async_read(s, cb, tile_bytes, {.page_id = i_tile}, {});
                 noc.async_read_barrier();
 
                 cb.push_back(onetile);
+#endif
                 i_tile += Wt;  // stride in H
             }  // Ht
             i_tile -= HtWt;  // go back to H=0

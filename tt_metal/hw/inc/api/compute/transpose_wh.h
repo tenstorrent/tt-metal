@@ -9,7 +9,9 @@
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_transpose_dest_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
