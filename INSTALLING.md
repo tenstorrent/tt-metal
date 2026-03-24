@@ -28,8 +28,8 @@ chmod +x install.sh
 > TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
 > | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v4.1.2 or above      | N/A                            |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v4.1.2 or above      | N/A                            |
 
 - If required, add the following flags for specifying dependencies versions:
 
@@ -38,7 +38,7 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.38 \
+  --smi-version=v4.1.2 \
   --fw-version=19.2.0 \
   --kmd-version=2.5.0 \
   --install-container-runtime=no
