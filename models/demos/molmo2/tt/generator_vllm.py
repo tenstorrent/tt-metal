@@ -1359,18 +1359,406 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             tt_cache_path=self.cache_path,
         )
 
-    def warmup_model_prefill(self, *args, **kwargs) -> None:
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace: bool,
+        can_sample_on_device: bool = False,
+        non_greedy_decoding_on_device: bool = False,
+    ) -> None:
         """
         Warmup prefill path for Molmo2.
 
-        Note: Tracing in prefill mode is not yet supported for Molmo2.
-        """
-        logger.warning("Warmup model prefill not implemented for Molmo2 - tracing in prefill mode is not supported")
+        This method is called by tt-inference-server to capture prefill traces.
 
-    def warmup_model_decode(self, *args, **kwargs) -> None:
+        Args:
+            kv_cache: KV cache tensors (not used - Molmo2 manages its own)
+            enable_trace: Whether to capture prefill trace
+            can_sample_on_device: Whether sampling can happen on device
+            non_greedy_decoding_on_device: Whether non-greedy decoding is on device
+        """
+        if not enable_trace:
+            logger.info("Prefill trace disabled - skipping warmup_model_prefill")
+            return
+
+        logger.info("Warmup: Capturing prefill trace...")
+
+        # Ensure generator is initialized with KV cache
+        if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
+            logger.info("Warmup: Initializing KV cache...")
+            self.generator.init_kv_cache()
+
+        # Allocate prefill trace tensors for a typical sequence length
+        # Use bucket size 256 as default (covers most short prompts)
+        warmup_seq_len = 256
+        hidden_dim = 4096
+
+        logger.info(f"Warmup: Allocating prefill trace tensors for seq_len={warmup_seq_len}")
+        prefill_trace_tensors = self._allocate_prefill_trace_tensors(warmup_seq_len, hidden_dim)
+
+        # Capture prefill trace
+        logger.info("Warmup: Capturing prefill trace...")
+        trace_id, trace_output = self._capture_prefill_trace(prefill_trace_tensors)
+
+        # Store trace for reuse
+        if not hasattr(self.generator, "prefill_traces"):
+            self.generator.prefill_traces = {}
+        self.generator.prefill_traces[warmup_seq_len] = (trace_id, prefill_trace_tensors, trace_output)
+
+        logger.info(f"Warmup: Prefill trace captured for seq_len={warmup_seq_len}")
+
+    def warmup_model_decode(
+        self,
+        kv_cache,
+        enable_trace: bool,
+        max_batch_size: int = 1,
+        num_blocks: int = 64,
+        **kwargs,
+    ) -> None:
         """
         Warmup decode path for Molmo2.
 
-        Note: Tracing in decode mode is not yet supported for Molmo2.
+        This method is called by tt-inference-server to capture decode traces.
+
+        Args:
+            kv_cache: KV cache tensors (not used - Molmo2 manages its own)
+            enable_trace: Whether to capture decode trace
+            max_batch_size: Maximum batch size
+            num_blocks: Number of KV cache blocks
         """
-        logger.warning("Warmup model decode not implemented for Molmo2 - tracing in decode mode is not supported")
+        if not enable_trace:
+            logger.info("Decode trace disabled - skipping warmup_model_decode")
+            return
+
+        logger.info("Warmup: Capturing decode trace...")
+
+        # Ensure generator is initialized with KV cache
+        if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
+            logger.info("Warmup: Initializing KV cache...")
+            self.generator.init_kv_cache()
+
+        # Initialize position tensors if not present
+        if not hasattr(self.generator, "current_pos") or self.generator.current_pos is None:
+            logger.info("Warmup: Initializing position tensors...")
+            self._init_decode_position_tensors()
+
+        # Allocate decode trace tensors
+        hidden_dim = 4096
+        logger.info("Warmup: Allocating decode trace tensors...")
+        decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim)
+
+        # Create dummy hidden states for trace capture
+        dummy_hidden = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(dummy_hidden, decode_trace_tensors["hidden_states"])
+        ttnn.deallocate(dummy_hidden)
+
+        # Capture decode trace
+        logger.info("Warmup: Capturing decode trace...")
+        trace_id, trace_output = self._capture_decode_trace(decode_trace_tensors)
+
+        # Store trace for reuse
+        self.generator.decode_trace_id = trace_id
+        self.generator.decode_trace_tensors = decode_trace_tensors
+        self.generator.decode_trace_output = trace_output
+
+        logger.info("Warmup: Decode trace captured")
+
+    def _init_decode_position_tensors(self) -> None:
+        """Initialize position tensors for decode tracing."""
+        # Initialize current_pos tensor on device
+        current_pos_torch = torch.tensor([0], dtype=torch.int32)
+        self.generator.current_pos = ttnn.from_torch(
+            current_pos_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Initialize rot_mat_idxs tensor on device
+        rot_mat_idxs_torch = torch.tensor([0], dtype=torch.int32)
+        self.generator.rot_mat_idxs = ttnn.from_torch(
+            rot_mat_idxs_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        self.generator.decode_position = 0
+
+    def _allocate_prefill_trace_tensors(self, seq_len: int, hidden_dim: int = 4096) -> dict:
+        """
+        Pre-allocate all tensors needed for traced prefill.
+
+        Args:
+            seq_len: Sequence length for this trace bucket
+            hidden_dim: Hidden dimension (default 4096 for Molmo2-8B)
+
+        Returns:
+            Dict with allocated trace tensors
+        """
+        # Allocate hidden states input tensor
+        hidden_states_shape = [1, 1, seq_len, hidden_dim]
+        trace_hidden_states = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(hidden_states_shape),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Pre-compute rotation matrices (these will be used during trace)
+        rot_mats = self.generator.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
+
+        # Allocate rot_mats tensors (we'll copy into these)
+        trace_cos = ttnn.allocate_tensor_on_device(
+            rot_mats[0].shape,
+            rot_mats[0].dtype,
+            rot_mats[0].layout,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trace_sin = ttnn.allocate_tensor_on_device(
+            rot_mats[1].shape,
+            rot_mats[1].dtype,
+            rot_mats[1].layout,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Copy initial values
+        ttnn.copy(rot_mats[0], trace_cos)
+        ttnn.copy(rot_mats[1], trace_sin)
+
+        # Clean up temporary rot_mats
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+
+        return {
+            "hidden_states": trace_hidden_states,
+            "cos": trace_cos,
+            "sin": trace_sin,
+            "seq_len": seq_len,
+        }
+
+    def _capture_prefill_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """
+        Capture trace for text model prefill phase.
+
+        Args:
+            trace_tensors: Dict with pre-allocated trace tensors
+
+        Returns:
+            Tuple of (trace_id, logits_trace_output)
+        """
+        logger.info("Capturing text model prefill trace...")
+        rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        logits_trace, _ = self.generator.model.text_model.forward(
+            hidden_states=trace_tensors["hidden_states"],
+            start_pos=0,
+            attn_mask=None,
+            kv_caches=self.generator.kv_caches,
+            rot_mats=rot_mats,
+        )
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Text model prefill trace captured")
+
+        return trace_id, logits_trace
+
+    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
+        """
+        Allocate tensors needed for traced decode.
+
+        Args:
+            hidden_dim: Hidden dimension (default 4096 for Molmo2-8B)
+
+        Returns:
+            Dict with allocated trace tensors
+        """
+        trace_hidden_states = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return {
+            "hidden_states": trace_hidden_states,
+        }
+
+    def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """
+        Capture trace for decode phase (single token generation).
+
+        The RoPE embedding lookup reads from self.generator.rot_mat_idxs (managed via
+        ttnn.plus_one outside the trace). KV cache position reads from
+        self.generator.current_pos (also managed via ttnn.plus_one outside the trace).
+
+        Args:
+            trace_tensors: Dict with pre-allocated trace tensors
+
+        Returns:
+            Tuple of (trace_id, logits_trace_output)
+        """
+        logger.info("Capturing decode trace...")
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        rot_mats = self.generator.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.generator.rot_mat_idxs)
+
+        logits_trace = self.generator.model.text_model.forward_decode(
+            hidden_states=trace_tensors["hidden_states"],
+            kv_caches=self.generator.kv_caches,
+            current_pos=self.generator.current_pos,
+            rot_mats=rot_mats,
+        )
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Decode trace captured")
+
+        return trace_id, logits_trace
+
+    def warmup_model_vision(self) -> None:
+        """
+        Warmup vision path for Molmo2.
+
+        Captures vision trace for the ViT encoder + pooling + projection.
+        This is called separately from prefill/decode warmup.
+        """
+        logger.info("Warmup: Capturing vision trace...")
+
+        # Vision trace parameters for standard 378x378 image with 9 crops
+        num_patches = 729  # 27x27 patches per crop
+        hidden_dim = 1152  # ViT hidden dimension
+        n_out = 169  # 13x13 pooled output per crop
+        k_pool = 4  # Pooling factor
+        batch_size = 1
+
+        # Allocate vision trace tensors
+        vision_trace_tensors = self._allocate_vision_trace_tensors(
+            num_patches=num_patches,
+            hidden_dim=hidden_dim,
+            n_out=n_out,
+            k_pool=k_pool,
+            batch_size=batch_size,
+        )
+
+        # Capture vision trace
+        trace_id, trace_output = self._capture_vision_trace(vision_trace_tensors)
+
+        # Store trace for reuse
+        self.generator.vision_trace_id = trace_id
+        self.generator.vision_trace_tensors = vision_trace_tensors
+        self.generator.vision_trace_outputs = trace_output
+
+        logger.info("Warmup: Vision trace captured")
+
+    def _allocate_vision_trace_tensors(
+        self,
+        num_patches: int = 729,
+        hidden_dim: int = 1152,
+        n_out: int = 169,
+        k_pool: int = 4,
+        batch_size: int = 1,
+    ) -> dict:
+        """
+        Allocate tensors for vision trace.
+
+        Args:
+            num_patches: Number of patches per crop (default 729 = 27x27)
+            hidden_dim: ViT hidden dimension (default 1152)
+            n_out: Pooled output size per crop (default 169 = 13x13)
+            k_pool: Pooling factor (default 4)
+            batch_size: Batch size (default 1)
+
+        Returns:
+            Dict with allocated trace tensors
+        """
+        # Input: embedded patches
+        trace_embedded = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * num_patches, hidden_dim]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Indices for gathering
+        trace_idx = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, batch_size * n_out * k_pool]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Valid mask
+        trace_valid_mask = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, batch_size * n_out * k_pool, 1]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Valid token mask
+        trace_valid_token = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batch_size * n_out]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return {
+            "embedded": trace_embedded,
+            "idx": trace_idx,
+            "valid_mask": trace_valid_mask,
+            "valid_token": trace_valid_token,
+            "n_out": n_out,
+            "k_pool": k_pool,
+            "batch_size": batch_size,
+        }
+
+    def _capture_vision_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+        """
+        Capture vision trace for ViT + pooling + projection.
+
+        Args:
+            trace_tensors: Dict with pre-allocated trace tensors
+
+        Returns:
+            Tuple of (trace_id, visual_embeddings_trace_output)
+        """
+        logger.info("Capturing vision trace...")
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+
+        visual_embeddings = self.generator.model.vision_backbone.forward_ttnn(
+            images_embedded=trace_tensors["embedded"],
+            pooled_patches_idx_ttnn=trace_tensors["idx"],
+            valid_mask_ttnn=trace_tensors["valid_mask"],
+            valid_token_ttnn=trace_tensors["valid_token"],
+            n_out=trace_tensors["n_out"],
+            k_pool=trace_tensors["k_pool"],
+            batch_size=trace_tensors["batch_size"],
+        )
+
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Vision trace captured")
+
+        return trace_id, visual_embeddings
