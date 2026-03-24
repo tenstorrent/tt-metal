@@ -80,7 +80,7 @@ void kernel_main() {
 
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, cb_out);
 
         cb_wait_front(cb_x2, Wt);
 
@@ -88,7 +88,7 @@ void kernel_main() {
         ACQ();
 
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, wtr, 0, dst0);
         }
         pack_tile(dst0, cb_out, 0);
         REL();

@@ -39,9 +39,9 @@ inline void llk_math_eltwise_mul_reduce_scalar(
         EltwiseBinaryReuseDestType::NONE>(tensor_shape, dst_index, clear_fp32_dst_acc);
 }
 
-template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
+template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_scalar_reduce_init() {
-    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity, enforce_fp32_accumulation>();
+    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity>();
 }
 
 template <MathFidelity math_fidelity>

@@ -268,12 +268,12 @@ void reduce_cb(
     experimental::CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    reduce_init<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, cb_out);
+    reduce_init<reduce_type, REDUCE_DIM>(cb_in, cb_scaler, cb_out);
     tile_regs_acquire();
     cb_out_obj.reserve_back(1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_in_obj.wait_front(1);
-        reduce_tile<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, 0, 0, 0);
+        reduce_tile<reduce_type, REDUCE_DIM>(cb_in, cb_scaler, 0, 0, 0);
         cb_in_obj.pop_front(1);
     }
 

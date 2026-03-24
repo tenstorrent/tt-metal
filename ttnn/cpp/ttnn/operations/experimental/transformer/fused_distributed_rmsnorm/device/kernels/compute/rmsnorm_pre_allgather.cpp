@@ -80,12 +80,12 @@ void kernel_main() {
          */
         reconfig_data_format(intermediate_cb, reduce_scalar_cb);
         pack_reconfig_data_format(output_cb);
-        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, output_cb);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(intermediate_cb, reduce_scalar_cb, output_cb);
         cb_wait_front(intermediate_cb, onetile);
         cb_reserve_back(output_cb, onetile);
 
         tile_regs_acquire();
-        reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, 0, 0, 0);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(intermediate_cb, reduce_scalar_cb, 0, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -93,7 +93,7 @@ void kernel_main() {
         tile_regs_release();
 
         /*NOTE: for some reason, outputs are sometimes incorrect if you uninit with the use_float32_reduction flag!*/
-        reduce_uninit<false>();
+        reduce_uninit();
 
         cb_push_back(output_cb, onetile);
         cb_pop_front(intermediate_cb, onetile);

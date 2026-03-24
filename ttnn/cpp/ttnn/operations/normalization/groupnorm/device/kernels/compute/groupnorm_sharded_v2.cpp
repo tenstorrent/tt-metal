@@ -242,34 +242,34 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
             tile_regs_acquire();
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
+            reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ex2pe, cb_scaler, cb_ex_partial);
             cb_reserve_back(cb_ex_partial, 1);
             cb_wait_front(cb_scaler, 1);
             cb_wait_front(cb_ex2pe, 1);
             // reduce only one final tile
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
             cb_pop_front(cb_ex2pe, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex_partial);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
-            reduce_uninit<FP32_DEST_ACC>();
+            reduce_uninit();
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
+                reduce_uninit();
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -358,34 +358,34 @@ void kernel_main() {
             cb_wait_front(cb_scaler, 1);
             cb_wait_front(cb_ex2pe, 1);
 
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
+            reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ex2pe, cb_scaler, cb_ex_partial);
 
             tile_regs_acquire();
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex_partial);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
 
-            reduce_uninit<FP32_DEST_ACC>();
+            reduce_uninit();
 
             cb_pop_front(cb_ex2pe, 1);
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
+                reduce_uninit();
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }

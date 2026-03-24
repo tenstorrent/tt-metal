@@ -33,14 +33,13 @@ void calc_numeric_stable(
     reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_max_obj.reserve_back(1);
     cb_bcast_scaler_obj.wait_front(1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(cb_in, cb_bcast_scaler, cb_max);
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt++) {
         cb_in_obj.wait_front(wt + 1);
         constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(
-            cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
     }
-    reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_in);
+    reduce_uninit(cb_in);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_max);
@@ -289,19 +288,19 @@ void kernel_main() {
 
         tile_regs_acquire();
         cb_recipsumexps_obj.reserve_back(onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
 
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_exps_obj.wait_front(wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(
                 /*iCB=*/cb_exps,
                 /*icb_scaler=*/cb_bcast_scaler,
                 /*itile=*/wt,
                 /*itile_scaler=*/bcast_scaler0,
                 /*idst0=*/dst0);
         }
-        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
+        reduce_uninit(cb_exps);
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
         tile_regs_commit();

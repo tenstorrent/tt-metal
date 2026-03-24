@@ -128,13 +128,13 @@ void kernel_main() {
 #endif
     // E[x],
     index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_ex_partial2);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, cb_ex_partial2);
 
     cb_ex_partial2_obj.reserve_back(block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -186,12 +186,12 @@ void kernel_main() {
 
     cb_ex_partial2_obj.reserve_back(block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
 
         tile_regs_commit();

@@ -84,14 +84,14 @@ void kernel_main() {
          * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
         cb_reserve_back(cb_stats_reduced, stats_tile_stride);
         cb_reserve_back(cb_var, 1);
         ACQ();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_stats, cb_reduce, i, 0, 0);
         }
         pack_tile(0, cb_stats_reduced);
 

@@ -203,15 +203,12 @@ ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim, bool 
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A. Required when clear_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
-template <bool clear_fp32_accumulation = false, bool respect_trigger = false>
+template <bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_uninit<clear_fp32_accumulation>()));
+    MATH((llk_math_reduce_uninit()));
 #else
-    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-    // See _llk_math_reduce_init_ for more details
-    MATH((llk_math_reduce_uninit<clear_fp32_accumulation>(icb)));
+    MATH((llk_math_reduce_uninit<DST_ACCUM_MODE>(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
@@ -232,9 +229,9 @@ ALWI void reduce_block_max_row_runtime(
 
 ALWI void reduce_block_max_row_uninit_runtime(uint32_t icb, bool respect_trigger = false) {
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_uninit<false>()));
+    MATH((llk_math_reduce_uninit()));
 #else
-    MATH((llk_math_reduce_uninit<false>(icb)));
+    MATH((llk_math_reduce_uninit<DST_ACCUM_MODE>(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit_runtime(respect_trigger)));

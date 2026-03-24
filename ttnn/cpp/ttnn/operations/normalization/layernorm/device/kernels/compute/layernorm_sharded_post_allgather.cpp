@@ -127,11 +127,11 @@ void kernel_main() {
 #endif
 
             cb_scaler_global_obj.wait_front(1);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_scaler_global, cb_var);
+            reduce_init<REDUCE_OP, REDUCE_DIM>(cb_stats, cb_scaler_global, cb_var);
             tile_regs_acquire();
             // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
             for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(
                     cb_stats,
                     cb_scaler_global,
                     0,

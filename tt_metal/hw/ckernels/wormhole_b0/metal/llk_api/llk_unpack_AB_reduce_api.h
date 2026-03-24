@@ -16,17 +16,12 @@ inline void llk_unpack_AB_reduce_mop_config(const std::uint32_t operand_id = 0) 
     _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
+template <PoolType pool_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
-
-    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, enforce_fp32_accumulation>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, is_fp32_dest_acc_en>(tensor_shape);
 }
 
 template <PoolType pool_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>

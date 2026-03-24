@@ -76,7 +76,7 @@ void kernel_main() {
          * Reduce stats input.
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
          */
-        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, reduce_result_cb);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(stats_cb, reduce_scalar_cb, reduce_result_cb);
 
         cb_wait_front(stats_cb, stats_tiles_cols);
         cb_reserve_back(reduce_result_cb, 1);
@@ -84,7 +84,7 @@ void kernel_main() {
         tile_regs_acquire();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, i, 0, 0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(stats_cb, reduce_scalar_cb, i, 0, 0);
         }
 
         tile_regs_commit();
@@ -94,7 +94,7 @@ void kernel_main() {
         cb_push_back(reduce_result_cb, 1);
         cb_pop_front(stats_cb, stats_tiles_cols);
 
-        reduce_uninit<false>();  // NOTE: cannot pass use_float32_reduction here or outputs are incorrect?
+        reduce_uninit();  // NOTE: cannot pass use_float32_reduction here or outputs are incorrect?
 
         /*
          * 1/sqrt(mean_squared + eps)
