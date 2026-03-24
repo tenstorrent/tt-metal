@@ -277,12 +277,17 @@ static constexpr std::string_view kRankFailureAnnotationFile =
 
 template <std::size_t N, typename... Args>
 [[nodiscard]] std::string_view format_to_buffer(
-    char (&buffer)[N], fmt::format_string<Args...> format_string, Args&&... args) {
+    char (&buffer)[N], fmt::format_string<Args...> format_string, Args&&... args) noexcept {
     static_assert(N > 0);
-    auto result = fmt::format_to_n(buffer, N - 1, format_string, std::forward<Args>(args)...);
-    const auto written = std::min<std::size_t>(result.size, N - 1);
-    buffer[written] = '\0';
-    return std::string_view(buffer, written);
+    try {
+        auto result = fmt::format_to_n(buffer, N - 1, format_string, std::forward<Args>(args)...);
+        const auto written = std::min<std::size_t>(result.size, N - 1);
+        buffer[written] = '\0';
+        return std::string_view(buffer, written);
+    } catch (...) {
+        buffer[0] = '\0';
+        return {};
+    }
 }
 
 [[nodiscard]] bool hostname_is_generic_for_rank_diagnostics(std::string_view hostname) noexcept {
@@ -821,7 +826,18 @@ static void mpi_terminate_handler() noexcept {
         "================================================================\n",
         rank_name,
         local_hostname);
-    [[maybe_unused]] const auto ignored = write(STDERR_FILENO, msg.data(), msg.size());
+    if (!msg.empty()) {
+        [[maybe_unused]] const auto ignored = write(STDERR_FILENO, msg.data(), msg.size());
+    } else {
+        static constexpr std::string_view kFallbackTerminateMessage =
+            "================================================================\n"
+            "FATAL: std::terminate called in MPI context\n"
+            "  Cause  : uncaught exception or explicit std::terminate()\n"
+            "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
+            "================================================================\n";
+        [[maybe_unused]] const auto ignored =
+            write(STDERR_FILENO, kFallbackTerminateMessage.data(), kFallbackTerminateMessage.size());
+    }
     _exit(kUlfmExitCode);
 }
 
