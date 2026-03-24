@@ -19,18 +19,6 @@ import yaml
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
-INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
-PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
-RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
-RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
-MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
-
-# Store the original working directory at module load time to preserve it
-# across mpirun process launches (critical for SLURM/sbatch environments)
-ORIGINAL_CWD = Path.cwd().resolve()
-
 
 def get_local_network_interfaces() -> List[str]:
     """Get list of network interface names on the local host.
@@ -255,6 +243,20 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     return config
 
 
+# Runtime settings (kept outside the file header).
+TT_RUN_PREFIX = "[tt-run]"
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
+PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
+MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+
+# Store the original working directory at module load time to preserve it
+# across mpirun process launches (critical for SLURM/sbatch environments)
+ORIGINAL_CWD = Path.cwd().resolve()
+
+
 # Environment variable prefixes that should be automatically passed through to MPI processes
 ENV_PASSTHROUGH_PREFIXES = (
     "TT_",  # TT-Metal/TTNN variables
@@ -403,7 +405,7 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     return env_args
 
 
-def _resolve_rankfile_for_mpi(rankfile_path: str) -> str:
+def resolve_rankfile_for_mpi(rankfile_path: str) -> str:
     """Resolve rankfile path when possible; preserve original on lookup failure."""
     try:
         return str(resolve_path(rankfile_path, description="MPI rankfile", must_be_file=True))
@@ -414,7 +416,7 @@ def _resolve_rankfile_for_mpi(rankfile_path: str) -> str:
         return rankfile_path
 
 
-def _extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
+def extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
     """Extract rankfile path from --map-by policy if using rankfile:file=... syntax."""
     match = RANKFILE_MAP_BY_PATH_PATTERN.search(policy)
     if not match:
@@ -422,7 +424,7 @@ def _extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
     return match.group(1)
 
 
-def _extract_rankfile_hosts(rankfile_path: str) -> List[str]:
+def extract_rankfile_hosts(rankfile_path: str) -> List[str]:
     """Extract unique hosts from an OpenMPI rankfile, preserving first-seen order."""
     hosts = []
     seen_hosts = set()
@@ -447,7 +449,7 @@ def _extract_rankfile_hosts(rankfile_path: str) -> List[str]:
     return hosts
 
 
-def _has_host_selection_args(mpi_args: List[str]) -> bool:
+def has_host_selection_args(mpi_args: List[str]) -> bool:
     """Return True if host selection arguments are already present."""
     for arg in mpi_args:
         for host_flag in MPI_HOST_FLAGS:
@@ -456,7 +458,7 @@ def _has_host_selection_args(mpi_args: List[str]) -> bool:
     return False
 
 
-def _has_mca_param(mpi_args: List[str], param_name: str) -> bool:
+def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
     """Return True if --mca/-mca specifies a given MCA parameter."""
     i = 0
     while i < len(mpi_args):
@@ -506,7 +508,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 i += 1
                 continue
 
-            detected_rankfile_path = _resolve_rankfile_for_mpi(mpi_args[i + 1])
+            detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
             normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
             rewrote_rankfile_args = True
             i += 2
@@ -514,7 +516,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
-            detected_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+            detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
             normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
             rewrote_rankfile_args = True
             i += 1
@@ -527,9 +529,9 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             policy = mpi_args[i + 1]
-            rankfile_path = _extract_rankfile_path_from_map_by_policy(policy)
+            rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
             if rankfile_path:
-                resolved_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
                 policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
                 detected_rankfile_path = resolved_rankfile_path
 
@@ -539,9 +541,9 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
         if arg.startswith("--map-by="):
             policy = arg.split("=", 1)[1]
-            rankfile_path = _extract_rankfile_path_from_map_by_policy(policy)
+            rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
             if rankfile_path:
-                resolved_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
                 policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
                 arg = f"--map-by={policy}"
                 detected_rankfile_path = resolved_rankfile_path
@@ -559,8 +561,8 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
             f"--map-by rankfile:file={detected_rankfile_path}"
         )
 
-    if detected_rankfile_path and not _has_host_selection_args(normalized_args):
-        rankfile_hosts = _extract_rankfile_hosts(detected_rankfile_path)
+    if detected_rankfile_path and not has_host_selection_args(normalized_args):
+        rankfile_hosts = extract_rankfile_hosts(detected_rankfile_path)
         if rankfile_hosts:
             host_csv = ",".join(rankfile_hosts)
             normalized_args.extend(["--host", host_csv])
@@ -974,9 +976,9 @@ def main(
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
     if not bare:
-        user_has_btl_setting = _has_mca_param(effective_mpi_args, "btl")
-        user_has_tcp_include = _has_mca_param(effective_mpi_args, "btl_tcp_if_include")
-        user_has_tcp_exclude = _has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
+        user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
+        user_has_tcp_include = has_mca_param(effective_mpi_args, "btl_tcp_if_include")
+        user_has_tcp_exclude = has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
 
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
