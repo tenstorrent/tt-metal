@@ -51,6 +51,7 @@ class WanAttentionBlock(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        sdpa_t_fracture_w_only: bool = False,
     ) -> None:
         super().__init__()
 
@@ -58,6 +59,7 @@ class WanAttentionBlock(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.sdpa_t_fracture_w_only = sdpa_t_fracture_w_only
 
         self.norm = RMSNorm(
             embedding_dim=dim,
@@ -156,17 +158,27 @@ class WanAttentionBlock(Module):
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
 
-        # Split T (batch) across W-axis devices to reduce redundant SDPA compute.
+        # Split T (batch) across devices to reduce redundant SDPA compute.
         # SDPA batch elements are independent, so they can be trivially partitioned.
+        # When sdpa_t_fracture_w_only=True, fracture only on the W axis (fewer devices,
+        # but avoids conflicts with H-axis sharding on some mesh/shape combinations).
+        # Default (False) fractures across all devices (H x W axes) for maximum parallelism.
+        h_axis = self.parallel_config.height_parallel.mesh_axis
+        h_devices = self.parallel_config.height_parallel.factor
         w_axis = self.parallel_config.width_parallel.mesh_axis
         w_devices = self.parallel_config.width_parallel.factor
+        w_only = self.sdpa_t_fracture_w_only
+        fracture_devices = w_devices if w_only else h_devices * w_devices
         BT = B * T
-        split_t = w_devices > 1 and T > 1
+        split_t = fracture_devices > 1 and T > 1
         if split_t:
-            padded_BT = ((BT + w_devices - 1) // w_devices) * w_devices
+            padded_BT = ((BT + fracture_devices - 1) // fracture_devices) * fracture_devices
             if padded_BT > BT:
                 x_TNC = ttnn.pad(x_TNC, [(0, padded_BT - BT), (0, 0), (0, 0)], value=0.0)
-            x_TNC = ttnn.mesh_partition(x_TNC, dim=0, cluster_axis=w_axis)
+            if w_only:
+                x_TNC = ttnn.mesh_partition(x_TNC, dim=0, cluster_axis=w_axis)
+            else:
+                x_TNC = ttnn.mesh_partition(x_TNC, dim=0)
 
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
@@ -194,6 +206,8 @@ class WanAttentionBlock(Module):
         # Gather T back before layout conversion (all-gather requires TILE)
         if split_t:
             out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=w_axis)
+            if not w_only:
+                out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=h_axis)
             if padded_BT > BT:
                 out_TND = out_TND[:BT, :, :]
 
@@ -598,6 +612,7 @@ class WanMidBlock(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        sdpa_t_fracture_w_only: bool = False,
     ) -> None:
         super().__init__()
 
@@ -625,6 +640,7 @@ class WanMidBlock(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     dtype=dtype,
+                    sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
                 )
             )
             resnets.append(
@@ -1078,6 +1094,7 @@ class WanDecoder3d(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        sdpa_t_fracture_w_only: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1115,6 +1132,7 @@ class WanDecoder3d(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         )
 
         # upsample blocks
@@ -1277,6 +1295,7 @@ class WanDecoder(Module):
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        sdpa_t_fracture_w_only: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1312,6 +1331,7 @@ class WanDecoder(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
