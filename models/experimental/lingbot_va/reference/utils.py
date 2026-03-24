@@ -16,6 +16,7 @@ from diffusers import AutoencoderKLWan
 from transformers import T5TokenizerFast, UMT5EncoderModel
 
 from .transformer_wan import WanTransformer3DModel
+import easydict
 
 # RobotWin + shared config: vendored from https://github.com/Robbyant/lingbot-va (wan_va/configs).
 
@@ -208,7 +209,7 @@ def shard_model(model, param_dtype=torch.bfloat16, reduce_dtype=torch.float32):
 # -----------------------------------------------------------------------------
 # RobotWin config (adapted from wan_va.configs)
 # -----------------------------------------------------------------------------
-va_shared_cfg = EasyDict()
+va_shared_cfg = easydict.EasyDict()
 va_shared_cfg.host = "0.0.0.0"
 va_shared_cfg.port = 29536
 va_shared_cfg.param_dtype = torch.bfloat16
@@ -216,7 +217,7 @@ va_shared_cfg.save_root = "./train_out"
 va_shared_cfg.patch_size = (1, 2, 2)
 va_shared_cfg.enable_offload = True
 
-va_robotwin_cfg = EasyDict(__name__="Config: VA robotwin")
+va_robotwin_cfg = easydict.EasyDict(__name__="Config: VA robotwin")
 va_robotwin_cfg.update(va_shared_cfg)
 va_robotwin_cfg.wan22_pretrained_model_name_or_path = "/path/to/pretrained/model"
 va_robotwin_cfg.attn_window = 72
