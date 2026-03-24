@@ -3256,6 +3256,46 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoAsicsEach_Rota
     }
 }
 
+// Dumps mapping inputs to stderr when MapMultiMeshToPhysical_PartialRankBinding_* fails (exception or result.success).
+void PrintPartialRankBindingOneHostUnsetContext(
+    const ::tt::tt_fabric::MeshId& mesh_id,
+    const std::map<::tt::tt_fabric::MeshId, std::map<tt::tt_metal::AsicID, ::tt::tt_fabric::MeshHostRankId>>&
+        asic_id_to_mesh_rank,
+    const std::map<::tt::tt_fabric::MeshId, std::map<::tt::tt_fabric::FabricNodeId, ::tt::tt_fabric::MeshHostRankId>>&
+        fabric_node_id_to_mesh_rank,
+    const TopologyMappingConfig& config,
+    const char* exception_what,
+    const std::string& result_error_message) {
+    std::cerr << "\n=== MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset (failure context) ===\n";
+    if (exception_what != nullptr && exception_what[0] != '\0') {
+        std::cerr << "exception: " << exception_what << "\n";
+    }
+    if (!result_error_message.empty()) {
+        std::cerr << "result.error_message: " << result_error_message << "\n";
+    }
+    std::cerr << "strict_mode=" << config.strict_mode << " disable_rank_bindings=" << config.disable_rank_bindings
+              << "\n";
+    std::cerr << "hostname_to_asics:\n";
+    for (const auto& [host, asics] : config.hostname_to_asics) {
+        std::cerr << "  " << host << ":";
+        for (const auto& a : asics) {
+            std::cerr << " " << a.get();
+        }
+        std::cerr << "\n";
+    }
+    std::cerr << "fabric_node -> mesh rank (mesh " << mesh_id.get() << "):\n";
+    for (const auto& [fn, r] : fabric_node_id_to_mesh_rank.at(mesh_id)) {
+        std::cerr << "  " << fn << " -> " << r.get() << (r == ::tt::tt_fabric::MESH_HOST_RANK_UNSET ? " (UNSET)" : "")
+                  << "\n";
+    }
+    std::cerr << "asic -> mesh rank (mesh " << mesh_id.get() << "):\n";
+    for (const auto& [asic, r] : asic_id_to_mesh_rank.at(mesh_id)) {
+        std::cerr << "  asic " << asic.get() << " -> " << r.get()
+                  << (r == ::tt::tt_fabric::MESH_HOST_RANK_UNSET ? " (UNSET)" : "") << "\n";
+    }
+    std::cerr << "================================================================================\n" << std::flush;
+}
+
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset_Succeeds) {
     using namespace ::tt::tt_fabric;
 
@@ -3305,8 +3345,24 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     config.hostname_to_asics["host_0"] = {physical_asics[0], physical_asics[1]};
     config.hostname_to_asics["host_1"] = {physical_asics[2], physical_asics[3]};
 
-    const auto result = map_multi_mesh_to_physical(
-        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    TopologyMappingResult result;
+    try {
+        result = map_multi_mesh_to_physical(
+            logical_multi_mesh_graph,
+            physical_multi_mesh_graph,
+            config,
+            asic_id_to_mesh_rank,
+            fabric_node_id_to_mesh_rank);
+    } catch (const std::exception& e) {
+        PrintPartialRankBindingOneHostUnsetContext(
+            mesh_id, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank, config, e.what(), "");
+        throw;
+    }
+
+    if (!result.success) {
+        PrintPartialRankBindingOneHostUnsetContext(
+            mesh_id, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank, config, nullptr, result.error_message);
+    }
 
     ASSERT_TRUE(result.success)
         << "Partial rank binding (one host explicit, others UNSET) should succeed with UNSET pooling: "

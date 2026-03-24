@@ -1,4 +1,6 @@
-# Physical Groupings File for Triple 16x8 Quad BH Galaxy Blitz 48-Stage Pipeline
+# Physical Groupings File - Default Configuration
+# This is a default/copy of the triple pod configuration
+# Used as fallback when cluster-specific PGD is not found
 # This file defines groupings for a pipelined configuration with 48 stages (meshes)
 # Each mesh contains 1 tray (8 ASICs), arranged in 3 pods with 16 meshes each
 # The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
@@ -25,7 +27,7 @@ groupings {
 
 # TRAY_2: Bottom left corner is ASIC_LOCATION_1
 groupings {
-  name: "tray_2"
+  name: "tray_2_BH_Galaxy"
   preset_type: TRAY_2
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_8 },
@@ -41,10 +43,9 @@ groupings {
     dims: [2, 4]
   }
 }
-
 # TRAY_3: Top right corner is ASIC_LOCATION_1
 groupings {
-  name: "tray_3"
+  name: "tray_3_BH_Galaxy"
   preset_type: TRAY_3
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_1 },
@@ -60,8 +61,6 @@ groupings {
     dims: [2, 4]
   }
 }
-
-
 # TRAY_4: Bottom right corner is ASIC_LOCATION_1
 groupings {
   name: "tray_4"
@@ -94,15 +93,6 @@ groupings {
   row_major_mesh {
     dims: [2, 2]
   }
-}
-
-# Custom hosts grouping (required)
-groupings {
-  name: "hosts_custom"
-  custom_type: "hosts"
-  instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } }
-  ]
 }
 
 # HALFTRAY: 4 ASICs in 2x2 layout - either locations 1-4 or 5-8
@@ -165,16 +155,6 @@ groupings {
   ]
 }
 
-# MESH: 1 halftray (4 ASICs in 2x2) - for triple connection / smaller pipeline stages
-# Uses halftray_1_4 (ASICs 1-4); halftray_5_8 (ASICs 5-8) is also available
-groupings {
-  name: "2x2_Mesh_Halftray"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "halftray" } }
-  ]
-}
-
 # MESH: 2 trays (16 ASICs)
 groupings {
   name: "4x4_Mesh BH"
@@ -227,6 +207,7 @@ groupings {
   }
 }
 
+
 # MESH: 1 host (32 ASICs) - for single galaxy (8x4)
 # Note: Single instance grouping, no row_major_mesh needed (only applies to multi-instance groupings)
 groupings {
@@ -235,6 +216,30 @@ groupings {
   instances: [
     { id: 0 grouping_ref { preset_type: HOSTS } }
   ]
+}
+
+groupings {
+  name: "8x8_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+groupings {
+  name: "4x16_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
 }
 
 # MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
