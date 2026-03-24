@@ -117,6 +117,12 @@ DEFAULT_PARTITION = os.environ.get("DEFAULT_PARTITION", "bh_sp5_aisle_c_partial"
 # Supported clusters exposed to users. Only these are returned in the catalog.
 SUPPORTED_CLUSTERS = {"bh_galaxy", "4bh_glx"}
 
+# Human-readable display names for catalog cluster entries.
+CLUSTER_DISPLAY_NAMES = {
+    "bh_galaxy": "BH Galaxy",
+    "4bh_glx": "4× BH Galaxy",
+}
+
 # Cluster size → ordered list of partitions that can satisfy it. First with free nodes wins.
 CLUSTER_TO_PARTITIONS = {
     "bh_galaxy": ["bh_sp5_aisle_c_partial"],
@@ -218,6 +224,7 @@ def _get_cluster_info(cluster: str) -> dict:
         }
     return {
         "id": cluster,
+        "display_name": CLUSTER_DISPLAY_NAMES.get(cluster, cluster),
         "partition": p,
         "mesh_shape": topo["mesh_shape"],
         "topology": topo,
