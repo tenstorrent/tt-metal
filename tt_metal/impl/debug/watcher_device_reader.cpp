@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cctype>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -399,8 +400,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord coord = {x, y};
-            Core::Create(coord, HalProgrammableCoreType::TENSIX, *this, dump_data).Dump();
+            core_requests.push_back({{x, y}, HalProgrammableCoreType::TENSIX});
         }
     }
 
@@ -494,14 +494,16 @@ void WatcherDeviceReader::Dump(FILE* file) {
             }
         }
 
-        // Clear all pause flags
+        // Clear all pause flags. Protect each core's read/write with try-catch since these
+        // go through read_non_mmio/write_to_non_mmio on remote chips and can timeout.
         for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
-            auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
-            uint64_t addr =
-                hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
-                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
+            try {
+                auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+                auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+                auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
+                uint64_t addr =
+                    hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                    dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
             env.get_cluster().read_core(
@@ -512,6 +514,13 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
     }
     fflush(f);
+
+    // Re-throw the first exception after all cores are dumped and logged. This preserves
+    // the original error propagation to poll_watcher_data (which handles test_mode server-kill
+    // and non-test-mode graceful logging), while ensuring the full dump is available in the log.
+    if (first_exception.has_value()) {
+        throw first_exception.value();
+    }
 }
 
 WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
@@ -548,7 +557,6 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_coord_str += fmt::format(" phys(x={:2},y={:2})", phys_core.x, phys_core.y);
     }
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
-    fprintf(reader.f, "%s: ", core_str.c_str());
 
     uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
@@ -577,6 +585,9 @@ void WatcherDeviceReader::Core::Dump() const {
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
+
+    // Print core header (moved here from Create to support batched reads).
+    fprintf(reader_.f, "%s: ", core_str_.c_str());
 
     ValidateKernelIDs();
 
