@@ -39,10 +39,14 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
             [&](const auto& config) {
                 using ProgramConfigType = std::decay_t<decltype(config)>;
                 if (not(std::is_same_v<
-                        ProgramConfigType,
-                        operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
+                            ProgramConfigType,
+                            operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                        std::is_same_v<
+                            ProgramConfigType,
+                            operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>)) {
                     TT_THROW(
-                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast.");
+                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 1D or 2D "
+                        "Multicast.");
                 }
             },
             args.matmul_struct.program_config.value());

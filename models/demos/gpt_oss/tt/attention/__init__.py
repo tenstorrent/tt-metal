@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 
 from models.demos.gpt_oss.config import MeshConfig
@@ -101,59 +100,6 @@ class Attention:
             config.head_dim,
         )
 
-        # Create persistent buffers for fused MM+RS (o_proj + reduce_scatter)
-        self.use_fused_mm_rs = mesh_config.tp > 1
-        if self.use_fused_mm_rs:
-            local_hidden = config.hidden_size // mesh_config.tp
-            padded_local_hidden = ((local_hidden + 31) // 32) * 32
-            padded_hidden = padded_local_hidden * mesh_config.tp
-
-            # MM output shape: [1, 1, batch, padded_hidden]
-            # RS intermediate needs same shape as MM output
-            # RS output shape: [1, 1, batch, padded_local_hidden]
-            batch = config.max_local_batch_size
-            mm_shape = [1, 1, batch, padded_hidden]
-            rs_shape = [1, 1, batch, padded_local_hidden]
-
-            self.mm_rs_persistent_intermediate = ttnn.from_torch(
-                torch.zeros(mm_shape, dtype=torch.bfloat16),
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self.mm_rs_persistent_output = ttnn.from_torch(
-                torch.zeros(rs_shape, dtype=torch.bfloat16),
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            # 2D multicast program config for the o_proj matmul
-            # Input: [1, 1, batch, local_qkv_out] -> Output: [1, 1, batch, padded_hidden]
-            # Optimized 2D mcast config for o_proj MM+RS fusion
-            # M=4t, K=28t, N=224t (GPT-OSS 120B, TP=8)
-            grid_x, grid_y = 8, 2
-            per_core_M = max(1, batch // 32 // grid_y)
-            per_core_N = max(1, padded_hidden // 32 // grid_x)
-            self.mm_rs_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
-                in0_block_w=14,  # Half of K=28 tiles per block (2 passes)
-                out_subblock_h=1,
-                out_subblock_w=7,  # 28/7=4 subblock iterations
-                per_core_M=per_core_M,
-                per_core_N=per_core_N,
-                transpose_mcast=False,
-            )
-            self.mm_rs_compute_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-            )
-
         # Store references for backward compatibility
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
@@ -215,7 +161,6 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
-                attention_module=self,
             )
         else:
             return prefill_forward(

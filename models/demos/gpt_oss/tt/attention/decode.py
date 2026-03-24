@@ -22,7 +22,6 @@ def decode_forward(
     position_idx,
     page_table,
     ccl_manager,
-    attention_module=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -154,73 +153,29 @@ def decode_forward(
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
+    tt_out = ttnn.linear(
+        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+
+    tt_sdpa_out.deallocate(True)
+    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+
     # Calculate padded hidden size for tile-aligned CCL operations.
+    # o_proj weights may be padded so local_hidden becomes tile-aligned.
     local_hidden = hidden_size // mesh_config.tp
     padded_local_hidden = ((local_hidden + 31) // 32) * 32
     padded_hidden = padded_local_hidden * mesh_config.tp if mesh_config.tp > 1 else hidden_size
 
-    use_fused_mm_rs = attention_module is not None and getattr(attention_module, "use_fused_mm_rs", False)
+    tt_out = ttnn.reshape(
+        tt_out,
+        (1, 1, batch_size, padded_hidden),
+        (1, 1, 32, padded_hidden),
+    )
+    # tt_out = ttnn.unsqueeze(tt_out, 0)
 
-    if use_fused_mm_rs:
-        # Fused matmul + reduce_scatter: o_proj MM overlaps with RS data movement
-        tt_sdpa_out = ttnn.to_memory_config(tt_sdpa_out, ttnn.DRAM_MEMORY_CONFIG)
-
-        _mm_out, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
-            tt_sdpa_out,
-            weights.o_proj,
-            attention_module.mm_rs_persistent_intermediate,
-            attention_module.mm_rs_persistent_output,
-            3,  # scatter dim (last dim)
-            ccl_manager.get_rs_ping_pong_semaphore(),
-            (0, 4),  # RS core grid offset (avoid MM cores)
-            bias=weights.o_proj_bias,
-            topology=ccl_manager.topology,
-            cluster_axis=mesh_config.tp_axis,
-            program_config=attention_module.mm_rs_program_config,
-            compute_kernel_config=attention_module.mm_rs_compute_config,
-            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-            memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
-        tt_sdpa_out.deallocate(True)
-
-        # All-gather back to full hidden size
-        tt_out = ttnn.experimental.all_gather_async(
-            rs_out,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            topology=ccl_manager.topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=mesh_config.tp_axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
-
-        # Remove padding if needed
-        if padded_local_hidden != local_hidden:
-            shape = tt_out.shape
-            tt_out = ttnn.slice(
-                tt_out,
-                starts=[0, 0, 0, 0],
-                ends=[shape[0], shape[1], shape[2], hidden_size],
-                steps=[1, 1, 1, 1],
-            )
-    else:
-        # Original path: separate matmul + allreduce
-        tt_out = ttnn.linear(
-            tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        )
-
-        tt_sdpa_out.deallocate(True)
-        tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-
-        tt_out = ttnn.reshape(
-            tt_out,
-            (1, 1, batch_size, padded_hidden),
-            (1, 1, 32, padded_hidden),
-        )
-
-        tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    # Tensor parallel allreduce
+    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
 
     return tt_out
