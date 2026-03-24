@@ -34,7 +34,7 @@ HF_MODEL=google/gemma-3-27b-it MESH_DEVICE=T3K python examples/offline_inference
 ```
 
 ### Dummy weights (debug / perf without checkpoints)
-Pass **`--dummy_weights`** to **`text_demo.py`** or **`vision_demo.py`** (same pattern as Llama3 Galaxy `text_demo`): random tensors from the bundled local HF `config.json`, no full checkpoint load. Example:
+Pass **`--dummy_weights`** to **`text_demo.py`** or **`vision_demo.py`**: random tensors from the bundled local HF `config.json`, no full checkpoint load. Example:
 `HF_MODEL=google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and batch-1" --dummy_weights`
 Smoke test only: `HF_MODEL=google/gemma-3-4b-it pytest models/demos/gemma3/tests/test_e2e_dummy.py`.
 
