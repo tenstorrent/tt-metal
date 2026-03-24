@@ -174,6 +174,10 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
+        if (test_config.fabric_setup.use_vc2) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {} and fabric_tensix_config: {}",

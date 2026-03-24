@@ -26,6 +26,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_roll.py
   - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
 
   # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
@@ -38,7 +39,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py
@@ -110,7 +110,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
-  - tests/ttnn/unit_tests/operations/fused/test_composite.py
+  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
 
   # Transformers tests
   - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
@@ -143,9 +143,6 @@ blackhole:
 
   # Base functionality - simulator limitations (tilize/untilize, layout conversion)
   - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
-  - tests/ttnn/unit_tests/base_functionality/test_expand.py
-  - tests/ttnn/unit_tests/base_functionality/test_roll.py
-  - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
 
   # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
@@ -154,54 +151,17 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_ternary_sharding.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_pow.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_relational.py
   - tests/ttnn/unit_tests/operations/eltwise/test_where.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_experimental_where.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_minimum.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_maximum.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_activation.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_minimum.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_maximum.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_ternary.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_activation.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_composite.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_divide.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_math.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_tanh_accuracy.py
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_sampling.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_fill.py
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_gcd.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_i1.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_exp_21f.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_mul.py
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
 
   # Core tests
   - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
@@ -210,9 +170,6 @@ blackhole:
   - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
   - tests/ttnn/unit_tests/base_functionality/test_concat_issue.py
   - tests/ttnn/unit_tests/base_functionality/test_async.py
-
-  # Eltwise tests (BH-specific failures)
-  - tests/ttnn/unit_tests/operations/eltwise/test_sigmoid_accurate_21f.py
 
   # Conv tests
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
@@ -233,11 +190,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_upsample.py
 
   # Matmul tests (same simulator limitations as wormhole)
-  - tests/ttnn/unit_tests/operations/matmul/test_addmm.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/matmul/test_linear.py
-  - tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py
 
   # Fused tests (same simulator limitations as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
@@ -247,12 +201,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
-  - tests/ttnn/unit_tests/operations/fused/test_composite.py
-
-  # Transformers tests (same as wormhole + BH-specific)
-  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
-  - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
-  - tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
 
   # Reduce tests (same as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py

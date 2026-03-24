@@ -83,7 +83,7 @@ constexpr uint64_t CMD_BUF_MISC_PATH_RES_DISABLE = (1 << 18);   // bit 18: path 
 // Pre-defined MISC register values for common transaction types
 // ============================================================================
 // Read transaction: write_trans=0, atomic_trans=0, posted=0 → all bits clear
-constexpr uint64_t CMD_BUF_MISC_READ = 0;
+constexpr uint64_t CMD_BUF_MISC_READ = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
 
 // Unicast write: write_trans=1
 constexpr uint64_t CMD_BUF_MISC_WRITE = CMD_BUF_MISC_WRITE_TRANS;
@@ -163,6 +163,109 @@ inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_
     *ptr = id_mask;
 }
 
+struct NocCmdBufState {
+    uint32_t ctrl;
+    uint32_t ret_addr_coord;
+    uint32_t targ_addr_lo;
+    uint32_t ret_addr_lo;
+    uint32_t at_len_be;
+    uint32_t targ_addr_coord;
+    uint32_t targ_addr_mid;
+    uint32_t packet_tag;
+    uint32_t at_data;
+    uint32_t ret_addr_mid;
+};
+
+inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
+    uint32_t noc, uint32_t cmd_buf, NocCmdBufState* state) {
+    state->ctrl = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL);
+    constexpr uint32_t noc_ctrl_reserved_bit_mask = ((1u << 27) - (1u << 18)) | (1u << 31);
+    state->ctrl &= ~noc_ctrl_reserved_bit_mask;
+    state->ret_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE);
+    state->targ_addr_lo = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_LO);
+    state->ret_addr_lo = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_LO);
+    state->at_len_be = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN);
+    state->targ_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE);
+    state->targ_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID);
+    state->packet_tag = 0;
+    state->at_data = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA);
+    state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
+}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
+
+inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
+    uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, state->ctrl);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, state->ret_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, state->targ_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, state->ret_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, state->at_len_be);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, state->targ_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, state->targ_addr_mid);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, state->ret_addr_mid);
+}
+
+inline __attribute__((always_inline)) uint32_t noc_get_reads_issued(uint32_t noc) { return noc_reads_num_issued[noc]; }
+
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_issued(uint32_t noc) {
+    return noc_nonposted_writes_num_issued[noc];
+}
+
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_acked(uint32_t noc) {
+    return noc_nonposted_writes_acked[noc];
+}
+
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_atomics_acked(uint32_t noc) {
+    return noc_nonposted_atomics_acked[noc];
+}
+
+inline __attribute__((always_inline)) uint32_t noc_get_posted_writes_issued(uint32_t noc) {
+    return noc_posted_writes_num_issued[noc];
+}
+
+inline __attribute__((always_inline)) void noc_increment_nonposted_writes_acked(uint32_t noc, uint32_t delta) {
+    noc_nonposted_writes_acked[noc] += delta;
+}
+
+inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued(uint32_t noc, uint32_t delta) {
+    noc_nonposted_writes_num_issued[noc] += delta;
+}
+
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
+    uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    return (int32_t)(sent - expected_count) >= 0;
+}
+
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
+    uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
+}
+
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr(
+    uint32_t noc, uint32_t cmd_buf, uint64_t targ_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(targ_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(targ_addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(targ_addr >> NOC_ADDR_COORD_SHIFT));
+}
+
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_coordinate(
+    uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
+}
+
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc, uint32_t cmd_buf, uint64_t ret_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(ret_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(ret_addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
+}
+
+inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
+    return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN);
+}
+
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     constexpr uint32_t noc = 0;
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
@@ -206,11 +309,13 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
 
-    // Atomic command buffer (SCMDBUF): simple buffer for atomics
+    // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_ATOMIC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
 }
 
 // set noc local memory state for a single kernel from the global state
@@ -245,6 +350,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
+// Expects noc_init to have set on OVERLAY_RD_CMD_BUF:
+//   MISC      = CMD_BUF_MISC_READ
+//   DEST_COORD = my_xy (local core, read return destination)
+//   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = CMDBUF_TRID_STATIC
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
@@ -252,12 +361,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint64_t src_addr,
     uint32_t dest_addr,
     uint32_t len_bytes,
-    uint32_t read_req_vc = 1) {
+    uint32_t read_req_vc = CMDBUF_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
-    // MISC and VCs are set once in noc_init for the read cmd buffer.
-    // DEST_COORD (local coordinate) is also set in noc_init.
-    // Per-transaction: program remote src, local dest addr, length, then issue.
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, read_req_vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_RD_RESP_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, (uint32_t)src_addr);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -311,16 +421,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
                     (mcast ? CMD_BUF_MISC_MULTICAST : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
 
-    // VCs are set once in noc_init to unicast values.
-    // Only override for mcast, then restore unicast so the next call is clean.
-    if (mcast) {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_MCAST_REQ_VC);
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
-    } else {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
-    }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
+        mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
 
     if constexpr (use_trid) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, trid);
@@ -337,13 +442,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
     __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
-
-    if (mcast) {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_WR_REQ_VC);
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
-    }
 
     if constexpr (update_counter) {
         uint32_t num_packets = len_bytes / NOC_MAX_BURST_SIZE + ((len_bytes % NOC_MAX_BURST_SIZE) ? 1 : 0);
@@ -375,14 +473,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
                     (mcast ? CMD_BUF_MISC_MULTICAST : 0);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
 
-    if (mcast) {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_MCAST_REQ_VC);
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
-    } else {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
-    }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
+        mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
@@ -436,7 +531,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint64_t src_addr,
     uint32_t dest_addr,
     uint32_t len_bytes,
-    uint32_t read_req_vc = 1) {
+    uint32_t read_req_vc = CMDBUF_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     // Overlay handles packetization via MAX_BYTES_IN_PACKET register; no software chunking needed.
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
@@ -508,14 +603,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
                     (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
 
-    if (mcast) {
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_MCAST_REQ_VC);
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
-    } else {
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
-    }
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
 
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
@@ -526,13 +616,6 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     SCMDBUF_ISSUE_INLINE_TRANS(val);
 
-    if (mcast) {
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_WR_REQ_VC);
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
-    }
-
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
@@ -540,6 +623,45 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
         }
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted = false,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dests = 1) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
+                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+
+    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
+        (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    SCMDBUF_ISSUE_INLINE_TRANS(val);
+
+    if (posted) {
+        noc_posted_writes_num_issued[noc] += 1;
+    } else {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += num_dests;
     }
 }
 
@@ -559,6 +681,8 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
                     (linked ? CMD_BUF_MISC_LINKED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
     if constexpr (program_ret_addr) {
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
@@ -600,6 +724,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
                     (posted ? CMD_BUF_MISC_POSTED : 0) | (linked ? CMD_BUF_MISC_LINKED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)(addr & 0xFFFFFFFF));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -803,6 +929,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
 
     // Set remote destination coordinate
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -935,6 +1063,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
@@ -978,7 +1108,8 @@ template <
     bool update_addr_hi = false,
     bool update_val = false,
     bool posted = false,
-    bool update_counter = true>
+    bool update_counter = true,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
@@ -1218,14 +1349,11 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
                     ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMD_BUF_MISC_MULTICAST : 0) |
                     ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
-    if (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_MCAST_REQ_VC);
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
-    } else {
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
-    }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
+        (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
 }
 
 // clang-format off
@@ -1390,53 +1518,53 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 // Dynamic NOC functions (will fail at compile-time if used)
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <NocBarrierType barrier_type, uint32_t status_register, typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS, typename T = void>
 inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 // ============================================================================================================

@@ -62,7 +62,7 @@ COMMAND_ALIASES: dict[str, str] = {"reset": "tt-smi -glx_reset --snapshot_no_tty
 
 # Common environment variables for all hosts
 COMMON_ENV: tuple[tuple[str, str], ...] = (
-    ("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"),
+    ("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"),
     ("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/dev"),
 )
 

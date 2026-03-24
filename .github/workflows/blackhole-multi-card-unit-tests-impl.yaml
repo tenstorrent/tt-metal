@@ -28,7 +28,16 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
+      model:
+        description: 'Filter tests by model-name (default: all)'
+        required: false
+        type: string
+        default: "all"
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
@@ -93,8 +102,14 @@ jobs:
             timeout: 60
             test-type: slow
           - name: ring joint attention tests
-            cmd: pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
-            timeout: 30
+            cmd: |
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
+            timeout: 60
+            test-type: slow
+          - name: sdpa nightly tests
+            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+            timeout: 60
             test-type: slow
           - name: fabric infra unit tests
             cmd: |
@@ -107,6 +122,22 @@ jobs:
             cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
             timeout: 15
             test-type: slow
+          - name: bh_lb_DeepSeek_PREFILL
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2' -vvv --tb=short
+            timeout: 30
+            test-type: loudbox
+            owner_id: U08E1JCMAJF # Marko Bezulj
+            model-name: deepseek_prefill
+          - name: bh_qb_DeepSeek_PREFILL
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2' -vvv --tb=short
+            timeout: 30
+            test-type: qb
+            owner_id: U08E1JCMAJF # Marko Bezulj
+            model-name: deepseek_prefill
           YAML_EOF
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
@@ -116,11 +147,24 @@ jobs:
           runner_label="${{ inputs.runner-label }}"
           viommu_json="false"
           if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
+          loudbox_json="false"
+          if [[ "$runner_label" == *LoudBox* ]]; then loudbox_json="true"; fi
+          quietbox_json="false"
+          if [[ "$runner_label" == *LLMBox* ]]; then quietbox_json="true"; fi
 
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu)]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
+          fi
+
+          # Filter by model if specified
+          model_filter="${{ inputs.model }}"
+          if [ "$model_filter" != "all" ]; then
+            filtered_tests=$(echo "$filtered_tests" | jq -c --arg model "$model_filter" \
+              '[.[] | select(.["model-name"] == $model)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
@@ -182,6 +226,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:
@@ -223,11 +268,6 @@ jobs:
         if: ${{ failure() }}
         run: |
           tt-smi -s
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U0883RN6CRE # William Ly
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

@@ -14,13 +14,19 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "internal/hw_thread.h"
+#include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
+#include "api/kernel_thread_globals.h"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
 #endif
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
@@ -36,17 +42,40 @@ uint32_t _start() {
 #else
     // TODO: initialize globals and bss
     uint32_t hartid = internal_::get_hw_thread_idx();
+
+    // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
+    uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
+    uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
+    uint32_t thread_0_hartid = hartid;
+    if (launch_msg->kernel_config.enables & (1u << hartid)) {
+        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
+            if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+                thread_0_hartid = j;
+                break;
+            }
+        }
+    }
+
     extern uint32_t __tdata_lma[];
-    // for now this works for legacy kernels, we need to revisit this for new kernels
-    // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
-    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    // }
+
+    if (hartid == thread_0_hartid) {
+        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
+    }
+
     do_thread_crt1(__tdata_lma);
 
+    // Wait until first thread in the group has set its slot to GO.
+    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
+    }
+
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        // noc_local_state_init(NOC_INDEX); //TODO revisit this
+#if defined(NOC_API_V2)
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#endif
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -55,6 +84,11 @@ uint32_t _start() {
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
+
+        // Setup after the go signal so the previous kernel has completed.
+        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
+        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");

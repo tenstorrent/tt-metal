@@ -253,6 +253,7 @@ def _build_ff1_3_inputs(
     use_real_weights: bool,
     mode: str,
     seq_len: int,
+    fabric_config: ttnn.FabricConfig,
 ):
     weights = _build_ff1_3_weights(hf_config, use_real_weights)
 
@@ -272,7 +273,7 @@ def _build_ff1_3_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -287,12 +288,25 @@ def _build_ff1_3_inputs(
     else:
         torch_input = torch.randn(num_layers, batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
+    if mode == "decode":
+        input_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -384,6 +398,7 @@ def test_ds_ff1_3(
     use_real_weights,
     program_cache_enabled,
     trace_mode,
+    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -420,6 +435,7 @@ def test_ds_ff1_3(
         use_real_weights,
         mode,
         seq_len,
+        device_params["fabric_config"],
     )
     _run_ds_ff1_3_test(
         mesh_device,

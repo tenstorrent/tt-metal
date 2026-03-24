@@ -84,7 +84,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
@@ -94,7 +94,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
         # Required for BenchmarkData to save to Superset
@@ -172,7 +172,11 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
+          pytest models/demos/deepseek_v3/tests -x \
+            --ignore=models/demos/deepseek_v3/tests/unit \
+            --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
+            --ignore=models/demos/deepseek_v3/tests/t3k_compat \
+            --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -212,11 +216,6 @@ jobs:
           # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       # - name: Save environment data
       #   id: save-environment-data
       #   if: ${{ !cancelled() }}
