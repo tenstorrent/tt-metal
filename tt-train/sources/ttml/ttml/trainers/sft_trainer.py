@@ -135,7 +135,7 @@ class SFTTrainer:
         config: SFTConfig,
         optimizer: Any = None,
         peft_config: Optional[LoraConfig] = None,
-        scheduler: Optional[LRSchedulerBase] = None,
+        scheduler: Optional[Any] = None,
         lr_schedule: Optional[Callable[[int], float]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         compute_loss_func: Optional[Callable] = None,
