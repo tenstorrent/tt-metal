@@ -46,8 +46,6 @@ class BroadcastRMSNorm:
         sender_coord,
         output_tensor,
         semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=None,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -60,6 +58,10 @@ class BroadcastRMSNorm:
     ):
         """
         Execute fused Broadcast+RMSNorm operation.
+
+        Multi-device broadcast topology is configured via ``fabric_config`` and optional
+        ``broadcast_topology_override`` (see ``DeepseekMinimalBroadcast.configure``), not
+        mesh cluster axes.
 
         Args:
             skip_ccl: If True, skip CCL broadcast and run RMSNorm only (single-device mode).

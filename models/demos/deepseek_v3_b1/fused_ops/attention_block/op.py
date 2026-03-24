@@ -281,8 +281,6 @@ class AttentionBlock:
                 cbs_list, worker_core
         """
         sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
-        sender_row = sender_mesh_coord[0]
-        sender_col = sender_mesh_coord[1]
 
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
