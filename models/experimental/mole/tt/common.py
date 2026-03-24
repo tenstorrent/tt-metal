@@ -10,6 +10,12 @@ import ttnn
 
 
 DEFAULT_DTYPE = ttnn.float32
+LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
 _ACTIVE_TRACE_RELEASE_HOOKS: dict[int, list[weakref.ReferenceType]] = {}
 
 
@@ -133,11 +139,13 @@ def upload_timeseries_and_marks_to_device(
         torch_input.unsqueeze(0),
         dtype=model.dtype,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
     )
     host_marks = ttnn.from_torch(
         torch_input_mark.unsqueeze(0),
         dtype=model.dtype,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
     )
 
     if cached is None:
@@ -275,6 +283,20 @@ def default_activation_memory_config() -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG
 
 
+def moving_average_projection_matrix(*, seq_len: int, kernel_size: int) -> torch.Tensor:
+    if kernel_size % 2 == 0:
+        raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+
+    pad = (kernel_size - 1) // 2
+    projection = torch.zeros((seq_len, seq_len), dtype=torch.float32)
+    scale = 1.0 / kernel_size
+    for output_index in range(seq_len):
+        for offset in range(-pad, pad + 1):
+            input_index = min(max(output_index + offset, 0), seq_len - 1)
+            projection[output_index, input_index] += scale
+    return projection
+
+
 def router_time_major_to_channel_major_permutation(*, channels: int, num_predictions: int) -> torch.Tensor:
     permutation = []
     for channel_index in range(channels):
@@ -315,13 +337,19 @@ def apply_linear(
     params: dict[str, ttnn.Tensor],
     *,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
+    kwargs = {
+        "transpose_b": True,
+        "memory_config": memory_config,
+    }
+    if compute_kernel_config is not None:
+        kwargs["compute_kernel_config"] = compute_kernel_config
     return ttnn.linear(
         input_tensor,
         params["weight"],
         bias=params["bias"],
-        transpose_b=True,
-        memory_config=memory_config,
+        **kwargs,
     )
 
 
@@ -330,10 +358,21 @@ def apply_two_layer_mlp(
     params: dict[str, dict[str, ttnn.Tensor]],
     *,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
-    hidden = apply_linear(input_tensor, params["linear_1"], memory_config=memory_config)
+    hidden = apply_linear(
+        input_tensor,
+        params["linear_1"],
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
     hidden = ttnn.relu(hidden)
-    return apply_linear(hidden, params["linear_2"], memory_config=memory_config)
+    return apply_linear(
+        hidden,
+        params["linear_2"],
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
 
 def extract_initial_marks(input_marks: ttnn.Tensor) -> ttnn.Tensor:
@@ -403,12 +442,13 @@ def temporal_gating(
     num_predictions: int,
     return_channelwise_weights: bool = True,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-    gating_flat = ttnn.reshape(logits, (1, batch_size * channels, 1, num_predictions))
-    gating_flat = ttnn.softmax(gating_flat, dim=-1)
+    gating_channel_major = ttnn.reshape(logits, (1, 1, batch_size, channels, num_predictions))
+    gating_channel_major = ttnn.softmax(gating_channel_major, dim=-1)
+    gating_channel_major = ttnn.reshape(gating_channel_major, (1, batch_size, channels, num_predictions))
+    gating_flat = ttnn.reshape(gating_channel_major, (1, batch_size * channels, 1, num_predictions))
     if not return_channelwise_weights:
         return gating_flat, None
-    gating_weights = ttnn.reshape(gating_flat, (1, batch_size, channels, num_predictions))
-    gating_weights = ttnn.permute(gating_weights, (0, 1, 3, 2))
+    gating_weights = ttnn.permute(gating_channel_major, (0, 1, 3, 2))
     return gating_flat, gating_weights
 
 
@@ -503,17 +543,19 @@ class TtExpertBase:
             prediction = self.forward(input_tensor, input_marks)
             ttnn.synchronize_device(device)
 
+            trace_id = None
             try:
                 trace_id = ttnn.begin_trace_capture(device, cq_id=0)
                 prediction = self.forward(input_tensor, input_marks)
                 ttnn.end_trace_capture(device, trace_id, cq_id=0)
             except Exception:
                 self._trace_capture_enabled = False
-                try:
-                    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-                    ttnn.release_trace(device, trace_id)
-                except Exception:
-                    pass
+                if trace_id is not None:
+                    try:
+                        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                        ttnn.release_trace(device, trace_id)
+                    except Exception:
+                        pass
                 self._release_prediction_trace()
                 return prediction
             self._prediction_trace_state = {

@@ -5,7 +5,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.mole.reference.config import MoLEConfig
+from models.experimental.mole.reference.config import MoLEConfig, replace_num_experts
 from models.experimental.mole.reference.mole import MixtureOfLinearExperts
 from models.experimental.mole.tt.common import time_marks_input_to_device, timeseries_input_to_device
 from models.experimental.mole.tt.mole import TtMoLE
@@ -71,7 +71,31 @@ def test_tt_router_channelwise_matches_reference(device, base_model_type, expect
         dtype=tt_model.dtype,
         memory_config=tt_model.memory_config,
     )
-    _, tt_gating_weights, _ = tt_model.model._forward_outputs(tt_inputs, tt_marks)
+    tt_gating_weights = tt_model._compute_router_weights(tt_marks)
     tt_gating_weights = ttnn.to_torch(tt_gating_weights).squeeze(0)
 
     assert_with_pcc(reference_outputs.gating_weights, tt_gating_weights, pcc=expected_router_pcc)
+
+
+@pytest.mark.parametrize("base_model_type", ["dlinear", "rlinear", "rmlp"])
+def test_reference_mole_builds_distinct_expert_instances(base_model_type):
+    config = MoLEConfig(
+        seq_len=96,
+        pred_len=24,
+        input_dim=7,
+        base_model_type=base_model_type,
+        num_experts=4,
+    )
+    model = MixtureOfLinearExperts(config)
+
+    assert len(model.experts) == config.num_experts
+    assert len({id(expert) for expert in model.experts}) == config.num_experts
+
+
+def test_replace_num_experts_keeps_t_dim_compatible():
+    config = MoLEConfig(seq_len=96, pred_len=24, input_dim=7, num_experts=4)
+
+    updated = replace_num_experts(config, num_experts=8)
+
+    assert updated.num_experts == 8
+    assert updated.t_dim == 8
