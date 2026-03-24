@@ -96,11 +96,7 @@ def _run_dataset_comparison(
         eval_batch_size=training.eval_batch_size,
         freq=config.freq,
     )
-<<<<<<< HEAD
     dataset_config = resolve_dataset_config(config, input_dim=input_dim, freq=resolved_freq)
-=======
-    dataset_config = resolve_dataset_config(config, input_dim=input_dim)
->>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
     baseline_config = replace_num_experts(dataset_config, num_experts=1)
 
     if verbose:
