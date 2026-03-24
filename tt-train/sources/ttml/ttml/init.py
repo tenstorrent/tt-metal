@@ -18,12 +18,13 @@ Factory variants (uniform, normal, constant, zeros, ones, xavier_uniform,
 
 In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
     xavier_normal_, kaiming_uniform_, kaiming_normal_):
-    Take an existing tensor and fill it in-place, returning the same tensor.
+    Take an existing tensor (or Parameter/Buffer wrapping one) and fill it
+    in-place, returning the same object that was passed in.
     Mirrors the PyTorch torch.nn.init convention.
 
     Usage:
         ttml.init.uniform_(tensor, a=-0.1, b=0.1)
-        ttml.init.xavier_uniform_(tensor, gain=1.0)
+        ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ _NonlinearityType = Literal[
 ]
 
 _FanMode = Literal["fan_in", "fan_out"]
+
+_FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
 
 def _get_device():
@@ -294,38 +297,52 @@ def kaiming_normal(
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_tensor(tensor_or_param):
+    """Return the underlying autograd tensor, unwrapping Parameter/Buffer if needed."""
+    from ttml.modules.parameter import Buffer, Parameter
+
+    if isinstance(tensor_or_param, (Parameter, Buffer)):
+        return tensor_or_param.tensor
+    return tensor_or_param
+
+
 def uniform_(tensor, a: float = 0.0, b: float = 1.0):
     """Fill tensor in-place with values from uniform distribution [a, b)."""
-    t = uniform(a, b)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = uniform(a, b)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
 def normal_(tensor, mean: float = 0.0, std: float = 1.0):
     """Fill tensor in-place with values from normal (Gaussian) distribution."""
-    t = normal(mean, std)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = normal(mean, std)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
 def constant_(tensor, val: float):
     """Fill tensor in-place with a constant value."""
-    t = constant(val)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = constant(val)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
 def zeros_(tensor):
     """Fill tensor in-place with zeros."""
-    t = zeros()(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = zeros()(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
 def ones_(tensor):
     """Fill tensor in-place with ones."""
-    t = ones()(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = ones()(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
@@ -334,8 +351,9 @@ def xavier_uniform_(tensor, gain: float = 1.0):
 
     See ``xavier_uniform`` for details.
     """
-    t = xavier_uniform(gain)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = xavier_uniform(gain)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
@@ -344,8 +362,9 @@ def xavier_normal_(tensor, gain: float = 1.0):
 
     See ``xavier_normal`` for details.
     """
-    t = xavier_normal(gain)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = xavier_normal(gain)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
@@ -359,8 +378,9 @@ def kaiming_uniform_(
 
     See ``kaiming_uniform`` for details.
     """
-    t = kaiming_uniform(a, mode, nonlinearity)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = kaiming_uniform(a, mode, nonlinearity)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
@@ -374,8 +394,9 @@ def kaiming_normal_(
 
     See ``kaiming_normal`` for details.
     """
-    t = kaiming_normal(a, mode, nonlinearity)(tensor.shape())
-    tensor.set_value(t.get_value())
+    inner = _unwrap_tensor(tensor)
+    reinit_val = kaiming_normal(a, mode, nonlinearity)(inner.shape())
+    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
     return tensor
 
 
