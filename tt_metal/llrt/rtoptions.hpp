@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -46,9 +45,6 @@ class Hal;
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
-
-inline std::string g_root_dir;
-inline std::once_flag g_root_once;
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.

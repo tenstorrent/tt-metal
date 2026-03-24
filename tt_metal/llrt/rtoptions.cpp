@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fmt/format.h>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,10 @@
 using std::vector;
 
 namespace tt::llrt {
+namespace {
+std::string g_root_dir;
+std::once_flag g_root_once;
+}  // namespace
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
