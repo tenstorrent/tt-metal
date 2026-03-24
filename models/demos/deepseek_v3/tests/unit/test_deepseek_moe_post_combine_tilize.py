@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 
 
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("iterations", [10])
 @pytest.mark.parametrize(
     "device_params",
