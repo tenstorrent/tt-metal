@@ -60,6 +60,29 @@ use_trace=enable_trace,      # Prefill trace OK
 use_vision_trace=True,       # Vision trace accuracy bug fixed
 ```
 
+### TODO: Move Vision Prep to TTNN
+Current vision prep takes ~220ms on CPU. Breakdown:
+
+| Step | Time | Can move to TTNN? |
+|------|------|-------------------|
+| Unfold/permute | ~80ms | ⚠️ Possible with gather |
+| ttnn.from_torch (pixels) | ~60ms | ❌ Must transfer pixels |
+| Index prep (clip, valid) | ~30ms | ✅ Yes (ttnn.ge, ttnn.clamp) |
+| ttnn.from_torch (3 tensors) | ~50ms | ⚠️ If indices computed on device |
+
+**3 tensors transferred in `_prepare_vision_inputs_for_trace`:**
+- `idx_ttnn` [1, B×N_out×K_pool]: Flattened patch indices for gather
+- `valid_mask_ttnn` [1, 1, B×N_out×K_pool, 1]: Mask for valid indices (idx >= 0)
+- `valid_token_ttnn` [B×N_out]: Which output tokens have valid patches
+
+All derived from `pooled_patches_idx` from HuggingFace Molmo preprocessor.
+
+**Optimization opportunities:**
+1. **Unfold → TTNN gather**: Pre-compute patch indices, use `ttnn.embedding` to extract patches
+2. **Index ops on TTNN**: Move `>=`, `clip`, `any` to device with `ttnn.ge`, `ttnn.clamp`
+3. **Reimplement pooled_patches_idx on TTNN**: Compute Molmo's image tiling/pooling logic on device
+4. **Use unified trace**: Overlaps vision + prefill to hide CPU prep latency
+
 ### Input Padding for Trace Reuse (2026-03-24)
 Added input text padding to bucket sizes for prefill trace reuse:
 ```python
