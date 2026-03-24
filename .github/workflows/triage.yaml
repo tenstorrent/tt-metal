@@ -94,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: "triage_output_${{ inputs.runner-label }}"
-          path: ${{ env.TT_TRIAGE_OUTPUT_PATH }}
+          path: /work/generated/triage_output.txt
           if-no-files-found: ignore
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
