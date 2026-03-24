@@ -618,7 +618,8 @@ pytest models/tt_dit/tests/models/ltx/test_performance_ltx.py -v
 - [ ] Milestone 7b: Verify cross-attention passes prompt correctly (needs step-by-step device comparison)
 - [ ] Milestone 7c: Verify CFG is amplifying prompt signal (needs device)
 - [x] (2026-03-24 08:10Z) Milestone 7d: CLIP confirms reference CPU output matches "cat" (0.341) while TTNN matches "person" (0.315). Bug is real, not a model limitation.
-- [ ] Milestone 8a: Create LTXPipeline class and test_pipeline_ltx.py (mode=video|av)
+- [x] (2026-03-24 08:30Z) Milestone 8a (partial): Added mode="video"|"av" parameter to LTXPipeline, load_transformer passes has_audio.
+- [ ] Milestone 8a (remaining): Add AV-mode __call__ to LTXPipeline (audio denoising loop, audio embeddings)
 - [ ] Milestone 8b: Create test_performance_ltx.py with warmup and BenchmarkProfiler
 
 ## Surprises & Discoveries
