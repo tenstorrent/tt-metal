@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from math import ceil
 from ttml.common.utils import (
     no_grad,
 )
@@ -90,6 +91,7 @@ def compute_rewards_advantages(ctx: InferenceCtx, answers: List[float], completi
 
 
 def train_grpo():
+    start_time = time.perf_counter()
     ctx = setup(
         yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
@@ -106,6 +108,7 @@ def train_grpo():
     base_lr = 1e-6
     warmup_steps = 20
     step = 0
+    micro_batch_size = 16
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
         ctx, prompts, answers, batch_size=4
@@ -117,7 +120,8 @@ def train_grpo():
 
         all_rewards = []
         ctx.optimizer.zero_grad()
-        for p, ans, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch):
+        num_micro_batches = ceil(len(completions_batch) / micro_batch_size)
+        for p, ans, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size):
             mb_start = time.perf_counter()
             B = len(c)
 
@@ -135,10 +139,11 @@ def train_grpo():
 
             ctx.tt_model.eval()
             with no_grad():
-                nlog_probs_old, mask, Tp = compute_nlog_probs(ctx, p, c)
+                nlog_probs_old, mask, Tp, intermediates_old = compute_nlog_probs(ctx, p, c)
+            deallocate_tensors(intermediates_old)
 
             ctx.tt_model.train()
-            nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
+            nlog_probs_new, mask_new, _, intermediates_new = compute_nlog_probs(ctx, p, c)
 
             ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
             eps = 0.2
@@ -193,6 +198,7 @@ def train_grpo():
                     weighted_surr,
                     weighted_surr_4d,
                     loss,
+                    *intermediates_new,
                 ]
             )
 
@@ -202,7 +208,7 @@ def train_grpo():
         print(f"reward_mean={all_rewards_np.mean():.4f}, reward_std={all_rewards_np.std():.4f}")
         print(f"step={step} done! elapsed={step_elapsed:.2f}s")
 
-    print("training process done!")
+    print(f"training process done! {time.perf_counter() - start_time} s")
 
 
 if __name__ == "__main__":

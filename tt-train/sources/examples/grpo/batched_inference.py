@@ -197,6 +197,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         deallocate_tensors([column])
 
     deallocate_tensors([logits_mask_tensor])
+    kv_cache.clear()
 
     stop_ids = get_stop_ids(ctx)
 
@@ -266,7 +267,7 @@ def compute_nlog_probs(
     ctx: InferenceCtx,
     prompts: List[List[int]],
     completions: List[List[int]],
-) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int]:
+) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int, List]:
     assert len(completions) == len(prompts)
 
     B = len(completions)
@@ -322,4 +323,4 @@ def compute_nlog_probs(
 
     assert nlog.shape() == [B, Tp]
     assert loss_mask_tt.shape() == [B, Tp]
-    return nlog, loss_mask_tt, Tp
+    return nlog, loss_mask_tt, Tp, [x_tt, mask_tt, logits, targets_tt]
