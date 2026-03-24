@@ -334,10 +334,12 @@ def compute_score_single_device_tt_only(
     model_args: Any,
     to_ttnn_ids: Callable[[torch.Tensor, Any], Any],
     to_torch_fn: Callable[[Any], torch.Tensor],
+    tt_q_hidden: Any | None = None,
 ) -> Dict[str, List[float]]:
     """
     Encode sentence_pairs, run only BgeM3Model (TT) backbone, return sparse + colbert scores.
     Keeps hidden states as ttnn tensors; scoring uses ttnn.matmul, ttnn reductions, etc.
+    If tt_q_hidden is set, skips the TT forward for queries (must match encode_prompts(queries)).
     """
     queries = [p[0] for p in sentence_pairs]
     passages = [p[1] for p in sentence_pairs]
@@ -353,7 +355,10 @@ def compute_score_single_device_tt_only(
 
     token_type_q = enc_q.get("token_type_ids", torch.zeros_like(enc_q["input_ids"]))
     token_type_p = enc_p.get("token_type_ids", torch.zeros_like(enc_p["input_ids"]))
-    tt_q = run_tt(enc_q["input_ids"], enc_q["attention_mask"], token_type_q)
+    if tt_q_hidden is None:
+        tt_q = run_tt(enc_q["input_ids"], enc_q["attention_mask"], token_type_q)
+    else:
+        tt_q = tt_q_hidden
     tt_p = run_tt(enc_p["input_ids"], enc_p["attention_mask"], token_type_p)
 
     return compute_score_from_hidden_states_tt_only(
@@ -375,11 +380,19 @@ def compute_score(
     model_args: Any,
     to_ttnn_ids: Callable[[torch.Tensor, Any], Any],
     to_torch_auto_compose: Callable[[Any], torch.Tensor],
+    tt_q_hidden: Any | None = None,
 ) -> Dict[str, List[float]]:
     """
     Compute sparse and colbert scores for sentence_pairs using BgeM3Model (TT only).
     Returns dict with keys "sparse" and "colbert", each a list of floats (one per pair).
+    If tt_q_hidden is set, skips the TT forward for queries (reuse PCC / prior query forward).
     """
     return compute_score_single_device_tt_only(
-        device, sentence_pairs, ttnn_model, model_args, to_ttnn_ids, to_torch_auto_compose
+        device,
+        sentence_pairs,
+        ttnn_model,
+        model_args,
+        to_ttnn_ids,
+        to_torch_auto_compose,
+        tt_q_hidden=tt_q_hidden,
     )

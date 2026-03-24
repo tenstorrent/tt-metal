@@ -187,7 +187,8 @@ class ModelArgs:
             max_length=self.max_seq_len,
         )
         max_prompt_length = max(len(prompt_input_ids) for prompt_input_ids in tokenized["input_ids"])
-        pad_multiple = 2048 if max_prompt_length > 2048 else 128
+        # pad_multiple = 2048 if max_prompt_length > 2048 else 128
+        pad_multiple = 128
         padded_length = ((max_prompt_length + pad_multiple - 1) // pad_multiple) * pad_multiple
 
         if padded_length > self.max_seq_len:

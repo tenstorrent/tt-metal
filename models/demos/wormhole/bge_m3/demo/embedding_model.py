@@ -58,7 +58,8 @@ def run_bge_demo_inference(
     device,
     sentence_pairs,
     model_name="BAAI/bge-m3",
-    sequence_length=8192,
+    # sequence_length=8192,
+    sequence_length=1024,
 ):
     """Run inference: PCC/cosine validation (ref vs TT), then return sparse + colbert scores from BgeM3Model only."""
     sentence_pairs = list(sentence_pairs)
@@ -130,8 +131,16 @@ def run_bge_demo_inference(
         similarity_diff < tolerance
     ), f"Cosine similarities differ by {similarity_diff:.4f}, which exceeds tolerance of {tolerance}"
 
-    # Call compute_score and return sparse and colbert scores
-    scores = compute_score(device, sentence_pairs, ttnn_model, model_args, _to_ttnn_ids, to_torch_auto_compose)
+    # Reuse query TT forward from PCC block (avoid duplicate ttnn_model pass for queries).
+    scores = compute_score(
+        device,
+        sentence_pairs,
+        ttnn_model,
+        model_args,
+        _to_ttnn_ids,
+        to_torch_auto_compose,
+        tt_q_hidden=ttnn_output,
+    )
     # logger.info(f"Sparse scores: {scores['sparse']}")
     # logger.info(f"ColBERT scores: {scores['colbert']}")
     for i, (q, p) in enumerate(sentence_pairs):
