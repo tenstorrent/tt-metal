@@ -276,7 +276,7 @@ std::vector<Tensor> minimal_matmul(
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
-    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hw bug #38306).
+    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hardware bug #38306).
     // The default (HiFi2 + fp32_acc) is safe; only user-supplied HiFi4+fp32 is vulnerable.
     if (arch == tt::ARCH::WORMHOLE_B0 && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
         compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {

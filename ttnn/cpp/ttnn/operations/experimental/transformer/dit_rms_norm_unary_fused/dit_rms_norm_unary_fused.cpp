@@ -40,7 +40,7 @@ ttnn::Tensor dit_rms_norm_unary_fused(
         kernel_config_val.fp32_dest_acc_en = (input_tensor.dtype() == DataType::FLOAT32);
     }
 
-    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hw bug #38306).
+    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hardware bug #38306).
     if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
         compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
         log_warning(

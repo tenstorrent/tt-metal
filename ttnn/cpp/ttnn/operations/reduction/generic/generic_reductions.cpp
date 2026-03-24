@@ -15,6 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::operations::reduction {
 
