@@ -93,9 +93,13 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     uint32_t max_number_of_input_pages_overlapping_an_output_page = 1;
     if (elements_per_input_page < elements_per_output_page) {
         max_number_of_input_pages_overlapping_an_output_page =
-            static_cast<uint32_t>(elements_per_output_page / elements_per_input_page) + 2;
+            static_cast<uint32_t>(elements_per_output_page / elements_per_input_page) +
+            2;  // +2 because the output page can overlap the end of the first input page and the beginning of the last
+                // input page
     } else if (elements_per_input_page > elements_per_output_page) {
-        max_number_of_input_pages_overlapping_an_output_page = 2;
+        max_number_of_input_pages_overlapping_an_output_page =
+            2;  // 2 because the output page can overlap the end of the first input page and the beginning of the last
+                // input page
     }
 
     // Configuring the CB that store input pages
