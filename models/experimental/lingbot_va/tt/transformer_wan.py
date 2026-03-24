@@ -5,7 +5,8 @@
 TTNN WanTransformer3DModel for Lingbot-VA.
 
 Reuses WanPatchEmbed, WanTimeTextImageEmbedding, and utilities from models.tt_dit.
-Defines WanTransformerBlock and WanAttention locally (no wan2_2 dependency).
+``WanTransformerBlock`` uses on-device ``attention_wan.WanAttention`` (same algorithm as
+``reference.transformer_wan.WanAttention``, without PyTorch attention round-trips).
 Adds Lingbot-VA-specific: in_channels=48, action_embedder, condition_embedder_action,
 action_proj_out, and dual forward paths (video + action).
 """
@@ -29,8 +30,8 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
-from models.experimental.lingbot_va.reference.transformer_wan import WanAttention as TorchWanAttention
 
+from .attention_wan import WanAttention
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
 
 
@@ -91,22 +92,27 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        self.attn1 = TorchWanAttention(
+        self.attn1 = WanAttention(
             dim=dim,
-            heads=num_heads,
-            dim_head=dim // num_heads,
+            num_heads=num_heads,
+            qk_norm=True,
             eps=eps,
-            cross_attention_dim_head=None,
-            attn_mode="torch",
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=True,
         )
-
-        self.attn2 = TorchWanAttention(
+        self.attn2 = WanAttention(
             dim=dim,
-            heads=num_heads,
-            dim_head=dim // num_heads,
+            num_heads=num_heads,
+            qk_norm=True,
             eps=eps,
-            cross_attention_dim_head=dim // num_heads,
-            attn_mode="torch",
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            is_self=False,
         )
 
         self.norm2 = (
@@ -164,12 +170,7 @@ class WanTransformerBlock(Module):
 
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
-        attn1_state = pop_substate(state, "attn1")
-        attn2_state = pop_substate(state, "attn2")
-        if attn1_state:
-            self.attn1.load_state_dict(attn1_state, strict=True)
-        if attn2_state:
-            self.attn2.load_state_dict(attn2_state, strict=True)
+        # attn1 / attn2 are TT ``WanAttention`` modules: weights load via child ``_prepare_torch_state`` + Module loader.
 
     def forward(
         self,
@@ -214,83 +215,52 @@ class WanTransformerBlock(Module):
         gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
         c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
 
-        def _tt_to_torch_bnd(x: ttnn.Tensor) -> torch.Tensor:
-            t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
-            if t.dim() == 4:
-                t = t[0]
-            elif t.dim() > 4:
-                while t.dim() > 3:
-                    t = t.squeeze(0)
-            if t.dim() == 2:
-                t = t.unsqueeze(0)
-            return t.contiguous()
-
-        def _torch_to_tt_1bnd(x: torch.Tensor) -> ttnn.Tensor:
-            if x.dim() == 3:
-                x = x.unsqueeze(0)
-            return bf16_tensor(x.to(torch.bfloat16), device=self.mesh_device)
-
-        def _rope_to_rotary_emb(rope_cos_tt: ttnn.Tensor, rope_sin_tt: ttnn.Tensor) -> torch.Tensor:
-            cos_t = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_tt)[0]).float()
-            sin_t = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_tt)[0]).float()
-            while cos_t.dim() > 3 and cos_t.shape[0] == 1:
-                cos_t = cos_t.squeeze(0)
-                sin_t = sin_t.squeeze(0)
-            if cos_t.dim() == 2:
-                cos_t = cos_t.unsqueeze(0)
-                sin_t = sin_t.unsqueeze(0)
-            half = cos_t.shape[-1] // 2
-            return torch.complex(cos_t[..., :half], sin_t[..., :half])[:, :, None, :].contiguous()
-
-        # 1) Self-attention
-        # Use explicit modulation for per-token conditioning and dynamic layernorm for global conditioning.
+        k_cur, v_cur = None, None
         per_token = T_dim != 6
         if per_token:
             spatial_normed_1BND = self.norm1(spatial_1BND)
             spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
                 1.0 + scale_msa, spatial_normed_1BND.dtype
             ) + ttnn.typecast(shift_msa, spatial_normed_1BND.dtype)
-            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
-            attn_output = self.attn1(
-                spatial_normed_t,
-                spatial_normed_t,
-                spatial_normed_t,
-                rotary_emb_t,
-                update_cache=update_cache,
-                cache_name=cache_name,
-            )
-            attn_output = _torch_to_tt_1bnd(attn_output)
-            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
         else:
             spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=(1.0 + scale_msa), dynamic_bias=shift_msa)
-            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
-            attn_output = self.attn1(
-                spatial_normed_t,
-                spatial_normed_t,
-                spatial_normed_t,
-                rotary_emb_t,
-                update_cache=update_cache,
-                cache_name=cache_name,
+
+        if return_kv:
+            attn_out = self.attn1(
+                spatial_normed_1BND,
+                N,
+                prompt_1BLP=None,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                cached_k=cached_k,
+                cached_v=cached_v,
+                return_kv=True,
             )
-            attn_output = _torch_to_tt_1bnd(attn_output)
-            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
+            attn_output, k_cur, v_cur = attn_out
+        else:
+            attn_output = self.attn1(
+                spatial_normed_1BND,
+                N,
+                prompt_1BLP=None,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                cached_k=cached_k,
+                cached_v=cached_v,
+                return_kv=False,
+            )
+        spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
 
-        # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND) if self.norm2 is not None else spatial_1BND
-
-        spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
-        prompt_t = _tt_to_torch_bnd(prompt_1BLP)
         attn_output_1BND = self.attn2(
-            spatial_normed_t,
-            prompt_t,
-            prompt_t,
-            None,
-            update_cache=0,
-            cache_name=cache_name,
+            spatial_normed_1BND,
+            N,
+            prompt_1BLP=prompt_1BLP,
+            rope_cos=None,
+            rope_sin=None,
+            trans_mat=None,
         )
-        attn_output_1BND = _torch_to_tt_1bnd(attn_output_1BND)
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # 3) Feed Forward
@@ -312,7 +282,7 @@ class WanTransformerBlock(Module):
         spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa)
 
         if return_kv:
-            return (spatial_1BND, cached_k, cached_v)
+            return (spatial_1BND, k_cur, v_cur)
         return spatial_1BND
 
 
@@ -852,9 +822,8 @@ class WanTransformer3DModel(Module):
             spatial_1BNI, N = self.preprocess_spatial_input(spatial)
             spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        # Disable TT cache-return path when using torch attention in WanTransformerBlock.
-        use_cache = False
-        caches = self._attn_caches.get(cache_name) if use_cache else None
+        use_cache = cache_name in self._attn_caches
+        caches = self._attn_caches[cache_name] if use_cache else None
 
         block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
         dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
