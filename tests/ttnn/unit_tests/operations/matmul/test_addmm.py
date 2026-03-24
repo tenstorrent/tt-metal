@@ -51,10 +51,12 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
         target_pcc = 0.999
 
     test_name = f"test_addmm_square_matrices[dtype={dtype},matrix_size={matrix_size}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=matrix_size,
@@ -103,10 +105,12 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
         target_pcc = 0.999
 
     test_name = f"test_addmm_with_alpha_beta[dtype={dtype},matrix_size={matrix_size},alpha={alpha},beta={beta}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=matrix_size,
@@ -168,10 +172,12 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
         pcc = 0.999
 
     test_name = f"test_addmm_rectangular_matrices[dtype={dtype},matrix_dims={matrix_dims}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
@@ -236,10 +242,12 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
 
     # Assert the results match
     test_name = f"test_vector_matrix_multiplication[dtype={dtype},size={size},case_type={case_type}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
@@ -302,10 +310,12 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
         target_pcc = 0.999
 
     test_name = f"test_addmm_non_tile_multiple_dimensions[dtype={dtype},shape={shape}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor_torch,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
@@ -524,10 +534,12 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
         target_pcc = 0.999
 
     test_name = f"test_addmm_with_output_tensor_inplace_op[dtype={dtype}]"
+    test_dtype_str = "bfloat8" if dtype == ttnn.bfloat8_b else ("bfloat16" if dtype == ttnn.bfloat16 else "float32")
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=32,
@@ -584,6 +596,7 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
+        test_dtype="bfloat16",
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=32,

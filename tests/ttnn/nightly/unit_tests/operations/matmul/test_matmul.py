@@ -113,6 +113,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
         csv_filename="test_matmul_nightly_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
@@ -206,5 +207,6 @@ def test_sdxl_matmul(
             csv_filename="test_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

@@ -375,6 +375,7 @@ def run_multi_core_matmul_1d(
         csv_filename="test_matmul_1d_gather_in0_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
     logger.info(output)

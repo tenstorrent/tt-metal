@@ -193,6 +193,7 @@ def run_test_matmul_in1_dram_sharded(
         csv_filename="test_matmul_dram_sharded_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

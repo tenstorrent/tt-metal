@@ -222,6 +222,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
@@ -280,6 +281,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
@@ -288,6 +290,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     collect_and_dump_numeric_metrics(
         output,
@@ -296,6 +299,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -334,6 +338,7 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_with_pcc(torch_input_tensor, output_tensor, 1)
@@ -365,6 +370,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(z_t, z, "test_pytorch_2_0_failed_cases")
@@ -478,6 +484,7 @@ def test_matmul_reuse_config_sharded_fd_column(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_fd_column")
@@ -591,6 +598,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_tiny_tile")
@@ -753,6 +761,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_in1_dram_sharded_tiny_tile")
@@ -895,6 +904,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_multiple_output_blocks_per_core")
@@ -1080,6 +1090,7 @@ def run_matmul_2d_tiny_tile(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1253,6 +1264,7 @@ def run_matmul_1d_tiny_tile(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1477,6 +1489,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1626,6 +1639,7 @@ def test_padded_2d_matmul(device, side, tile_count):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_padded_2d_matmul")
@@ -1769,6 +1783,7 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height")
@@ -1815,6 +1830,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_from_1D")
@@ -1852,6 +1868,7 @@ def test_matmul_does_dot_product(device, w):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=w,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
@@ -1896,6 +1913,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=w,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_4D")
@@ -1938,6 +1956,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=w,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.9997)
@@ -1998,6 +2017,7 @@ def test_tutorial_matmul(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul")
@@ -2033,6 +2053,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul_inputs_and_output_in_l1_memory")
@@ -2071,6 +2092,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(
@@ -2220,6 +2242,7 @@ def test_sharded_matmul(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_sharded_matmul")
@@ -2257,6 +2280,7 @@ def test_matmul_with_core_grid(device, batch_size):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_with_core_grid")
@@ -2299,6 +2323,7 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(
@@ -2343,6 +2368,7 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(
@@ -2387,6 +2413,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(
@@ -2439,6 +2466,7 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -2499,6 +2527,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_transpose_a_with_core_grid")
@@ -2646,6 +2675,7 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_and_configs")
@@ -2863,6 +2893,7 @@ def test_matmul_in0_in1_bias_sharded(
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(matmul_output, tt_mm_out, "test_matmul_in0_in1_bias_sharded")
@@ -2897,6 +2928,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output2)
@@ -2908,6 +2940,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output3)
@@ -2919,6 +2952,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
 
@@ -2952,6 +2986,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=32,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -2973,6 +3008,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=32,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -3001,6 +3037,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=32,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -3036,6 +3073,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
@@ -3050,6 +3088,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=k,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     assert len(output.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
@@ -3079,6 +3118,7 @@ def test_small_matmul_pcc(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=2048,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_small_matmul_pcc")
@@ -3186,6 +3226,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=64,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3208,6 +3249,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=64,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3224,6 +3266,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=64,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3435,6 +3478,7 @@ def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # Verify correctness
@@ -3510,6 +3554,7 @@ def test_matmul_block_sharded_input_with_padding(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=16,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output, output, "test_matmul_block_sharded_input_with_padding")
@@ -3561,6 +3606,7 @@ def test_matmul_activation_with_sharded_input(device):
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=1024,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_block_sharded_input_with_padding")
@@ -3652,6 +3698,7 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
             k=k_size,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
 
         # assert_matmul_accuracy(torch_output, output, "test_matmul_on_subdevice_1d_mcast")
@@ -3708,6 +3755,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     collect_and_dump_numeric_metrics(
         golden,
@@ -3716,6 +3764,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     collect_and_dump_numeric_metrics(
         result_conv,
@@ -3724,6 +3773,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     # assert_matmul_accuracy(golden, result_conv, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
@@ -3795,6 +3845,7 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
     #     result_manual,
     #     result_col,
     #     test_name=test_name,
+    test_dtype = ((str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),)
     #     csv_filename="test_matmul_numeric_results.csv",
     #     test_params=None,
     # )
@@ -3836,6 +3887,7 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
     #     result_manual,
     #     result_col,
     #     test_name=test_name,
+    test_dtype = ((str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),)
     #     csv_filename="test_matmul_numeric_results.csv",
     #     test_params=None,
     # )

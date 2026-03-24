@@ -66,6 +66,7 @@ def run_tilize_matmul_test(M, K, N, device):
         csv_filename="test_tilize_hpadding_matmul_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.debug(f"Passing={passing_pcc}")

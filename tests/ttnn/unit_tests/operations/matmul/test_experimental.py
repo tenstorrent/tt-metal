@@ -37,6 +37,7 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
         test_name=test_name,
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
@@ -66,6 +67,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
@@ -167,6 +169,7 @@ def test_ttnn_linear(
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
@@ -254,6 +257,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
 
@@ -321,6 +325,7 @@ def test_sharded_partial_op(device, H, num_cores, num_slices):
     #     pt_out,
     #     tt_out,
     #     test_name=test_name,
+    test_dtype = ((str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),)
     #     csv_filename="test_experimental_numeric_results.csv",
     #     test_params=None,
     # )

@@ -139,6 +139,7 @@ def collect_and_dump_numeric_metrics(
     expected,
     actual,
     test_name="",
+    test_dtype=None,
     csv_filename=None,
     csv_dir=None,
     test_params=None,
@@ -373,6 +374,20 @@ def collect_and_dump_numeric_metrics(
             act_rank = precision_rank.get(actual_dtype_name, 0)
             dtype_str = expected_dtype_name if exp_rank < act_rank else actual_dtype_name
 
+        # Normalize test_dtype (to string)
+        def _normalize_test_dtype(value):
+            if isinstance(value, torch.dtype):
+                return _dtype_name(value)
+            if isinstance(value, str):
+                return value
+            if value is not None:
+                return str(value).replace("ttnn.", "")
+            return "unknown"
+
+        test_dtype_str = _normalize_test_dtype(test_dtype)
+        if test_dtype_str == "unknown":
+            test_dtype_str = dtype_str
+
         if csv_dir is None:
             # Try to get the calling file's directory
             import inspect
@@ -395,7 +410,7 @@ def collect_and_dump_numeric_metrics(
             writer = csv.writer(f)
             if write_header:
                 # Build header row
-                header = ["test_name", "dtype", "actual_dtype", "expected_dtype"]
+                header = ["test_name", "test_dtype", "dtype", "actual_dtype", "expected_dtype"]
                 if test_params:
                     header.extend(test_params.keys())
                 header.extend(
@@ -436,7 +451,7 @@ def collect_and_dump_numeric_metrics(
                 writer.writerow(header)
 
             # Build data row
-            row = [test_name, dtype_str, actual_dtype_name, expected_dtype_name]
+            row = [test_name, test_dtype_str, dtype_str, actual_dtype_name, expected_dtype_name]
             if test_params:
                 row.extend(test_params.values())
             row.extend(

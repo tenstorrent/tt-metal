@@ -70,6 +70,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
+                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -120,6 +121,7 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
+                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -162,6 +164,7 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
+                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -284,6 +287,7 @@ def test_group_attn_matmul(
             csv_filename="test_attn_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
@@ -378,6 +382,7 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
+                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -509,6 +514,7 @@ def test_group_attn_matmul_fp32(
             csv_filename="test_attn_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"

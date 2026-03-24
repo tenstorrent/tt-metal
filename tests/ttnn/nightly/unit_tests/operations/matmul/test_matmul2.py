@@ -116,6 +116,7 @@ def test_matmul_1d_in0_batched(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
@@ -451,6 +452,7 @@ def test_matmul_1d_fp32_input_output(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
@@ -572,6 +574,7 @@ def test_matmul_no_mcast_fp32_input_output(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)

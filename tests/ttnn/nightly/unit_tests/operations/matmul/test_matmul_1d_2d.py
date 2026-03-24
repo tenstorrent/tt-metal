@@ -171,6 +171,7 @@ def test_llama2_matmul(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -509,6 +510,7 @@ def test_multi_core_matmul_2d_wh(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -815,6 +817,7 @@ def test_multi_core_matmul_1d_wh(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

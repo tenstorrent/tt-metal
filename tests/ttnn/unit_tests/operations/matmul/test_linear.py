@@ -146,6 +146,7 @@ def test_linear_with_core_grid(
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
@@ -182,6 +183,7 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -230,6 +232,7 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -267,6 +270,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -308,6 +312,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -356,6 +361,7 @@ def test_bloom_ff2_linear(device):
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=4096,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
 
@@ -411,6 +417,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
@@ -453,6 +460,7 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=384,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -532,6 +540,7 @@ def test_resnet50_linear(device):
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=2048,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -630,6 +639,7 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_value,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
 
@@ -760,6 +770,7 @@ def test_linear_yolov7(
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=512,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -858,6 +869,7 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             csv_filename="test_linear_numeric_results.csv",
             test_params=None,
             k=k_size,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -901,6 +913,7 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             csv_filename="test_linear_numeric_results.csv",
             test_params=None,
             k=k_size,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -961,5 +974,6 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
     )
     assert_with_pcc(torch_output, output, 0.99)

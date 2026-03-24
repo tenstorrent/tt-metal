@@ -115,6 +115,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
@@ -310,6 +311,7 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -408,6 +410,7 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -513,6 +516,7 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
 
@@ -614,5 +618,6 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)

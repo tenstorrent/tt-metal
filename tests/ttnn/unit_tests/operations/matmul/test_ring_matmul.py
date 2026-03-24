@@ -159,6 +159,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
             csv_filename="test_ring_matmul_numeric_results.csv",
             k=1280,
             test_params=None,
+            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         )
         assert_with_pcc(ring_out, torch_out, 0.9)
 
