@@ -184,7 +184,7 @@ def setup_harvesting_tools(venv_path):
     run_command(f"{pip_path} install {tool_dir}")
 
 
-def apply_harvesting(input_fwbundle, harvesting_cols):
+def apply_harvesting(input_fwbundle, harvesting_cols, venv_path):
     """Apply harvesting configuration to firmware."""
     print("\n" + "=" * 80)
     print("STEP 6: Applying harvesting configuration")
@@ -203,7 +203,8 @@ def apply_harvesting(input_fwbundle, harvesting_cols):
         sys.exit(1)
 
     cmd = (
-        f"tt-update-tensix-disable-count "
+        f". {os.getcwd()}/{venv_path}/bin/activate &&"
+        f"tt-system-firmware/scripts/update_tensix_disable_count.py "
         f"--input {input_absolute} "
         f"--output {output_absolute} "
         f"--board P150A-1 --board P150B-1 --board P150C-1 "
@@ -322,7 +323,7 @@ def main():
             setup_harvesting_tools(venv_path)
 
             # Step 6: Apply harvesting
-            firmware_to_flash = apply_harvesting(fwbundle_path, harvesting_cols)
+            firmware_to_flash = apply_harvesting(fwbundle_path, harvesting_cols, venv_path)
 
         # Step 7: Flash firmware
         flash_firmware(venv_path, firmware_to_flash)

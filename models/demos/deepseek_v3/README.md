@@ -65,7 +65,7 @@ Many unit tests and submodule tests can run on a single Galaxy without requiring
 
 ```bash
 # Run tests directly (no launch script needed)
-pytest models/demos/deepseek_v3/tests/test_mlp.py
+pytest models/demos/deepseek_v3/tests/t3k_compat/test_mlp.py
 pytest models/demos/deepseek_v3/tests/test_attention.py
 ```
 
