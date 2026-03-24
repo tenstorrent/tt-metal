@@ -2231,6 +2231,11 @@ void py_module(nb::module_& mod) {
     bind_sigmoid(mod);
 
     bind_unary_chain(mod);
+    bind_unary_operation<"lgamma", &ttnn::lgamma>(
+        mod,
+        R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
+        "",
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_identity(mod);
 
     // unary composite imported into ttnn
@@ -2245,11 +2250,6 @@ void py_module(nb::module_& mod) {
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(TILE)doc");
-    bind_unary_composite_2param<"lgamma", &ttnn::lgamma>(
-        mod,
-        R"doc(Performs lgamma function on :attr:`input_tensor`.)doc",
-        "[supported for value greater than 0].",
-        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",

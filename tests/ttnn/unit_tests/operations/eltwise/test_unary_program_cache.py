@@ -88,7 +88,8 @@ def test_unary_cache_reuse_same_config(device, isolate_program_cache):
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_cache):
     """TILE layout: same volume, different shapes -> 1 cache entry.
-    [1,1,32,64] and [1,1,64,32] have same volume (2048), so same num_pages."""
+    unary_ng doesn't hash volume or shape; tile counts are runtime args,
+    so any shape with the same op/dtype/memory_config shares one entry."""
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
 
@@ -99,16 +100,18 @@ def test_unary_cache_reuse_same_volume_different_shapes(device, isolate_program_
 
 
 @pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
-def test_unary_cache_miss_different_volumes(device, isolate_program_cache):
-    """TILE layout: different volumes -> different cache entries.
-    [1,1,32,32] (vol=1024) vs [1,1,64,64] (vol=4096) differ in num_pages."""
+def test_unary_cache_reuse_different_volumes(device, isolate_program_cache):
+    """TILE layout: different volumes -> still 1 cache entry.
+    unary_ng uses runtime tile counts (not compile-time), so different volumes
+    share the same compiled program. override_runtime_arguments handles the
+    different per-core tile distributions on cache hit."""
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 32], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() == 1
 
 
 # =============================================================================

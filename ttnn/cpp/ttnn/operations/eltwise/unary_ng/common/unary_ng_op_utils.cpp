@@ -178,11 +178,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::HARDSWISH: return {};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
-        default:
-            TT_FATAL(
-                false,
-                "UnaryNg: op type {} not yet migrated; add init/func in unary_ng_op_utils",
-                static_cast<int>(op_type));
+        default: TT_FATAL(false, "Undefined unary_ng op type {}", op_type);
     }
 }
 

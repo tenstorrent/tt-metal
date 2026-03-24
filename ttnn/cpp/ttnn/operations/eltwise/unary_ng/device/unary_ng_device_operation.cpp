@@ -89,6 +89,7 @@ TensorSpec UnaryNgDeviceOperation::compute_output_specs(
     const auto output_shape = tensor_args.input.logical_shape();
 
     if (args.memory_config.is_sharded()) {
+        const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
         auto shard_spec_opt = args.memory_config.shard_spec();
@@ -108,7 +109,9 @@ TensorSpec UnaryNgDeviceOperation::compute_output_specs(
         return TensorSpec(
             output_shape,
             TensorLayout(
-                args.output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                args.output_dtype,
+                PageConfig(output_layout),
+                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     const auto output_layout = tensor_args.input.layout();
@@ -152,7 +155,12 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
     }
 
     return operation::hash_operation<UnaryNgDeviceOperation>(
-        attributes, input_tensor.dtype(), input_tensor.memory_config(), src_shard_vol, dst_shard_vol);
+        attributes,
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        input_tensor.memory_config(),
+        src_shard_vol,
+        dst_shard_vol);
 }
 
 bool UnaryNgDeviceOperation::skip_launch(

@@ -7,12 +7,7 @@
 #include "ttnn/operations/eltwise/unary_ng/common/unary_ng_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-
 #include <algorithm>
-#include <map>
-
-#include <fmt/format.h>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -146,7 +141,9 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_height = output.tensor_spec().tile().get_height();
     const uint32_t tile_width = output.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t out_num_tiles = is_row_major ? output.buffer()->num_pages() : output.physical_volume() / tile_hw;
+
+    const bool rm_interleaved = is_row_major && !has_sharding;
+    const uint32_t out_num_tiles = rm_interleaved ? output.buffer()->num_pages() : output.physical_volume() / tile_hw;
     uint32_t out_shard_height{}, out_shard_width{}, num_shards_per_width{};
 
     const auto [oD, oN, oC, oHt, oWt] = [&]() -> std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> {
@@ -168,8 +165,15 @@ void set_or_update_runtime_arguments(
                                                                      : input.memory_config().memory_layout();
         num_shards_per_width = get_shards_per_width(shard_specs->output_shard_spec, out_memory_layout);
 
-        auto compute_shard_tiles = [&](const ShardSpec& spec,
+        auto compute_shard_pages = [&](const ShardSpec& spec,
                                        const auto& tensor) -> std::function<uint32_t(CoreCoord)> {
+            if (is_row_major) {
+                auto df = datatype_to_dataformat_converter(tensor.dtype());
+                uint32_t ts = tile_size(df);
+                uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
+                uint32_t pages = (shard_bytes + ts - 1) / ts;
+                return [pages](CoreCoord) -> uint32_t { return pages; };
+            }
             auto end_core = spec.grid.ranges().rbegin()->end_coord;
             bool rm = spec.orientation == ShardOrientation::ROW_MAJOR;
             auto mem_layout = tensor.memory_config().memory_layout();
@@ -212,8 +216,8 @@ void set_or_update_runtime_arguments(
             };
         };
 
-        auto in_shard_tiles = compute_shard_tiles(shard_specs->input_shard_spec, input);
-        auto out_shard_tiles = compute_shard_tiles(shard_specs->output_shard_spec, output);
+        auto in_shard_pages = compute_shard_pages(shard_specs->input_shard_spec, input);
+        auto out_shard_pages = compute_shard_pages(shard_specs->output_shard_spec, output);
 
         if (zero_start_grid) {
             auto bbox = core_group_1.bounding_box();
@@ -235,8 +239,8 @@ void set_or_update_runtime_arguments(
                 handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
                 continue;
             }
-            uint32_t in_tiles = in_shard_tiles(core);
-            uint32_t o_tiles = out_shard_tiles(core);
+            uint32_t in_tiles = in_shard_pages(core);
+            uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id =
                 (i / num_shards_per_width) * (out_shard_height * oWt) + (i % num_shards_per_width) * out_shard_width;
 
@@ -336,20 +340,31 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
-    const uint32_t output_cb_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
-
     const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
     const bool has_sharding = shard_specs.has_value();
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
+
+    // For sharded ROW_MAJOR: use tile-sized CB pages and pack shard bytes into tile-sized chunks
+    // (matches old UnaryShardedProgramFactory behavior). For interleaved ROW_MAJOR: use row-sized pages.
+    const bool rm_interleaved = is_row_major && !has_sharding;
+    const uint32_t input_cb_page_size = rm_interleaved ? src_buffer->page_size() : single_tile_size;
+    const uint32_t output_cb_page_size = rm_interleaved ? dst_buffer->page_size() : single_tile_size_output;
+
+    auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
+        if (rm) {
+            auto df = datatype_to_dataformat_converter(t.dtype());
+            uint32_t ts = tile_size(df);
+            uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
+            return (shard_bytes + ts - 1) / ts;
+        }
+        return spec.numel() / t.tensor_spec().tile().get_tile_hw();
+    };
     const auto src_num_tiles_per_shard =
-        src_sharded ? std::optional<uint32_t>(
-                          shard_specs->input_shard_spec.numel() / (input.tensor_spec().tile().get_tile_hw()))
+        src_sharded ? std::optional<uint32_t>(shard_pages(shard_specs->input_shard_spec, input, is_row_major))
                     : std::nullopt;
     const auto dst_num_tiles_per_shard =
-        dst_sharded ? std::optional<uint32_t>(
-                          shard_specs->output_shard_spec.numel() / (output.tensor_spec().tile().get_tile_hw()))
+        dst_sharded ? std::optional<uint32_t>(shard_pages(shard_specs->output_shard_spec, output, is_row_major))
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
