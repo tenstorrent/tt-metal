@@ -724,6 +724,40 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         self.generator = generator
         self.max_gen_len = model_args.max_seq_len - 1
 
+    def __del__(self):
+        """Release traces and cleanup resources on destruction."""
+        try:
+            if hasattr(self, "generator") and self.generator is not None:
+                # Release prefill traces
+                if hasattr(self.generator, "prefill_traces") and self.generator.prefill_traces:
+                    for seq_len, (trace_id, _, _) in self.generator.prefill_traces.items():
+                        try:
+                            ttnn.release_trace(self.mesh_device, trace_id)
+                            logger.debug(f"Released prefill trace for seq_len={seq_len}")
+                        except Exception as e:
+                            logger.warning(f"Failed to release prefill trace: {e}")
+                    self.generator.prefill_traces.clear()
+
+                # Release decode trace
+                if hasattr(self.generator, "decode_trace_id") and self.generator.decode_trace_id is not None:
+                    try:
+                        ttnn.release_trace(self.mesh_device, self.generator.decode_trace_id)
+                        logger.debug("Released decode trace")
+                    except Exception as e:
+                        logger.warning(f"Failed to release decode trace: {e}")
+                    self.generator.decode_trace_id = None
+
+                # Release vision trace
+                if hasattr(self.generator, "vision_trace_id") and self.generator.vision_trace_id is not None:
+                    try:
+                        ttnn.release_trace(self.mesh_device, self.generator.vision_trace_id)
+                        logger.debug("Released vision trace")
+                    except Exception as e:
+                        logger.warning(f"Failed to release vision trace: {e}")
+                    self.generator.vision_trace_id = None
+        except Exception as e:
+            logger.warning(f"Error in Molmo2ForConditionalGeneration.__del__: {e}")
+
     @classmethod
     def initialize_vllm_model(
         cls,
@@ -1062,9 +1096,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Take [0] to get single device output, squeeze to remove batch dim if present
             mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
             logits_torch = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0].squeeze()
-            # NOTE: Do NOT deallocate logits_ttnn - it may be a trace output tensor that's
-            # reused across multiple calls. Deallocating would cause "Buffer must be allocated"
-            # errors on subsequent requests.
+
+            # Deallocate logits_ttnn only when trace is disabled.
+            # When trace IS enabled, logits_ttnn is a trace output tensor that's reused
+            # across calls - deallocating would cause "Buffer must be allocated" errors.
+            if not enable_trace:
+                ttnn.deallocate(logits_ttnn)
 
             # Extract last token's logits - shape: [vocab_size]
             # Use original_seq_len - 1 to index correctly (accounting for padding)
@@ -1135,6 +1172,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # Embed tokens
         hidden_states = self.generator.model.text_model.embed_tokens(token_id_ttnn)
 
+        # Deallocate input tensor after embedding
+        ttnn.deallocate(token_id_ttnn)
+
         # Run forward_decode directly to get logits (not argmax like run_decode_step)
         logits_ttnn = self.generator.model.text_model.forward_decode(
             hidden_states=hidden_states,
@@ -1165,6 +1205,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # Use ConcatMeshToTensor and take first device since all devices have same logits
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0]
+
+        # Deallocate logits_ttnn after conversion (safe when trace is disabled)
+        ttnn.deallocate(logits_ttnn)
 
         # Logits shape from text_model.forward_decode: [1, 1, padded_seq, vocab_size]
         # Slice to actual sequence length and reshape for vLLM
