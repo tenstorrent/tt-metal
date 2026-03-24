@@ -89,6 +89,13 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Upload full triage output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: "triage_output_${{ inputs.runner-label }}"
+          path: ${{ env.TT_TRIAGE_OUTPUT_PATH }}
+          if-no-files-found: ignore
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
