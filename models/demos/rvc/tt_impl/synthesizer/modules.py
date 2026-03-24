@@ -97,7 +97,7 @@ class WN:
                 ttnn.tanh(t_activation, output_tensor=t_activation),
                 output_tensor=s_activation,
             )
-
+            gates_activations = ttnn.to_memory_config(gates_activations, ttnn.L1_MEMORY_CONFIG)
             res_skip_out = res_skip_layer(gates_activations)
             if i < self.num_layers - 1:
                 residual_out, skip_out = ttnn.chunk(res_skip_out, 2, dim=-1)
@@ -246,5 +246,5 @@ class ResidualCouplingLayer:
         h = self.enc(h, g=g)
         stats = self.post_linear(h)
         x1 = ttnn.subtract(x1, stats, output_tensor=x1)
-        out = ttnn.concat([x0, x1], dim=-1)
+        out = ttnn.concat([x0, x1], dim=-1, memory_config=x0.memory_config())
         return out

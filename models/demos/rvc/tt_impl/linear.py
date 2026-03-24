@@ -47,6 +47,7 @@ class Linear:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.bias_tensor = None
@@ -56,18 +57,24 @@ class Linear:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        output_memory_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if input_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            else ttnn.L1_MEMORY_CONFIG
+        )
         out = ttnn.linear(
             input_tensor,
             self.weight_tensor,
             bias=self.bias_tensor,
-            # memory_config=self.memory_config,
             dtype=self.dtype,
             activation=self.activation,
             compute_kernel_config=self.compute_config,
+            memory_config=output_memory_config,
         )
         return out
 
