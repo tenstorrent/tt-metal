@@ -4387,6 +4387,8 @@ def determine_device_name(mesh_device):
             4: "N150x4",
             8: "T3K",
             32: "TG",
+            64: "DUAL",
+            128: "QUAD",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")

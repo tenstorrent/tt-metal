@@ -41,6 +41,8 @@ def get_num_links(mesh_device, cluster_axis=None):
         "P300": (2, 2),
         "BHGLX": (2, 2),
         "TG": (4, 4),
+        "DUAL": (4, 4),
+        "QUAD": (4, 4),
         "N150x4": (1, 1),
     }
     device_links = link_dict[device_name]
