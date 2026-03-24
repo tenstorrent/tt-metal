@@ -15,5 +15,4 @@ jobs:
     uses: ./.github/workflows/llk-run-perf-tests.yaml
     secrets: inherit
     with:
-      artifact_prefix: "nightly-perf-"
 
