@@ -4,7 +4,7 @@
 import argparse
 import csv
 import gc
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -28,7 +28,7 @@ from models.experimental.mole.demo.core import (
     train_model_on_dataloader,
     unpack_batch,
 )
-from models.experimental.mole.reference.config import MoLEConfig
+from models.experimental.mole.reference.config import MoLEConfig, replace_num_experts
 from models.experimental.mole.utils.datasets import (
     create_real_dataset_loaders,
     RegressionMetricTotals,
@@ -97,7 +97,7 @@ def _run_dataset_comparison(
         freq=config.freq,
     )
     dataset_config = resolve_dataset_config(config, input_dim=input_dim)
-    baseline_config = replace(dataset_config, num_experts=1, t_dim=1)
+    baseline_config = replace_num_experts(dataset_config, num_experts=1)
 
     if verbose:
         print(

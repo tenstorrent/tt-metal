@@ -9,4 +9,5 @@ import torch
 @dataclass(frozen=True)
 class MoLEForwardOutputs:
     prediction: torch.Tensor
-    gating_weights: torch.Tensor
+    gating_weights: torch.Tensor | None = None
+    expert_predictions: torch.Tensor | None = None

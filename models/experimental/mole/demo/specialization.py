@@ -5,7 +5,6 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-import ttnn
 import torch
 from PIL import Image, ImageDraw
 
@@ -14,14 +13,11 @@ from models.experimental.mole.demo.core import (
     add_dataset_arguments,
     add_model_arguments,
     add_training_arguments,
-    build_ttnn_mole,
     model_config_from_args,
-    open_ttnn_device,
     resolve_dataset_config,
     set_random_seed,
     training_config_from_args,
     train_model_on_dataloader,
-    upload_mole_inputs,
     unpack_batch,
 )
 from models.experimental.mole.reference.config import MoLEConfig
@@ -104,9 +100,7 @@ def visualize_router_weights(
     model = training_summary["trained_model"]
 
     router_weights_list = []
-    device = open_ttnn_device()
-    try:
-        tt_model = build_ttnn_mole(device, model_config, model)
+    with torch.no_grad():
         for batch_index, batch in enumerate(loaders["test"]):
             if (
                 visualization_options.max_eval_batches is not None
@@ -116,16 +110,8 @@ def visualize_router_weights(
             inputs, _, input_marks, _ = unpack_batch(batch)
             if input_marks is None:
                 raise ValueError("specialization requires x_mark time features")
-            tt_inputs, tt_marks = upload_mole_inputs(
-                model=tt_model,
-                device=device,
-                torch_input=inputs,
-                torch_input_mark=input_marks,
-            )
-            _, tt_gating_weights, _ = tt_model.model._forward_outputs(tt_inputs, tt_marks)
-            router_weights_list.append(ttnn.to_torch(tt_gating_weights).squeeze(0).mean(dim=2))
-    finally:
-        ttnn.close_device(device)
+            _, gating_weights = model(inputs, input_marks)
+            router_weights_list.append(gating_weights.mean(dim=2))
 
     if not router_weights_list:
         raise ValueError("No evaluation batches produced")

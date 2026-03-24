@@ -214,11 +214,18 @@ def predict_expert_from_torch(
     return to_torch_with_cached_host(model=model, device_tensor=output, cache_name="expert_prediction").squeeze(0)
 
 
-def capture_trace(*, model, device, tt_input, tt_marks) -> TraceState:
-    model.forward(tt_input, tt_marks)
+def capture_trace(*, model, device, tt_input, tt_marks, prediction_only: bool = False) -> TraceState:
+    forward_fn = (
+        model.forward_prediction_no_trace
+        if prediction_only and hasattr(model, "forward_prediction_no_trace")
+        else model.forward_no_trace
+        if hasattr(model, "forward_no_trace")
+        else model.forward
+    )
+    forward_fn(tt_input, tt_marks)
     ttnn.synchronize_device(device)
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    trace_output = model.forward(tt_input, tt_marks)
+    trace_output = forward_fn(tt_input, tt_marks)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     return TraceState(model=model, device=device, trace_id=trace_id, trace_output=trace_output)
 

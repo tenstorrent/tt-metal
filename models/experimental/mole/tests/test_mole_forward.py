@@ -57,8 +57,7 @@ def test_mole_forward(
         torch_input, input_marks=torch_input_mark, device=device
     )
     tt_output = ttnn.to_torch(tt_output).squeeze(0)
-    tt_router_output = ttnn.to_torch(tt_router_output).squeeze(0).squeeze(0)
-    torch_router_weights_averaged = torch_router_weights.mean(dim=2)
+    tt_router_output = ttnn.to_torch(tt_router_output).squeeze(0)
 
-    assert_with_pcc(torch_router_weights_averaged, tt_router_output, pcc=expected_router_pcc)
+    assert_with_pcc(torch_router_weights, tt_router_output, pcc=expected_router_pcc)
     assert_with_pcc(torch_output, tt_output, pcc=expected_pcc)

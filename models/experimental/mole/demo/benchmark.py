@@ -3,10 +3,18 @@
 
 import argparse
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import torch
 import ttnn
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*args, **kwargs):
+        return None
+
 
 from models.experimental.mole.demo.core import (
     add_dataset_arguments,
@@ -20,7 +28,7 @@ from models.experimental.mole.demo.core import (
     set_random_seed,
     upload_mole_inputs,
 )
-from models.experimental.mole.reference.config import MoLEConfig
+from models.experimental.mole.reference.config import MoLEConfig, replace_num_experts
 
 
 MILLISECONDS_PER_SECOND = 1000.0
@@ -38,6 +46,12 @@ class BenchmarkOptions:
     profile_single_replay: bool = False
     e2e: bool = False
     dataset_path: str | None = None
+
+
+def _forward_prediction_only(model, tt_input, tt_marks):
+    if hasattr(model, "forward_prediction_no_trace"):
+        return model.forward_prediction_no_trace(tt_input, tt_marks)
+    return model.forward_prediction(tt_input, tt_marks)
 
 
 def _measure_calls(infer_once, *, batch_size: int, iterations: int, inner_iterations: int) -> dict[str, float]:
@@ -98,9 +112,7 @@ def _run_e2e_metrics(
             torch_input=torch_input,
             torch_input_mark=torch_input_mark,
         )
-        # E2E mode includes host readback on every iteration; avoid prediction-path
-        # trace replay because host reads are not allowed during active capture.
-        output = tt_model.forward(tt_input, tt_marks)
+        output = _forward_prediction_only(tt_model, tt_input, tt_marks)
         _readback_output(output)
 
     for _ in range(warmup_iterations):
@@ -123,7 +135,7 @@ def _run_e2e_metrics(
             torch_input=torch_input,
             torch_input_mark=torch_input_mark,
         )
-        output = tt_compare_model.forward(tt_input, tt_marks)
+        output = _forward_prediction_only(tt_compare_model, tt_input, tt_marks)
         _readback_output(output)
 
     for _ in range(warmup_iterations):
@@ -182,45 +194,32 @@ def _cpu_metrics(
     )
 
 
-def _run_trace_metrics(
+def _run_single_trace_metrics(
     *,
     device,
-    primary_trace_state,
-    compare_trace_state,
+    trace_state,
     batch_size: int,
     warmup_iterations: int,
     measured_iterations: int,
     measured_inner_iterations: int,
-) -> tuple[dict[str, float], dict[str, float]]:
-    replay_once = lambda: execute_trace(primary_trace_state, blocking=False)
+) -> dict[str, float]:
+    replay_once = lambda: execute_trace(trace_state, blocking=False)
 
     for _ in range(warmup_iterations):
         replay_once()
     ttnn.synchronize_device(device)
 
-    ttnn_metrics = _measure_trace_calls(
-        replay_once,
-        device=device,
-        batch_size=batch_size,
-        iterations=measured_iterations,
-        inner_iterations=measured_inner_iterations,
-    )
-
-    if compare_trace_state is None:
-        return ttnn_metrics, {"latency_ms": 0.0, "sequences_per_second": 0.0}
-
-    for _ in range(warmup_iterations):
-        execute_trace(compare_trace_state, blocking=False)
-    ttnn.synchronize_device(device)
-
-    compare_metrics = _measure_trace_calls(
-        lambda: execute_trace(compare_trace_state, blocking=False),
-        device=device,
-        batch_size=batch_size,
-        iterations=measured_iterations,
-        inner_iterations=measured_inner_iterations,
-    )
-    return ttnn_metrics, compare_metrics
+    signpost("start")
+    try:
+        return _measure_trace_calls(
+            replay_once,
+            device=device,
+            batch_size=batch_size,
+            iterations=measured_iterations,
+            inner_iterations=measured_inner_iterations,
+        )
+    finally:
+        signpost("stop")
 
 
 def run_benchmark(
@@ -246,7 +245,7 @@ def run_benchmark(
     tt_model = build_ttnn_mole(device, config, reference_model)
     tt_compare_model = None
     if benchmark_options.include_expert_overhead:
-        compare_config = replace(config, num_experts=1, t_dim=1)
+        compare_config = replace_num_experts(config, num_experts=1)
         compare_reference_model = build_reference_mole(compare_config).eval()
         tt_compare_model = build_ttnn_mole(device, compare_config, compare_reference_model)
     tt_input = None
@@ -301,36 +300,49 @@ def run_benchmark(
             include_expert_overhead=include_expert_overhead,
         )
     else:
-        primary_trace_state = capture_trace(
-            model=tt_model,
-            device=device,
-            tt_input=tt_input,
-            tt_marks=tt_marks,
-        )
-        compare_trace_state = (
-            capture_trace(
-                model=tt_compare_model,
-                device=device,
-                tt_input=tt_compare_input,
-                tt_marks=tt_compare_marks,
-            )
-            if include_expert_overhead and tt_compare_model is not None
-            else None
-        )
+        compare_metrics = {"latency_ms": 0.0, "sequences_per_second": 0.0}
+        primary_trace_state = None
         try:
-            ttnn_metrics, compare_metrics = _run_trace_metrics(
+            primary_trace_state = capture_trace(
+                model=tt_model,
                 device=device,
-                primary_trace_state=primary_trace_state,
-                compare_trace_state=compare_trace_state,
+                tt_input=tt_input,
+                tt_marks=tt_marks,
+                prediction_only=True,
+            )
+            ttnn_metrics = _run_single_trace_metrics(
+                device=device,
+                trace_state=primary_trace_state,
                 batch_size=actual_batch_size,
                 warmup_iterations=benchmark_options.warmup_iterations,
                 measured_iterations=measured_iterations,
                 measured_inner_iterations=measured_inner_iterations,
             )
         finally:
-            release_trace(primary_trace_state)
-            if compare_trace_state is not None:
-                release_trace(compare_trace_state)
+            if primary_trace_state is not None:
+                release_trace(primary_trace_state)
+
+        if include_expert_overhead and tt_compare_model is not None:
+            compare_trace_state = None
+            try:
+                compare_trace_state = capture_trace(
+                    model=tt_compare_model,
+                    device=device,
+                    tt_input=tt_compare_input,
+                    tt_marks=tt_compare_marks,
+                    prediction_only=True,
+                )
+                compare_metrics = _run_single_trace_metrics(
+                    device=device,
+                    trace_state=compare_trace_state,
+                    batch_size=actual_batch_size,
+                    warmup_iterations=benchmark_options.warmup_iterations,
+                    measured_iterations=measured_iterations,
+                    measured_inner_iterations=measured_inner_iterations,
+                )
+            finally:
+                if compare_trace_state is not None:
+                    release_trace(compare_trace_state)
 
     if benchmark_options.tt_only:
         speedup_x = 0.0

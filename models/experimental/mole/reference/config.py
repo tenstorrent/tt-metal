@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 
@@ -23,13 +23,14 @@ class MoLEConfig:
     head_dropout: float = 0.0
 
     def __post_init__(self) -> None:
-        resolved_t_dim = self.t_dim
-        if resolved_t_dim is None:
-            resolved_t_dim = self.num_experts if self.num_experts is not None else 4
+        resolved_num_experts = self.num_experts
+        if resolved_num_experts is None:
+            resolved_num_experts = self.t_dim if self.t_dim is not None else 4
         if self.num_experts is not None and self.t_dim is not None and self.num_experts != self.t_dim:
             raise ValueError(f"num_experts ({self.num_experts}) and t_dim ({self.t_dim}) must match")
-        object.__setattr__(self, "t_dim", resolved_t_dim)
-        object.__setattr__(self, "num_experts", resolved_t_dim)
+        object.__setattr__(self, "num_experts", resolved_num_experts)
+        # Keep t_dim as a compatibility alias for older call sites.
+        object.__setattr__(self, "t_dim", resolved_num_experts)
 
     @property
     def enc_in(self) -> int:
@@ -38,3 +39,7 @@ class MoLEConfig:
     @property
     def channel(self) -> int:
         return self.input_dim
+
+
+def replace_num_experts(config: MoLEConfig, *, num_experts: int) -> MoLEConfig:
+    return replace(config, num_experts=num_experts, t_dim=num_experts)
