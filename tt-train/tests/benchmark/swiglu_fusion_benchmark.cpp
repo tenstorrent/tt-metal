@@ -119,18 +119,6 @@ std::vector<uint32_t> make_random_tokens(size_t count, uint32_t vocab_size, uint
     return values;
 }
 
-ttml::autograd::TensorPtr make_causal_mask(uint32_t sequence_length, ttnn::distributed::MeshDevice* device) {
-    std::vector<float> mask;
-    mask.reserve(static_cast<size_t>(sequence_length) * sequence_length);
-    for (uint32_t i = 0; i < sequence_length; ++i) {
-        for (uint32_t j = 0; j < sequence_length; ++j) {
-            mask.push_back(i >= j ? 1.0F : 0.0F);
-        }
-    }
-    auto mask_tensor = ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device);
-    return ttml::autograd::create_tensor(mask_tensor, /*requires_grad=*/false);
-}
-
 RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
@@ -190,13 +178,12 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         auto optimizer_mem = std::make_shared<ttml::optimizers::AdamW>(model_mem->parameters(), optimizer_cfg);
         ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
 
-        const auto mask_mem = make_causal_mask(cfg.sequence_length, device);
         auto run_step_with_snapshots = [&](double& step_ms) {
             auto [features, targets] = make_batch();
             auto* const dev = &ttml::autograd::ctx().get_device();
             auto t0 = std::chrono::high_resolution_clock::now();
             optimizer_mem->zero_grad();
-            auto logits = (*model_mem)(features, mask_mem);
+            auto logits = (*model_mem)(features, std::nullopt);
             ttml::utils::MemoryUsageTracker::snapshot("FORWARD_PASS");
             auto loss = ttml::ops::cross_entropy_loss(logits, targets);
             loss->backward();
@@ -222,14 +209,13 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     {
         auto model_timed = ttml::models::llama::create(model_cfg);
         auto optimizer_timed = std::make_shared<ttml::optimizers::AdamW>(model_timed->parameters(), optimizer_cfg);
-        auto mask_timed = make_causal_mask(cfg.sequence_length, device);
 
         auto run_step_timed = [&]() -> double {
             auto [features, targets] = make_batch();  // mimic dataloader/collate outside timing region
             auto* const dev = &ttml::autograd::ctx().get_device();
             auto t0 = std::chrono::high_resolution_clock::now();
             optimizer_timed->zero_grad();
-            auto logits = (*model_timed)(features, mask_timed);
+            auto logits = (*model_timed)(features, std::nullopt);
             auto loss = ttml::ops::cross_entropy_loss(logits, targets);
             loss->backward();
             optimizer_timed->step();
@@ -249,7 +235,6 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         }
 
         optimizer_timed.reset();
-        mask_timed.reset();
         model_timed.reset();
         ttml::autograd::ctx().reset_graph();
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
