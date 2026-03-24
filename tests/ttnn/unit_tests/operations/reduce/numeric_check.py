@@ -327,6 +327,52 @@ def collect_and_dump_numeric_metrics(
 
     # Dump to CSV if filename provided
     if csv_filename:
+        # Compute dtype strings (minimal local helpers)
+        def _dtype_name(dt):
+            if dt is None or not isinstance(dt, torch.dtype):
+                return "unknown"
+            if dt == torch.float64:
+                return "float64"
+            if dt == torch.float32:
+                return "float32"
+            if dt == torch.bfloat16:
+                return "bfloat16"
+            if dt == torch.float16:
+                return "float16"
+            if dt == torch.int32:
+                return "int32"
+            if dt == torch.int16:
+                return "int16"
+            if dt == torch.int8:
+                return "int8"
+            if dt == torch.uint8:
+                return "uint8"
+            if dt == torch.bool:
+                return "bool"
+            return str(dt).replace("torch.", "")
+
+        precision_rank = {
+            "float64": 4,
+            "float32": 3,
+            "bfloat16": 2,
+            "float16": 1,
+            "int32": 0,
+            "int16": 0,
+            "int8": 0,
+            "uint8": 0,
+            "bool": 0,
+            "unknown": 0,
+        }
+
+        expected_dtype_name = _dtype_name(getattr(expected, "dtype", None))
+        actual_dtype_name = _dtype_name(getattr(actual, "dtype", None))
+        if expected_dtype_name == actual_dtype_name:
+            dtype_str = expected_dtype_name
+        else:
+            exp_rank = precision_rank.get(expected_dtype_name, 0)
+            act_rank = precision_rank.get(actual_dtype_name, 0)
+            dtype_str = expected_dtype_name if exp_rank < act_rank else actual_dtype_name
+
         if csv_dir is None:
             # Try to get the calling file's directory
             import inspect
@@ -349,7 +395,7 @@ def collect_and_dump_numeric_metrics(
             writer = csv.writer(f)
             if write_header:
                 # Build header row
-                header = ["test_name"]
+                header = ["test_name", "dtype", "actual_dtype", "expected_dtype"]
                 if test_params:
                     header.extend(test_params.keys())
                 header.extend(
@@ -390,7 +436,7 @@ def collect_and_dump_numeric_metrics(
                 writer.writerow(header)
 
             # Build data row
-            row = [test_name]
+            row = [test_name, dtype_str, actual_dtype_name, expected_dtype_name]
             if test_params:
                 row.extend(test_params.values())
             row.extend(
