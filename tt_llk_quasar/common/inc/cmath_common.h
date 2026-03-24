@@ -14,7 +14,11 @@ namespace ckernel::math
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for trinity
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
-constexpr static std::uint32_t TRISC_ID          = 1;
+#if defined(LLK_TRISC_ISOLATE_SFPU)
+constexpr static std::uint32_t TRISC_ID = 3;
+#else
+constexpr static std::uint32_t TRISC_ID = 1;
+#endif
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;

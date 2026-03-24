@@ -58,7 +58,12 @@ namespace llk_perf
 #define PERF_COUNTERS_SYNC_CTRL_ADDR (PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_BUFFER_SIZE)
 
 // Thread count for perf counter synchronization
+// Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
+#if defined(ARCH_QUASAR)
+#define PERF_COUNTERS_THREAD_COUNT 4
+#else
 #define PERF_COUNTERS_THREAD_COUNT 3
+#endif
 
 // Atomic counters for ATINCGET-based synchronization
 #define PERF_COUNTERS_START_COUNTER_ADDR (PERF_COUNTERS_SYNC_CTRL_ADDR + 4)
@@ -69,26 +74,18 @@ namespace llk_perf
 // Sync Control Word Bit Layout
 // ============================================================================
 
-// Bit 0: UNPACK thread started flag
-// Bit 1: MATH thread started flag
-// Bit 2: PACK thread started flag
-// Bit 3: UNPACK thread stopped flag
-// Bit 4: MATH thread stopped flag
-// Bit 5: PACK thread stopped flag
-// Bit 6: Global started flag (at least one thread started)
-// Bit 7: Global stopped flag (all threads stopped)
-// Bits 8-9: Starter thread ID (0=UNPACK, 1=MATH, 2=PACK) - thread that initialized hardware
-// Bits 10-11: Stopper thread ID (0=UNPACK, 1=MATH, 2=PACK) - thread that read hardware
-// Bits 12-31: Reserved
-
-constexpr std::uint32_t SYNC_START_MASK    = (1u << 0) | (1u << 1) | (1u << 2);
-constexpr std::uint32_t SYNC_STOP_MASK     = SYNC_START_MASK << 3;
-constexpr std::uint32_t SYNC_STARTED_FLAG  = 1u << 6;
-constexpr std::uint32_t SYNC_STOPPED_FLAG  = 1u << 7;
-constexpr std::uint32_t SYNC_STARTER_SHIFT = 8u;
-constexpr std::uint32_t SYNC_STARTER_MASK  = 0x3u << SYNC_STARTER_SHIFT;
-constexpr std::uint32_t SYNC_STOPPER_SHIFT = 10u;
-constexpr std::uint32_t SYNC_STOPPER_MASK  = 0x3u << SYNC_STOPPER_SHIFT;
+// Sync control word bit layout (layout differs for 3 vs 4 TRISCs):
+// 3 TRISCs: Bits 0-2 start, 3-5 stop, 6 started, 7 stopped, 8-9 starter, 10-11 stopper
+// 4 TRISCs: Bits 0-3 start, 4-7 stop, 8 started, 9 stopped, 10-11 starter, 12-13 stopper
+constexpr std::uint32_t SYNC_START_MASK     = (1u << PERF_COUNTERS_THREAD_COUNT) - 1u;
+constexpr std::uint32_t SYNC_STOP_BIT_SHIFT = PERF_COUNTERS_THREAD_COUNT;
+constexpr std::uint32_t SYNC_STOP_MASK      = SYNC_START_MASK << SYNC_STOP_BIT_SHIFT;
+constexpr std::uint32_t SYNC_STARTED_FLAG   = 1u << (2u * PERF_COUNTERS_THREAD_COUNT);
+constexpr std::uint32_t SYNC_STOPPED_FLAG   = 1u << (2u * PERF_COUNTERS_THREAD_COUNT + 1u);
+constexpr std::uint32_t SYNC_STARTER_SHIFT  = 2u * PERF_COUNTERS_THREAD_COUNT + 2u;
+constexpr std::uint32_t SYNC_STARTER_MASK   = 0x3u << SYNC_STARTER_SHIFT;
+constexpr std::uint32_t SYNC_STOPPER_SHIFT  = SYNC_STARTER_SHIFT + 2u;
+constexpr std::uint32_t SYNC_STOPPER_MASK   = 0x3u << SYNC_STOPPER_SHIFT;
 
 // ============================================================================
 // ATINCGET Helpers
@@ -195,7 +192,7 @@ inline std::uint32_t get_counter_output_high_addr(counter_bank bank)
 namespace thread_info
 {
 // Get the current thread ID based on compile-time defines
-// Returns: 0 (UNPACK), 1 (MATH), 2 (PACK)
+// Returns: 0 (UNPACK), 1 (MATH), 2 (PACK), 3 (SFPU on Quasar only)
 constexpr std::uint32_t get_thread_id()
 {
 #if defined(LLK_TRISC_UNPACK)
@@ -204,23 +201,24 @@ constexpr std::uint32_t get_thread_id()
     return 1u;
 #elif defined(LLK_TRISC_PACK)
     return 2u;
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+    return 3u;
 #else
-    return 1u;
+#error "No TRISC define set"
 #endif
 }
 
 // Get the bit mask for this thread's start flag in sync control word
-// Returns: bit 0 (UNPACK), bit 1 (MATH), or bit 2 (PACK)
+// Returns: bit 0 (UNPACK), bit 1 (MATH), bit 2 (PACK), or bit 3 (SFPU)
 constexpr std::uint32_t get_thread_start_bit()
 {
     return 1u << get_thread_id();
 }
 
 // Get the bit mask for this thread's stop flag in sync control word
-// Returns: bit 3 (UNPACK), bit 4 (MATH), or bit 5 (PACK)
 constexpr std::uint32_t get_thread_stop_bit()
 {
-    return get_thread_start_bit() << 3;
+    return get_thread_start_bit() << SYNC_STOP_BIT_SHIFT;
 }
 } // namespace thread_info
 
@@ -609,7 +607,7 @@ public:
             std::uint32_t final_state = *sync_ctrl;
             final_state &= ~(SYNC_START_MASK | SYNC_STOP_MASK | SYNC_STARTED_FLAG | SYNC_STOPPED_FLAG);
             final_state |= start_bits;
-            final_state |= (stop_bits << 3);
+            final_state |= (stop_bits << SYNC_STOP_BIT_SHIFT);
             if (start_bits != 0u)
             {
                 final_state |= SYNC_STARTED_FLAG;

@@ -349,10 +349,24 @@ class MailboxesPerf(Enum):
     Packer = 0x1FFCC
 
 
+class MailboxesPerfQuasar(Enum):
+    Unpacker = 0x1FFC4
+    Math = 0x1FFC8
+    Packer = 0x1FFCC
+    Sfpu = 0x1FFD0
+
+
 class MailboxesDebug(Enum):
     Unpacker = 0x6DFC4
     Math = 0x6DFC8
     Packer = 0x6DFCC
+
+
+class MailboxesDebugQuasar(Enum):
+    Unpacker = 0x6DFC4
+    Math = 0x6DFC8
+    Packer = 0x6DFCC
+    Sfpu = 0x6DFD0
 
 
 format_tile_sizes = {

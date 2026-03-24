@@ -34,6 +34,7 @@ from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
+    TRISC_CORES,
     BootMode,
     RiscCore,
     exalens_device_setup,
@@ -51,7 +52,14 @@ from .format_config import (
     DataFormat,
     InputOutputFormat,
 )
-from .llk_params import DestAccumulation, L1Accumulation, MailboxesDebug, MailboxesPerf
+from .llk_params import (
+    DestAccumulation,
+    L1Accumulation,
+    MailboxesDebug,
+    MailboxesDebugQuasar,
+    MailboxesPerf,
+    MailboxesPerfQuasar,
+)
 from .stimuli_config import StimuliConfig
 from .test_variant_parameters import RuntimeParameter, TemplateParameter
 
@@ -233,6 +241,22 @@ class TestConfig:
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
+                TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
+                TestConfig.TRISC_START_ADDRS = [
+                    0x16DFF0,
+                    0x16DFF4,
+                    0x16DFF8,
+                    0x16DFFC,
+                ]
+                TestConfig.THREAD_PERFORMANCE_DATA_BUFFER = [
+                    0x16B000,  # Unpack
+                    0x16C000,  # Math
+                    0x16D000,  # Pack
+                    0x16E000,  # SFPU
+                ]
+                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = (
+                    0x16AFF0  # BARRIER_START for 4 cores
+                )
             case _:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
@@ -343,12 +367,15 @@ class TestConfig:
         no_debug_symbols: bool = False,
         speed_of_light: bool = False,
     ):
-        device_module.Mailbox = MailboxesDebug if with_coverage else MailboxesPerf
-
         TestConfig.setup_arch()
         TestConfig.setup_paths(sources_path)
         TestConfig.setup_compilation_options(
             with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light
+        )
+        device_module.Mailbox = (
+            (MailboxesDebugQuasar if with_coverage else MailboxesPerfQuasar)
+            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            else (MailboxesDebug if with_coverage else MailboxesPerf)
         )
 
     @staticmethod
@@ -956,10 +983,11 @@ class TestConfig:
                     if self.coverage_build == CoverageBuild.Yes
                     else f""
                 )
+                trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{name.upper()} {TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
+                    f"-DLLK_TRISC_{trisc_define} {TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
                 )
@@ -972,7 +1000,9 @@ class TestConfig:
                     (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
                 )
 
-            with ThreadPoolExecutor(max_workers=3) as executor:
+            with ThreadPoolExecutor(
+                max_workers=len(TestConfig.KERNEL_COMPONENTS)
+            ) as executor:
                 futures = [
                     executor.submit(build_kernel_part, name)
                     for name in TestConfig.KERNEL_COMPONENTS
@@ -1118,9 +1148,7 @@ class TestConfig:
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
             case BootMode.EXALENS:
                 exalens_device_setup(TestConfig.CHIP_ARCH, location)
-                set_tensix_soft_reset(
-                    0, [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], location
-                )
+                set_tensix_soft_reset(0, TRISC_CORES, location)
 
         return elfs
 

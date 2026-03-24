@@ -14,9 +14,7 @@ COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 86 config slots
 COUNTER_DATA_WORD_COUNT = (
     TestConfig._PERF_COUNTERS_DATA_WORDS
 )  # 172 data words (86 * 2)
-PERF_COUNTERS_STARTER_SHIFT = 8
-PERF_COUNTERS_STARTER_MASK = 0x3
-PERF_COUNTERS_STOPPER_SHIFT = 10
+PERF_COUNTERS_STARTER_MASK = 0x3  # 2 bits for thread ID 0-3
 PERF_COUNTERS_STOPPER_MASK = 0x3
 
 # Single shared buffer addresses (all threads use the same location)
@@ -25,13 +23,17 @@ PERF_COUNTERS_CONFIG_ADDR = TestConfig.PERF_COUNTERS_CONFIG_ADDR
 PERF_COUNTERS_DATA_ADDR = TestConfig.PERF_COUNTERS_DATA_ADDR
 PERF_COUNTERS_SYNC_CTRL_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR
 PERF_COUNTERS_START_COUNTER_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR + 4
-PERF_COUNTERS_THREAD_COUNT = 3
+
+PERF_COUNTERS_THREAD_COUNT = len(TestConfig.KERNEL_COMPONENTS)
 PERF_COUNTERS_STOP_COUNTER_ADDR = PERF_COUNTERS_START_COUNTER_ADDR + (
     PERF_COUNTERS_THREAD_COUNT * 4
 )
 PERF_COUNTERS_STOP_ELECT_ADDR = PERF_COUNTERS_STOP_COUNTER_ADDR + (
     PERF_COUNTERS_THREAD_COUNT * 4
 )
+
+# TRISC id -> name. BH uses ids 0–2; Quasar uses 0–3. Same mapping for missing-thread errors and starter/stopper.
+PERF_COUNTER_TRISC_NAMES = {0: "UNPACK", 1: "MATH", 2: "PACK", 3: "SFPU"}
 
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
@@ -206,13 +208,10 @@ def _build_all_counters() -> List[Dict]:
 # can be active at once (determined by mux setting), so maximum concurrent counters = 86
 ALL_COUNTERS = _build_all_counters()
 
-# All threads that support performance counters
-ALL_THREADS = ["UNPACK", "MATH", "PACK"]
-
 
 def configure_counters(location: str = "0,0") -> None:
     """
-    Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK).
+    Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK, and in Quasar, isolated SFPU).
 
     Writes counter configuration to L1 memory that all threads access. Configures all 94
     counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1).
@@ -252,11 +251,12 @@ def configure_counters(location: str = "0,0") -> None:
         data=[0] * COUNTER_DATA_WORD_COUNT,
     )
 
-    # Clear sync state and ATINCGET counters before kernel runs
+    # Clear sync state and ATINCGET counters before kernel runs (layout matches counters.h).
+    # 1 word sync ctrl + PERF_COUNTERS_THREAD_COUNT start + PERF_COUNTERS_THREAD_COUNT stop + 1 word stop_elect
     write_words_to_device(
         location=location,
         addr=PERF_COUNTERS_SYNC_CTRL_ADDR,
-        data=[0] * (1 + PERF_COUNTERS_THREAD_COUNT * 2 + 1),
+        data=[0] * (1 + 2 * PERF_COUNTERS_THREAD_COUNT + 1),
     )
 
 
@@ -288,11 +288,15 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
 
     sync_word = sync_ctrl[0]
 
-    # Validate that counters were properly started and stopped
-    GLOBAL_STARTED_BIT = 1 << 6
-    GLOBAL_STOPPED_BIT = 1 << 7
-    ALL_START_BITS = 0x7  # Bits 0-2 should all be set
-    ALL_STOP_BITS = 0x7 << 3  # Bits 3-5 should all be set
+    # Sync control word bit layout (matches counters.h); layout differs for 3 vs 4 TRISCs.
+    thread_count = len(TestConfig.KERNEL_COMPONENTS)
+    SYNC_START_MASK = (1 << thread_count) - 1
+    SYNC_STOP_BIT_SHIFT = thread_count
+    SYNC_STOP_MASK = SYNC_START_MASK << SYNC_STOP_BIT_SHIFT
+    SYNC_STARTED_FLAG = 1 << (2 * thread_count)
+    SYNC_STOPPED_FLAG = 1 << (2 * thread_count + 1)
+    SYNC_STARTER_SHIFT = 2 * thread_count + 2
+    SYNC_STOPPER_SHIFT = SYNC_STARTER_SHIFT + 2
 
     if sync_word == 0:
         raise RuntimeError(
@@ -300,22 +304,18 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             "Ensure start_perf_counters() is called in all threads."
         )
 
-    if not (sync_word & GLOBAL_STARTED_BIT):
+    if not (sync_word & SYNC_STARTED_FLAG):
         raise RuntimeError(
             f"Perf counters were never started (global started bit not set); sync_ctrl=0x{sync_word:08x}"
         )
 
-    # Validate that all three threads set their start bits.
-    # This is stricter than before and may surface cache-visibility issues.
-    start_bits = sync_word & 0x7
-    if start_bits != 0x7:
+    # Validate that all threads set their start bits.
+    start_bits = sync_word & SYNC_START_MASK
+    if start_bits != SYNC_START_MASK:
         missing_threads = []
-        if not (start_bits & 0x1):
-            missing_threads.append("UNPACK")
-        if not (start_bits & 0x2):
-            missing_threads.append("MATH")
-        if not (start_bits & 0x4):
-            missing_threads.append("PACK")
+        for i in range(thread_count):
+            if not (start_bits & (1 << i)):
+                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
 
         raise RuntimeError(
             f"Not all threads set their start bit in sync_ctrl. "
@@ -323,15 +323,12 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             f"sync_ctrl=0x{sync_word:08x}"
         )
 
-    if not (sync_word & GLOBAL_STOPPED_BIT):
-        stop_bits = (sync_word >> 3) & 0x7
+    if not (sync_word & SYNC_STOPPED_FLAG):
+        stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
         missing_threads = []
-        if not (stop_bits & 0x1):
-            missing_threads.append("UNPACK")
-        if not (stop_bits & 0x2):
-            missing_threads.append("MATH")
-        if not (stop_bits & 0x4):
-            missing_threads.append("PACK")
+        for i in range(thread_count):
+            if not (stop_bits & (1 << i)):
+                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
 
         raise RuntimeError(
             f"Perf counters were not stopped properly (global stopped bit not set). "
@@ -339,16 +336,13 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             f"sync_ctrl=0x{sync_word:08x}"
         )
 
-    # Check that all three threads set their stop bits
-    stop_bits = (sync_word >> 3) & 0x7
-    if stop_bits != 0x7:
+    # Check that all threads set their stop bits
+    stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
+    if stop_bits != SYNC_START_MASK:
         missing_threads = []
-        if not (stop_bits & 0x1):
-            missing_threads.append("UNPACK")
-        if not (stop_bits & 0x2):
-            missing_threads.append("MATH")
-        if not (stop_bits & 0x4):
-            missing_threads.append("PACK")
+        for i in range(thread_count):
+            if not (stop_bits & (1 << i)):
+                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
 
         raise RuntimeError(
             f"Not all threads called stop_perf_counters(). "
@@ -356,22 +350,20 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             f"sync_ctrl=0x{sync_word:08x}"
         )
 
-    starter_id = (sync_word >> PERF_COUNTERS_STARTER_SHIFT) & PERF_COUNTERS_STARTER_MASK
-    stopper_id = (sync_word >> PERF_COUNTERS_STOPPER_SHIFT) & PERF_COUNTERS_STOPPER_MASK
+    starter_id = (sync_word >> SYNC_STARTER_SHIFT) & PERF_COUNTERS_STARTER_MASK
+    stopper_id = (sync_word >> SYNC_STOPPER_SHIFT) & PERF_COUNTERS_STOPPER_MASK
 
-    thread_map = {0: "UNPACK", 1: "MATH", 2: "PACK"}
-
-    if starter_id not in thread_map:
+    if starter_id not in PERF_COUNTER_TRISC_NAMES:
         raise RuntimeError(
             f"Invalid starter id {starter_id}; sync_ctrl=0x{sync_word:08x}"
         )
-    if stopper_id not in thread_map:
+    if stopper_id not in PERF_COUNTER_TRISC_NAMES:
         raise RuntimeError(
             f"Invalid stopper id {stopper_id}; sync_ctrl=0x{sync_word:08x}"
         )
 
-    starter_thread = thread_map[starter_id]
-    stopper_thread = thread_map[stopper_id]
+    starter_thread = PERF_COUNTER_TRISC_NAMES[starter_id]
+    stopper_thread = PERF_COUNTER_TRISC_NAMES[stopper_id]
 
     # Read metadata from shared buffer
     metadata = read_words_from_device(
