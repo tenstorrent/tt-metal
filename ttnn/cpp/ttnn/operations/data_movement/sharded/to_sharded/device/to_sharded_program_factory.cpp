@@ -36,31 +36,29 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     const auto& output_distribution_spec = output.buffer()->buffer_distribution_spec().value();
     const auto num_output_shards = output_distribution_spec.num_shards();
     const auto bytes_per_element = input.element_size();
-    // const auto num_cores = output.buffer()->buffer_distribution_spec().value().cores_with_data().size();
-    uint32_t elements_per_tensor_row = input.padded_shape()[-1];
+    const auto elements_per_tensor_row = input.logical_shape()[-1];
     uint32_t num_input_pages_in_row = 1;
     uint32_t num_output_pages_in_row = 1;
-    uint32_t elements_per_output_page = output.padded_shape()[-1];
-    uint32_t elements_per_input_page = input.padded_shape()[-1];
+    uint32_t elements_per_output_page = output.logical_shape()[-1];
+    uint32_t elements_per_input_page = input.logical_shape()[-1];
 
     if (input.is_sharded() && input.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t shard_width =
+        uint32_t input_shard_width =
             (input.shard_spec().has_value() ? input.shard_spec().value().shape[1]
                                             : input.nd_shard_spec().value().shard_shape[-1]);
-        elements_per_tensor_row = input.logical_shape()[-1];
-        num_input_pages_in_row = tt::div_up(elements_per_tensor_row, shard_width);
-        elements_per_input_page = shard_width;
+        num_input_pages_in_row = tt::div_up(elements_per_tensor_row, input_shard_width);
+        elements_per_input_page = input_shard_width;
     }
     if (output.is_sharded() &&
         output.memory_config().memory_layout() !=
             TensorMemoryLayout::HEIGHT_SHARDED) {  // This favtory is meant to convert things to ND sharded, but if we
                                                    // decide to make this apply to even converting to legacy sharded,
                                                    // thenm having this branch lets us handle that case too.
-        uint32_t shard_width =
+        uint32_t output_shard_width =
             (output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                              : output.nd_shard_spec().value().shard_shape[-1]);
-        num_output_pages_in_row = tt::div_up(elements_per_tensor_row, shard_width);
-        elements_per_output_page = shard_width;
+        num_output_pages_in_row = tt::div_up(elements_per_tensor_row, output_shard_width);
+        elements_per_output_page = output_shard_width;
     }
 
     const auto input_pages_cb_index = tt::CBIndex::c_0;
@@ -90,7 +88,7 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     const auto num_cores = ordered_cores_with_data.size();
     const auto& ordered_cores_with_data_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    std::cout << "num_cores: " << num_cores << std::endl;
+    // std::cout << "num_cores: " << num_cores << std::endl;
     // Creating CBs
     uint32_t max_number_of_input_pages_overlapping_an_output_page = 1;
     if (elements_per_input_page < elements_per_output_page) {
@@ -134,14 +132,19 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
         static_cast<uint32_t>(elements_per_tensor_row),
     };
 
-    std::cout << "num_shards: " << num_output_shards << std::endl;
-    std::cout << "elements_per_output_page: " << elements_per_output_page << std::endl;
-    std::cout << "elements_per_input_page: " << elements_per_input_page << std::endl;
-    std::cout << "elements_per_tensor_row: " << elements_per_tensor_row << std::endl;
-    std::cout << "bytes_per_element: " << bytes_per_element << std::endl;
-    std::cout << "num_output_pages_in_row: " << num_output_pages_in_row << std::endl;
-    std::cout << "num_input_pages_in_row: " << num_input_pages_in_row << std::endl;
-    std::cout << "num_cores: " << num_cores << std::endl;
+    // std::cout << "num_output_shards: " << num_output_shards << std::endl;
+    // std::cout << "num_input_shards: " << input.buffer()->buffer_distribution_spec().value().num_shards() <<
+    // std::endl; std::cout<<"output_padded_shape: " << output.padded_shape() << std::endl;
+    // std::cout<<"input_padded_shape: " << input.padded_shape() << std::endl;
+    // std::cout<<"output_logical_shape: " << output.logical_shape() << std::endl;
+    // std::cout<<"input_logical_shape: " << input.logical_shape() << std::endl;
+    // std::cout << "elements_per_output_page: " << elements_per_output_page << std::endl;
+    // std::cout << "elements_per_input_page: " << elements_per_input_page << std::endl;
+    // std::cout << "elements_per_tensor_row: " << elements_per_tensor_row << std::endl;
+    // std::cout << "bytes_per_element: " << bytes_per_element << std::endl;
+    // std::cout << "num_output_pages_in_row: " << num_output_pages_in_row << std::endl;
+    // std::cout << "num_input_pages_in_row: " << num_input_pages_in_row << std::endl;
+    // std::cout << "num_cores: " << num_cores << std::endl;
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
