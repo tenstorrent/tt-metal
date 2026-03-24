@@ -418,7 +418,7 @@ struct TopKSampling {
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
         static constexpr uint32_t rand_cb = RandCBId;
         static constexpr uint32_t winner_cb_id = WinnerCBId;
-        static constexpr uint32_t p_bf16 = PBF16;
+        static constexpr float p = __builtin_bit_cast(float, PBF16);
         static constexpr uint32_t topk_scores_stride = TopKScoresStride;
     };
 
@@ -901,10 +901,8 @@ struct TopKSampling {
                     get_write_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_stride);
 
                 uint16_t rand = rand_u16[0];
-                uint16_t bf16_p = static_cast<uint16_t>(CTArgs::p_bf16 >> 16);
 
-                DPRINT << "BRISC sampling: rand=" << BF16(rand)
-                       << " p=" << BF16(bf16_p) << ENDL() << ENDL();
+                DPRINT << "BRISC sampling: rand=" << BF16(rand) << " p=" << CTArgs::p << ENDL() << ENDL();
 
                 DPRINT << "Probabilities: " << ENDL();
                 for (uint32_t i = 0; i < K; ++i) {
@@ -913,39 +911,38 @@ struct TopKSampling {
                 DPRINT << ENDL();
 
                 // Top-P filtering: accumulate probabilities until cum_prob > p
-                uint16_t cum_prob = 0;
+                float cum_prob = 0.0f;
                 uint32_t kept_tokens = K;
                 // skip if p_bf16 is 1.0 (i.e. no top-p filtering)
                 // if (bf16_p != 16256) {
-                    DPRINT << "Top-P filtering as p != " << BF16(16256) << ENDL();
-                    for (uint32_t i = 0; i < K; ++i) {
-                        uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                        DPRINT << "Accumulating probability " << BF16(prob) << " sum so far " << BF16(cum_prob) << ENDL();
-                        cum_prob = bfloat16_add(cum_prob, prob);
-                        DPRINT << "Cumulative probability " << BF16(cum_prob) << ENDL();
-                        if (bfloat16_greater(cum_prob, bf16_p)) {
-                            kept_tokens = i + 1;
-                            break;
-                        }
+                DPRINT << "Top-P filtering as p != " << 1.0f << ENDL();
+                for (uint32_t i = 0; i < K; ++i) {
+                    uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                    DPRINT << "Accumulating probability " << BF16(prob) << " sum so far " << cum_prob << ENDL();
+                    cum_prob += bf16_to_float(prob);
+                    DPRINT << "Cumulative probability " << cum_prob << ENDL();
+                    if (cum_prob > CTArgs::p) {
+                        kept_tokens = i + 1;
+                        break;
+                    }
                     }
                 // } else {
                 //     DPRINT << "No Top-P filtering as p == " << BF16(16256) << ENDL();
                 //     cum_prob = 16256;  // 1.0 in bfloat16
                 // }
 
-                DPRINT << "Top-P kept=" << kept_tokens
-                       << " cum_prob=" << BF16(cum_prob) << ENDL();
+                    DPRINT << "Top-P kept=" << kept_tokens << " cum_prob=" << cum_prob << ENDL();
 
-                // Inverse-CDF random categorical selection
-                uint16_t cum_sum = 0;
-                uint32_t selected_index = global_indices[0];
-                for (uint32_t i = 0; i < kept_tokens; ++i) {
-                    uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                    cum_sum = bfloat16_add(cum_sum, bfloat16_div(prob, cum_prob));
-                    if (bfloat16_greater(cum_sum, rand)) {
-                        selected_index = global_indices[i];
-                        break;
-                    }
+                    // Inverse-CDF random categorical selection
+                    float cum_sum = 0.0f;
+                    uint32_t selected_index = global_indices[0];
+                    for (uint32_t i = 0; i < kept_tokens; ++i) {
+                        uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                        cum_sum += bf16_to_float(prob) / cum_prob;
+                        if (cum_sum > bf16_to_float(rand)) {
+                            selected_index = global_indices[i];
+                            break;
+                        }
                 }
 
                 DPRINT << "Selected index=" << selected_index << ENDL();

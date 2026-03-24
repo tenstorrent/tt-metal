@@ -12,7 +12,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed
+from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -455,9 +455,9 @@ class SamplingOp:
         logger.debug(f"Temperature: {temperature}")
         logger.debug(f"1.0 / temperature: {1.0 / temperature}")
         inv_temp_bf16 = float_to_bfloat16_packed(1.0 / temperature)
-        p_bf16 = float_to_bfloat16_packed(p)
+        p_uint32_cast = float_to_uint32(p)
         logger.debug(f"Inv temp BF16: {inv_temp_bf16}")
-        logger.debug(f"P BF16: {p_bf16}, seed: {seed}")
+        logger.debug(f"P uint32: {p_uint32_cast}, seed: {seed}")
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
         topk_scores_stride = _round_up(k * 2, l1_alignment)
@@ -516,7 +516,7 @@ class SamplingOp:
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_rand_cb", rand_cb),
             ("sampling_winner_cb", winner_cb),
-            ("sampling_p_bf16", p_bf16),
+            ("sampling_p_bf16", p_uint32_cast),
             ("sampling_topk_scores_stride", topk_scores_stride),
         ]
 
