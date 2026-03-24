@@ -100,10 +100,11 @@ def load_gpt2_from_safetensors(
             _assign_tensor(param, _to_bf16_4d(resized))
             continue
 
-        # wpe.weight → positional embedding
+        # wpe.weight → positional embedding (truncate to model's block_size)
         if hf_name == "wpe.weight":
             param = get_param("NanoGPT/pos_emb/weight")
-            _assign_tensor(param, _to_bf16_4d(hf_arr))
+            tgt_seq_len = param.shape()[-2]
+            _assign_tensor(param, _to_bf16_4d(hf_arr[:tgt_seq_len]))
             continue
 
         # ln_f.weight / ln_f.bias → final layer norm
