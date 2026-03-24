@@ -51,9 +51,19 @@ def _set_default_fabric_config(num_devices: int) -> None:
     """
     if int(num_devices) <= 1:
         return
-    is_6u = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    fabric = ttnn.FabricConfig.FABRIC_1D_RING if is_6u else ttnn.FabricConfig.FABRIC_1D
-    ttnn.set_fabric_config(fabric, ttnn.FabricReliabilityMode.STRICT_INIT)
+    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    if is_galaxy:
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        fabric = ttnn.FabricConfig.FABRIC_1D
+    ttnn.set_fabric_config(
+        fabric,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
 
 
 def _parse_tt_dtype(raw: str) -> ttnn.DataType:
@@ -263,9 +273,14 @@ def main() -> int:
 
     # Open a mesh device for consistency with vLLM (even if mesh-cols=1).
     _set_default_fabric_config(n_devices)
+    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    if is_galaxy:
+        dispatch_cfg = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW)
+    else:
+        dispatch_cfg = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH)
     open_kwargs = {
         "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
-        "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+        "dispatch_core_config": dispatch_cfg,
     }
     if device_ids is not None:
         open_kwargs["physical_device_ids"] = device_ids

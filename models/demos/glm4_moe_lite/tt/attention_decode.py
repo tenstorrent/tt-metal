@@ -444,8 +444,8 @@ def flash_mla_and_output(
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
             attn_out_partial,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=cfg.ccl_num_links,
+            topology=cfg.ccl_topology,
             cluster_axis=cfg.tp_axis,
             memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
