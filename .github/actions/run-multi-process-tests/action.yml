@@ -7,10 +7,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Disable hang detection for multi-process tests
-      if: ${{ inputs.auto-triage == 'false' }}
-      shell: bash
-      run: echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=" >> $GITHUB_ENV
     - name: Run Multi-Process tests
       shell: bash
       env:
