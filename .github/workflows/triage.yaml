@@ -47,6 +47,7 @@ jobs:
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+        TT_TRIAGE_OUTPUT_PATH: /work/generated/triage_output.txt
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -75,8 +76,6 @@ jobs:
           auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
-        env:
-          TT_TRIAGE_OUTPUT_PATH: /work/generated/triage_output.txt
         run: |
             mkdir -p generated/test_reports
             uv pip install -r tools/triage/requirements.txt
