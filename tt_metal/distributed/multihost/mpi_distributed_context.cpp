@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <unistd.h>
 #include <vector>
 #include <fmt/format.h>
@@ -274,6 +275,16 @@ static constexpr std::string_view kRankFailureAnnotationFile =
     return fmt::format("MPI rank failure {} on {}", failed_rank_name, failed_hostname);
 }
 
+template <std::size_t N, typename... Args>
+[[nodiscard]] std::string_view format_to_buffer(
+    char (&buffer)[N], fmt::format_string<Args...> format_string, Args&&... args) {
+    static_assert(N > 0);
+    auto result = fmt::format_to_n(buffer, N - 1, format_string, std::forward<Args>(args)...);
+    const auto written = std::min<std::size_t>(result.size, N - 1);
+    buffer[written] = '\0';
+    return std::string_view(buffer, written);
+}
+
 [[nodiscard]] bool hostname_is_generic_for_rank_diagnostics(std::string_view hostname) noexcept {
     return hostname.empty() || hostname == kUnknownHostname || hostname == "localhost" ||
            hostname == "localhost.localdomain" || hostname == "mpirun-host";
@@ -351,39 +362,27 @@ void emit_terminate_annotation_if_enabled(int local_rank, std::string_view local
         return;
     }
 
-    char rank_name[32] = {};
-    const char* rank_name_ptr = kUnknownRankName.data();
-    if (local_rank >= 0) {
-        const int rank_name_len = std::snprintf(rank_name, sizeof(rank_name), "world-rank-%d", local_rank);
-        if (rank_name_len > 0 && static_cast<std::size_t>(rank_name_len) < sizeof(rank_name)) {
-            rank_name_ptr = rank_name;
-        }
-    }
+    char rank_name_buffer[32] = {};
+    const std::string_view rank_name =
+        (local_rank >= 0) ? format_to_buffer(rank_name_buffer, "world-rank-{}", local_rank) : kUnknownRankName;
 
-    char command[1024] = {};
     const bool hostname_known = local_hostname != kUnknownHostname;
-    const int written = std::snprintf(
-        command,
-        sizeof(command),
-        hostname_known ? "\n::error file=%s,title=MPI rank fatal terminate %s on %.*s::"
-                         "std::terminate called in MPI context; rank_name=%s; hostname=%.*s; "
-                         "action=revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
-                       : "\n::error file=%s,title=MPI rank fatal terminate %s::"
-                         "std::terminate called in MPI context; rank_name=%s; hostname=%.*s; "
-                         "action=revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n",
-        kRankFailureAnnotationFile.data(),
-        rank_name_ptr,
-        static_cast<int>(local_hostname.size()),
-        local_hostname.data(),
-        rank_name_ptr,
-        static_cast<int>(local_hostname.size()),
-        local_hostname.data());
-    if (written <= 0) {
-        return;
-    }
+    char title_buffer[256] = {};
+    const std::string_view title =
+        hostname_known ? format_to_buffer(title_buffer, "MPI rank fatal terminate {} on {}", rank_name, local_hostname)
+                       : format_to_buffer(title_buffer, "MPI rank fatal terminate {}", rank_name);
 
-    const auto bytes_to_write = std::min<std::size_t>(static_cast<std::size_t>(written), sizeof(command) - 1);
-    [[maybe_unused]] const auto ignored = write(STDOUT_FILENO, command, bytes_to_write);
+    char command_buffer[1024] = {};
+    const std::string_view command = format_to_buffer(
+        command_buffer,
+        "\n::error file={},title={}::"
+        "std::terminate called in MPI context; rank_name={}; hostname={}; "
+        "action=revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n",
+        kRankFailureAnnotationFile,
+        title,
+        rank_name,
+        local_hostname);
+    [[maybe_unused]] const auto ignored = write(STDOUT_FILENO, command.data(), command.size());
 }
 
 [[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {
@@ -806,33 +805,23 @@ static void mpi_terminate_handler() noexcept {
 #endif
     emit_terminate_annotation_if_enabled(local_rank, local_hostname);
 
-    char rank_name[32] = {};
-    const char* rank_name_ptr = kUnknownRankName.data();
-    if (local_rank >= 0) {
-        const int rank_name_len = std::snprintf(rank_name, sizeof(rank_name), "world-rank-%d", local_rank);
-        if (rank_name_len > 0 && static_cast<std::size_t>(rank_name_len) < sizeof(rank_name)) {
-            rank_name_ptr = rank_name;
-        }
-    }
+    char rank_name_buffer[32] = {};
+    const std::string_view rank_name =
+        (local_rank >= 0) ? format_to_buffer(rank_name_buffer, "world-rank-{}", local_rank) : kUnknownRankName;
 
-    char msg[1024] = {};
-    const int written = std::snprintf(
-        msg,
-        sizeof(msg),
+    char msg_buffer[1024] = {};
+    const std::string_view msg = format_to_buffer(
+        msg_buffer,
         "================================================================\n"
         "FATAL: std::terminate called in MPI context\n"
-        "  Rank   : %s\n"
-        "  Host   : %.*s\n"
+        "  Rank   : {}\n"
+        "  Host   : {}\n"
         "  Cause  : uncaught exception or explicit std::terminate()\n"
         "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
         "================================================================\n",
-        rank_name_ptr,
-        static_cast<int>(local_hostname.size()),
-        local_hostname.data());
-    if (written > 0) {
-        const auto bytes_to_write = std::min<std::size_t>(static_cast<std::size_t>(written), sizeof(msg) - 1);
-        [[maybe_unused]] const auto ignored = write(STDERR_FILENO, msg, bytes_to_write);
-    }
+        rank_name,
+        local_hostname);
+    [[maybe_unused]] const auto ignored = write(STDERR_FILENO, msg.data(), msg.size());
     _exit(kUlfmExitCode);
 }
 
