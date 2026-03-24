@@ -265,7 +265,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_noc1_num_senders"),
         get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
         get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_dst_cb"),
+        get_named_compile_time_arg_val("≈"),
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };
 
