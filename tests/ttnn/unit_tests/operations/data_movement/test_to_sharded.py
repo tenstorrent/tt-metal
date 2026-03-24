@@ -298,6 +298,15 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
             [1, 1, 64, 50],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
+        # WIDTH_SHARDED uneven input (100 cols / 32 → 4 shards, last has 4 cols) → ND sharded
+        (
+            [1, 1, 64, 100],
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 21),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+            [1, 1, 64, 50],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
         # BLOCK_SHARDED even (2×2 grid) → ND sharded
         (
             [1, 1, 128, 128],
@@ -334,19 +343,21 @@ def test_to_sharded_legacy_sharded_to_nd_sharded(
 ):
     torch.manual_seed(0)
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    # torch_input = torch.arange(tensor_shape[-1], dtype=torch.bfloat16).expand(tensor_shape)
-
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
 
     input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
     input_sharded_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
-    sharded_input = ttnn.interleaved_to_sharded(input_tensor, input_sharded_mem_config)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_sharded_mem_config,
+    )
 
     nd_shard_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
     output_sharded_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
-    output_tensor = ttnn.to_sharded(sharded_input, output_sharded_mem_config)
+    output_tensor = ttnn.to_sharded(input_tensor, output_sharded_mem_config)
 
     check_mem_config(output_tensor, output_sharded_mem_config, is_nd_sharded=True)
 
