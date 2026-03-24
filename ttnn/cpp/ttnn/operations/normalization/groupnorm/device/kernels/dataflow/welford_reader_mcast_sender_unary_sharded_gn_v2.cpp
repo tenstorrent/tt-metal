@@ -9,6 +9,8 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -56,9 +58,7 @@ void kernel_main() {
     uint32_t num_mcast_cores_first_group;
     uint32_t num_mcast_cores_last_group;
 
-    // noc addrs for first and last groups
-    uint64_t multicast_first_group_data_noc;
-    uint64_t multicast_last_group_data_noc;
+    // first and last group noc addrs are specified inline via coordinates in multicast write calls
 
     if (has_mcast_first_group and has_mcast_last_group) {
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -104,23 +104,6 @@ void kernel_main() {
     const uint64_t multicast_data_noc = get_noc_multicast_addr(
         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
 
-    if (has_mcast_first_group) {
-        multicast_first_group_data_noc = get_noc_multicast_addr(
-            mcast_first_group_dest_noc_start_x,
-            mcast_first_group_dest_noc_start_y,
-            mcast_first_group_dest_noc_end_x,
-            mcast_first_group_dest_noc_end_y,
-            0);
-    }
-    if (has_mcast_last_group) {
-        multicast_last_group_data_noc = get_noc_multicast_addr(
-            mcast_last_group_dest_noc_start_x,
-            mcast_last_group_dest_noc_start_y,
-            mcast_last_group_dest_noc_end_x,
-            mcast_last_group_dest_noc_end_y,
-            0);
-    }
-
     experimental::Noc noc;
     experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
@@ -149,13 +132,19 @@ void kernel_main() {
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
-    uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+    uint32_t src_addr_in0 = in0_l1_read_addr;
+    experimental::UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
         noc.async_read_barrier();
@@ -217,11 +206,18 @@ void kernel_main() {
 
             // mcast to other cores
             if constexpr (num_mcast_cores > 1) {
-                noc_async_write_multicast(
-                    global_means_ptr,
-                    multicast_data_noc | global_means_ptr,
+                experimental::MulticastEndpoint mcast_dst;
+                noc.async_write_multicast(
+                    experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                    mcast_dst,
                     2 * single_tile_size_bytes,
                     num_mcast_cores_mid_group,
+                    {},
+                    {.noc_x_start = mcast_dest_noc_start_x,
+                     .noc_y_start = mcast_dest_noc_start_y,
+                     .noc_x_end = mcast_dest_noc_end_x,
+                     .noc_y_end = mcast_dest_noc_end_y,
+                     .addr = global_means_ptr},
                     true);
                 reduce_sender_sem.set_multicast(
                     noc,
@@ -233,11 +229,17 @@ void kernel_main() {
                     false);
 
                 if (has_mcast_first_group) {
-                    noc_async_write_multicast(
-                        global_means_ptr,
-                        multicast_first_group_data_noc | global_means_ptr,
+                    noc.async_write_multicast(
+                        experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                        mcast_dst,
                         2 * single_tile_size_bytes,
                         num_mcast_cores_first_group,
+                        {},
+                        {.noc_x_start = mcast_first_group_dest_noc_start_x,
+                         .noc_y_start = mcast_first_group_dest_noc_start_y,
+                         .noc_x_end = mcast_first_group_dest_noc_end_x,
+                         .noc_y_end = mcast_first_group_dest_noc_end_y,
+                         .addr = global_means_ptr},
                         true);
                     reduce_sender_sem.set_multicast(
                         noc,
@@ -250,11 +252,17 @@ void kernel_main() {
                 }
 
                 if (has_mcast_last_group) {
-                    noc_async_write_multicast(
-                        global_means_ptr,
-                        multicast_last_group_data_noc | global_means_ptr,
+                    noc.async_write_multicast(
+                        experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                        mcast_dst,
                         2 * single_tile_size_bytes,
                         num_mcast_cores_last_group,
+                        {},
+                        {.noc_x_start = mcast_last_group_dest_noc_start_x,
+                         .noc_y_start = mcast_last_group_dest_noc_start_y,
+                         .noc_x_end = mcast_last_group_dest_noc_end_x,
+                         .noc_y_end = mcast_last_group_dest_noc_end_y,
+                         .addr = global_means_ptr},
                         true);
                     reduce_sender_sem.set_multicast(
                         noc,
@@ -282,10 +290,16 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
-        uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+        uint32_t src_addr_in0 = in0_l1_read_addr;
+        experimental::UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes_with_stride;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();

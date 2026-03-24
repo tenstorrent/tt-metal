@@ -114,7 +114,12 @@ void kernel_main() {
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
         for (uint32_t j = 0; j < block_w; ++j) {
-            noc_async_read_tile(input_mask_tile_id, mask, l1_write_addr_input_mask);
+            noc.async_read(
+                mask,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                input_mask_single_tile_size_bytes,
+                {.page_id = input_mask_tile_id},
+                {});
             input_mask_tile_id += 1;
             noc.async_read_barrier();
             l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
@@ -142,9 +147,8 @@ void kernel_main() {
         // Read the first 64 bytes of the tile into the first face
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 64);
+            noc.async_read(
+                gamma, experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma), 64, {.page_id = tile_id}, {});
             l1_write_addr_gamma += gamma_tile_bytes;
         }
         noc.async_read_barrier();
@@ -152,9 +156,14 @@ void kernel_main() {
         // Copy the second set of 32 bytes into the second face
         l1_write_addr_gamma = base_l1_write_addr_gamma;
 
+        experimental::UnicastEndpoint self_ep_gamma;
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint64_t noc_read_addr = get_noc_addr(l1_write_addr_gamma + 32);
-            noc_async_read(noc_read_addr, l1_write_addr_gamma + 512, 32);
+            noc.async_read(
+                self_ep_gamma,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
+                32,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
+                {});
             l1_write_addr_gamma += gamma_tile_bytes;
         }
 
@@ -176,8 +185,8 @@ void kernel_main() {
         // Read the first 64 bytes of the tile into the first face
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
-            uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-            noc_async_read(beta_noc_addr, l1_write_addr_beta, 64);
+            noc.async_read(
+                beta, experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta), 64, {.page_id = tile_id}, {});
             l1_write_addr_beta += beta_tile_bytes;
         }
         noc.async_read_barrier();
@@ -185,9 +194,14 @@ void kernel_main() {
         // Copy the second set of 32 bytes into the second face
         l1_write_addr_beta = base_l1_write_addr_beta;
 
+        experimental::UnicastEndpoint self_ep_beta;
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint64_t noc_read_addr = get_noc_addr(l1_write_addr_beta + 32);
-            noc_async_read(noc_read_addr, l1_write_addr_beta + 512, 32);
+            noc.async_read(
+                self_ep_beta,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
+                32,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
+                {});
             l1_write_addr_beta += beta_tile_bytes;
         }
 
@@ -215,8 +229,12 @@ void kernel_main() {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_out.wait_front(1);
                     const uint32_t l1_read_addr = cb_out.get_read_ptr();
-                    noc_async_write_tile(
-                        out_start_id + index_b_offset + out_block_index_offset + mt_offset + nt, dst_a, l1_read_addr);
+                    noc.async_write(
+                        experimental::CoreLocalMem<uint32_t>(l1_read_addr),
+                        dst_a,
+                        single_tile_size_bytes,
+                        {},
+                        {.page_id = out_start_id + index_b_offset + out_block_index_offset + mt_offset + nt});
                     noc.async_write_barrier();
                     cb_out.pop_front(1);
                 }

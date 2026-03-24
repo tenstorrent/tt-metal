@@ -118,7 +118,12 @@ void kernel_main() {
             cb_input_mask.reserve_back(block_w);
             uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
             for (uint32_t j = 0; j < block_w; ++j) {
-                noc_async_read_tile(input_mask_tile_id, mask, l1_write_addr_input_mask);
+                noc.async_read(
+                    mask,
+                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    input_mask_single_tile_size_bytes,
+                    {.page_id = input_mask_tile_id},
+                    {});
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
@@ -162,9 +167,12 @@ void kernel_main() {
                     // Read the first 64 bytes of the tile into the first face
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = gamma_tile_start_id + w;
-                        uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-
-                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 64);
+                        noc.async_read(
+                            gamma,
+                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma),
+                            64,
+                            {.page_id = tile_id},
+                            {});
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc.async_read_barrier();
@@ -172,9 +180,14 @@ void kernel_main() {
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_gamma = base_l1_write_addr_gamma;
 
+                    experimental::UnicastEndpoint self_ep_gamma;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint64_t noc_read_addr = get_noc_addr(l1_write_addr_gamma + 32);
-                        noc_async_read(noc_read_addr, l1_write_addr_gamma + 512, 32);
+                        noc.async_read(
+                            self_ep_gamma,
+                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
+                            32,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
+                            {});
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
 
@@ -196,8 +209,12 @@ void kernel_main() {
                     // Read the first 64 bytes of the tile into the first face
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = beta_tile_start_id + w;
-                        uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-                        noc_async_read(beta_noc_addr, l1_write_addr_beta, 64);
+                        noc.async_read(
+                            beta,
+                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta),
+                            64,
+                            {.page_id = tile_id},
+                            {});
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc.async_read_barrier();
@@ -205,9 +222,14 @@ void kernel_main() {
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_beta = base_l1_write_addr_beta;
 
+                    experimental::UnicastEndpoint self_ep_beta;
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint64_t noc_read_addr = get_noc_addr(l1_write_addr_beta + 32);
-                        noc_async_read(noc_read_addr, l1_write_addr_beta + 512, 32);
+                        noc.async_read(
+                            self_ep_beta,
+                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
+                            32,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
+                            {});
                         l1_write_addr_beta += beta_tile_bytes;
                     }
 
@@ -239,11 +261,13 @@ void kernel_main() {
                         // Checks, only relevant to the last group, that we are not indexing out of bounds
                         // for the cases where our last group does not span the length of our max tile span for a group
                         if ((index_g_offset + nt) < row_tile_max_index) {
-                            noc_async_write_tile(
-                                out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                    index_b_offset + index_g_offset,
+                            noc.async_write(
+                                experimental::CoreLocalMem<uint32_t>(l1_read_addr),
                                 dst_a,
-                                l1_read_addr);
+                                single_tile_size_bytes,
+                                {},
+                                {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                            index_b_offset + index_g_offset});
                         }
                         l1_read_addr += single_tile_size_bytes;
                     }

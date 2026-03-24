@@ -10,6 +10,8 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
@@ -74,13 +76,19 @@ void kernel_main() {
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
-    uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+    uint32_t src_addr_in0 = in0_l1_read_addr;
+    experimental::UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
         noc.async_read_barrier();
@@ -119,7 +127,12 @@ void kernel_main() {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.reserve_back(1);
                     const uint32_t l1_write_addr = cb_in0.get_write_ptr();
-                    noc_async_read_tile(start_id + index_b_offset + mt_offset + nt, src_a, l1_write_addr);
+                    noc.async_read(
+                        src_a,
+                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        src0_tile_bytes,
+                        {.page_id = start_id + index_b_offset + mt_offset + nt},
+                        {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
                 }
@@ -183,7 +196,12 @@ void kernel_main() {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.reserve_back(1);
                     const uint32_t l1_write_addr = cb_in0.get_write_ptr();
-                    noc_async_read_tile(start_id + index_b_offset + mt_offset + nt, src_a, l1_write_addr);
+                    noc.async_read(
+                        src_a,
+                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        src0_tile_bytes,
+                        {.page_id = start_id + index_b_offset + mt_offset + nt},
+                        {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
                 }
@@ -199,10 +217,16 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
-        uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+        uint32_t src_addr_in0 = in0_l1_read_addr;
+        experimental::UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes_with_stride;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();
