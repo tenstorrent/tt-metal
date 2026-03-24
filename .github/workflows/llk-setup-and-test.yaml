@@ -172,12 +172,16 @@ jobs:
 
       # Step 4: Zip performance data if perf tests were run
       - name: Zip performance data
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('${{ env.LLK_PATH }}/tests/python_tests/perf_data/**') != ''
+        if: always()
         shell: bash
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         run: |
-          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
-          echo "Performance data zipped successfully"
+          if [ -d perf_data ] && [ -n "$(ls -A perf_data 2>/dev/null)" ]; then
+            zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
+            echo "Performance data zipped successfully"
+          else
+            echo "No performance data found, skipping zip"
+          fi
 
       # Step 4.1: Upload generated info file per runner
       - name: Upload code coverage for this runner
@@ -283,3 +287,4 @@ jobs:
       #     files: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
       #     name: coverage-report-${{ env.CHIP_ARCH }}
       #     verbose: true
+
