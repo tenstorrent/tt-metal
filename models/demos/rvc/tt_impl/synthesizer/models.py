@@ -243,9 +243,7 @@ class ResidualCouplingBlock:
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         for flow in self.flows:
-            print(f"x shape before flow: {x.shape}, memory config: {x.memory_config()}")  # Debug print
             x = flow(_flip_last_dim_ttnn(x), g=g)
-            print(f"x shape after flow: {x.shape}, memory config: {x.memory_config()}")
         return x
 
 
@@ -622,24 +620,15 @@ class SynthesizerTrnMsNSF:
         conditioning = self.embedding(speaker_id)
         conditioning = ttnn.unsqueeze(conditioning, dim=1)
         prior_mean, prior_log = self.enc_p(phone, pitch)
-        print(f"prior_mean shape: {prior_mean.shape}, prior_log shape: {prior_log.shape}")
-        print(
-            f"prior_mean memory config: {prior_mean.memory_config()}, prior_log memory config: {prior_log.memory_config()}"
-        )
         latent = (
             prior_mean
             + ttnn.exp(prior_log, output_tensor=prior_log)
             * ttnn_randn_fallback(tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device)
             * 0.66666
         )
-        print(f"latent memory config: {latent.memory_config()}")
-        print(f"latent shape: {latent.shape}, conditioning shape: {conditioning.shape}")
         latent_flow = self.flow(latent, conditioning)
-        print(f"latent_flow shape: {latent_flow.shape}, conditioning shape: {conditioning.shape}")
-        print(f"latent_flow memory config: {latent_flow.memory_config()}")
         latent_flow = ttnn.to_memory_config(latent_flow, ttnn.DRAM_MEMORY_CONFIG)
         out = self.dec(latent_flow, nsf_f0, conditioning)
-        print(f"out memory config: {out.memory_config()}")
         return out
 
 
