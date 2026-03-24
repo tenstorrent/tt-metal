@@ -17,66 +17,54 @@
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
-uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
-    uint16_t sign_a = bf16_a & 0x8000;
-    uint16_t sign_b = bf16_b & 0x8000;
-    int16_t exp_a = (bf16_a & 0x7F80) >> 7;
-    int16_t exp_b = (bf16_b & 0x7F80) >> 7;
-    uint16_t mant_a = (bf16_a & 0x007F) | 0x0080;
-    uint16_t mant_b = (bf16_b & 0x007F) | 0x0080;
+// Bit-cast helpers without UB
+static inline uint32_t float_to_bits(float x) {
+    uint32_t u;
+    std::memcpy(&u, &x, sizeof(u));
+    return u;
+}
 
-    if (exp_a == 0) {
-        mant_a &= 0x007F;
-    }
-    if (exp_b == 0) {
-        mant_b &= 0x007F;
-    }
+static inline float bits_to_float(uint32_t u) {
+    float x;
+    std::memcpy(&x, &u, sizeof(x));
+    return x;
+}
 
-    if (exp_a > exp_b) {
-        mant_b >>= (exp_a - exp_b);
-    } else if (exp_b > exp_a) {
-        mant_a >>= (exp_b - exp_a);
-        exp_a = exp_b;
-    }
+// Convert bf16 bit-pattern to float32 exactly
+static inline float bf16_to_float(uint16_t bf) {
+    uint32_t u32 = static_cast<uint32_t>(bf) << 16;
+    return bits_to_float(u32);
+}
 
-    uint16_t mant_res;
-    uint16_t sign_res;
-    if (sign_a == sign_b) {
-        mant_res = mant_a + mant_b;
-        sign_res = sign_a;
-    } else {
-        if (mant_a >= mant_b) {
-            mant_res = mant_a - mant_b;
-            sign_res = sign_a;
-        } else {
-            mant_res = mant_b - mant_a;
-            sign_res = sign_b;
+// Convert float32 to bf16 bit-pattern using round-to-nearest-even
+static inline uint16_t float_to_bf16_rne(float x) {
+    uint32_t u = float_to_bits(x);
+
+    // Preserve NaNs as NaNs. Make sure result mantissa is nonzero.
+    const uint32_t exp_mask  = 0x7F800000u;
+    const uint32_t frac_mask = 0x007FFFFFu;
+    if ((u & exp_mask) == exp_mask && (u & frac_mask) != 0) {
+        uint16_t upper = static_cast<uint16_t>(u >> 16);
+        // Ensure NaN payload remains NaN after truncation
+        if ((upper & 0x007Fu) == 0) {
+            upper |= 0x0001u;
         }
+        return upper;
     }
 
-    if (mant_res == 0) {
-        return 0;
-    }
+    // Round-to-nearest-even when truncating low 16 bits
+    // bias = 0x7FFF + lsb_of_upper
+    uint32_t lsb = (u >> 16) & 1u;
+    u += 0x7FFFu + lsb;
 
-    if (mant_res & 0x0100) {
-        mant_res >>= 1;
-        exp_a += 1;
-    }
-    while (mant_res && !(mant_res & 0x0080)) {
-        mant_res <<= 1;
-        exp_a -= 1;
-    }
+    return static_cast<uint16_t>(u >> 16);
+}
 
-    if (exp_a >= 0xFF) {
-        return sign_res | 0x7F80;
-    }
-    if (exp_a <= 0) {
-        mant_res >>= (1 - exp_a);
-        exp_a = 0;
-    }
-
-    uint16_t result = sign_res | (exp_a << 7) | (mant_res & 0x007F);
-    return result;
+uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
+    float a = bf16_to_float(bf16_a);
+    float b = bf16_to_float(bf16_b);
+    float sum = a + b;
+    return float_to_bf16_rne(sum);
 }
 
 uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
@@ -928,21 +916,22 @@ struct TopKSampling {
                 uint16_t cum_prob = 0;
                 uint32_t kept_tokens = K;
                 // skip if p_bf16 is 1.0 (i.e. no top-p filtering)
-                if (bf16_p != 16256) {
+                // if (bf16_p != 16256) {
                     DPRINT << "Top-P filtering as p != " << BF16(16256) << ENDL();
                     for (uint32_t i = 0; i < K; ++i) {
                         uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                        DPRINT << "Accumulating probability " << BF16(prob) << ENDL();
+                        DPRINT << "Accumulating probability " << BF16(prob) << " sum so far " << BF16(cum_prob) << ENDL();
                         cum_prob = bfloat16_add(cum_prob, prob);
+                        DPRINT << "Cumulative probability " << BF16(cum_prob) << ENDL();
                         if (bfloat16_greater(cum_prob, bf16_p)) {
                             kept_tokens = i + 1;
                             break;
                         }
                     }
-                } else {
-                    DPRINT << "No Top-P filtering as p == " << BF16(16256) << ENDL();
-                    cum_prob = 16256;  // 1.0 in bfloat16
-                }
+                // } else {
+                //     DPRINT << "No Top-P filtering as p == " << BF16(16256) << ENDL();
+                //     cum_prob = 16256;  // 1.0 in bfloat16
+                // }
 
                 DPRINT << "Top-P kept=" << kept_tokens
                        << " cum_prob=" << BF16(cum_prob) << ENDL();
