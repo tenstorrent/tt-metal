@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
-from models.tt_dit.models.transformers.ltx.audio_ltx import LTXAudioVideoTransformerBlock, LTXAudioVideoTransformerModel
+from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerBlock, LTXTransformerModel
 from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
@@ -340,7 +340,7 @@ def test_av_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     logger.info(f"Block 0: {len(block_state)} keys")
 
     # Create TT block
-    tt_block = LTXAudioVideoTransformerBlock(
+    tt_block = LTXTransformerBlock(
         video_dim=video_dim,
         audio_dim=audio_dim,
         video_ffn_dim=video_dim * 4,
@@ -348,6 +348,7 @@ def test_av_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        has_audio=True,
     )
     tt_block.load_torch_state_dict(block_state)
 
@@ -464,11 +465,12 @@ def test_av_model_with_real_weights(mesh_device: ttnn.MeshDevice, sp_axis: int, 
     )
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
 
-    model = LTXAudioVideoTransformerModel(
+    model = LTXTransformerModel(
         num_layers=1,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        has_audio=True,
     )
     model.load_torch_state_dict(filt)
 
@@ -511,8 +513,8 @@ def test_av_model_with_real_weights(mesh_device: ttnn.MeshDevice, sp_axis: int, 
         timestep_torch=torch.tensor([0.5]),
     )
 
-    vh = LTXAudioVideoTransformerModel.device_to_host(vo)
-    ah = LTXAudioVideoTransformerModel.device_to_host(ao)
+    vh = LTXTransformerModel.device_to_host(vo)
+    ah = LTXTransformerModel.device_to_host(ao)
 
     assert vh.shape == (1, 1, video_N, 128), f"Video shape: {vh.shape}"
     assert ah.shape == (1, 1, audio_N, 128), f"Audio shape: {ah.shape}"
@@ -642,11 +644,12 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
         tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
     )
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    tt_model = LTXAudioVideoTransformerModel(
+    tt_model = LTXTransformerModel(
         num_layers=1,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        has_audio=True,
     )
     tt_model.load_torch_state_dict(filt)
 
@@ -740,8 +743,8 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
         audio_cross_pe_sin_full=tt_a_xsin_full,
     )
 
-    tt_video = LTXAudioVideoTransformerModel.device_to_host(vo).squeeze(0)
-    tt_audio = LTXAudioVideoTransformerModel.device_to_host(ao).squeeze(0)
+    tt_video = LTXTransformerModel.device_to_host(vo).squeeze(0)
+    tt_audio = LTXTransformerModel.device_to_host(ao).squeeze(0)
 
     video_pcc = _compute_pcc(tt_video, ref_video)
     audio_pcc = _compute_pcc(tt_audio, ref_audio)
