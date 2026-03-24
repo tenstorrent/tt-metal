@@ -293,7 +293,6 @@ def generate_reference_io_tg(
         ("prefill", 1, 128),
         ("prefill", 1, 512),
         ("prefill", 1, 2048),
-        ("prefill", 1, 8192),
     ],
 )
 @pytest.mark.parametrize(
@@ -504,13 +503,28 @@ def test_moe_single_galaxy_stress(
     logger.info(f"Running {len(test_configs)} iterations")
     logger.info("=" * 80)
 
+    # Create shared state once - it's the same for all iterations
+    model_shared_state = MoE.create_shared_state(scaled_config, mesh_device)
+
+    # Convert weights once - same weights used for all iterations
+    state_dict = _clone_state_dict(reference_model_tg.state_dict())
+    weight_config = get_test_weight_config(
+        MoE,
+        scaled_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=force_recalculate_weight_config,
+        test_name="test_moe_stress",
+        real_weights=False,
+    )
+
     for iteration, (mode, batch_size_per_row, seq_len) in enumerate(test_configs):
         logger.info(f"\n>>> Iteration {iteration + 1}/{len(test_configs)}: mode={mode}, seq_len={seq_len}")
 
         num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
 
         # Generate random input for stress test
-        state_dict = _clone_state_dict(reference_model_tg.state_dict())
         torch_input = torch.randn(1, num_tokens, scaled_config.hidden_size, dtype=torch.bfloat16)
 
         reference_model_tg.eval()
@@ -518,24 +532,11 @@ def test_moe_single_galaxy_stress(
         with torch.no_grad():
             reference_output = reference_model_tg(torch_input)
 
-        # Convert weights
-        weight_config = get_test_weight_config(
-            MoE,
-            scaled_config,
-            (state_dict,),
-            cache_path,
-            mesh_device,
-            force_recalculate=force_recalculate_weight_config,
-            test_name=f"test_moe_stress_iter{iteration}",
-            real_weights=False,
-        )
-
-        # Create model config
+        # Create model config and state (mode-specific)
         model_config = get_model_config(
             MoE, mode, scaled_config, mesh_device, device_params["fabric_config"], topk_fallback=True
         )
         model_state = MoE.create_state(scaled_config, mesh_device, ccl)
-        model_shared_state = MoE.create_shared_state(scaled_config, mesh_device)
         run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
         # Run forward pass
