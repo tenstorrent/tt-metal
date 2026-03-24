@@ -415,46 +415,35 @@ def get_or_create_model(cur, model_cache, source_file, hf_model, schema=DEFAULT_
 
 
 def parse_mesh_from_machine_info(machine_info, arguments=None):
-    """Extract mesh configuration from tensor arguments (V2 format).
+    """Extract mesh configuration from machine_info.
 
-    In V2 format, tensor_placement is stored in the tensor arguments themselves,
-    not in machine_info. This function extracts mesh config from the first tensor argument.
+    Reads mesh_device_shape and device_count directly from the execution's
+    machine_info block.  Falls back to computing device_count as the product
+    of mesh_shape dimensions when machine_info.device_count is absent.
 
     Returns: (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
     """
-    placement = None
-
-    # V2 format: Extract tensor_placement from first tensor argument
-    if arguments:
-        for arg_value in arguments.values():
-            if isinstance(arg_value, dict) and arg_value.get("type") == "ttnn.Tensor":
-                if "tensor_placement" in arg_value:
-                    placement = arg_value["tensor_placement"]
-                    break
-
-    if not placement:
-        # No tensor_placement = no specific mesh config
-        return None, None, None, None, None
-
-    mesh_shape_str = placement.get("mesh_device_shape")
-    mesh_shape = parse_array_value(mesh_shape_str)
+    mesh_shape = parse_array_value(machine_info.get("mesh_device_shape"))
 
     if not mesh_shape:
         return None, None, None, None, None
 
-    # Calculate device count
     device_count = machine_info.get("device_count")
     if device_count is None:
         device_count = 1
         for dim in mesh_shape:
             device_count *= dim
 
-    # Parse placement type
-    placement_str = placement.get("placement")
-    placement_type, shard_dim = parse_placement(placement_str)
-
-    # Parse distribution shape
-    distribution_shape = parse_array_value(placement.get("distribution_shape"))
+    # Per-tensor placement info (still read from arguments for placement_type)
+    placement_type, shard_dim, distribution_shape = None, None, None
+    if arguments:
+        for arg_value in arguments.values():
+            if isinstance(arg_value, dict) and arg_value.get("type") == "ttnn.Tensor":
+                placement = arg_value.get("tensor_placement")
+                if placement:
+                    placement_type, shard_dim = parse_placement(placement.get("placement"))
+                    distribution_shape = parse_array_value(placement.get("distribution_shape"))
+                    break
 
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
@@ -601,10 +590,32 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                     f"Re-trace with generic_ops_tracer.py to produce a JSON with config hashes."
                 )
 
-            for execution in executions:
+            for exec_idx, execution in enumerate(executions):
                 source = execution.get("source")
                 machine_info = execution.get("machine_info", {})
                 execution_count = execution.get("count", 1)
+
+                # Validate required fields
+                missing = []
+                if not source:
+                    missing.append("execution.source")
+                if not machine_info.get("board_type"):
+                    missing.append("machine_info.board_type")
+                if not machine_info.get("device_series"):
+                    missing.append("machine_info.device_series")
+                if machine_info.get("card_count") is None:
+                    missing.append("machine_info.card_count")
+                if not machine_info.get("mesh_device_shape"):
+                    missing.append("machine_info.mesh_device_shape")
+                if machine_info.get("device_count") is None:
+                    missing.append("machine_info.device_count")
+                if missing:
+                    raise ValueError(
+                        f"Operation '{op_name}', config_hash '{config_hash}', "
+                        f"execution index {exec_idx}: missing required fields: {', '.join(missing)}. "
+                        f"Re-trace with generic_ops_tracer.py to produce complete execution data."
+                        f"Ensure that generic_ops_tracer.py is generating configuration according to model_tracer/README.md"
+                    )
 
                 # Parse source to get model info
                 source_file, hf_model = parse_source(source)
