@@ -298,7 +298,7 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
             [1, 1, 64, 50],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
-        # WIDTH_SHARDED uneven input (100 cols / 32 → 4 shards, last has 4 cols) → ND sharded
+        # WIDTH_SHARDED uneven input with unaligned shard width (100 cols / 21 → 5 shards, last has 5 cols) → ND sharded
         (
             [1, 1, 64, 100],
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -363,4 +363,136 @@ def test_to_sharded_legacy_sharded_to_nd_sharded(
 
     output_torch = ttnn.to_torch(output_tensor)
 
+    assert_equal(torch_input, output_torch)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, input_nd_shard_shape, input_grid, output_nd_shard_shape, output_grid",
+    [
+        # ---- Even input & output, sharded across dim 0 (batch) ----
+        # 3-D: [6,32,64] sharded [2,32,64]→3 shards, reshard to [3,32,64]→2 shards
+        (
+            [6, 32, 64],
+            [2, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+            [3, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        # ---- Even input & output, sharded across dims 0 and 1 ----
+        # 3-D: [6,8,64] sharded [2,4,64]→6 shards → reshard to [3,8,64]→2 shards
+        (
+            [6, 8, 64],
+            [2, 4, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            [3, 8, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        # ---- 4-D sharded across batch+channel (dims 0,1), even ----
+        # [4,6,16,32] sharded [1,2,16,32]→12 shards → reshard to [2,3,16,32]→4 shards
+        (
+            [4, 6, 16, 32],
+            [1, 2, 16, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1))}),
+            [2, 3, 16, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # ---- Uneven input shards (dim 0 doesn't divide evenly) ----
+        # [5,32,64] sharded [2,32,64]→3 shards (last shard has 1 along dim0), output even [5,32,64]→1 shard
+        (
+            [5, 32, 64],
+            [2, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+            [5, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ),
+        # ---- Uneven output shards (dim 0 doesn't divide evenly) ----
+        # [6,32,64] sharded [6,32,64]→1 shard, reshard to [4,32,64]→2 shards (last shard has 2 along dim0)
+        (
+            [6, 32, 64],
+            [6, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            [4, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        # ---- Both input and output uneven ----
+        # [7,32,64] sharded [3,32,64]→3 shards (last has 1), reshard to [4,32,64]→2 shards (last has 3)
+        (
+            [7, 32, 64],
+            [3, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+            [4, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        # ---- Unaligned shard width on input ----
+        # [6,8,50] sharded [2,4,17]→6 shards (shard width 17, not 16/32 aligned), output aligned
+        (
+            [6, 8, 50],
+            [2, 4, 17],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            [3, 8, 50],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        # ---- Unaligned shard width on output ----
+        # [6,8,64] sharded [2,4,64]→6 shards (aligned), output [3,4,21]→unaligned width 21
+        (
+            [6, 8, 64],
+            [2, 4, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            [3, 4, 21],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # ---- Both input and output unaligned shard widths ----
+        # [6,8,50] sharded [2,4,17]→18 shards, reshard to [3,4,13]→16 shards
+        (
+            [6, 8, 50],
+            [2, 4, 17],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            [3, 4, 13],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1))}),
+        ),
+        # ---- Uneven + unaligned combined ----
+        # [5,7,50] sharded [2,3,17]→12 shards (uneven dim0, dim1; unaligned width), reshard to [3,4,25]→4 shards (uneven; width 25)
+        (
+            [5, 7, 50],
+            [2, 3, 17],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 1))}),
+            [3, 4, 25],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_to_sharded_nd_sharded_to_nd_sharded(
+    device,
+    tensor_shape,
+    input_nd_shard_shape,
+    input_grid,
+    output_nd_shard_shape,
+    output_grid,
+    shard_orientation,
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_nd_spec = ttnn.NdShardSpec(input_nd_shard_shape, input_grid, orientation=shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_nd_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
+    output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, output_nd_spec)
+
+    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+
+    check_mem_config(output_tensor, output_mem_config, is_nd_sharded=True)
+
+    output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
