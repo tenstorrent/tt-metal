@@ -55,15 +55,16 @@ void verify_numerical_configuration(
     if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != MathFidelity::HiFi4) {
         return;
     }
-    // Only print warning once per process.
+    // Only print warning once per process
+    // (compare-and-swap so concurrent callers do not double-log).
     static std::atomic<bool> warning_generated{false};
-    if (!warning_generated) {
+    bool expected = false;
+    if (warning_generated.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         log_warning(
             tt::LogOp,
             "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
             "bug. "
             "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-        warning_generated = true;
     }
 }
 
