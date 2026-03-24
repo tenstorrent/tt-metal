@@ -302,6 +302,7 @@ class JobManager:
 
     def generate_slurm_script(
         self,
+        training_config,
         config: Dict,
         partition: str,
         nodes: int,
@@ -311,6 +312,7 @@ class JobManager:
         """Generate a SLURM batch script.
 
         Args:
+            training_config: Training type configuration object
             config: Training configuration dictionary
             partition: SLURM partition name
             nodes: Number of nodes to request
@@ -320,16 +322,17 @@ class JobManager:
         Returns:
             Generated SLURM script content
         """
-        # Use script path relative to tt_metal_runtime_root for consistent resolution
+        # Use script path from training_config relative to tt_metal_runtime_root
         tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
-        script_path = Path(f"{tt_train_root}/sources/examples/gsm8k_finetune/gsm8k_finetune.py")
+        script_path = Path(f"{tt_train_root}/sources/examples/{training_config.script_path}")
 
         # If the script doesn't exist at the expected location, try relative to output_dir
         # (for cases where jobs are run from /data and script is copied there)
+        script_name = Path(training_config.script_path).name
         if not script_path.exists():
-            script_path = output_dir.parent.parent / "gsm8k_finetune.py"
+            script_path = output_dir.parent.parent / script_name
         if not script_path.exists():
-            script_path = Path(__file__).parent / "gsm8k_finetune.py"
+            script_path = Path(__file__).parent / script_name
 
         is_lb_partition = "lb" in partition.lower()
 
@@ -456,6 +459,7 @@ class JobManager:
 
     def submit_job(
         self,
+        training_config,
         config: Dict,
         partition: str,
         nodes: int = 1,
@@ -464,8 +468,9 @@ class JobManager:
         """Submit a training job to SLURM.
 
         Args:
-            config: Training configuration dictionary
-            partition: SLURM partition name
+            training_config: Training type configuration object (required)
+            config: Training configuration dictionary (required)
+            partition: SLURM partition name (required)
             nodes: Number of nodes to request
             job_name: Optional job name (auto-generated if not provided)
 
@@ -501,7 +506,7 @@ class JobManager:
         except Exception as e:
             return False, f"Failed to create config: {e}", None
 
-        script_content = self.generate_slurm_script(config, partition, nodes, job_name, job_dir)
+        script_content = self.generate_slurm_script(training_config, config, partition, nodes, job_name, job_dir)
         script_path = job_dir / "submit.sh"
         with open(script_path, "w") as f:
             f.write(script_content)
