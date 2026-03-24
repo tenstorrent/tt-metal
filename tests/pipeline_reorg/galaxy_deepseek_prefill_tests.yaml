@@ -4,10 +4,9 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   test_type: Test type identifier for filtering (workflow_dispatch test-type selection).
-#   sku: Machine type to target (e.g. wh_galaxy, bh_galaxy).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   timeout: The maximum allowed runtime for this job in minutes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -15,7 +14,8 @@
 - name: "(Galaxy) DeepSeek Prefill module tests"
   cmd: export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
   test_type: module
-  sku: bh_galaxy
+  skus:
+    bh_galaxy:
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
-  timeout: 30
