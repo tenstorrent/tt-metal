@@ -155,7 +155,7 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/write_to_nd_shard_pages_row_major.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_reader.cpp",
         ordered_cores_with_data_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/debug/dprint.h"
 
 struct InputPageReadInfo {
     uint32_t input_first_page_id;
@@ -30,13 +29,10 @@ inline InputPageReadInfo get_input_page_read_info(
     uint32_t bytes_per_input_page) {
     const uint32_t row = output_page_id / num_output_pages_in_row;
     const uint32_t col = (output_page_id % num_output_pages_in_row) * elements_per_output_page;
-    // const uint32_t element_id = row * elements_per_row + col;
-    // const uint32_t bytes_per_input_page = elements_per_input_page * bytes_per_element;
     const uint32_t input_first_page_offset = (col % elements_per_input_page) * bytes_per_element;
     const uint32_t output_end_col = (col + elements_per_output_page) < elements_per_tensor_row
                                         ? (col + elements_per_output_page - 1)
                                         : elements_per_tensor_row - 1;
-    // DPRINT << "output_end_col: " << output_end_col << ENDL();
 
     const uint32_t input_first_page_id = row * num_input_pages_in_row + (col / elements_per_input_page);
     const uint32_t input_first_page_bytes = bytes_per_input_page - input_first_page_offset;
@@ -79,25 +75,12 @@ void kernel_main() {
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
 
     constexpr uint32_t input_page_size_bytes = elements_per_input_page * bytes_per_element;
-    // constexpr uint32_t output_page_size_bytes = elements_per_output_page * bytes_per_element;
-    // DPRINT << "before for loop outputting to shard pages" << ENDL();
-    // DPRINT << "start_shard_id: " << start_shard_id << ENDL();
+
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_dst.shard_pages(shard_id);
-        DPRINT << "shard_id: " << shard_id << ENDL();
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); page_iter++) {
-            // DPRINT << "inside for loop outputting to shard pages" << ENDL();
             auto output_page_id = page_iter->page_id();
-            // CB holding the page buffers of our input tensor
-            // quantities I need: max_num_input_pages_per_output_page. size is n +2 unless the input page size is
-            // larger, then it is 2. If same size, then is 1. This is passed into the kernel from the program factory as
-            // CTA. page_id of first input page to read and its offset. row = page_id / num_output_pages_in_row col =
-            // (page_id % num_output_pages_in_row) * elements per output page element_id = row * elements per row + col
-            // input page_id = element_id / elements per INPUT page
-            // input first page offset = (element_id % elements per INPUT page) * bytes per element
-            // input first page bytes = bytes per input page - input first page offset
-            // input last page bytes = ((element_id + elements per output_page - 1) % elements per INPUT page) * bytes
-            // per element
+
             const auto input_page_read_info = get_input_page_read_info(
                 output_page_id,
                 num_output_pages_in_row,
@@ -114,28 +97,17 @@ void kernel_main() {
             const auto input_last_page_bytes = input_page_read_info.input_last_page_bytes;
             const auto output_page_valid_data_bytes = input_page_read_info.output_page_valid_data_bytes;
             cb_reserve_back(cb_id_in1, 1);
-            // DPRINT << "reserved back output page" << ENDL();
             uint32_t l1_output_page_write_addr = get_write_ptr(cb_id_in1);
             uint32_t l1_output_buffer_temp_write_addr = l1_output_page_write_addr;
 
             // Read the input pages into the CB
             const auto input_pages_to_read = input_last_page_id - input_first_page_id + 1;
-            DPRINT << "input_first_page_id: " << input_first_page_id << ENDL();
-            DPRINT << "input_last_page_id: " << input_last_page_id << ENDL();
-            DPRINT << "input_first_page_bytes: " << input_first_page_bytes << ENDL();
-            DPRINT << "input_last_page_bytes: " << input_last_page_bytes << ENDL();
-            DPRINT << "input_first_page_offset: " << input_first_page_offset << ENDL();
-            DPRINT << "output_page_id: " << output_page_id << ENDL();
 
-            // DPRINT << "BEFORE attempting to reserv back input pages: " << input_pages_to_read << ENDL();
             cb_reserve_back(cb_id_in0, input_pages_to_read);
-            DPRINT << "AFTER reserving back input pages" << ENDL();
-            // DPRINT << "reserved back input pages" << ENDL();
 
             for (uint32_t input_page_id_offset = 0; input_page_id_offset < input_pages_to_read;
                  ++input_page_id_offset) {
                 uint32_t input_pages_l1_write_addr = get_write_ptr(cb_id_in0);
-                // DPRINT << "Loop to input pages" << ENDL();
                 uint32_t input_page_overlapping_bytes_with_output_page = input_page_size_bytes;
                 uint32_t input_page_offset_bytes = 0;
                 if (input_page_id_offset == 0) {
@@ -149,76 +121,34 @@ void kernel_main() {
                     input_page_overlapping_bytes_with_output_page =
                         input_last_page_bytes;  // We may only be overlapping with the last part of the first input page
                 }
-                DPRINT << "BEFORE reading input page" << ENDL();
                 const uint64_t input_page_noc_addr =
                     accessor_src.get_noc_addr(input_first_page_id + input_page_id_offset);
                 noc_async_read(input_page_noc_addr, input_pages_l1_write_addr, input_page_size_bytes);
-                DPRINT << "AFTER reading input page" << ENDL();
                 noc_async_read_barrier();
-                // DPRINT << "input_page[0] = 0x" << HEX()
-                //        << *reinterpret_cast<volatile uint16_t*>(input_pages_l1_write_addr) << DEC() << ENDL();
-                // DPRINT << "input src cb0 base address: " << input_pages_l1_write_addr << ENDL();
-                // DPRINT << "src from cb0: " << input_pages_l1_write_addr + input_page_offset_bytes << ENDL();
-                // DPRINT << "DST in cb1: " << l1_output_buffer_temp_write_addr << ENDL();
-                DPRINT << "BEFORE pushing back input page" << ENDL();
+
                 cb_push_back(cb_id_in0, 1);
-                DPRINT << "AFTER pushing back input page" << ENDL();
-                DPRINT << "BEFORE memmove" << ENDL();
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     l1_output_buffer_temp_write_addr,
                     input_pages_l1_write_addr + input_page_offset_bytes,
                     input_page_overlapping_bytes_with_output_page);
-                DPRINT << "AFTER memmove" << ENDL();
-                // DPRINT << "input_pages_l1_write_addr: " << input_pages_l1_write_addr << ENDL();
-
-                // input_pages_l1_write_addr +=
-                //     accessor_src.get_aligned_page_size();  // This will avoid any alignment issues!
-
                 l1_output_buffer_temp_write_addr += input_page_overlapping_bytes_with_output_page;
-                // DPRINT << "input_page_offset_bytes: " << input_page_offset_bytes << ENDL();
-                // DPRINT << "input_page_overlapping_bytes_with_output_page: " <<
-                // input_page_overlapping_bytes_with_output_page << ENDL();
             }
-            // DPRINT << "After loop to input pages" << ENDL();
-
-            // cb_push_back(cb_id_in0, input_pages_to_read);
-            DPRINT << "BEFORE pushing back output page" << ENDL();
             cb_push_back(cb_id_in1, 1);
-            DPRINT << "AFTER pushing back output page" << ENDL();
-            // DPRINT << "pushing back output page" << ENDL();
-            DPRINT << "BEFORE waiting for input pages" << ENDL();
             cb_wait_front(cb_id_in0, input_pages_to_read);
-            DPRINT << "AFTER waiting for input pages" << ENDL();
-            DPRINT << "BEFORE popping input pages" << ENDL();
             cb_pop_front(cb_id_in0, input_pages_to_read);
-            DPRINT << "AFTER popping input pages" << ENDL();
-            // DPRINT << "popping input pages" << ENDL();
 
             // Write the output page. AL: may move this step to writer kernel
-            // DPRINT << "waiting for output page" << ENDL();
-            DPRINT << "BEFORE waiting for output page" << ENDL();
             cb_wait_front(cb_id_in1, 1);  // AL: may move this step to writer kernel
-            DPRINT << "AFTER waiting for output page" << ENDL();
-            DPRINT << "BEFORE getting read pointer for output page" << ENDL();
             const uint64_t output_page_noc_addr = page_iter->noc_addr();
             uint32_t output_page_read_addr = get_read_ptr(cb_id_in1);
-            // DPRINT << "output_page_read_addr: " << output_page_read_addr << ENDL();
-            // DPRINT << "output_page[0] = 0x" << HEX() << *reinterpret_cast<volatile uint16_t*>(output_page_read_addr)
-            //    << DEC() << ENDL();
 
             noc_async_write(
                 output_page_read_addr,
                 output_page_noc_addr,
                 output_page_valid_data_bytes);  // AL: for writer kernel, may not bother computing
                                                 // output_page_valid_data
-            DPRINT << "AFTER writing output page" << ENDL();
             noc_async_write_barrier();
-            DPRINT << "BEFORE popping output page" << ENDL();
             cb_pop_front(cb_id_in1, 1);
-            DPRINT << "AFTER popping output page" << ENDL();
-            // DPRINT << "popping output page" << ENDL();
         }
-        DPRINT << "AFTER for loop outputting to shard pages" << ENDL();
     }
-    DPRINT << "End of kernel" << ENDL();
 }
