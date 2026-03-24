@@ -28,6 +28,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
+    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
     float scaler = std::sqrt(operation_attributes.scaler);
 
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
