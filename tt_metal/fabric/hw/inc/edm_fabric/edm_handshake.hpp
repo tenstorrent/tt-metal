@@ -41,6 +41,7 @@ namespace handshake {
  */
 
 static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
+static constexpr uint32_t CONTEXT_SWITCH_TIMEOUT_SHORT = 100000;
 static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 
 // Data-Structure used for EDM to EDM Handshaking.
@@ -83,6 +84,7 @@ FORCE_INLINE void sender_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
             run_routing();
         } else {
             count++;
@@ -105,6 +107,7 @@ FORCE_INLINE void receiver_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
             run_routing();
         } else {
             count++;
