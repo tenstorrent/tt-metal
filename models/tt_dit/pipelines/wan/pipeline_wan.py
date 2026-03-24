@@ -353,8 +353,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
             config = device_configs[tuple(mesh_device.shape)]
 
-        sp_axis = sp_axis or config["sp_axis"]
-        tp_axis = tp_axis or config["tp_axis"]
+        sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
+        tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
 
         parallel_config = DiTParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
