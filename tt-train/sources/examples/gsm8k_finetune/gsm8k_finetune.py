@@ -36,7 +36,15 @@ from ttml.common.utils import (
 )
 from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
-from ttml.trainers import SFTConfig, SFTTrainer
+from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+
+
+class DDPCallback(TrainerCallback):
+    """Synchronise gradients across all DDP devices before the optimiser step."""
+
+    def on_before_optimizer_step(self, trainer):
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+
 
 # Configuration
 CONFIG = "training_gsm8k_tinyllama.yaml"
@@ -46,6 +54,7 @@ def gsm8k_collate_fn(
     batch: list,
     eos_token_id: int,
     max_sequence_length: int,
+    mapper=None,
 ) -> Batch:
     """Collate (question_tokens, answer_tokens) pairs into a :class:`Batch`.
 
@@ -102,9 +111,9 @@ def gsm8k_collate_fn(
         loss_mask_np *= (batch_size * max_sequence_length) / total_weight
 
     return Batch(
-        input_ids=ttml.autograd.Tensor.from_numpy(input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        labels=ttml.autograd.Tensor.from_numpy(labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
-        loss_mask=ttml.autograd.Tensor.from_numpy(loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
+        input_ids=ttml.autograd.Tensor.from_numpy(input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper),
+        labels=ttml.autograd.Tensor.from_numpy(labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper),
+        loss_mask=ttml.autograd.Tensor.from_numpy(loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper),
     )
 
 
@@ -348,6 +357,12 @@ def train():
         ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
     )
 
+    use_ddp = device_config.enable_ddp and device_config.total_devices() > 1
+    mapper = None
+    if use_ddp:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+
     model_type = model_config["transformer_config"]["model_type"]
 
     if model_type == "gpt2":
@@ -400,6 +415,7 @@ def train():
         gsm8k_collate_fn,
         eos_token_id=tokenizer.eos_token_id,
         max_sequence_length=max_sequence_length,
+        mapper=mapper,
     )
 
     num_devices = device_config.total_devices()
@@ -438,6 +454,10 @@ def train():
     mask_np = build_causal_mask(max_sequence_length)
     causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
+    callbacks = []
+    if use_ddp:
+        callbacks.append(DDPCallback())
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -446,6 +466,7 @@ def train():
         optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
         attention_mask=causal_mask,
+        callbacks=callbacks,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")
