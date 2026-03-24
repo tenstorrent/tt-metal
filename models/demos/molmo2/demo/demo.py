@@ -65,6 +65,42 @@ VIDEO_MAX_FPS = 2.0
 IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
+# Prefill sequence length buckets for trace reuse
+PREFILL_SEQ_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+
+
+def get_padded_prefill_len(seq_len: int) -> int:
+    """
+    Get the padded sequence length for prefill trace reuse.
+
+    Pads to the next bucket size to allow trace reuse across similar sequence lengths.
+    Uses buckets: 128, 256, 512, 1024, 2048, 4096, 8192, 16384, then powers of 2.
+    """
+    for bucket in PREFILL_SEQ_BUCKETS:
+        if seq_len <= bucket:
+            return bucket
+    # For very long sequences, use next power of 2
+    return 2 ** (seq_len - 1).bit_length()
+
+
+def pad_input_ids(input_ids: torch.Tensor, pad_token_id: int = 0) -> Tuple[torch.Tensor, int, int]:
+    """
+    Pad input_ids to the next bucket size for trace reuse.
+
+    Args:
+        input_ids: Token IDs tensor [batch, seq_len]
+        pad_token_id: Token ID to use for padding (default 0)
+
+    Returns:
+        Tuple of (padded_input_ids, padded_len, original_len)
+    """
+    original_len = input_ids.shape[1]
+    padded_len = get_padded_prefill_len(original_len)
+    if padded_len > original_len:
+        pad_amount = padded_len - original_len
+        input_ids = torch.nn.functional.pad(input_ids, (0, pad_amount), value=pad_token_id)
+    return input_ids, padded_len, original_len
+
 
 def load_processor():
     """Load the Molmo2 tokenizer from HuggingFace."""
@@ -1376,6 +1412,7 @@ class Molmo2Generator:
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
         timing: dict,
+        original_seq_len: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run unified Vision + Fusion + Prefill in single trace.
@@ -1384,6 +1421,8 @@ class Molmo2Generator:
         keeping everything on device using scatter_add for fusion.
         """
         seq_len = input_ids.shape[1]
+        if original_seq_len is None:
+            original_seq_len = seq_len
         logger.info("Running unified Vision + Prefill trace...")
 
         # Prepare all inputs (vision + text embeddings + fusion indices)
@@ -1496,8 +1535,8 @@ class Molmo2Generator:
         ttnn.deallocate(inputs["input_ids"])
         ttnn.deallocate(inputs["selector_matrix"])
 
-        # Update position for decode
-        self.reset_kv_cache(seq_len)
+        # Update position for decode using ORIGINAL seq_len (not padded)
+        self.reset_kv_cache(original_seq_len)
 
         return logits, timing
 
@@ -1651,13 +1690,23 @@ class Molmo2Generator:
         # Initialize KV cache if needed
         self.init_kv_cache()
 
-        seq_len = input_ids.shape[1]
+        # Pad input_ids to next bucket size for trace reuse
+        original_seq_len = input_ids.shape[1]
+        input_ids, seq_len, _ = pad_input_ids(input_ids, pad_token_id=0)
+        if seq_len != original_seq_len:
+            logger.info(f"Padded input_ids from {original_seq_len} to {seq_len} for trace reuse")
+
         timing = {}
 
         # Unified trace path: Vision + embed_tokens + Fusion + Prefill in single trace
         # This eliminates CPU roundtrip between vision and text prefill
         if use_unified_trace and pixel_values is not None:
-            return self._run_unified_prefill(input_ids, pixel_values, pooled_patches_idx, timing)
+            logits, timing = self._run_unified_prefill(
+                input_ids, pixel_values, pooled_patches_idx, timing, original_seq_len
+            )
+            # Store original_seq_len in timing for correct logits indexing
+            timing["original_seq_len"] = original_seq_len
+            return logits, timing
 
         # Start end-to-end TTFT timer (vision + fusion + prefill)
         e2e_ttft_start = None
@@ -1795,8 +1844,12 @@ class Molmo2Generator:
 
         logger.info(f"Prefill-only TTFT: {timing['ttft_ms']:.2f}ms")
 
-        # Update position for decode
-        self.reset_kv_cache(seq_len)
+        # Update position for decode using ORIGINAL seq_len (not padded)
+        # The decode step should continue from the actual end of the prompt
+        self.reset_kv_cache(original_seq_len)
+
+        # Store original_seq_len in timing so caller can index logits correctly
+        timing["original_seq_len"] = original_seq_len
 
         return logits, timing
 
@@ -1944,10 +1997,12 @@ class Molmo2Generator:
         )
 
         # Get first prediction from prefill (one-time CPU argmax is acceptable)
+        # Use original_seq_len from timing to index correctly (accounting for padding)
+        original_seq_len = prefill_timing.get("original_seq_len", input_ids.shape[1])
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
         if logits_torch.dim() == 2:
-            next_token_logits = logits_torch[-1, :]
+            next_token_logits = logits_torch[original_seq_len - 1, :]
         else:
             next_token_logits = logits_torch
 
@@ -2090,10 +2145,12 @@ class Molmo2Generator:
         vision_total_ms = (time.perf_counter() - vision_start) * 1000
 
         # First token from prefill logits (one-time CPU argmax)
+        # Use original_seq_len from timing to index correctly (accounting for padding)
+        original_seq_len = prefill_timing.get("original_seq_len", input_ids.shape[1])
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
         if logits_torch.dim() == 2:
-            next_token_logits = logits_torch[-1, :]
+            next_token_logits = logits_torch[original_seq_len - 1, :]
         else:
             next_token_logits = logits_torch
 

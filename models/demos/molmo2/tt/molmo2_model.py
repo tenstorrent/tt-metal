@@ -81,6 +81,8 @@ class Molmo2Model(LightweightModule):
         """
         super().__init__()
 
+        from loguru import logger
+
         self.mesh_device = mesh_device
         self.text_hidden_dim = text_hidden_dim
         self.dtype = dtype
@@ -90,6 +92,7 @@ class Molmo2Model(LightweightModule):
         self.bos_token_id = 151643
         self.eos_token_id = 151645
 
+        logger.info("Creating VisionBackbone...")
         # Vision backbone (ViT + Adapter)
         self.vision_backbone = VisionBackbone(
             mesh_device=mesh_device,
@@ -111,7 +114,9 @@ class Molmo2Model(LightweightModule):
             weight_cache_path=weight_cache_path,
             dtype=dtype,
         )
+        logger.info("VisionBackbone created")
 
+        logger.info("Creating TextModel...")
         # Text model (Language Model)
         self.text_model = TextModel(
             mesh_device=mesh_device,
