@@ -6,6 +6,11 @@ The script downloads workflow-data from the latest aggregate-workflow-data run,
 filters to workflows with N consecutive failures, then fetches run jobs from
 the GitHub API to find which specific jobs failed in all N runs.
 
+Workflows whose display name contains any keyword in
+``SKIP_WORKFLOW_NAME_KEYWORDS`` (case-insensitive substring match) are skipped:
+no per-run job downloads for those entries. The aggregate artifact is still
+downloaded as a single file upstream.
+
 Usage:
   python tools/ci/extract_failing_jobs.py
   python tools/ci/extract_failing_jobs.py t3000-unit-tests
@@ -34,6 +39,9 @@ REPO = os.environ.get("GITHUB_REPO", "tt-metal")
 WORKFLOW_FILE = "aggregate-workflow-data.yaml"
 ARTIFACT_NAME = "workflow-data"
 CONSECUTIVE_FAILURES = int(os.environ.get("CONSECUTIVE_FAILURES", "3"))
+
+# Substrings; if any appear in the workflow display name (case-insensitive), skip job fetches.
+SKIP_WORKFLOW_NAME_KEYWORDS: tuple[str, ...] = ("sanity",)
 
 
 def resolve_token() -> str | None:
@@ -205,6 +213,15 @@ def extract_failing_jobs(
 
     for workflow_name, runs in workflow_data:
         if not runs:
+            continue
+
+        name_lower = str(workflow_name).lower()
+        skip_kw = next((kw for kw in SKIP_WORKFLOW_NAME_KEYWORDS if kw.lower() in name_lower), None)
+        if skip_kw is not None:
+            print(
+                f'  Skipping workflow "{workflow_name}" (name contains keyword {skip_kw!r}).',
+                file=sys.stderr,
+            )
             continue
 
         if workflow_filter:
