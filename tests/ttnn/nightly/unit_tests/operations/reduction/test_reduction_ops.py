@@ -181,8 +181,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-# std and var will be handled separately. Issue #25100
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod"])
+@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
 def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different

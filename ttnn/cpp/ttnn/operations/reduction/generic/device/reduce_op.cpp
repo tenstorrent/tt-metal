@@ -100,7 +100,12 @@ Tensor reduce(
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto tilized_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());
-    if (is_multicore_hw) {
+
+    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
+    // scaler twice internally (once per dimension).  The host compensates with
+    // sqrt(scaler), but sqrt of a negative number is NaN, so negative scalers
+    // must take the two-step W-then-H path where the scaler is applied once.
+    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,

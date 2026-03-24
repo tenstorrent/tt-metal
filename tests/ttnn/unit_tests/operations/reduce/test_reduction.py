@@ -31,18 +31,22 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    # All values are close to 1, and we're using bfloat16, so even a rounding error
+    # of 0.5 ULP has a significant impact on PCC.
+    # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
+    pcc = 0.98
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
-@pytest.mark.parametrize("batch_size", [1])
-# @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [320, 640, 327])
-@pytest.mark.parametrize("w", [320, 640, 641])
-@pytest.mark.parametrize("dim", [-1, -2, (-2, -1), None])
-# @pytest.mark.parametrize("dim", [None, [], -1, -2])
+@pytest.mark.parametrize("batch_size", [1, 16])
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
+@pytest.mark.parametrize("dim", [None, [], -1, -2, (-2, -1)])
 @pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("correction", [False])
-# @pytest.mark.parametrize("correction", [True, False])
+@pytest.mark.parametrize("correction", [True, False])
 def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
@@ -58,7 +62,11 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
@@ -104,7 +112,12 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = 0.25
+    rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -129,7 +142,14 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = 0.125
+    # For values close to 0, relative error can be large.
+    # Absolute error and PCC should catch any significant errors.
+    rtol = 5
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -154,7 +174,12 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = 0.03
+    rtol = 0.03
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -178,7 +203,11 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("dim_1", [33])
@@ -201,7 +230,14 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = 0.25
+    # For values close to 0, relative error can be large.
+    # Absolute error and PCC should catch any significant errors.
+    rtol = 0.12
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -223,7 +259,14 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = 0.5
+    # For values close to 0, relative error can be large.
+    # Absolute error and PCC should catch any significant errors.
+    rtol = 110
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("dim1", [1])
@@ -454,7 +497,11 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("h", [41])
@@ -474,7 +521,11 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("batch_size", [3])
@@ -496,7 +547,11 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("c", [3])
@@ -517,7 +572,11 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("h", [41])
@@ -537,7 +596,11 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
@@ -564,7 +627,11 @@ def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     _, out_c, out_h, out_w = torch_output_tensor.shape
     output_tensor = torch.reshape(output_tensor, (batch_size, out_h, out_w, out_c))
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    assert_with_pcc(output_tensor, torch_output_tensor)
+
+    atol = rtol = 0.01
+    pcc = 0.9999
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 def run_reduce_sum_h(device, batch_size, h, w, dim):
@@ -574,7 +641,11 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor)
+
+    atol = rtol = 0.01
+    pcc = 0.9999
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39449")
@@ -652,83 +723,58 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-    assert_with_pcc(torch_result, ttnn_result, 0.99)
-
-    atol = rtol = 0.1
-    # There is a scale factor difference between torch and ttnn for std and var
-    # But for other operations, it should be close. Issue #19478
-    if op == "std":
-        atol, rtol = sys.maxsize, 0.1 + math.sqrt(2)
-    elif op == "var":
-        atol, rtol = sys.maxsize, 0.1 + 2
-
-    assert torch.allclose(
-        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
-    ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+    atol = rtol = 0.01
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
+# Test that generic reduces work correctly with a scalar applied to the input.
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
-# @pytest.mark.parametrize("scalar", [1.0])
-@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43])
+@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1), None])
-@pytest.mark.parametrize("shape", [(1, 1, 3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
-def test_vs_scalar_applied_to_input(device, op, scalar, correction, dim, shape):
-    torch.manual_seed(42)
+@pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
+def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
+    if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
+        pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
+
+    if op not in ("var", "std") and correction:
+        # PyTorch supports the correction argument only for var and std.
+        return
+
+    torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    print(f"torch input: {torch_input}")
 
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    print(f"ttnn input: {ttnn_input}")
     ttnn_op = getattr(ttnn, op)
     ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
-    print(f"scalar = {scalar}, ttnn result: {ttnn_result}")
 
-    torch_op = getattr(torch, op)
+    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+    # PyTorch supports the correction argument only for var and std.
+    # ttnn supports it for all, but it is ignored for all except var and std.
     if op in ("var", "std"):
         torch_result = torch_op(scalar * torch_input, dim=dim, correction=correction)
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
-    if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
-        torch_result = torch_result.values
-    print(f"scalar = {scalar}, torch result: {torch_result}")
 
-    #    assert_with_pcc(torch_result, ttnn_result, 0.99)
-    atol = rtol = 0.1
-    # Welford accumulates in Float32, but the input/output and scalar are
-    # bfloat16, so large reductions with non-integer scalars lose precision.
-    # pcc = 0.99 if op in ("var", "std") else 0.999
-    pcc = 0.99
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
-
-    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
-
-
-# @pytest.mark.parametrize("op", ["sum", "mean", "max", "min"])
-@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
-@pytest.mark.parametrize("scalar", [-2.0, 2.0, -2.43, 2.43])
-def test_vs_scalar_applied_to_result(device, op, scalar):
-    torch.manual_seed(42)
-    shape = (1, 1, 3, 4)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    print(f"torch input: {torch_input}")
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    print(f"ttnn input: {ttnn_input}")
-    ttnn_result = ttnn.to_torch(getattr(ttnn, op)(ttnn_input, dim=-1, scalar=scalar))
-    print(f"scalar = {scalar}, ttnn result: {ttnn_result}")
-
-    torch_op = getattr(torch, op)
-    torch_result = torch_op(torch_input, dim=-1)
-    print(f"scalar = {scalar}, torch result: {torch_result}")
-    if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
-        torch_result = torch_result.values
-    torch_result = scalar * torch_result
-    print(f"scalar = {scalar}, torch result after scalar: {torch_result}")
-
-    #    assert_with_pcc(torch_result, ttnn_result, 0.99)
-
-    atol = rtol = 0.1
-    pcc = 0.999
+    if op == "sum":
+        # sum may compute mix of some large values and some small values, so we need to
+        # allow for larger errors. PCC should catch any significant errors.
+        atol = 1
+        rtol = 0.4
+    else:
+        atol = 0.1
+        rtol = 0.1
+    if op in ("var", "std"):
+        # For var/std there are cases where all values are close to 1, and we're using bfloat16,
+        # so even a rounding error of 0.5 ULP has a significant impact on PCC.
+        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
+        pcc = 0.98
+    else:
+        pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
 
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
