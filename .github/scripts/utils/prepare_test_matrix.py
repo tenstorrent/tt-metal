@@ -11,14 +11,30 @@ This script:
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
 
-Example:
+enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
+key that appears under any test entry's skus mapping in the tests YAML.
+
+Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
+    python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
 """
 
 import yaml
 import json
 import sys
 import os
+
+ALL_SKUS_IN_TESTS = "ALL_SKUS_IN_TESTS"
+
+
+def collect_skus_from_tests(tests):
+    """Return sorted unique SKU names referenced in tests' skus mappings."""
+    names = set()
+    for test in tests:
+        test_skus = test.get("skus")
+        if isinstance(test_skus, dict):
+            names.update(test_skus.keys())
+    return sorted(names)
 
 
 def parse_enabled_skus(enabled_skus_str):
@@ -180,6 +196,7 @@ def build_test_matrix(tests, enabled_skus, sku_config):
 def main():
     if len(sys.argv) != 4:
         print("Usage: python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>")
+        print("  enabled_skus: comma-separated list, or ALL_SKUS_IN_TESTS")
         print(
             'Example: python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml'
         )
@@ -193,15 +210,19 @@ def main():
     print(f"Loading SKU config from: {sku_config_path}")
     print(f"Enabled SKUs: '{enabled_skus_str}'")
 
-    # Parse enabled SKUs
-    enabled_skus = parse_enabled_skus(enabled_skus_str)
-    print(f"Parsed enabled SKUs: {enabled_skus}")
-
-    # Load configurations
     sku_config = load_sku_config(sku_config_path)
     tests = load_tests(tests_yaml_path)
 
-    # Build filtered matrix
+    if enabled_skus_str.strip().upper() == ALL_SKUS_IN_TESTS:
+        enabled_skus = collect_skus_from_tests(tests)
+        print(f"Resolved {ALL_SKUS_IN_TESTS} to: {enabled_skus}")
+        if not enabled_skus:
+            print("::error::No SKU keys found under skus in the tests YAML.")
+            sys.exit(1)
+    else:
+        enabled_skus = parse_enabled_skus(enabled_skus_str)
+        print(f"Parsed enabled SKUs: {enabled_skus}")
+
     filtered_matrix = build_test_matrix(tests, enabled_skus, sku_config)
 
     # Output as JSON
