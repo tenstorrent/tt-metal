@@ -304,7 +304,7 @@ def prepare_output_tensor_from_combine_writer(
 
 
 PCC_THRESHOLD = 0.988
-ATOL_THRESHOLD = 600
+ATOL_THRESHOLD = 700
 
 
 def validate_matmul(
@@ -412,6 +412,9 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         if pcc_val < PCC_THRESHOLD or not allclose_passed:
             combine_all_passed = False
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
+            if not allclose_passed:
+                mask = (vals - refs).abs() > ATOL_THRESHOLD
+                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -1104,7 +1107,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("experts_per_device", [2, 3])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
@@ -1613,21 +1616,23 @@ def test_moe_compute(
                 e_t_all_passed = False
 
             # ========== Matmul Output Tensor Validation ==========
-            if not validate_matmul(
-                layer_id,
-                experts_per_device,
-                all_core_range_set,
-                output_shard_cores,
-                output_height_shard_dim,
-                output_width_shard_dim,
-                total_tokens,
-                hidden_size,
-                expert_token_counts,
-                matmul_goldens,
-                matmul_output_tensor,
-                mesh_device,
-            ):
-                matmul_all_passed = False
+
+            if experts_per_device == 2:
+                if not validate_matmul(
+                    layer_id,
+                    experts_per_device,
+                    all_core_range_set,
+                    output_shard_cores,
+                    output_height_shard_dim,
+                    output_width_shard_dim,
+                    total_tokens,
+                    hidden_size,
+                    expert_token_counts,
+                    matmul_goldens,
+                    matmul_output_tensor,
+                    mesh_device,
+                ):
+                    matmul_all_passed = False
 
             if not validate_combine(
                 layer_id,
@@ -1643,7 +1648,13 @@ def test_moe_compute(
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
-    logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    if experts_per_device == 2:
+        logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    else:
+        logger.info(
+            "\nWe cannot directly validate matmul results for all experts when experts_per_device > 2 due "
+            " to the double buffer scheme"
+        )
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"

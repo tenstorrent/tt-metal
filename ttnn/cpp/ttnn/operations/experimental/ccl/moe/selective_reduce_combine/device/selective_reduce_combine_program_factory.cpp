@@ -295,7 +295,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
     const auto expert_token_segment_buffer_block_size_bytes =
         token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
-    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
+    constexpr auto double_buffer = 2;
+    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * double_buffer;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
