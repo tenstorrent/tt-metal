@@ -880,7 +880,7 @@ class TestBranchingTopology:
             check_pcc(goldens[i], outs_fused[i], label=label)
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
-    def test_asymmetric_deep_left(self, device, multi_tensors):
+    def test_asymmetric_deep_left(self, device):
         """Deep left + shallow right.
 
         Tree (8 cores):
@@ -891,7 +891,7 @@ class TestBranchingTopology:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         wt = t["tt_weights"]
 
         def rms(inp, cr, wi):
@@ -924,12 +924,12 @@ class TestBranchingTopology:
         for i, label in enumerate(["LL(deep)", "LR", "Right"]):
             check_pcc(goldens[i], outs_fused[i], label=label)
 
-    def test_overlapping_branches_error(self, device, multi_tensors):
+    def test_overlapping_branches_error(self, device):
         """Overlapping branch core ranges should raise ValueError."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
-        t = multi_tensors
+        t = make_multi_norm_tensors(device)
         stem = rms_norm.rms_norm(
             t["tt_input"], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][0], epsilon=1e-5
         )
@@ -991,13 +991,13 @@ class TestParallelExecution:
             check_pcc(golden, rms_tails[i].output_tensors[0], label=f"chain {i}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
-    def test_matmul_plus_fused_chain(self, device, test_tensors):
+    def test_matmul_plus_fused_chain(self, device):
         """Matmul + 3-phase norm chain on disjoint cores."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
-        t = test_tensors
+        t = make_small_norm_tensors(device)
         ln_compute = ttnn.layernorm_default_compute_config(device.arch())
         torch.manual_seed(42)
 
