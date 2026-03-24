@@ -14,8 +14,14 @@
 #include "api/debug/dprint.h"
 #endif
 
+// Push one dummy input stick and one zeroed scalar stick into their CBs.
+// Used for height-sharding padding sticks that have no real grid data:
+// the compute kernel always consumes a fixed number of CB entries per core,
+// so we must push placeholder pages to keep reader and compute in sync.
+// The scalar page is zeroed so the interpolation weight is 0, making the
+// padded output harmless (written to the shard but masked by valid_sticks).
 template <uint32_t input_cb_index, uint32_t scalar_cb_index>
-ALWI void push_padding_sticks() {
+ALWI void push_noop_sticks() {
     cb_reserve_back(input_cb_index, 1);
     cb_push_back(input_cb_index, 1);
 
@@ -138,7 +144,7 @@ void kernel_main() {
         } else {
             // Padding stick from height-sharding — push zero-weight data to CBs
             // so the compute kernel receives the expected number of items.
-            push_padding_sticks<input_cb_index, scalar_cb_index>();
+            push_noop_sticks<input_cb_index, scalar_cb_index>();
         }
 
         // Always advance once after processing
