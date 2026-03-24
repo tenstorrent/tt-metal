@@ -243,6 +243,49 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: Qwen3-32B unit tests (Galaxy)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B FAKE_DEVICE=TG
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
+  model: qwen3-32b-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: GPT-OSS 120B unit tests (Galaxy, high batch)
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
+    pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
+  model: gpt-oss-120b-high-batch-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 25
+      tier: 1
+  owner_id: U08TJ70UFRT # Stuti Raizada
+  team: models
+
+- name: Whisper unit tests
+  cmd: pytest --timeout 300 models/demos/audio/whisper/tests/test_whisper_modules.py
+  model: whisper
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 1
+    wh_n300:
+      timeout: 10
+      tier: 1
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+
 - name: QwQ-32B unit tests
   cmd: |
     export HF_MODEL=Qwen/QwQ-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/QwQ-32B
