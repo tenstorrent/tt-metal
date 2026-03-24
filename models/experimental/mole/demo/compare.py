@@ -87,7 +87,7 @@ def _run_dataset_comparison(
     ttnn_device=None,
     verbose: bool,
 ) -> dict[str, dict[str, float]]:
-    loaders, input_dim = create_real_dataset_loaders(
+    loaders, input_dim, resolved_freq = create_real_dataset_loaders(
         dataset_name,
         dataset_path,
         seq_len=config.seq_len,
@@ -96,7 +96,7 @@ def _run_dataset_comparison(
         eval_batch_size=training.eval_batch_size,
         freq=config.freq,
     )
-    dataset_config = resolve_dataset_config(config, input_dim=input_dim)
+    dataset_config = resolve_dataset_config(config, input_dim=input_dim, freq=resolved_freq)
     baseline_config = replace_num_experts(dataset_config, num_experts=1)
 
     if verbose:
@@ -108,7 +108,10 @@ def _run_dataset_comparison(
     device = ttnn_device if ttnn_device is not None else open_ttnn_device()
     try:
         if verbose:
-            print(f"[compare] training/evaluating {dataset_config.base_model_type} baseline", flush=True)
+            print(
+                f"[compare] training PyTorch reference {dataset_config.base_model_type} baseline, then evaluating with TTNN inference",
+                flush=True,
+            )
         baseline_result = train_model_on_dataloader(
             build_reference_expert(baseline_config),
             loaders,
@@ -128,7 +131,7 @@ def _run_dataset_comparison(
         gc.collect()
 
         if verbose:
-            print("[compare] training/evaluating mole", flush=True)
+            print("[compare] training PyTorch reference mole, then evaluating with TTNN inference", flush=True)
         mole_result = train_model_on_dataloader(
             build_reference_mole(dataset_config),
             loaders,
@@ -162,13 +165,14 @@ def _write_results_csv(output_path: str | None, results: dict[str, dict[str, flo
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["model", "mse", "source"])
+        writer = csv.DictWriter(csv_file, fieldnames=["model", "mse", "mae", "source"])
         writer.writeheader()
         for name, metrics in results.items():
             writer.writerow(
                 {
                     "model": name,
                     "mse": metrics["mse"],
+                    "mae": metrics["mae"],
                     "source": metrics.get("source", "measured"),
                 }
             )
@@ -218,6 +222,7 @@ def run_reference_comparison(
         "eval_batch_size": training_config.eval_batch_size,
         "training_steps": training_config.steps,
         "compared_eval_batches": max_eval_batches,
+        "training_backend": "pytorch_reference",
         "inference_backend": "ttnn",
         "seed": compare_options.seed,
     }
@@ -227,7 +232,9 @@ def run_reference_comparison(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Compare MoLE against single-model baselines.")
+    parser = argparse.ArgumentParser(
+        description="Train PyTorch reference models, then compare their TTNN inference metrics against single-model baselines."
+    )
     add_dataset_arguments(
         parser,
         dataset_help="Dataset name, e.g. weather, ETTh1, ETTh2, ETTm1, ETTm2",
@@ -259,5 +266,5 @@ if __name__ == "__main__":
         options=options,
     )
     for name, metrics in comparison["results"].items():
-        print(f"{name}: mse={metrics['mse']:.6f}")
+        print(f"{name}: mse={metrics['mse']:.6f} mae={metrics['mae']:.6f}")
     print(f"csv_output_path: {comparison['csv_output_path']}")

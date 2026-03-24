@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any, Callable
 import weakref
@@ -16,35 +17,49 @@ LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
-_ACTIVE_TRACE_RELEASE_HOOKS: dict[int, list[weakref.ReferenceType]] = {}
+class _TraceReleaseHookTable:
+    """Weakref hooks keyed by ``id(device)`` — avoids a module-level dict literal."""
+
+    __slots__ = ("_by_device_id",)
+
+    def __init__(self) -> None:
+        self._by_device_id: dict[int, list[weakref.ReferenceType]] = {}
+
+    def register(self, *, device: Any, hook: Callable[[], None]) -> None:
+        key = id(device)
+        hooks = self._by_device_id.get(key)
+        if hooks is None:
+            hooks = []
+            self._by_device_id[key] = hooks
+        if hasattr(hook, "__self__") and hook.__self__ is not None:
+            hook_ref: weakref.ReferenceType = weakref.WeakMethod(hook)
+        else:
+            hook_ref = weakref.ref(hook)
+        hooks.append(hook_ref)
+
+    def release_for_device(self, *, device: Any) -> None:
+        key = id(device)
+        hooks = self._by_device_id.get(key, [])
+        live_refs = []
+        for hook_ref in hooks:
+            hook = hook_ref()
+            if hook is None:
+                continue
+            live_refs.append(hook_ref)
+            with contextlib.suppress(Exception):
+                hook()
+        self._by_device_id[key] = live_refs
+
+
+_TRACE_RELEASE_HOOKS = _TraceReleaseHookTable()
 
 
 def register_trace_release_hook(*, device: Any, hook: Callable[[], None]) -> None:
-    key = id(device)
-    hooks = _ACTIVE_TRACE_RELEASE_HOOKS.get(key)
-    if hooks is None:
-        hooks = []
-        _ACTIVE_TRACE_RELEASE_HOOKS[key] = hooks
-    if hasattr(hook, "__self__") and hook.__self__ is not None:
-        hook_ref: weakref.ReferenceType = weakref.WeakMethod(hook)
-    else:
-        hook_ref = weakref.ref(hook)
-    hooks.append(hook_ref)
+    _TRACE_RELEASE_HOOKS.register(device=device, hook=hook)
 
 
 def release_active_traces_for_device(*, device: Any) -> None:
-    hooks = _ACTIVE_TRACE_RELEASE_HOOKS.get(id(device), [])
-    live_refs = []
-    for hook_ref in hooks:
-        hook = hook_ref()
-        if hook is None:
-            continue
-        live_refs.append(hook_ref)
-        try:
-            hook()
-        except Exception:
-            continue
-    _ACTIVE_TRACE_RELEASE_HOOKS[id(device)] = live_refs
+    _TRACE_RELEASE_HOOKS.release_for_device(device=device)
 
 
 @dataclass(frozen=True)
@@ -221,13 +236,17 @@ def validate_timeseries_input(
         raise ValueError(f"expected input_dim={input_dim}, got input_dim={input_tensor.shape[3]}")
 
 
-def validate_time_marks(input_marks: ttnn.Tensor, *, seq_len: int | None = None) -> None:
+def validate_time_marks(
+    input_marks: ttnn.Tensor, *, seq_len: int | None = None, expected_features: int | None = None
+) -> None:
     if len(input_marks.shape) != 4:
         raise ValueError(f"expected [1, batch, seq_len, features], got {tuple(input_marks.shape)}")
     if input_marks.shape[0] != 1:
         raise ValueError(f"expected leading dimension 1, got {input_marks.shape[0]}")
     if seq_len is not None and input_marks.shape[2] != seq_len:
         raise ValueError(f"expected seq_len={seq_len}, got seq_len={input_marks.shape[2]}")
+    if expected_features is not None and input_marks.shape[3] != expected_features:
+        raise ValueError(f"expected {expected_features} time features, got {input_marks.shape[3]}")
 
 
 def upload_linear(
@@ -452,24 +471,18 @@ def temporal_gating(
     return gating_flat, gating_weights
 
 
-def reduce_weighted_heads(
+def _reduce_weighted_heads_core(
     projected: ttnn.Tensor,
     gating_flat: ttnn.Tensor,
     *,
     batch_size: int,
     channels: int,
     pred_len: int,
-    num_predictions: int,
     memory_config=ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    projected = ttnn.permute(projected, (0, 2, 1, 3))
-    projected = ttnn.reshape(projected, (1, batch_size * channels, pred_len, num_predictions))
-
-    # Convert [1, B*C, 1, T] into [1, B*C, T, 1] and use batched matmul.
-    # This avoids materializing repeated gating tensors across pred_len.
+    """Shared tail: matmul against column gating then reshape back to NTC layout."""
     gating_column = ttnn.permute(gating_flat, (0, 1, 3, 2))
     reduced = ttnn.matmul(projected, gating_column, memory_config=memory_config)
-
     reduced = ttnn.reshape(reduced, (1, batch_size, channels, pred_len))
     return ttnn.permute(reduced, (0, 1, 3, 2))
 
@@ -485,12 +498,22 @@ def reduce_weighted_heads_batch_major(
     memory_config=ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     projected = ttnn.reshape(projected, (1, batch_size * channels, pred_len, num_predictions))
+    return _reduce_weighted_heads_core(
+        projected,
+        gating_flat,
+        batch_size=batch_size,
+        channels=channels,
+        pred_len=pred_len,
+        memory_config=memory_config,
+    )
 
-    gating_column = ttnn.permute(gating_flat, (0, 1, 3, 2))
-    reduced = ttnn.matmul(projected, gating_column, memory_config=memory_config)
 
-    reduced = ttnn.reshape(reduced, (1, batch_size, channels, pred_len))
-    return ttnn.permute(reduced, (0, 1, 3, 2))
+@dataclass
+class _ExpertPredictionTraceState:
+    trace_id: int
+    prediction: ttnn.Tensor
+    input_ids: tuple[int, int]
+    device: Any
 
 
 class TtExpertBase:
@@ -521,10 +544,8 @@ class TtExpertBase:
         state = self._prediction_trace_state
         if state is None:
             return
-        try:
-            ttnn.release_trace(state["device"], state["trace_id"])
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            ttnn.release_trace(state.device, state.trace_id)
         self._prediction_trace_state = None
 
     def __del__(self):
@@ -538,7 +559,7 @@ class TtExpertBase:
         state = self._prediction_trace_state
         current_ids = (id(input_tensor), id(input_marks))
 
-        if state is None or state["input_ids"] != current_ids or state["device"] is not device:
+        if state is None or state.input_ids != current_ids or state.device is not device:
             self._release_prediction_trace()
             prediction = self.forward(input_tensor, input_marks)
             ttnn.synchronize_device(device)
@@ -551,22 +572,21 @@ class TtExpertBase:
             except Exception:
                 self._trace_capture_enabled = False
                 if trace_id is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         ttnn.end_trace_capture(device, trace_id, cq_id=0)
                         ttnn.release_trace(device, trace_id)
-                    except Exception:
-                        pass
                 self._release_prediction_trace()
                 return prediction
-            self._prediction_trace_state = {
-                "trace_id": trace_id,
-                "prediction": prediction,
-                "input_ids": current_ids,
-                "device": device,
-            }
+            self._prediction_trace_state = _ExpertPredictionTraceState(
+                trace_id=trace_id,
+                prediction=prediction,
+                input_ids=current_ids,
+                device=device,
+            )
 
-        ttnn.execute_trace(device, self._prediction_trace_state["trace_id"], cq_id=0, blocking=False)
-        return self._prediction_trace_state["prediction"]
+        st = self._prediction_trace_state
+        ttnn.execute_trace(device, st.trace_id, cq_id=0, blocking=False)
+        return st.prediction
 
     def forward_from_torch_input(self, torch_input: torch.Tensor, *, input_marks: torch.Tensor, device) -> ttnn.Tensor:
         tt_input, tt_marks = upload_timeseries_and_marks_to_device(

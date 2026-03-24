@@ -41,12 +41,11 @@ class TtRLinearExpert(TtExpertBase):
                 "linear_1": up(self.reference_model.temporal[0]),
                 "linear_2": up(self.reference_model.temporal[2]),
             }
-        if self.reference_model.rev is not None:
-            uv = lambda v: upload_vector(v, device=device, dtype=self.dtype, memory_config=self.parameter_memory_config)
-            params["rev"] = {
-                "affine_weight": uv(self.reference_model.rev.affine_weight),
-                "affine_bias": uv(self.reference_model.rev.affine_bias),
-            }
+        uv = lambda v: upload_vector(v, device=device, dtype=self.dtype, memory_config=self.parameter_memory_config)
+        params["rev"] = {
+            "affine_weight": uv(self.reference_model.rev.affine_weight),
+            "affine_bias": uv(self.reference_model.rev.affine_bias),
+        }
         self._tt_parameters = params
         self._cached_device = device
         register_trace_release_hook(device=device, hook=self._release_prediction_trace)

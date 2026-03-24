@@ -4,6 +4,7 @@
 import csv
 import http.client
 import os
+import tempfile
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,7 @@ class DatasetSplitConfig:
 @dataclass
 class RegressionMetricTotals:
     squared_error_sum: float = 0.0
+    absolute_error_sum: float = 0.0
     numel: int = 0
 
 
@@ -63,6 +65,7 @@ def update_regression_metric_totals(
 ) -> RegressionMetricTotals:
     difference = predictions - targets
     totals.squared_error_sum += difference.pow(2).sum().item()
+    totals.absolute_error_sum += difference.abs().sum().item()
     totals.numel += difference.numel()
     return totals
 
@@ -72,6 +75,7 @@ def finalize_regression_metric_totals(totals: RegressionMetricTotals) -> dict[st
         raise ValueError("regression metrics require at least one prediction element")
     return {
         "mse": totals.squared_error_sum / totals.numel,
+        "mae": totals.absolute_error_sum / totals.numel,
     }
 
 
@@ -186,7 +190,9 @@ def resolve_tslib_dataset_path(
     dataset_url = f"{TSLIB_DATASET_BASE_URL}/{relative_path.as_posix()}?download=true"
 
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = resolved_path.with_suffix(resolved_path.suffix + ".tmp")
+    file_descriptor, temporary_path_str = tempfile.mkstemp(dir=resolved_path.parent, suffix=".tmp")
+    os.close(file_descriptor)
+    temporary_path = Path(temporary_path_str)
     try:
         _download_https_file(dataset_url, temporary_path)
         os.replace(temporary_path, resolved_path)
@@ -232,19 +238,50 @@ def _parse_timestamp(raw_value: str) -> datetime:
         return datetime.strptime(raw_value, "%Y-%m-%d %H:%M:%S")
 
 
-def _build_time_marks(date_values: list[str], freq: str) -> torch.Tensor:
+def _build_time_marks(date_values: list[str], freq: str, *, minute_bucket: int = 15) -> torch.Tensor:
     timestamps = [_parse_timestamp(value) for value in date_values]
     if freq.lower().endswith("h"):
         mark_rows = [[ts.month, ts.day, ts.weekday(), ts.hour] for ts in timestamps]
     else:
-        mark_rows = [[ts.month, ts.day, ts.weekday(), ts.hour, ts.minute // 15] for ts in timestamps]
+        if minute_bucket <= 0:
+            raise ValueError(f"minute_bucket must be positive, got {minute_bucket}")
+        mark_rows = [[ts.month, ts.day, ts.weekday(), ts.hour, ts.minute // minute_bucket] for ts in timestamps]
     return torch.tensor(mark_rows, dtype=torch.float32)
+
+
+def resolve_dataset_freq(dataset_name: str, freq: str) -> str:
+    """Return the time-mark layout freq used when loading CSVs.
+
+    TSLib ETT-minute and Weather series are sub-hourly; default ``freq="h"`` would
+    build 4-feature hourly marks while the model/router expect 5 features for those
+    datasets. Remap only when the caller left the generic hourly default.
+    """
+    normalized_dataset_name = dataset_name.lower()
+    normalized_freq = freq.lower()
+    if normalized_freq != "h":
+        return freq
+    if normalized_dataset_name in {"ettm1", "ettm2", "weather"}:
+        return "t"
+    return freq
+
+
+def resolve_dataset_minute_bucket(dataset_name: str, freq: str) -> int:
+    """Return minute bucket width for non-hourly calendar marks."""
+    if freq.lower().endswith("h"):
+        return 60
+    normalized_dataset_name = dataset_name.lower()
+    if normalized_dataset_name in {"ettm1", "ettm2"}:
+        return 15
+    if normalized_dataset_name == "weather":
+        return 10
+    return 15
 
 
 def load_tslib_csv(
     dataset_path: str | Path,
     *,
     freq: str = "h",
+    minute_bucket: int = 15,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     dataset_path = Path(dataset_path)
     if not dataset_path.exists():
@@ -264,7 +301,7 @@ def load_tslib_csv(
 
     date_values = [row[0] for row in rows]
     values = torch.tensor([[float(value) for value in row[1:]] for row in rows], dtype=torch.float32)
-    time_marks = _build_time_marks(date_values, freq)
+    time_marks = _build_time_marks(date_values, freq, minute_bucket=minute_bucket)
     return values, time_marks
 
 
@@ -277,9 +314,11 @@ def create_real_dataset_loaders(
     batch_size: int,
     eval_batch_size: int,
     freq: str = "h",
-) -> tuple[dict[str, DataLoader], int]:
+) -> tuple[dict[str, DataLoader], int, str]:
     resolved_path = resolve_tslib_dataset_path(dataset_name, dataset_path)
-    values, time_marks = load_tslib_csv(resolved_path, freq=freq)
+    resolved_freq = resolve_dataset_freq(dataset_name, freq)
+    minute_bucket = resolve_dataset_minute_bucket(dataset_name, resolved_freq)
+    values, time_marks = load_tslib_csv(resolved_path, freq=resolved_freq, minute_bucket=minute_bucket)
 
     split = infer_split_config(dataset_name, values.shape[0])
     values = values[: split.test_end]
@@ -319,4 +358,4 @@ def create_real_dataset_loaders(
             drop_last=False,
         ),
     }
-    return loaders, values.shape[1]
+    return loaders, values.shape[1], resolved_freq

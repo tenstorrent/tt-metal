@@ -18,7 +18,6 @@ class MoLEConfig:
     individual: bool = False
     freq: str = "h"
     drop: float = 0.1
-    disable_rev: bool = False
     d_model: int = 512
     head_dropout: float = 0.0
 

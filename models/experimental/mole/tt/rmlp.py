@@ -6,8 +6,6 @@ from models.experimental.mole.tt.rlinear import TtRLinearExpert
 
 
 class TtRMLPExpert(TtRLinearExpert):
-    """RMLP variant — delegates to TtRLinearExpert with RMLP reference weights."""
-
     def __init__(self, config, *, reference_model=None, runtime_options=None):
         if reference_model is None:
             reference_model = RMLPExpert(config).eval()

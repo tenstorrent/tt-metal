@@ -84,7 +84,7 @@ def visualize_router_weights(
 
     set_random_seed(visualization_options.seed)
 
-    loaders, input_dim = create_real_dataset_loaders(
+    loaders, input_dim, resolved_freq = create_real_dataset_loaders(
         dataset_name,
         visualization_options.dataset_path,
         seq_len=model_config.seq_len,
@@ -93,7 +93,7 @@ def visualize_router_weights(
         eval_batch_size=training_config.eval_batch_size,
         freq=model_config.freq,
     )
-    model_config = resolve_dataset_config(model_config, input_dim=input_dim)
+    model_config = resolve_dataset_config(model_config, input_dim=input_dim, freq=resolved_freq)
 
     model = MixtureOfLinearExperts(model_config)
     training_summary = train_model_on_dataloader(model, loaders, training_config, return_summary=True)

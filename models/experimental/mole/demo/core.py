@@ -78,6 +78,12 @@ def add_model_arguments(
         parser.add_argument(f"--{name}", type=int, default=default)
     if include_input_dim:
         parser.add_argument("--input-dim", type=int, default=7)
+    parser.add_argument(
+        "--freq",
+        type=str,
+        default="h",
+        help="Time-feature layout for marks: hourly-style (ends with 'h', e.g. h) uses 4 features; otherwise 5 (minute-style)",
+    )
 
 
 def add_training_arguments(
@@ -104,6 +110,7 @@ def model_config_from_args(args: Namespace) -> MoLEConfig:
         "pred_len": args.pred_len,
         "base_model_type": args.base_model_type,
         "num_experts": args.num_experts,
+        "freq": args.freq,
     }
     for name in ("input_dim", "head_dropout"):
         if hasattr(args, name):
@@ -180,9 +187,13 @@ def predict_mole_from_torch(
     model,
     device,
     torch_input: torch.Tensor,
-    torch_input_mark: torch.Tensor,
+    torch_input_mark: torch.Tensor | None,
     return_router_output: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    if torch_input_mark is None:
+        raise ValueError(
+            "TT MoLE evaluation requires time marks (x_mark); the dataloader must return input marks."
+        )
     tt_input, tt_marks = upload_mole_inputs(
         model=model,
         device=device,
@@ -200,8 +211,12 @@ def predict_mole_from_torch(
 
 
 def predict_expert_from_torch(
-    *, model, device, torch_input: torch.Tensor, torch_input_mark: torch.Tensor
+    *, model, device, torch_input: torch.Tensor, torch_input_mark: torch.Tensor | None
 ) -> torch.Tensor:
+    if torch_input_mark is None:
+        raise ValueError(
+            "TT expert evaluation requires time marks (x_mark); the dataloader must return input marks."
+        )
     tt_input, tt_marks = upload_mole_inputs(
         model=model,
         device=device,
@@ -243,7 +258,10 @@ def resolve_dataset_config(
     config: MoLEConfig,
     *,
     input_dim: int,
+    freq: str | None = None,
 ) -> MoLEConfig:
+    if freq is not None:
+        return replace(config, input_dim=input_dim, freq=freq)
     return replace(config, input_dim=input_dim)
 
 
@@ -254,7 +272,7 @@ def resolve_eval_input(
     dataset_name: str,
     dataset_path: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, MoLEConfig]:
-    loaders, input_dim = create_real_dataset_loaders(
+    loaders, input_dim, resolved_freq = create_real_dataset_loaders(
         dataset_name,
         dataset_path,
         seq_len=config.seq_len,
@@ -265,7 +283,7 @@ def resolve_eval_input(
     )
     batch = next(iter(loaders["test"]))
     torch_input, _, torch_input_mark, _ = unpack_batch(batch)
-    return torch_input, torch_input_mark, resolve_dataset_config(config, input_dim=input_dim)
+    return torch_input, torch_input_mark, resolve_dataset_config(config, input_dim=input_dim, freq=resolved_freq)
 
 
 def unpack_batch(batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
@@ -331,6 +349,7 @@ def train_model_on_dataloader(
     max_eval_batches: int | None = None,
     return_summary: bool = False,
 ) -> dict[str, float] | dict[str, object]:
+    """Train the PyTorch reference model used for validation and TTNN weight export."""
     optimizer = torch.optim.Adam(model.parameters(), lr=training.learning_rate)
     model.train()
     best_state_dict = None
