@@ -1,11 +1,28 @@
 ---
-description: Draft Slack messages for pipelines channel to announce a filed CI issue and optional PR.
+description: Draft Slack messages for pipelines channel using CI issue evidence plus exported Slack auto-triage when relevant.
 alwaysApply: false
 ---
 
 # Draft Slack Message for CI Issue
 
 Use this rule when drafting a Slack message to inform people about a filed CI maintenance issue (e.g. for a pipelines channel).
+
+## Required Scope
+
+- Slack scope is limited to `#metal-infra-pipeline-status` (channel ID `C08SJ7MGESY`) only.
+- Read Slack evidence only from local export file `build_ci/raw_data/slack_C08SJ7MGESY_last_30_days.json` (assume user already generated it with `tools/ci/export_slack_channel.py`).
+- If issue is not CI-pipeline related, exit instead of drafting a pipeline heads-up message.
+- Do **not** read the entire 30-day export file into context. It is large and must be queried in filtered slices only.
+- Use targeted extraction (`jq`/`rg`) keyed by workflow/job/test path/run ID/error signature and `HIGH CONFIDENCE`, then inspect only matched snippets.
+
+## Evidence Priority
+
+1. Latest failing job logs on `main` for the issue's job (ground truth for failure details).
+2. GitHub issue details and linked PRs.
+3. `.github/CODEOWNERS` and recent commit history for ownership.
+4. Exported Slack auto-triage data from `C08SJ7MGESY` as supporting evidence.
+
+Auto-triage guidance must be treated as strong only if it explicitly contains `HIGH CONFIDENCE`. Lower-confidence triage is weak signal and should not drive owner selection by itself.
 
 ## Structure
 
@@ -16,18 +33,26 @@ Use this rule when drafting a Slack message to inform people about a filed CI ma
 2. **Context paragraph(s)**
    - First sentence: workflow and job in plain language (e.g. "(Blackhole) Demo tests → llama3.3-70b batch-1 TP device perf prefill (layers=2) has been failing repeatedly on main.").
    - Next: brief root-cause or area (e.g. device profiler buffer sizing, op_support_count, large seq len). Keep it short and actionable.
+   - Include the latest failing **job** URL on `main` (must be job-level `.../runs/<run_id>/job/<job_id>`, not only workflow run URL).
 
 3. **Failure excerpt**
-   Single line or short block: the actual error from the issue.
+   Single line or short block: the actual error from latest job logs (or issue when logs are unavailable).
    Prefix with `failure: ` if it's one line. Preserve the gist; trim long stack traces.
 
 4. **PR + review ask (optional)**
-   If the user provides a PR number or one is linked to the issue:
+   If a PR (draft or open) is linked and would close the issue:
    - "And here's an auto-generated PR trying to address it: #<number>"
    - "Appreciate an extra set of eyes"
 
 5. **Mentions**
-   Suggest 2–4 people most relevant to the issue. Use issue body (workflow name, job name, failing path), labels, and `.github/CODEOWNERS` to pick owners (e.g. profiler/workflow owners, area owners). Output as display names or GitHub usernames; the user will convert to Slack @mentions (e.g. @Mark O'Connor).
+   Suggest 2-4 people most relevant to the issue. Use failure logs, issue body (workflow/job/path), labels, `.github/CODEOWNERS`, and recent commits to pick owners.
+   For each selected GitHub login, resolve profile name via `gh api users/<login>` and output mention as `@<human name>` (for example, `@salar hosseini`).
+   Do not output GitHub handles (for example, `@skhorasganiTT`) and do not output Slack IDs.
+
+6. **Auto-triage reference (optional)**
+   If a relevant auto-triage message/reply is found in the exported month of data **and** has `HIGH CONFIDENCE`, add:
+   - `This auto-triage report may be of relevance: <slack permalink>`
+   If no relevant high-confidence triage exists, omit this line and proceed normally.
 
 ## Tone
 
@@ -36,5 +61,6 @@ Use this rule when drafting a Slack message to inform people about a filed CI ma
 
 ## Notes
 
-- User will copy-paste into Slack and may edit (PR number, mentions, wording). Output should be easy to copy as one block.
-- If no PR is provided or found, omit the PR line and optionally keep "Appreciate an extra set of eyes" with mentions only.
+- User will copy-paste into Slack and may edit. Output should be easy to copy as one block.
+- Use double-newline spacing between logical lines/sections to preserve readability in Slack.
+- If no relevant high-confidence triage is found in the 30-day export, still draft the message using issue/log/ownership evidence.
