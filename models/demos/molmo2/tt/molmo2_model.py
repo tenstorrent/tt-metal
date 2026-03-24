@@ -160,7 +160,17 @@ class Molmo2Model(LightweightModule):
         k_pool = pooled_patches_idx.shape[2]
 
         # Patch embedding on TTNN: CPU unfold only, linear+pos_embed on device
-        embedded_ttnn = self.vision_backbone.image_vit.patch_embed_ttnn(pixel_values)
+        vit = self.vision_backbone.image_vit
+        patch_features = vit.patch_size * vit.patch_size * 3  # 14*14*3 = 588
+
+        # Detect input format:
+        # - Pre-unfolded from vLLM: [num_crops, num_patches, 588] - 3D with last dim == 588
+        # - Raw image format: [B, C, H, W] - 4D
+        if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+            # Pre-unfolded patch format from vLLM [num_crops, num_patches, 588]
+            embedded_ttnn = vit.patch_embed_from_patches_ttnn(pixel_values)
+        else:
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)
 
         # Prepare gather indices and masks (CPU, fast)
         valid = pooled_patches_idx >= 0
