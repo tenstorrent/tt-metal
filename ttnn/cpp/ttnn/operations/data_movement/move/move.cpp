@@ -28,13 +28,14 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
         // TODO: Should this throw error?
         return input_tensor;
     }
+    auto* device = input_tensor.device();
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
     }
 
-    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
+    auto output_tensor = create_device_tensor(output_tensor_spec, device);
     auto output_mem_config = output_tensor.memory_config();
 
     // get_parallelization_strategy
@@ -52,7 +53,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks = device->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
@@ -61,7 +62,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 
     // If input and output buffers overlap, input has to be copied into circular buffer before writing to output
     // Only compute with storage cores allow CBs to be created
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
@@ -80,9 +81,9 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     bool fits_in_cb =
-        (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
+        (device->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
         (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
-                                                                         : output_tensor.device()->l1_size_per_core());
+                                                                         : device->l1_size_per_core());
 
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
         ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE;
@@ -109,6 +110,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         // TODO: Should this throw error?
         return {input_tensor};
     }
+    auto* device = input_tensor.device();
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
@@ -118,7 +120,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
     }
 
-    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
+    auto output_tensor = create_device_tensor(output_tensor_spec, device);
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         log_debug(
             tt::LogOp,
