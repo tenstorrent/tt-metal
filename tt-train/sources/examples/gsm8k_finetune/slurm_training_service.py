@@ -1040,6 +1040,18 @@ def create_job():
         slurm_config["model_config"] = training_params["model_config"]
     # Pass dataset for training script (HF name or s3:// URL)
     slurm_config["dataset"] = dataset_url
+    if not slurm_config["dataset"]:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": "dataset_url is required",
+                        "code": "missing_dataset",
+                    }
+                }
+            ),
+            400,
+        )
 
     job_name = f"tt_{model.replace('-', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 

@@ -52,10 +52,6 @@ def validate_sft_params(params: dict) -> dict:
     validated.setdefault("gradient_accumulation", 1)
     validated.setdefault("eval_every", 20)
 
-    # Ensure required parameters are present
-    if not validated.get("dataset"):
-        raise ValueError("dataset parameter is required for SFT training")
-
     # Basic validation
     if validated["batch_size"] <= 0:
         raise ValueError("batch_size must be positive")
@@ -89,12 +85,11 @@ def validate_lora_params(params: dict) -> dict:
     # LoRA-specific defaults
     validated.setdefault("lora_rank", 8)
     validated.setdefault("lora_alpha", 16)
-    validated.setdefault("lora_target_modules", ["q_linear", "kv_linear", "out_linear"])
+    # Map target_modules (OpenAPI spec name) → lora_target_modules (internal name)
+    validated["lora_target_modules"] = validated.pop(
+        "target_modules", validated.pop("lora_target_modules", ["q_linear", "kv_linear", "out_linear"])
+    )
     validated.setdefault("lora_dropout", 0.05)
-
-    # Ensure required parameters are present
-    if not validated.get("dataset"):
-        raise ValueError("dataset parameter is required for LoRA training")
 
     # Basic validation
     if validated["batch_size"] <= 0:
