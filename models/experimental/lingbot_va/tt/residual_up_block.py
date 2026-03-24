@@ -103,13 +103,15 @@ class WanResidualUpBlock(Module):
             x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         if self.upsampler is not None:
+            # WanResample expects ROW_MAJOR; WanResidualBlock output is TILE (same as WanUpBlock).
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
             x_BTHWC, logical_h = self.upsampler(x_BTHWC, logical_h, feat_cache, feat_idx)
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
         if self.avg_shortcut is not None:
             shortcut = self.avg_shortcut(x_copy, first_chunk=first_chunk)
             shortcut = ttnn.to_layout(shortcut, ttnn.TILE_LAYOUT)
             x_tile = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             x_BTHWC = ttnn.add(x_tile, shortcut)
-            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         return x_BTHWC, logical_h

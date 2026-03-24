@@ -196,16 +196,22 @@ class WanVAEEncoder(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        # conv_in uses Conv3dConfig output_layout ROW_MAJOR; residual/mid blocks expect TILE (see WanEncoder3D).
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## downsamples
         for down_block in self.down_blocks:
             if isinstance(down_block, WanResample):
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
                 x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             elif isinstance(down_block, WanResidualBlock):
                 x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanAttentionBlock):
                 x_BTHWC = down_block(x_BTHWC, logical_h)
             elif isinstance(down_block, WanResidualDownBlock):
-                x_BTHWC = down_block(x_BTHWC, feat_cache=feat_cache, feat_idx=feat_idx)
+                # Thread logical_h like WanResample (downsampler inside updates it; layout wraps are in the block).
+                x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache=feat_cache, feat_idx=feat_idx)
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
 
