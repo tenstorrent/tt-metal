@@ -101,7 +101,14 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: amd64
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) rather than pr.head.sha.
+      # GHA always resolves workflow *files* from the merge commit; using head.sha for the
+      # working-tree checkout creates a mismatch where the workflow calls scripts that don't
+      # exist on the PR branch yet (e.g. a new .github/scripts/ file lands on main and
+      # immediately breaks unrelated open PRs that haven't rebased).
+      # Consistency: code and workflow definitions are both from the same merge commit,
+      # so "re-run after a main update" failures are explainable as code conflicts rather
+      # than invisible infrastructure drift.
 
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -116,7 +123,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
@@ -206,7 +213,7 @@ jobs:
       publish-artifact: true
       skip-tt-train: false
       distributed: false
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
