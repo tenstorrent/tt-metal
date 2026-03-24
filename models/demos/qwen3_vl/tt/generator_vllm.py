@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import time
 from types import SimpleNamespace
 from typing import Mapping, Optional
 
@@ -239,9 +240,12 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 dim=0,
             )
             # Vision prefill
+            start = time.time()
             image_embeds, deepstack_visual_embeds = self.visual_model(
                 inputs.pixel_values, grid_thw=inputs.image_grid_thw
             )
+            total_time = time.time() - start
+            logger.info(f"vision prefill time: {total_time}")
         else:
             # text-only users
             image_embeds, deepstack_visual_embeds = (
@@ -252,6 +256,7 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             )
 
         # Prepare text + vision inputs for decoder model
+        start = time.time()
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
         text_embeds_tt = ttnn.from_torch(
             text_embeds,
@@ -290,8 +295,11 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
+        total_time = time.time() - start
+        logger.info(f"preprocessing prefill time: {total_time}")
         rot_mats = (cos, sin)
 
+        start = time.time()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
@@ -300,6 +308,8 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
+        total_time = time.time() - start
+        logger.info(f"text prefill time: {total_time}")
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):

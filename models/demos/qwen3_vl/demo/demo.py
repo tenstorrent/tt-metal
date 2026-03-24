@@ -155,6 +155,19 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # Batch-1 run with 512x512 image - small image, short context (~128 tokens + image tokens)
+            "models/demos/qwen3_vl/demo/sample_prompts/demo_512x512.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            2048,  # max_seq_len, small context for 512x512 image
+            1,  # batch_size
+            100,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 512},  # page_params (smaller for short context)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
@@ -213,6 +226,7 @@ def create_tt_model(
         "batch-32",  # 32 users (special because it fills tile size)
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
+        "small-image-512x512",  # small 512x512 image with short context (~128 text tokens)
         "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
         "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
         "long-context-64k",  # real-world test for 300DPI scanned document with 64k long context
