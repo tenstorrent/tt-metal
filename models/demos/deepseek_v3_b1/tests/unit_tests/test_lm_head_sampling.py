@@ -719,7 +719,6 @@ def test_single_device(
         argmax_final_core_coord=final_core,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
-        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -879,7 +878,6 @@ def test_single_device_d2h(
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
         socket_output=d2h_socket,
-        fabric_config=device_params["fabric_config"],
     )
 
     output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
