@@ -162,3 +162,22 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
+
+/**
+ * @brief Configure packer ReLU at runtime from a packed uint32.
+ * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
+ */
+TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
+}
+
+/**
+ * @brief Configure packer ReLU at runtime from a ReluType enum.
+ *
+ * Quasar's ReluType is a scoped enum class (no implicit conversion to uint32_t),
+ * so this overload is needed for compute kernels that call
+ * llk_pack_relu_config(ReluType::ZERO_RELU).
+ */
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluType mode) {
+    llk_pack_relu_config(static_cast<std::uint32_t>(mode));
+}
