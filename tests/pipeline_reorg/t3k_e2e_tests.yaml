@@ -50,7 +50,8 @@
   team: fabric
 
 - name: t3k_fabric_stability_tests
-  cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
+  # Setting TT_METAL_OPERATION_TIMEOUT_SECONDS=0 to disable test timeouts and let the tests run to completion, as some of the stability tests can take a long time to complete.
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
   skus:
     wh_llmbox:
       timeout: 120
