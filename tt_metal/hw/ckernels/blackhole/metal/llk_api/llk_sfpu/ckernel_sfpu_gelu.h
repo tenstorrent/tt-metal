@@ -60,7 +60,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     // Step 1: Range reduction - split t into k*ln(2) + r
     sfpi::vFloat z = t * INV_LN2;
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
     // Step 2: Extended precision range reduction (Cody-Waite)
     sfpi::vFloat r = k * LN2_HI + t;
