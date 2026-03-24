@@ -6,13 +6,7 @@
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
-#if defined(COMPILE_FOR_NCRISC)
-
-#include <cstdint>
-
-#include "api/dataflow/dataflow_api.h"
-
-#elif defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 
 #include <cstdint>
 
@@ -27,8 +21,6 @@
 using namespace tt::tt_fabric::linear::experimental;
 using namespace tt::tt_fabric::common::experimental;
 
-#elif defined(COMPILE_FOR_TRISC)
-
 #endif
 
 namespace deepseek_b1_ops {
@@ -39,21 +31,42 @@ struct PipelineStageSync {
     // ========================================================================
 
     // Reader CTArgs (NCRISC)
-    template <uint32_t isStallingDevice>
-    struct ReaderCTArgs {
-        static constexpr bool is_stalling_device = isStallingDevice == 1;
-    };
-
-    // Writer CTArgs (BRISC)
     template <
-        uint32_t isSignallingDevice,
+        uint32_t runStallingLogicOnNCRISC,
+        uint32_t runSignallingLogicOnNCRISC,
+        uint32_t runStallingLogicOnBRISC,
+        uint32_t runSignallingLogicOnBRISC,
         uint32_t isStallingDeviceEqualSignallingDevice,
         uint32_t stallingDeviceChipID,
         unit32_t stallingDeviceMeshID,
         uint32_t fabricArgBase>
     struct WriterCTArgs {
-        static constexpr bool is_signalling_device = isSignallingDevice == 1;
-        static constexpr uint32_t is_stalling_device_equal_signalling_device = isStallingDeviceEqualSignallingDevice;
+        static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
+        static constexpr bool run_signalling_logic_on_ncrsic = runSignallingLogicOnNCRISC == 1;
+        static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
+        static constexpr bool run_signalling_logic_on_brsic = runSignallingLogicOnBRISC == 1;
+        static constexpr bool is_stalling_device_equal_signalling_device = isStallingDeviceEqualSignallingDevice == 1;
+        static constexpr uint32_t stalling_device_chip_id = stallingDeviceChipID;
+        static constexpr uint32_t stalling_device_mesh_id = stallingDeviceMeshID;
+        static constexpr uint32_t fabric_arg_base = fabricArgBase;
+    };
+
+    // Writer CTArgs (BRISC)
+    template <
+        uint32_t runStallingLogicOnNCRISC,
+        uint32_t runSignallingLogicOnNCRISC,
+        uint32_t runStallingLogicOnBRISC,
+        uint32_t runSignallingLogicOnBRISC,
+        uint32_t isStallingDeviceEqualSignallingDevice,
+        uint32_t stallingDeviceChipID,
+        unit32_t stallingDeviceMeshID,
+        uint32_t fabricArgBase>
+    struct WriterCTArgs {
+        static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
+        static constexpr bool run_signalling_logic_on_ncrsic = runSignallingLogicOnNCRISC == 1;
+        static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
+        static constexpr bool run_signalling_logic_on_brsic = runSignallingLogicOnBRISC == 1;
+        static constexpr bool is_stalling_device_equal_signalling_device = isStallingDeviceEqualSignallingDevice == 1;
         static constexpr uint32_t stalling_device_chip_id = stallingDeviceChipID;
         static constexpr uint32_t stalling_device_mesh_id = stallingDeviceMeshID;
         static constexpr uint32_t fabric_arg_base = fabricArgBase;
@@ -65,6 +78,8 @@ struct PipelineStageSync {
 
     // NCRISC reader args
     struct ReaderArgs {
+        uint32_t stalling_device_semaphore_noc_x_addr;
+        uint32_t stalling_device_semaphore_noc_y_addr;
         uint32_t stalling_device_semaphore_l1_addr;
     };
 
@@ -90,39 +105,27 @@ struct PipelineStageSync {
         void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
-            // ================================================================
-            // NCRISC (Reader)
-            // ================================================================
-            if (!CTArgs::is_stalling_device) {
-                return;
-            }
-
+        FORCE_INLINE void stalling_logic(uint32_t stalling_device_semaphore_l1_addr) {
             /*
              * - Wait min as multiple signals may have been received before testing semaphore value
              * - Decrement by one (instead of set to 0), so further signals aren't erased
              * - Invalidate cache to ensure value is decremented before proceeding
              */
-            const uint32_t stalling_device_semaphore_l1_addr = args.stalling_device_semaphore_l1_addr;
             auto stalling_device_semaphore_l1_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stalling_device_semaphore_l1_addr);
             noc_semaphore_wait_min(stalling_device_semaphore_l1_ptr, 1);
             unified_kernels::semaphore_dec(stalling_device_semaphore_l1_ptr);
             invalidate_l1_cache();
+        }
 
-#elif defined(COMPILE_FOR_BRISC)
-            // ================================================================
-            // BRISC (Writer)
-            // ================================================================
-            if (!CTArgs::is_signalling_device) {
-                return;
-            }
-
-            const uint32_t stalling_device_semaphore_noc_x_addr = args.stalling_device_semaphore_noc_x_addr;
-            const uint32_t stalling_device_semaphore_noc_y_addr = args.stalling_device_semaphore_noc_y_addr;
-            const uint32_t stalling_device_semaphore_l1_addr = args.stalling_device_semaphore_l1_addr;
-
+        FORCE_INLINE void signalling_logic(
+            uint32_t stalling_device_semaphore_noc_x_addr,
+            uint32_t stalling_device_semaphore_noc_y_addr,
+            uint32_t stalling_device_semaphore_l1_addr,
+            uint32_t stalling_device_chip_id,
+            uint32_t stalling_device_mesh_id,
+            bool is_stalling_device_equal_signalling_device,
+            uint32_t fabric_arg_base, ) {
             const uint64_t stalling_device_semaphore_noc_addr = get_noc_addr(
                 stalling_device_semaphore_noc_x_addr,
                 stalling_device_semaphore_noc_y_addr,
@@ -132,14 +135,11 @@ struct PipelineStageSync {
              * - If stalling and signalling devices are the same, use a pure NoC semaphore inc
              * - Otherwise, must use a fabric + NoC semaphore inc
              */
-            if constexpr (CTArgs::is_stalling_device_equal_signalling_device) {
+            if (is_stalling_device_equal_signalling_device) {
                 // pure NoC
                 noc_semaphore_inc(stalling_device_semaphore_noc_addr, 1);
             } else {
                 // fabric + NoC
-                const uint32_t stalling_device_chip_id = CTArgs::stalling_device_chip_id;
-                const uint32_t stalling_device_mesh_id = CTArgs::stalling_device_mesh_id;
-
                 PacketHeaderPool::reset();
                 constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
                 auto route_id = PacketHeaderPool::allocate_header_n(1);
@@ -152,9 +152,9 @@ struct PipelineStageSync {
                 packet_header->to_noc_unicast_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{stalling_device_semaphore_noc_addr, 1});
 
-                size_t arg_idx = CTArgs::fabric_arg_base;
                 auto fabric_sender =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                        fabric_arg_base);
                 fabric_sender.open();
                 fabric_sender.wait_for_empty_write_slot();
                 fabric_sender.send_payload_flush_blocking_from_address(
@@ -162,6 +162,42 @@ struct PipelineStageSync {
                 fabric_sender.close();
             }
             noc_async_atomic_barrier();
+        }
+
+        void impl([[maybe_unused]] const RTArgs& args) {
+            // ================================================================
+            // NCRISC (Reader)
+            // ================================================================
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (CTArgs::run_stalling_logic_on_ncrisc) {
+                stalling_logic(args.stalling_device_semaphore_l1_addr);
+            } else if constexpr (CTArgs::run_signalling_logic_on_ncrisc) {
+                signalling_logic(
+                    args.stalling_device_semaphore_noc_x_addr,
+                    args.stalling_device_semaphore_noc_y_addr,
+                    args.stalling_device_semaphore_l1_addr,
+                    CTArgs::stalling_device_chip_id,
+                    CTArgs::stalling_device_mesh_id,
+                    CTArgs::is_stalling_device_equal_signalling_device CTArgs::fabric_arg_base);
+            }
+#endif
+
+            // ================================================================
+            // BRISC (Writer)
+            // ================================================================
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (CTArgs::run_stalling_logic_on_brisc) {
+                stalling_logic(args.stalling_device_semaphore_l1_addr);
+            } else if constexpr (CTArgs::run_signalling_logic_on_brisc) {
+                signalling_logic(
+                    args.stalling_device_semaphore_noc_x_addr,
+                    args.stalling_device_semaphore_noc_y_addr,
+                    args.stalling_device_semaphore_l1_addr,
+                    CTArgs::stalling_device_chip_id,
+                    CTArgs::stalling_device_mesh_id,
+                    CTArgs::is_stalling_device_equal_signalling_device CTArgs::fabric_arg_base);
+            }
+#endif
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

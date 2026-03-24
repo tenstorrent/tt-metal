@@ -16,16 +16,56 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
-    "stalling_device_mesh_coord, signalling_device_mesh_coord",
+    "stalling_device_mesh_coord, stalling_core, run_stalling_kernel_on_brisc, signalling_device_mesh_coord, signalling_core, run_signalling_kernel_on_brisc",
     [
-        (ttnn.MeshCoordinate((0, 0)), ttnn.MeshCoordinate((1, 1))),
-        (ttnn.MeshCoordinate((0, 0)), ttnn.MeshCoordinate((0, 0))),
-    ],
-)
-@pytest.mark.parametrize(
-    "stalling_core, signalling_core",
-    [
-        (ttnn.CoreCoord(), ttnn.CoreCoord()),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((1, 1)),
+            ttnn.CoreCoord(0, 0),
+            False,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            False,
+            ttnn.MeshCoordinate((1, 1)),
+            ttnn.CoreCoord(0, 0),
+            True,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((1, 1)),
+            ttnn.CoreCoord(0, 0),
+            True,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            False,
+            ttnn.MeshCoordinate((1, 1)),
+            ttnn.CoreCoord(0, 0),
+            False,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            False,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            False,
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_iterations", [50])
@@ -37,9 +77,11 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
 def test_pipeline_stage_sync_2d(
     bh_2d_mesh_device,
     stalling_device_mesh_coord,
-    signalling_device_mesh_coord,
     stalling_core,
+    run_stalling_kernel_on_brisc,
+    signalling_device_mesh_coord,
     signalling_core,
+    run_signalling_kernel_on_brisc,
     num_iterations,
 ):
     """Test pipeline_stage_sync with 2D fabric."""
@@ -52,8 +94,10 @@ def test_pipeline_stage_sync_2d(
         mesh_device=submesh_device,
         stalling_device_mesh_coord=stalling_device_mesh_coord,
         stalling_core=stalling_core,
+        run_stalling_kernel_on_brisc=run_stalling_kernel_on_brisc,
         signalling_device_mesh_coord=signalling_device_mesh_coord,
         signalling_core=signalling_core,
+        run_signalling_kernel_on_brisc=run_signalling_kernel_on_brisc,
         num_iterations=num_iterations,
     )
     ttnn.synchronize_device(submesh_device)

@@ -14,7 +14,7 @@ Stalling device and signalling device can be the same, as long as the stalling c
 
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
 
 
 class PipelineStageSync:
@@ -87,26 +87,20 @@ class PipelineStageSync:
 
                 # === Compile-time args ===
 
-                # Reader (NCRISC) compile-time args
-                reader_named_ct_args = [
-                    ("is_stalling_device", stalling_device_mesh_coord == mesh_coord),
-                    ("num_iterations", num_iterations),
-                ]
-
-                # Writer (BRISC) compile-time args
+                # Reader (NCRISC) and Writer (BRISC) compile-time args
                 stalling_device_fabric_node_id = mesh_device.get_fabric_node_id(stalling_device_mesh_coord)
                 stalling_device_chip_id = int(stalling_device_fabric_node_id.chip_id)
                 stalling_device_mesh_id = int(stalling_device_fabric_node_id.mesh_id)
-
                 fabric_arg_base = 0
-                writer_named_ct_args = [
-                    ("is_signalling_device", signalling_device_mesh_coord == mesh_coord),
+
+                reader_named_ct_args = [
                     ("is_stalling_device_equal_signalling_device", is_stalling_device_equal_signalling_device),
                     ("stalling_device_chip_id", stalling_device_chip_id),
                     ("stalling_device_mesh_id", stalling_device_mesh_id),
                     ("fabric_arg_base", fabric_arg_base),
                     ("num_iterations", num_iterations),
                 ]
+                writer_named_ct_args = reader_named_ct_args
 
                 # === Common Runtime Args ===
                 stalling_core_phys = device.worker_core_from_logical_core(stalling_core)
@@ -114,19 +108,26 @@ class PipelineStageSync:
                 stalling_device_semaphore_noc_y_addr = stalling_core_phys.y
                 stalling_device_semaphore_l1_addr = global_semaphore_addr
 
-                # Reader (NCRISC) common runtime args
-                reader_common_rt_args = [stalling_device_semaphore_l1_addr]
-
-                # Reader (BRISC) common runtime args
-                writer_common_rt_args = [
+                # Reader (NCRISC) and Writer (BRISC) common runtime args
+                reader_common_rt_args = [
                     stalling_device_semaphore_noc_x_addr,
                     stalling_device_semaphore_noc_y_addr,
                     stalling_device_semaphore_l1_addr,
-                    stalling_device_chip_id,
-                    stalling_device_mesh_id,
                 ]
+                writer_common_rt_args = reader_common_rt_args
 
                 # === Unified Kernel Descriptor ===
+                run_stalling_logic_on_ncrisc = (
+                    mesh_coord == stalling_device_mesh_coord and not run_stalling_kernel_on_brisc
+                )
+                run_stalling_logic_on_brisc = mesh_coord == stalling_device_mesh_coord and run_stalling_kernel_on_brisc
+                run_signalling_logic_on_ncrisc = (
+                    mesh_coord == signalling_device_mesh_coord and not run_signalling_kernel_on_brisc
+                )
+                run_signalling_logic_on_brisc = (
+                    mesh_coord == signalling_device_mesh_coord and run_signalling_kernel_on_brisc
+                )
+
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
                     core_ranges=ttnn.CoreRangeSet(
@@ -139,6 +140,28 @@ class PipelineStageSync:
                     brisc_named_compile_time_args=writer_named_ct_args,
                     ncrisc_common_runtime_args=reader_common_rt_args,
                     brisc_common_runtime_args=writer_common_rt_args,
+                    per_core_compile_time_descriptors=[
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_stalling_logic_on_ncrisc",
+                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc), (signalling_core, 0)],
+                            other_value=0,
+                        ),
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_stalling_logic_on_brisc",
+                            core_values=[(stalling_core, run_stalling_logic_on_brisc), (signalling_core, 0)],
+                            other_value=0,
+                        ),
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_signalling_logic_on_ncrisc",
+                            core_values=[(stalling_core, 0), (signalling_core, run_signalling_logic_on_ncrisc)],
+                            other_value=0,
+                        ),
+                        PerCoreCompileTimeDescriptor(
+                            named_compile_time_arg="run_signalling_logic_on_brisc",
+                            core_values=[(stalling_core, 0), (signalling_core, run_signalling_logic_on_brisc)],
+                            other_value=0,
+                        ),
+                    ],
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
@@ -150,10 +173,20 @@ class PipelineStageSync:
                 )
 
                 if mesh_coord == signalling_device_mesh_coord:
-                    brisc_kernel_idx = kernel_result.groups[0].brisc_kernel_index
-                    per_core_rt_args_ref = program.kernels[brisc_kernel_idx].runtime_args[signalling_core.x][
-                        signalling_core.y
-                    ]
+                    if not run_signalling_kernel_on_brisc:
+                        kernel_idx = kernel_result.get_group_by_arg(
+                            "run_signalling_logic_on_ncrisc", 1
+                        ).ncrisc_kernel_index
+                        per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
+                            signalling_core.y
+                        ]
+                    else:
+                        kernel_idx = kernel_result.get_group_by_arg(
+                            "run_signalling_logic_on_brisc", 1
+                        ).brisc_kernel_index
+                        per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
+                            signalling_core.y
+                        ]
 
                     signalling_fabric_node_id = mesh_device.get_fabric_node_id(signalling_device_mesh_coord)
                     link_index = 0
