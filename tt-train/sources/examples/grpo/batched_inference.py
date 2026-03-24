@@ -278,7 +278,27 @@ def compute_nlog_probs(
     ctx: InferenceCtx,
     prompts: List[List[int]],
     completions: List[List[int]],
-) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int, List]:
+) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, int]:
+    """
+    Compute per-token negative log probabilities for prompt+completion sequences.
+    Concatenates each (prompt, completion) pair, applies the standard next-token-prediction
+    shift (input = sequence[:-1], target = sequence[1:]), runs the model, and returns
+    the cross-entropy at every position.
+    Sequences shorter than the longest are left-padded with ctx.pad_token.
+    Args:
+        prompts:     List of B token-id lists (one per sequence).
+        completions: List of B token-id lists (one per sequence).
+    Returns:
+        nlog_probs: Tensor [B, Tp] — negative log-probability of each target token.
+                    Positions beyond T (the true sequence length) are tile padding and meaningless.
+        mask:       Tensor [B, Tp] — binary mask, 1.0 on completion-token positions only
+                    (0.0 on prompt tokens, left-pad, and tile-pad). Accounts for the
+                    one-token input/target shift so mask[i,t]=1 where the model is
+                    predicting a completion token.
+        Tp:         int — T rounded up to the tile boundary (multiple of ctx.tile_size).
+                    T = max(len(p)+len(c)) - 1 across the batch.
+    """
+
     assert len(completions) == len(prompts)
 
     B = len(completions)
@@ -334,4 +354,4 @@ def compute_nlog_probs(
 
     assert nlog.shape() == [B, Tp]
     assert loss_mask_tt.shape() == [B, Tp]
-    return nlog, loss_mask_tt, Tp, [x_tt, mask_tt, logits, targets_tt]
+    return nlog, loss_mask_tt, Tp
