@@ -312,7 +312,10 @@ def train():
     yaml_config = load_config(CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs")
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
-    override_config_path = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml"
+    override_config_path = os.environ.get(
+        "TT_TRAIN_OVERRIDES_PATH",
+        f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml",
+    )
 
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
