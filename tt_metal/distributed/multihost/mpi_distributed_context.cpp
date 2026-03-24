@@ -279,38 +279,111 @@ static constexpr std::string_view kRankFailureAnnotationFile =
            hostname == "localhost.localdomain" || hostname == "mpirun-host";
 }
 
-[[nodiscard]] std::string best_effort_mpi_processor_name() {
-    std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name{};
-    int processor_name_length = 0;
-    if (MPI_Get_processor_name(processor_name.data(), &processor_name_length) != MPI_SUCCESS ||
-        processor_name_length <= 0) {
-        return {};
+[[nodiscard]] bool can_query_mpi_process_identity() noexcept {
+    int initialized = 0;
+    if (MPI_Initialized(&initialized) != MPI_SUCCESS || initialized == 0) {
+        return false;
     }
 
-    const auto capped_length = std::clamp(processor_name_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
-    processor_name[static_cast<std::size_t>(capped_length)] = '\0';
-    return processor_name.data();
+    int finalized = 0;
+    return MPI_Finalized(&finalized) == MPI_SUCCESS && finalized == 0;
 }
 
-[[nodiscard]] std::string best_effort_local_rank_hostname() {
-    // Prefer the rank-local processor name whenever MPI gives us a stable host
-    // identity. RUNNER_NAME is useful for the launcher host in CI, but tt-run
-    // forwards a single launcher-side RUNNER_NAME to every rank, so using it
-    // unconditionally collapses multihost jobs onto one hostname.
-    std::string mpi_processor_name = best_effort_mpi_processor_name();
+[[nodiscard]] std::string_view select_best_effort_local_rank_hostname(
+    std::string_view mpi_processor_name, std::string_view runner_name) noexcept {
     if (!hostname_is_generic_for_rank_diagnostics(mpi_processor_name)) {
         return mpi_processor_name;
     }
 
-    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
-        return value;
+    if (!runner_name.empty()) {
+        return runner_name;
     }
 
     if (!mpi_processor_name.empty()) {
         return mpi_processor_name;
     }
 
-    return std::string{kUnknownHostname};
+    return kUnknownHostname;
+}
+
+[[nodiscard]] std::string_view best_effort_local_rank_hostname_view(
+    std::array<char, MPI_MAX_PROCESSOR_NAME>& processor_name_buffer) noexcept {
+    std::string_view mpi_processor_name;
+    if (can_query_mpi_process_identity()) {
+        int processor_name_length = 0;
+        if (MPI_Get_processor_name(processor_name_buffer.data(), &processor_name_length) == MPI_SUCCESS &&
+            processor_name_length > 0) {
+            const auto capped_length = std::clamp(processor_name_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
+            processor_name_buffer[static_cast<std::size_t>(capped_length)] = '\0';
+            mpi_processor_name =
+                std::string_view{processor_name_buffer.data(), static_cast<std::size_t>(capped_length)};
+        }
+    }
+
+    std::string_view runner_name;
+    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
+        runner_name = value;
+    }
+
+    return select_best_effort_local_rank_hostname(mpi_processor_name, runner_name);
+}
+
+[[nodiscard]] std::string best_effort_local_rank_hostname() {
+    std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name_buffer{};
+    return std::string{best_effort_local_rank_hostname_view(processor_name_buffer)};
+}
+
+[[nodiscard]] int best_effort_local_world_rank() noexcept {
+    if (!can_query_mpi_process_identity()) {
+        return -1;
+    }
+
+    int rank = -1;
+    if (MPI_Comm_rank(MPI_COMM_WORLD, &rank) != MPI_SUCCESS) {
+        return -1;
+    }
+
+    return rank;
+}
+
+void emit_terminate_annotation_if_enabled(int local_rank, std::string_view local_hostname) noexcept {
+    if (!ttsl::gha::should_emit_annotations(kGithubActionsAnnotationEnvVar)) {
+        return;
+    }
+
+    char rank_name[32] = {};
+    const char* rank_name_ptr = kUnknownRankName.data();
+    if (local_rank >= 0) {
+        const int rank_name_len = std::snprintf(rank_name, sizeof(rank_name), "world-rank-%d", local_rank);
+        if (rank_name_len > 0 && static_cast<std::size_t>(rank_name_len) < sizeof(rank_name)) {
+            rank_name_ptr = rank_name;
+        }
+    }
+
+    char command[1024] = {};
+    const bool hostname_known = local_hostname != kUnknownHostname;
+    const int written = std::snprintf(
+        command,
+        sizeof(command),
+        hostname_known ? "\n::error file=%s,title=MPI rank fatal terminate %s on %.*s::"
+                         "std::terminate called in MPI context; rank_name=%s; hostname=%.*s; "
+                         "action=revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
+                       : "\n::error file=%s,title=MPI rank fatal terminate %s::"
+                         "std::terminate called in MPI context; rank_name=%s; hostname=%.*s; "
+                         "action=revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n",
+        kRankFailureAnnotationFile.data(),
+        rank_name_ptr,
+        static_cast<int>(local_hostname.size()),
+        local_hostname.data(),
+        rank_name_ptr,
+        static_cast<int>(local_hostname.size()),
+        local_hostname.data());
+    if (written <= 0) {
+        return;
+    }
+
+    const auto bytes_to_write = std::min<std::size_t>(static_cast<std::size_t>(written), sizeof(command) - 1);
+    [[maybe_unused]] const auto ignored = write(STDOUT_FILENO, command, bytes_to_write);
 }
 
 [[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {
@@ -721,6 +794,9 @@ static void mpi_finalize_alarm_handler(int /*sig*/) noexcept {
 // FailurePolicy::FAULT_TOLERANT on your MPIContext, then catch
 // MPIRankFailureException in your collective loops.
 static void mpi_terminate_handler() noexcept {
+    const int local_rank = best_effort_local_world_rank();
+    std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name_buffer{};
+    const std::string_view local_hostname = best_effort_local_rank_hostname_view(processor_name_buffer);
 #if OMPI_HAS_ULFM
     // Revoke so that any rank blocked in a collective receives ERR_REVOKED
     // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
@@ -728,13 +804,35 @@ static void mpi_terminate_handler() noexcept {
     // MPI may not be initialized yet.
     MPIX_Comm_revoke(MPI_COMM_WORLD);
 #endif
-    static const char msg[] =
+    emit_terminate_annotation_if_enabled(local_rank, local_hostname);
+
+    char rank_name[32] = {};
+    const char* rank_name_ptr = kUnknownRankName.data();
+    if (local_rank >= 0) {
+        const int rank_name_len = std::snprintf(rank_name, sizeof(rank_name), "world-rank-%d", local_rank);
+        if (rank_name_len > 0 && static_cast<std::size_t>(rank_name_len) < sizeof(rank_name)) {
+            rank_name_ptr = rank_name;
+        }
+    }
+
+    char msg[1024] = {};
+    const int written = std::snprintf(
+        msg,
+        sizeof(msg),
         "================================================================\n"
         "FATAL: std::terminate called in MPI context\n"
+        "  Rank   : %s\n"
+        "  Host   : %.*s\n"
         "  Cause  : uncaught exception or explicit std::terminate()\n"
         "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting kUlfmExitCode (70)\n"
-        "================================================================\n";
-    [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        "================================================================\n",
+        rank_name_ptr,
+        static_cast<int>(local_hostname.size()),
+        local_hostname.data());
+    if (written > 0) {
+        const auto bytes_to_write = std::min<std::size_t>(static_cast<std::size_t>(written), sizeof(msg) - 1);
+        [[maybe_unused]] const auto ignored = write(STDERR_FILENO, msg, bytes_to_write);
+    }
     _exit(kUlfmExitCode);
 }
 
