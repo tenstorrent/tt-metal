@@ -303,7 +303,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         input_tensor_b,
         sparsity,
         optional_output_tensor,
-        std::move(nnz),
+        nnz,
         is_input_a_sparse,
         is_input_b_sparse,
         memory_config,
