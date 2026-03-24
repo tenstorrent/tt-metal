@@ -116,46 +116,117 @@ def build_ref_model(hf_sd, n_layers=1, max_seq_len=256, max_batch_size=1):
 class TestOlmoE2EPCC:
     @torch.no_grad()
     def test_prefill_pcc_64layers(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: full 64-layer model, compare logits vs CPU."""
-        self._run_prefill_pcc(mesh_device, n_layers=64)
+        """Prefill PCC: full 64-layer model at ISL 128, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, pcc_threshold=0.99)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at ISL 128, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, pcc_threshold=0.995)
 
     @torch.no_grad()
     def test_prefill_pcc_1layer(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: embed → 1 layer → norm → lm_head, compare logits vs CPU."""
-        self._run_prefill_pcc(mesh_device, n_layers=1)
+        """Prefill PCC: embed → 1 layer → norm → lm_head at ISL 128, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, pcc_threshold=0.999)
+
+    # ── ISL 256 (real padded length for isl-128-b1 demo with ChatML overhead) ──────
+    @torch.no_grad()
+    def test_prefill_pcc_1layer_isl256(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 256 ISL (actual padded length for 177-token ChatML prompt), target > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=256, pcc_threshold=0.999)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl256(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 256 ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=256, pcc_threshold=0.995)
+
+    @torch.no_grad()
+    def test_prefill_pcc_64layers_isl256(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 64-layer model at 256 ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=256, pcc_threshold=0.99)
+
+    # ── ISL 512 ──────────────────────────────────────────────────────────────────
+    @torch.no_grad()
+    def test_prefill_pcc_1layer_isl512(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 512 ISL, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=512, pcc_threshold=0.999)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl512(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 512 ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=512, pcc_threshold=0.995)
+
+    @torch.no_grad()
+    def test_prefill_pcc_64layers_isl512(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 64-layer model at 512 ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=512, pcc_threshold=0.99)
+
+    # ── ISL 1k ──────────────────────────────────────────────────────────────────
+    @torch.no_grad()
+    def test_prefill_pcc_1layer_isl1k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 1k ISL, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=1024, pcc_threshold=0.999)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl1k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 1k ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=1024, pcc_threshold=0.995)
 
     @torch.no_grad()
     def test_prefill_pcc_64layers_isl1k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: full 64-layer model at 1k ISL (padded_len=1024)."""
-        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=1024)
+        """Prefill PCC: full 64-layer model at 1k ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=1024, pcc_threshold=0.99)
+
+    # ── ISL 2k ──────────────────────────────────────────────────────────────────
+    @torch.no_grad()
+    def test_prefill_pcc_1layer_isl2k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 2k ISL, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=2048, pcc_threshold=0.999)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl2k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 2k ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=2048, pcc_threshold=0.995)
 
     @torch.no_grad()
     def test_prefill_pcc_64layers_isl2k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: full 64-layer model at 2k ISL (padded_len=2048)."""
-        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=2048)
+        """Prefill PCC: full 64-layer model at 2k ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=2048, pcc_threshold=0.99)
 
+    # ── ISL 4k ──────────────────────────────────────────────────────────────────
     @torch.no_grad()
-    def test_prefill_pcc_64layers_isl4k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: full 64-layer model at 4k ISL (padded_len=4096)."""
-        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=4096)
+    def test_prefill_pcc_1layer_isl4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 4k ISL, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=4096, pcc_threshold=0.999)
 
     @torch.no_grad()
     def test_prefill_pcc_4layers_isl4k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: 4-layer model at 4k ISL (padded_len=4096)."""
-        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=4096)
+        """Prefill PCC: 4-layer model at 4k ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=4096, pcc_threshold=0.995)
 
     @torch.no_grad()
-    def test_prefill_pcc_64layers_isl8k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: full 64-layer model at 8k ISL (padded_len=8192)."""
-        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=8192)
+    def test_prefill_pcc_64layers_isl4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 4k ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=4096, pcc_threshold=0.99)
+
+    # ── ISL 8k ──────────────────────────────────────────────────────────────────
+    @torch.no_grad()
+    def test_prefill_pcc_1layer_isl8k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 1-layer model at 8k ISL, target hidden PCC > 0.999."""
+        self._run_prefill_pcc(mesh_device, n_layers=1, padded_len=8192, pcc_threshold=0.999)
 
     @torch.no_grad()
     def test_prefill_pcc_4layers_isl8k(self, mesh_device, reset_seeds, ensure_gc):
-        """Prefill PCC: 4-layer model at 8k ISL (padded_len=8192)."""
-        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=8192)
+        """Prefill PCC: 4-layer model at 8k ISL, target hidden PCC > 0.995."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=8192, pcc_threshold=0.995)
 
     @torch.no_grad()
-    def _run_prefill_pcc(self, mesh_device, n_layers, padded_len=128):
+    def test_prefill_pcc_64layers_isl8k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 8k ISL, target hidden PCC > 0.99."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=8192, pcc_threshold=0.99)
+
+    @torch.no_grad()
+    def _run_prefill_pcc(self, mesh_device, n_layers, padded_len=128, pcc_threshold=0.90):
         """Shared implementation for prefill PCC tests."""
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
@@ -289,7 +360,7 @@ class TestOlmoE2EPCC:
         import torch.nn.functional as F
 
         ref_hidden_cmp = ref_hidden[:, : tt_hidden.shape[-2], : tt_hidden.shape[-1]]
-        passing_hidden, pcc_hidden_msg = comp_pcc(ref_hidden_cmp.float(), tt_hidden.float(), 0.90)
+        passing_hidden, pcc_hidden_msg = comp_pcc(ref_hidden_cmp.float(), tt_hidden.float(), pcc_threshold)
         logger.info(f"Prefill {n_layers}L hidden state PCC (full tensor): {pcc_hidden_msg}")
         logger.info(f"  ref_hidden std={ref_hidden_cmp.std():.6f}, tt_hidden std={tt_hidden.std():.6f}")
 
@@ -422,7 +493,7 @@ class TestOlmoE2EPCC:
         logger.info(f"  Host logits PCC:  {pcc_host}")
         logger.info("=" * 60)
 
-        assert passing_hidden, f"Prefill {n_layers}L hidden state PCC {pcc_hidden_msg} < 0.90"
+        assert passing_hidden, f"Prefill {n_layers}L hidden state PCC {pcc_hidden_msg} < {pcc_threshold}"
         logger.info(f"PREFILL {n_layers}L PCC TEST: PASSED")
 
     @torch.no_grad()

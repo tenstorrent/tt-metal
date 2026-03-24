@@ -59,6 +59,10 @@ def _safe_decode(tokenizer, token_ids, skip_special_tokens=True):
 def get_padded_prefill_len(seq_len: int) -> int:
     if seq_len <= 128:
         return 128
+    if seq_len <= 256:
+        return 256
+    if seq_len <= 512:
+        return 512
     if seq_len <= 1024:
         return 1024
     else:
@@ -229,8 +233,25 @@ def run_olmo_demo(
             # Clamp each encoded prompt to the target ISL so that the ChatML overhead
             # (~56 tokens) never pushes the length past a power-of-2 boundary, which
             # would double padded_prefill_len and break support_seqlens CCL buffer lookups.
+            # IMPORTANT: preserve the ChatML generation prompt suffix (<|im_start|>assistant...<think>)
+            # so the model knows it should respond. Naive ep[:N] would cut the suffix for long prompts.
             target_prefill_len = 1 << (max_generated_tokens.bit_length() - 1)
-            encoded_prompts = [ep[:target_prefill_len] for ep in encoded_prompts]
+            _asst_marker = "<|im_start|>assistant"
+            clamped_prompts = []
+            for fp, ep in zip(formatted_prompts, encoded_prompts):
+                if len(ep) <= target_prefill_len:
+                    clamped_prompts.append(ep)
+                    continue
+                # Find the assistant generation prompt (suffix that the model needs to see)
+                _sfx_pos = fp.rfind(_asst_marker)
+                if _sfx_pos >= 0:
+                    _sfx_tokens = tokenizer.encode(fp[_sfx_pos:], add_special_tokens=False)
+                    # Truncate content and re-append suffix to preserve the generation prompt
+                    _content_len = target_prefill_len - len(_sfx_tokens)
+                    clamped_prompts.append(ep[:_content_len] + _sfx_tokens)
+                else:
+                    clamped_prompts.append(ep[:target_prefill_len])
+            encoded_prompts = clamped_prompts
         else:
             encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
 
@@ -551,7 +572,7 @@ def run_olmo_demo(
     failed_tokens_per_second_per_user = []
     iteration_time_start = time()
 
-    num_decode_tokens = max_generated_tokens - max_prompt_length
+    num_decode_tokens = max_generated_tokens - padded_prefill_len
     if num_decode_tokens <= 0:
         num_decode_tokens = max_generated_tokens
 
@@ -850,22 +871,22 @@ def run_olmo_demo(
         ),
         # ── ISL sweep: batch=1, 10 decode tokens, 64 layers ──────────────────────────────
         # paged_cache_max_seq_len = 8 × max_num_blocks  (batch_size_per_device_group=8 on TG)
-        (  # isl-128-b1: ~128-token prefill + 200 decode
+        (  # isl-128-b1: ~128-token prefill + 1000 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
-            False,  # instruct mode
+            True,  # instruct mode: wrap question in ChatML
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            328,  # ~128 prefill + 200 decode
+            256 + 512,  # padded_prefill(256) + 512 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-1k-b1: ~1k-token prefill + 200 decode
+        (  # isl-1k-b1: ~1k-token prefill + 512 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
@@ -873,14 +894,14 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            1224,  # ~1024 prefill + 200 decode
+            1024 + 512,  # padded_prefill(1024) + 512 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-2k-b1: ~2k-token prefill + 200 decode
+        (  # isl-2k-b1: ~2k-token prefill + 512 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
@@ -888,14 +909,14 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            2248,  # ~2048 prefill + 200 decode
+            2048 + 512,  # padded_prefill(2048) + 512 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-4k-b1: ~4k-token prefill + 1000 decode
+        (  # isl-4k-b1: ~4k-token prefill + 512 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
@@ -903,14 +924,14 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            4795,  # 3795 prefill + 1000 decode (pads to 4096; <3800 tokens, full sliding window coverage)
+            4096 + 512,  # padded_prefill(4096) + 512 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
             {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-8k-b1: ~8k-token prefill + 200 decode
+        (  # isl-8k-b1: ~8k-token prefill + 512 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
@@ -918,7 +939,7 @@ def run_olmo_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            8916,  # ~7916 prefill + 1000 decode (pads to 8192)
+            8192 + 512,  # padded_prefill(8192) + 512 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
             {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},

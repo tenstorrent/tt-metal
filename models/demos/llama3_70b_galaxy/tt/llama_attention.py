@@ -1182,9 +1182,9 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        # OLMo: use bfloat16 for xqkv up to 8k ISL to preserve Q/K norm and RoPE precision.
-        # For ISL > 8192: ring SDPA casts Q/K/V to bfloat8_b and memory pressure grows —
-        # use ccl_dtype (bfloat8_b) to match what ring SDPA requires.
+        # OLMo: use bfloat16 for xqkv at all supported ISLs (≤ 8192) to preserve Q/K norm and
+        # RoPE precision. For ring SDPA (ISL > 4096), Q/K/V are cast to bfloat8_b just before
+        # the ring SDPA call (after QK-norm), not at the xqkv level.
         if self.is_olmo:
             xqkv_dtype = ttnn.bfloat16 if seq_len <= 8192 else self.ccl_dtype
         else:
@@ -1209,7 +1209,7 @@ class TtLlamaAttention(LightweightModule):
         if not skip_input_dealloc:
             ttnn.deallocate(x_11SH)
 
-        # Use QKV_BF16 (bfloat16 all-gather buffer) for ISL <= 8192 where xqkv is bf16.
+        # Use QKV_BF16 (bfloat16 all-gather buffer) for all OLMo ISLs ≤ 8192 (xqkv is bf16).
         # For ISL > 8192, xqkv is bfloat8_b → use the standard "QKV" buffer.
         qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 8192) else "QKV"
         _dbg_sync("qkv_allreduce_start")
@@ -1342,19 +1342,27 @@ class TtLlamaAttention(LightweightModule):
 
         # Determine SDPA path before K/V handling so we know which dtypes to keep.
         # ring_distributed_sdpa needs seqlen//8 to be at least one tile (32).
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        # OLMo: always use non-ring SDPA for maximum precision (PCC > 0.999 at 1L for all ISLs).
+        # Flash-attention chunked implementation avoids OOM even at ISL 8k:
+        # - Sliding window (window=4096): O(8k×4k) attention, same as ISL 4k.
+        # - Full attention (window=None): O(8k×8k) but q_chunk=256/k_chunk=256 means ~9KB L1 per core.
+        # Non-OLMo models: ring SDPA for ISL > 4096 (original behavior).
+        if self.is_olmo:
+            ring_distributed_sdpa = False
+        else:
+            ring_distributed_sdpa = seq_len > 4096 and batch_size == 1
 
         # Cast K and V to bfloat8_b for KV cache fill (cache is always bf8).
-        # For OLMo non-ring SDPA: keep the bfloat16 K/V alive for the SDPA call;
-        # the bf8 copies are only needed for the cache fill.
+        # OLMo: keep the bfloat16 K/V alive for both ring and non-ring SDPA calls;
+        # bf8 copies are only for cache fill and deallocated after fill.
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        if not (self.is_olmo and not ring_distributed_sdpa):
+        if not self.is_olmo:
             ttnn.deallocate(k_heads_1KSD)
 
         k_fill = k_heads_1KSD_8b
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-        if not (self.is_olmo and not ring_distributed_sdpa):
+        if not self.is_olmo:
             ttnn.deallocate(v_heads_1VSD)
 
         v_fill = v_heads_1VSD_8b
@@ -1391,11 +1399,9 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        # OLMo non-ring path: use bfloat16 Q, K, V for SDPA — xqkv matmul now outputs bfloat16,
-        # so Q/K/V carry true bfloat16 precision through QK-norm and RoPE. Deallocate bf8 K/V here
-        # since the cache fill is complete and we no longer need them.
-        # Run ring_distributed_sdpa for > 1k seqlen; regular SDPA is used for <=1k seqlen.
-        if self.is_olmo and not ring_distributed_sdpa:
+        # OLMo: always use bfloat16 Q/K/V for SDPA for maximum precision.
+        # Deallocate bf8 K/V (used only for cache fill) after the fill is done.
+        if self.is_olmo:
             ttnn.deallocate(k_heads_1KSD_8b)
             ttnn.deallocate(v_heads_1VSD_8b)
             q_sdpa = q_heads_1QSD  # bfloat16
@@ -1497,11 +1503,11 @@ class TtLlamaAttention(LightweightModule):
 
         wo_weight = self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
         # OLMo: bfloat16 output to avoid quantization error in WO projection.
-        # - ttnn.linear path (seq_len < 4096): use hifi2 (FP32 accum) for best precision.
-        # - minimal_matmul path (seq_len >= 4096): use hifi2_fp16 (FP16 accum) because
+        # - ttnn.linear path (seq_len <= 8192): use hifi2 (FP32 accum) for best precision.
+        #   OLMo uses bf16 Q/K/V for all SDPA (ring and non-ring), so SDPA output is bf16.
+        # - minimal_matmul path (seq_len > 8192): use hifi2_fp16 (FP16 accum) because
         #   minimal_matmul's subblock configs (product=8) exceed max_dest_volume=4 when
-        #   fp32_dest_acc_en=True. At ISL≥4096, ring SDPA is used so SDPA inputs are
-        #   already bfloat8_b; FP32 accumulation in WO provides minimal additional benefit.
+        #   fp32_dest_acc_en=True. (OLMo ISL > 8192 is not currently supported.)
         wo_compute_cfg_linear = (
             self.compute_kernel_config_hifi2 if self.is_olmo else self.compute_kernel_config_hifi2_fp16
         )
@@ -1533,10 +1539,8 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # OLMo: select all-reduce buffer based on WO output dtype.
-        # - seq_len <= 8192: ttnn.linear with bfloat16 output → use WO_AG_BF16 (bfloat16 buffer).
-        # - seq_len > 8192: minimal_matmul (bf8 inputs → bf8 output, ring SDPA was already bf8)
-        #   → use WO_AG (bfloat8_b buffer).
+        # OLMo: WO always uses ttnn.linear with bfloat16 output (wo_dtype=bf16 for all ISLs ≤ 8192).
+        # Use WO_AG_BF16 (bfloat16 buffer) for all OLMo ISLs ≤ 8192; WO_AG (bfloat8_b) otherwise.
         wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len <= 8192 else "WO_AG"
         _dbg_sync("wo_allreduce_start")
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
