@@ -24,6 +24,8 @@ Use this rule when drafting a Slack message to inform people about a filed CI ma
 
 Auto-triage guidance must be treated as strong only if it explicitly contains `HIGH CONFIDENCE`. Lower-confidence triage is weak signal and should not drive owner selection by itself.
 
+**Infra-dominated failures:** When logs or the issue point at **runner or environment** problems—read-only filesystem / `EROFS` / errno 30 on shared mounts, missing or unwritable cache dirs (e.g. under `/mnt/…`), runner disk space, image or agent misconfiguration, pre-seeded artifact/cache absent on a read-only volume—**do not** default to **workflow or model `CODEOWNERS`** (the people who own the test suite or product area) as the primary pings. Prefer whoever **owns the runners, host images, and mounts** for that job’s SKU/label (issue body, infra contacts named there, recent `git log` on `.github/workflows/` or `infra/` when clearly related). Add workflow/product owners **only** if a **workflow or env change** (paths, env vars, timeouts) is clearly part of the fix alongside infra.
+
 ## URLs in the message (required)
 
 - Use **full raw URLs** only (`https://github.com/tenstorrent/tt-metal/issues/…`, job-level Actions `https://github.com/tenstorrent/tt-metal/actions/runs/…/job/…`, PR URLs, Slack archive permalinks). Slack linkifies plain URLs in normal message text.
@@ -53,6 +55,7 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 
 5. **Mentions**
    Suggest 2-4 people most relevant to the issue. Use failure logs, issue body (workflow/job/path), labels, `.github/CODEOWNERS`, and recent commits to pick owners.
+   Apply **Infra-dominated failures** (see Evidence Priority): for mount/ROFS/cache-on-runner failures, **prioritize infra/runner ownership** over the workflow’s product CODEOWNERS; say so in the context line if helpful (e.g. “looks infra-side: RO tt_cache on shared mount”).
    For each selected GitHub login, resolve profile name via `gh api users/<login>` and output mention as `@<human name>` (for example, `@salar hosseini`).
    Do not output GitHub handles (for example, `@skhorasganiTT`) and do not output Slack IDs.
 

@@ -33,6 +33,7 @@ Produce a copy-paste-ready Slack message for pipelines triage, using a CI issue 
 
 4. **Suggest mentions**
    - Use issue context, latest job logs, `.github/CODEOWNERS`, and recent commit history to suggest 2-4 people best suited to fix.
+   - If the failure is **infra-dominated** (read-only FS / shared mount / missing cache on RO volume / runner disk or image—see `.cursor/rules/slack-ci-issue-draft.mdc`), **do not** default to workflow or model CODEOWNERS; prefer infra/runner ownership (issue-named contacts, recent authors on relevant workflow or `infra/` changes). Add product/workflow owners only when a code or workflow/env change is clearly needed too.
    - Prefer specific individuals over broad team handles.
    - Resolve each selected GitHub login to a human name with `gh api users/<login>` and use that name in mentions.
    - Mentions must be `@<human name>` (for example, `@salar hosseini`), not GitHub handles like `@skhorasganiTT` and not Slack IDs.
