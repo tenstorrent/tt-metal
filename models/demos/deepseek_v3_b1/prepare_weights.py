@@ -25,7 +25,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+    GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+    QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    BlitzDecodeWeights,
+    OverlappedTensor,
+)
+from models.demos.deepseek_v3_b1.tensor_cache import _TRANSFORM_VERSION, CacheConfig, Fingerprint
 
 # Serialization: manifest version and dtype name mapping
 _MANIFEST_VERSION = 1
@@ -58,6 +66,87 @@ _FIELD_TO_FUSION_GROUP: dict[str, str] = {
     "shared_gate_proj": "gate_up",
     "shared_up_proj": "gate_up",
 }
+
+
+def _make_fp(
+    cache_config: CacheConfig,
+    mesh_shape: tuple[int, int],
+    group_name: str,
+    layer_idx: int,
+    spec_fingerprints: tuple[str, ...],
+) -> Fingerprint:
+    return Fingerprint(
+        schema_version=1,
+        hf_model_id=cache_config.hf_model_id,
+        hf_revision=cache_config.hf_revision,
+        transform_version=_TRANSFORM_VERSION,
+        mesh_shape=mesh_shape,
+        group_name=group_name,
+        layer_idx=layer_idx,
+        spec_fingerprints=spec_fingerprints,
+    )
+
+
+def _qab_kva_spec_fps() -> tuple[str, ...]:
+    cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    return (cfg.q_a_shard_spec.fingerprint(), cfg.q_b_shard_spec.fingerprint(), cfg.kv_a_shard_spec.fingerprint())
+
+
+def _o_proj_norms_spec_fps() -> tuple[str, ...]:
+    cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    return (
+        cfg.o_proj.fingerprint(),
+        cfg.gate_mm.fingerprint(),
+        cfg.attn_norm.fingerprint(),
+        cfg.q_norm.fingerprint(),
+        cfg.kv_norm.fingerprint(),
+        cfg.ffn_norm.fingerprint(),
+    )
+
+
+def _kv_b12_spec_fps() -> tuple[str, ...]:
+    """Fingerprint from the config-level core range sets + known shapes/dtype.
+
+    KVB12 specs are constructed inline (shape depends on mla_tp) but the
+    core grids and sharding strategy are fixed.  Combined with mesh_shape
+    in the Fingerprint, this uniquely identifies the layout.
+    """
+    cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec
+
+    kv_b1_fp = OverlappedShardSpec(
+        core_range_set=cfg.kv_b1_core_range_set,
+        raw_tensor_shape=cfg.kv_b1_proj_shape,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ).fingerprint()
+    kv_b2_fp = OverlappedShardSpec(
+        core_range_set=cfg.kv_b2_core_range_set,
+        raw_tensor_shape=cfg.kv_b2_proj_shape,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ).fingerprint()
+    return (kv_b1_fp, kv_b2_fp)
+
+
+def _gate_up_spec_fps() -> tuple[str, ...]:
+    """Fingerprint from the config-level shapes and core grids."""
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec
+
+    gate_fp = OverlappedShardSpec(
+        core_range_set=cfg.gate_core_range_set,
+        raw_tensor_shape=cfg.stacked_shape,
+        dtype=ttnn.DataType.BFLOAT4_B,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ).fingerprint()
+    up_fp = OverlappedShardSpec(
+        core_range_set=cfg.up_core_range_set,
+        raw_tensor_shape=cfg.stacked_shape,
+        dtype=ttnn.DataType.BFLOAT4_B,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ).fingerprint()
+    return (gate_fp, up_fp)
 
 
 @dataclass
@@ -491,76 +580,102 @@ def prepare_attention_weights(
     *,
     is_moe: bool,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> AttentionWeights:
-    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
+    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms).
+
+    When ``cache_config`` is provided, each fusion group is routed through
+    :meth:`TensorCache.get_or_create`.  On a hit the raw tensors are still
+    loaded (cheap) but the expensive tilize-pack-fuse step is skipped.
+    """
+    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
+
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
     t0 = time.perf_counter()
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
         state_dict, layer_idx
     )
-    # Single-device (mla_tp=1) expects per-TP shapes; slice if state dict has full logical (2-TP) size
     q_b, o_proj, kv_b1, kv_b2 = _slice_attention_weights_for_mla_tp(q_b, o_proj, kv_b1, kv_b2, bdw.mla_tp)
     logger.debug("  load raw tensors: {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
-    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=move_to_device)
+
+    def _cached_or_fuse(group_name, spec_fps_fn, fuse_fn):
+        if cache_config is not None:
+            fp = _make_fp(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn())
+            return cache_config.cache.get_or_create(fp, fuse=fuse_fn, device=bdw._device)
+        return fuse_fn()
+
+    def _cached_or_create(tensor_name, create_fn):
+        if cache_config is not None:
+            fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
+            return cache_config.cache.get_or_create_tensor(fp, create=create_fn, device=bdw._device)
+        return create_fn()
+
+    qab_kva = _cached_or_fuse(
+        "q_ab_kv_a",
+        _qab_kva_spec_fps,
+        lambda: bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=move_to_device),
+    )
     q_a_proj, q_b_proj, kv_a_proj = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
-    kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device)
+
+    kv_b12 = _cached_or_fuse(
+        "kv_b12",
+        _kv_b12_spec_fps,
+        lambda: bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device),
+    )
     kv_b1_proj, kv_b2_proj = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
     logger.debug("  convert q_ab_kv_a + kv_b12: {:.3f}s", time.perf_counter() - t0)
 
     if is_moe:
         gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
-        o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+        o_norms = _cached_or_fuse(
+            "o_proj_gate_mm_norms",
+            _o_proj_norms_spec_fps,
+            lambda: bdw.get_tt_o_proj_and_gate_mm_weights(
+                o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+            ),
         )
-        o_proj_ot = o_norms["o_proj"]
-        gate_mm_ot = o_norms["gate_mm"]
-        attn_norm_ot = o_norms["attn_norm"]
-        q_norm_ot = o_norms["q_norm"]
-        ffn_norm_ot = o_norms["ffn_norm"]
-        kv_norm_ot = o_norms["kv_norm"]
-        gate_bias_tt = create_gate_bias_tensor(
-            state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
-            bdw._device,
-            move_to_device=move_to_device,
+        gate_bias_raw = state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")]
+        gate_bias_tt = _cached_or_create(
+            "gate_bias",
+            lambda: create_gate_bias_tensor(gate_bias_raw, bdw._device, move_to_device=move_to_device),
         )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
-            o_proj=o_proj_ot,
-            gate_mm=gate_mm_ot,
-            attn_norm=attn_norm_ot,
-            q_norm=q_norm_ot,
-            kv_norm=kv_norm_ot,
-            ffn_norm=ffn_norm_ot,
+            o_proj=o_norms["o_proj"],
+            gate_mm=o_norms["gate_mm"],
+            attn_norm=o_norms["attn_norm"],
+            q_norm=o_norms["q_norm"],
+            kv_norm=o_norms["kv_norm"],
+            ffn_norm=o_norms["ffn_norm"],
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
             gate_bias=gate_bias_tt,
         )
     else:
         gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
-        o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
-            o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+        o_norms = _cached_or_fuse(
+            "o_proj_gate_mm_norms",
+            _o_proj_norms_spec_fps,
+            lambda: bdw.get_tt_o_proj_and_gate_mm_weights(
+                o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+            ),
         )
-        o_proj_ot = o_norms["o_proj"]
-        attn_norm_ot = o_norms["attn_norm"]
-        q_norm_ot = o_norms["q_norm"]
-        ffn_norm_ot = o_norms["ffn_norm"]
-        kv_norm_ot = o_norms["kv_norm"]
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
-            o_proj=o_proj_ot,
+            o_proj=o_norms["o_proj"],
             gate_mm=None,
-            attn_norm=attn_norm_ot,
-            q_norm=q_norm_ot,
-            kv_norm=kv_norm_ot,
-            ffn_norm=ffn_norm_ot,
+            attn_norm=o_norms["attn_norm"],
+            q_norm=o_norms["q_norm"],
+            kv_norm=o_norms["kv_norm"],
+            ffn_norm=o_norms["ffn_norm"],
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
             gate_bias=None,
@@ -574,32 +689,54 @@ def prepare_shared_expert_weights(
     *,
     is_moe: bool,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> SharedExpertWeights:
-    """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer."""
+    """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer.
+
+    When ``cache_config`` is provided, the gate_up fusion group is routed
+    through :meth:`TensorCache.get_or_create`.  The standalone down_proj
+    tensor is not cached (Phase 2 standalone caching).
+    """
+    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
     logger.debug("Converting shared expert weights for layer {} (is_moe={})", layer_idx, is_moe)
     t0 = time.perf_counter()
+
     if is_moe:
         shared_gate = state_dict[_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
         shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
         shared_down = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
-        # Single-device (moe_tp=1) expects per-TP shapes; slice if state dict has full logical (8-TP) size
         shared_gate, shared_up, shared_down = _slice_shared_expert_weights_for_moe_tp(
             shared_gate, shared_up, shared_down, bdw.moe_tp
         )
-        shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_moe_shared_expert_weights(
-            shared_gate, shared_up, shared_down, move_to_device=move_to_device
-        )
+        fuse_gate_up = lambda: bdw.get_tt_gate_up_proj_weights(shared_gate, shared_up, move_to_device=move_to_device)
+        create_down = lambda: bdw.get_tt_shared_down_proj_weights(shared_down, move_to_device=move_to_device)
     else:
-        mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
-        mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
-        mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
-        shared_gate_proj, shared_up_proj, shared_down_proj = bdw.get_tt_mlp_shared_expert_weights(
-            mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
-        )
+        shared_n = 2048
+        mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()[:, :shared_n]
+        mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()[:, :shared_n]
+        mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()[:shared_n, :]
+        fuse_gate_up = lambda: bdw.get_tt_gate_up_proj_weights(mlp_gate, mlp_up, move_to_device=move_to_device)
+        create_down = lambda: bdw.get_tt_shared_down_proj_weights(mlp_down, move_to_device=move_to_device)
+
+    def _cached_or_fuse(group_name, spec_fps_fn, fuse_fn):
+        if cache_config is not None:
+            fp = _make_fp(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn())
+            return cache_config.cache.get_or_create(fp, fuse=fuse_fn, device=bdw._device)
+        return fuse_fn()
+
+    def _cached_or_create(tensor_name, create_fn):
+        if cache_config is not None:
+            fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
+            return cache_config.cache.get_or_create_tensor(fp, create=create_fn, device=bdw._device)
+        return create_fn()
+
+    gate_up = _cached_or_fuse("gate_up", _gate_up_spec_fps, fuse_gate_up)
+    shared_down_proj = _cached_or_create("shared_down_proj", create_down)
+
     logger.debug("  shared expert weights done in {:.3f}s", time.perf_counter() - t0)
     return SharedExpertWeights(
-        shared_gate_proj=shared_gate_proj,
-        shared_up_proj=shared_up_proj,
+        shared_gate_proj=gate_up["gate_proj"],
+        shared_up_proj=gate_up["up_proj"],
         shared_down_proj=shared_down_proj,
     )
 
@@ -757,12 +894,22 @@ def prepare_embedding_weights(
     device,
     *,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3EmbeddingLayerWeights:
     """Prepare embedding weights from state dict (model.embed_tokens.weight)."""
     logger.info("Preparing embedding weights...")
     w = state_dict["model.embed_tokens.weight"]
     assert w.shape == (129280, 7168), f"Expected embedding shape (129280, 7168), got {w.shape}"
-    embedding_tt = _to_tt_embedding(w, device, move_to_device=move_to_device)
+
+    def create():
+        return _to_tt_embedding(w, device, move_to_device=move_to_device)
+
+    if cache_config is not None:
+        mesh_shape = (device.shape[0], device.shape[1])
+        fp = _make_fp(cache_config, mesh_shape, "embedding", 0, ())
+        embedding_tt = cache_config.cache.get_or_create_tensor(fp, create=create, device=device)
+    else:
+        embedding_tt = create()
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
 
 
@@ -869,6 +1016,7 @@ def prepare_lm_head_weights(
     device,
     *,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3LMHeadWeights:
     """Prepare LM head and final norm weights from state dict.
 
@@ -877,23 +1025,34 @@ def prepare_lm_head_weights(
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
     """
     logger.info("Preparing LM head weights...")
-    # lm_head.weight: HF (vocab_size, hidden_size) = (129280, 7168) -> (7168, 129280) for matmul
     lm_w = state_dict["lm_head.weight"]
     assert lm_w.shape == (
         _LM_HEAD_VOCAB_SIZE,
         _LM_HEAD_K,
     ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
 
-    lm_head_tt = _to_tt_lm_head_matrix(
-        lm_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
-    )
-
-    # model.norm.weight: (7168,) -> (1, 7168), HEIGHT_SHARDED on the mcast core
     logger.info("Preparing LM head norm...")
     norm_w = state_dict["model.norm.weight"]
     assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
 
-    final_norm_tt = _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
+    def create_lm_head():
+        return _to_tt_lm_head_matrix(
+            lm_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
+        )
+
+    def create_final_norm():
+        return _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
+
+    if cache_config is not None:
+        mesh_shape = (device.shape[0], device.shape[1])
+        fp_lm = _make_fp(cache_config, mesh_shape, "lm_head", 0, ())
+        lm_head_tt = cache_config.cache.get_or_create_tensor(fp_lm, create=create_lm_head, device=device)
+        fp_norm = _make_fp(cache_config, mesh_shape, "final_norm", 0, ())
+        final_norm_tt = cache_config.cache.get_or_create_tensor(fp_norm, create=create_final_norm, device=device)
+    else:
+        lm_head_tt = create_lm_head()
+        final_norm_tt = create_final_norm()
+
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
 
 

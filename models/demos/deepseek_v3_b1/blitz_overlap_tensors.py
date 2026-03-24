@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, fields
 
 import numpy as np
 import torch
@@ -57,6 +59,38 @@ class OverlappedShardSpec:
     tp_dim: tuple[int | None, int | None] = (None, None)
 
     logical_tensor_shape: tuple[int, int] | None = None
+
+    _FINGERPRINT_FIELDS = {
+        "core_range_set",
+        "raw_tensor_shape",
+        "dtype",
+        "sharding",
+        "tile_h",
+        "tile_w",
+        "tp_dim",
+        "logical_tensor_shape",
+    }
+
+    def fingerprint(self) -> str:
+        """Deterministic SHA-256 hash of all spec fields, stable across processes.
+
+        Used as part of the cache key for content-addressed tensor caching.
+        """
+        all_fields = {f.name for f in fields(self)}
+        missing = all_fields - self._FINGERPRINT_FIELDS
+        assert not missing, f"OverlappedShardSpec has new fields not included in fingerprint: {missing}"
+
+        canonical = (
+            self.raw_tensor_shape,
+            tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in self.core_range_set.ranges()),
+            self.dtype.name,
+            str(self.sharding),
+            self.tile_h,
+            self.tile_w,
+            self.tp_dim,
+            self.logical_tensor_shape,
+        )
+        return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
 
     def _tile_bytes(self) -> int:
         num_elements = self.tile_h * self.tile_w

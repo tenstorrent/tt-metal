@@ -799,60 +799,31 @@ class BlitzDecodeWeights:
     # MOE weight loading
     # ------------------------------------------------------------------
 
-    def get_tt_moe_shared_expert_weights(
+    def get_tt_gate_up_proj_weights(
         self,
         gate_proj_weights: torch.Tensor,
         up_proj_weights: torch.Tensor,
-        down_proj_weights: torch.Tensor,
         *,
         dtype: ttnn.DataType = ttnn.bfloat4_b,
         move_to_device: bool = True,
-    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
-        """Create all shared-expert weight tensors in one call.
+    ) -> dict[str, OverlappedTensor]:
+        """Fuse gate and up projections into one HEIGHT_SHARDED tensor.
 
-        **Gate / Up projections** are block-sharded and fused into a single
-        HEIGHT_SHARDED L1 tensor.  Gate weights live on the A compute cores,
-        up weights on the B compute cores.  Both are BFP4 with shard shape
-        ``(896, 32)`` across 64 cores each (128 total).
-
-        **Down projection** is WIDTH_SHARDED on 112 matmul cores as BFP4.
-
-        With ``moe_tp > 1`` the outer (N) dimension of gate/up and the inner
-        (K) dimension of down are TP-sharded across devices.
-
-        Per-device layout::
-
-            -- gate region: 64 A cores (non-rectangular) --
-            gate_proj (7168, 256) as bfloat4_b, block-sharded
-              stacked (57344, 32), shard (896, 32)
-
-            -- up region: 64 B cores (non-rectangular) --
-            up_proj (7168, 256) as bfloat4_b, block-sharded
-              stacked (57344, 32), shard (896, 32)
-
-            gate+up combined: 128 cores, HEIGHT_SHARDED (114688, 32)
-
-            down_proj (256, 7168) as bfloat4_b, WIDTH_SHARDED on 112 cores
-              shard (256, 64)
+        Gate weights live on the A compute cores, up weights on the B
+        compute cores.  Both are BFP4 with shard shape ``(896, 32)``
+        across 64 cores each (128 total).
 
         Args:
             gate_proj_weights: Raw gate tensor, shape
                 ``(7168, 256 * moe_tp)``.  TP-sharded on the outer dim.
             up_proj_weights: Raw up tensor, shape
                 ``(7168, 256 * moe_tp)``.  TP-sharded on the outer dim.
-            down_proj_weights: Raw down_proj tensor, shape
-                ``(256 * moe_tp, 7168)``.  TP-sharded on the inner dim.
 
         Returns:
-            ``(gate_proj, up_proj, down_proj)`` where the first two are
-            :class:`OverlappedTensor` views sharing a fused buffer and the
-            third is a standalone ``ttnn.Tensor``.
+            A dict of :class:`OverlappedTensor` views keyed by name
+            (``gate_proj``, ``up_proj``) sharing the same fused buffer.
         """
         moe_tp = self.moe_tp
-
-        # ==================================================================
-        # Gate + Up (fused HEIGHT_SHARDED in L1)
-        # ==================================================================
         cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 
         expected_gate_shape = (cfg.gate_proj_shape[0], cfg.gate_proj_shape[1] * moe_tp)
@@ -896,7 +867,7 @@ class BlitzDecodeWeights:
                 .contiguous()
             )
 
-        gate_up_dict = overlap_tensors(
+        return overlap_tensors(
             [
                 [
                     (
@@ -930,12 +901,26 @@ class BlitzDecodeWeights:
             device=self._device,
             move_to_device=move_to_device,
         )
-        gate_ov = gate_up_dict["gate_proj"]
-        up_ov = gate_up_dict["up_proj"]
 
-        # ==================================================================
-        # Down (WIDTH_SHARDED in L1 on 112 matmul cores)
-        # ==================================================================
+    def get_tt_shared_down_proj_weights(
+        self,
+        down_proj_weights: torch.Tensor,
+        *,
+        dtype: ttnn.DataType = ttnn.bfloat4_b,
+        move_to_device: bool = True,
+    ) -> ttnn.Tensor:
+        """Create the down projection as a standalone WIDTH_SHARDED tensor.
+
+        WIDTH_SHARDED on 112 matmul cores as BFP4, shard ``(256, 64)``.
+
+        Args:
+            down_proj_weights: Raw down_proj tensor, shape
+                ``(256 * moe_tp, 7168)``.  TP-sharded on the inner dim.
+
+        Returns:
+            A standalone ``ttnn.Tensor`` on device.
+        """
+        moe_tp = self.moe_tp
         dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
         K_down_per_device = 256
         N_per_core = 64
@@ -967,7 +952,7 @@ class BlitzDecodeWeights:
         )
         dp_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dp_shard_spec)
 
-        down_tensor = ttnn.from_torch(
+        return ttnn.from_torch(
             dp_combined,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -977,7 +962,32 @@ class BlitzDecodeWeights:
             mesh_mapper=dp_mapper,
         )
 
-        return gate_ov, up_ov, down_tensor
+    def get_tt_moe_shared_expert_weights(
+        self,
+        gate_proj_weights: torch.Tensor,
+        up_proj_weights: torch.Tensor,
+        down_proj_weights: torch.Tensor,
+        *,
+        dtype: ttnn.DataType = ttnn.bfloat4_b,
+        move_to_device: bool = True,
+    ) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
+        """Create all shared-expert weight tensors in one call.
+
+        Convenience wrapper around :meth:`get_tt_gate_up_proj_weights` and
+        :meth:`get_tt_shared_down_proj_weights`.
+
+        Returns:
+            ``(gate_proj, up_proj, down_proj)`` where the first two are
+            :class:`OverlappedTensor` views sharing a fused buffer and the
+            third is a standalone ``ttnn.Tensor``.
+        """
+        gate_up = self.get_tt_gate_up_proj_weights(
+            gate_proj_weights, up_proj_weights, dtype=dtype, move_to_device=move_to_device
+        )
+        down_tensor = self.get_tt_shared_down_proj_weights(
+            down_proj_weights, dtype=dtype, move_to_device=move_to_device
+        )
+        return gate_up["gate_proj"], gate_up["up_proj"], down_tensor
 
     def get_tt_moe_routed_expert_weights(
         self,
