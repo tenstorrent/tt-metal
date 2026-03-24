@@ -5,7 +5,7 @@ from safetensors.torch import safe_open
 from transformers import AutoConfig
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.qwen3omni.tt.vision_attn import TTNNQwen3VLMoeVisionAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.vision_attn import TTNNQwen3VLMoeVisionAttention
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3OmniMoeVisionAttention

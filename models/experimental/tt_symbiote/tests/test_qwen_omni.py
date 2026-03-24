@@ -36,11 +36,12 @@ Symbiote registration (``register_qwen_omni_symbiote_modules``) replaces:
 - **Thinker** self-attention with ``TTNNQwen3OmniAttention`` (same as ``test_thinker_attn.py``)
 - **Talker** text MoE with ``TTNNQwen3TalkerMoE`` (same pattern as ``test_qwen3_talker_moe.py``)
 - **Talker** self-attention with ``TTNNQwen3Attention`` (same implementation pattern as ``test_talker.py``)
+- **Thinker** vision (image / video frames) self-attention with ``TTNNQwen3VLMoeVisionAttention``
+  (mesh all-gather + col-sharded ``proj``, same spirit as ``thinker_attention.py``)
 
-Audio and vision stay on stock PyTorch modules.
+Audio encoder attention stays on stock PyTorch unless separately wired.
 
-**Note:** Full-resolution image+audio keeps large vision token counts in **PyTorch** paths;
-if those are moved to TTNN later, watch DRAM there too.
+**Note:** Full-resolution image+audio+video can stress DRAM; use ``TT_SYMBIOTE_RUN_MODE=CPU`` or trim inputs if needed.
 """
 
 import os
@@ -57,6 +58,7 @@ from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiv
 from models.experimental.tt_symbiote.qwen3omni.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.qwen3omni.tt.talker_attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.qwen3omni.tt.thinker_attention import TTNNQwen3OmniAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.vision_attn import TTNNQwen3VLMoeVisionAttention
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -88,9 +90,10 @@ def _patch_thinker_talker_device_dtype(model):
 
 
 def register_qwen_omni_symbiote_modules(model) -> dict:
-    """Replace thinker/talker MoE + attention with TTNN modules."""
+    """Replace thinker/talker MoE + attention with TTNN modules (including vision-tower attention)."""
     thinker_mlp_class = type(model.thinker.model.layers[0].mlp)
     thinker_attn_class = type(model.thinker.model.layers[0].self_attn)
+    vision_attn_class = type(model.thinker.visual.blocks[0].attn)
     talker_mlp_class = type(model.talker.model.layers[0].mlp)
     talker_attn_class = type(model.talker.model.layers[0].self_attn)
     r_thinker = register_module_replacement_dict(
@@ -98,6 +101,7 @@ def register_qwen_omni_symbiote_modules(model) -> dict:
         {
             thinker_mlp_class: TTNNQwen3OmniThinkerNaiveMoE,
             thinker_attn_class: TTNNQwen3OmniAttention,
+            vision_attn_class: TTNNQwen3VLMoeVisionAttention,
         },
         model_config=None,
     )
@@ -179,6 +183,11 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             layer.self_attn, TTNNQwen3OmniAttention
         ), f"thinker.layers[{i}].self_attn expected TTNNQwen3OmniAttention, got {type(layer.self_attn)}"
 
+    for i, block in enumerate(model.thinker.visual.blocks):
+        assert isinstance(
+            block.attn, TTNNQwen3VLMoeVisionAttention
+        ), f"thinker.visual.blocks[{i}].attn expected TTNNQwen3VLMoeVisionAttention, got {type(block.attn)}"
+
     for i in talker_moe_layer_indices:
         assert isinstance(
             model.talker.model.layers[i].mlp, TTNNQwen3TalkerMoE
@@ -190,8 +199,9 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             layer.self_attn, TTNNQwen3Attention
         ), f"talker.layers[{i}].self_attn expected TTNNQwen3Attention, got {type(layer.self_attn)}"
 
+    n_vision = len(model.thinker.visual.blocks)
     print(
-        f"Replacements OK: thinker {n_thinker} (MoE + attn) + "
+        f"Replacements OK: thinker {n_thinker} (MoE + attn) + vision {n_vision} (attn) + "
         f"talker {n_talker} (attn) + "
         f"talker MoE layers {len(talker_moe_layer_indices)}/{n_talker} "
         f"(mesh {mesh_device.get_num_devices()} device(s))"
