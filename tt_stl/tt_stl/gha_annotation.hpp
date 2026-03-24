@@ -144,9 +144,3 @@ inline void emit_annotation(const annotation& annotation, std::FILE* stream = st
 }
 
 }  // namespace ttsl::gha
-
-namespace tt {
-namespace stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt
