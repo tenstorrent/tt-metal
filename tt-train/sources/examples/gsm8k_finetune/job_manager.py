@@ -573,6 +573,13 @@ class JobManager:
                     elif "PENDING" in status_str or status_str == "PD":
                         return JobStatus.PENDING
 
+                # sacct unavailable or returned nothing: the job is no longer in
+                # squeue but we can't confirm its terminal state.  If our cache
+                # shows it was RUNNING, it must have exited — treat as failed
+                # rather than regressing to UNKNOWN (which maps to "queued").
+                cached = self._jobs_cache.get(job_id)
+                if cached and cached.status == JobStatus.RUNNING.value:
+                    return JobStatus.FAILED
                 return JobStatus.UNKNOWN
 
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -622,6 +629,8 @@ class JobManager:
                 continue
 
             new_status = self.get_job_status(job_id)
+            if new_status == JobStatus.UNKNOWN:
+                continue  # no authoritative information; preserve current state
             if new_status.value != job_info.status:
                 job_info.status = new_status.value
 
