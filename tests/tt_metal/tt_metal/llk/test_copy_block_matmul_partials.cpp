@@ -208,6 +208,10 @@ void run_single_core_copy_block_matmul_partials(
                 .dst_full_sync_en = test_config.dst_full_sync_en,
                 .compile_args = compute_kernel_args,
                 .defines = defines});
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src0_dfb, unary_reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst_dfb, compute_kernel, unary_writer_kernel);
     } else {
         compute_kernel = tt_metal::CreateKernel(
             program_,

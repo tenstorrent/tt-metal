@@ -3,28 +3,64 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_binary.h"
+// #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+// #include "api/compute/compute_kernel_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
 #include "experimental/circular_buffer.h"
+#endif
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_single_transfer = get_compile_time_arg_val(1);
+#ifdef ARCH_QUASAR
+    constexpr uint32_t in_dfb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t out_dfb_id = get_compile_time_arg_val(3);
+#else
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
+#endif
 
     constexpr uint32_t outer_loop = num_tiles / num_single_transfer;
 
-    unary_op_init_common(in_cb_id, out_cb_id);
-
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb_in(in_dfb_id);
+    experimental::DataflowBuffer dfb_out(out_dfb_id);
+    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+#else
     experimental::CircularBuffer cb_in(in_cb_id);
     experimental::CircularBuffer cb_out(out_cb_id);
+    unary_op_init_common(in_cb_id, out_cb_id);
+#endif
 
     // Run the outer loop
     for (uint32_t b = 0; b < outer_loop; ++b) {
+#ifdef ARCH_QUASAR
+        // Wait for num_single_transfer tiles to be available in dfb_in
+        dfb_in.wait_front(num_single_transfer);
+        // Acquire DEST reg for MATH/PACK
+        acquire_dst();
+        // Reserve dfb_out space for num_single_transfer tiles
+        dfb_out.reserve_back(num_single_transfer);
+
+        // Copy num_single_transfer tiles from dfb_in to DEST
+        for (uint32_t i = 0; i < num_single_transfer; ++i) {
+            copy_block_matmul_partials(dfb_in.get_id(), i, i, 1);
+        }
+        // Pack num_single_transfer tiles to dfb_out
+        pack_tile_block(0, dfb_out.get_id(), num_single_transfer);
+
+        // Release DEST reg marking compute/pack complete
+        release_dst();
+        // Move rd ptr from dfb_in by num_single_transfer places
+        dfb_in.pop_front(num_single_transfer);
+        // Move wr prt from dfb_out by num_single_transfer places
+        dfb_out.push_back(num_single_transfer);
+#else
         // Wait for num_single_transfer tiles to be available in in_cb
         cb_in.wait_front(num_single_transfer);
         // Acquire DEST reg for MATH/PACK
@@ -45,5 +81,6 @@ void kernel_main() {
         cb_in.pop_front(num_single_transfer);
         // Move wr prt from out_cb by num_single_transfer places
         cb_out.push_back(num_single_transfer);
+#endif
     }
 }

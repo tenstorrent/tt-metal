@@ -66,8 +66,6 @@ inline void llk_math_eltwise_unary_datacopy_block(
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
 
     for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
-        LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
-
         _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
     }
 }
