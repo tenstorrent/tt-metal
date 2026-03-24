@@ -385,6 +385,7 @@ class Molmo2ProcessorWrapper:
         self,
         text=None,
         images=None,
+        videos=None,
         return_tensors=None,
         **kwargs,
     ) -> BatchFeature:
@@ -392,16 +393,36 @@ class Molmo2ProcessorWrapper:
         Call the underlying Molmo2Processor.
 
         For vLLM compatibility, we need to:
-        1. Process images to get pixel_values, image_grids, etc.
+        1. Process images/videos to get pixel_values, image_grids, etc.
         2. Tokenize text WITHOUT replacing <|image|> placeholder
         3. Let vLLM's _get_prompt_updates handle the token replacement
+
+        For videos, we extract frames and process them as images.
         """
         import numpy as np
         from loguru import logger
 
         logger.info(
-            f"Molmo2ProcessorWrapper.__call__ invoked: text={text[:50] if text else None}..., images={type(images)}"
+            f"Molmo2ProcessorWrapper.__call__ invoked: text={text[:50] if text else None}..., images={type(images)}, videos={type(videos)}"
         )
+
+        # Handle video input by extracting frames
+        # vLLM passes videos as numpy array of shape [num_videos, num_frames, H, W, C]
+        if videos is not None and images is None:
+            logger.info(f"  Processing video input: type={type(videos)}")
+            if isinstance(videos, list) and len(videos) > 0:
+                video_frames = videos[0]  # Take first video
+                if isinstance(video_frames, np.ndarray):
+                    # video_frames shape: [num_frames, H, W, C]
+                    logger.info(f"    Video frames shape: {video_frames.shape}")
+                    # Sample 8 frames evenly if more than 8
+                    num_frames = video_frames.shape[0]
+                    if num_frames > 8:
+                        indices = np.linspace(0, num_frames - 1, 8, dtype=int)
+                        video_frames = video_frames[indices]
+                    # Treat video frames as a batch of images
+                    images = [video_frames[i] for i in range(video_frames.shape[0])]
+                    logger.info(f"    Extracted {len(images)} frames for processing")
 
         # Process images to get all outputs including image_grids
         if images is not None:
