@@ -261,10 +261,10 @@ class TestValidateSchema:
 
 
 class TestParseMeshFromMachineInfo:
-    """parse_mesh_from_machine_info: V2 tensor_placement extraction."""
+    """parse_mesh_from_machine_info: mesh config from machine_info."""
 
-    def test_v2_tensor_placement(self):
-        machine_info = {"device_count": 2}
+    def test_mesh_from_machine_info_with_placement(self):
+        machine_info = {"mesh_device_shape": [1, 2], "device_count": 2}
         arguments = {
             "arg0": {
                 "type": "ttnn.Tensor",
@@ -284,36 +284,31 @@ class TestParseMeshFromMachineInfo:
         assert shard_dim == 2
         assert dist_shape == [1, 2]
 
-    def test_no_tensor_placement(self):
+    def test_no_mesh_in_machine_info(self):
         result = parse_mesh_from_machine_info({}, {"arg0": {"type": "int", "value": 1}})
         assert result == (None, None, None, None, None)
 
     def test_no_arguments(self):
-        assert parse_mesh_from_machine_info({}, None) == (None, None, None, None, None)
+        machine_info = {"mesh_device_shape": [2, 4], "device_count": 8}
+        mesh_shape, device_count, placement_type, _, _ = parse_mesh_from_machine_info(machine_info, None)
+        assert mesh_shape == [2, 4]
+        assert device_count == 8
+        assert placement_type is None
 
     def test_device_count_calculated_from_shape(self):
-        machine_info = {}
-        arguments = {
-            "arg0": {
-                "type": "ttnn.Tensor",
-                "tensor_placement": {
-                    "placement": "['PlacementReplicate']",
-                    "mesh_device_shape": "[4, 8]",
-                },
-            }
-        }
-        mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, arguments)
+        machine_info = {"mesh_device_shape": [4, 8]}
+        mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, {})
+        assert mesh_shape == [4, 8]
+        assert device_count == 32
+
+    def test_mesh_shape_as_string(self):
+        machine_info = {"mesh_device_shape": "[4, 8]", "device_count": 32}
+        mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, {})
         assert mesh_shape == [4, 8]
         assert device_count == 32
 
     def test_empty_mesh_shape(self):
-        arguments = {
-            "arg0": {
-                "type": "ttnn.Tensor",
-                "tensor_placement": {"placement": "['PlacementReplicate']", "mesh_device_shape": None},
-            }
-        }
-        result = parse_mesh_from_machine_info({}, arguments)
+        result = parse_mesh_from_machine_info({"mesh_device_shape": None}, {})
         assert result == (None, None, None, None, None)
 
 
@@ -809,6 +804,8 @@ class TestLoadData:
                                         "board_type": "Wormhole",
                                         "device_series": "n300",
                                         "card_count": 1,
+                                        "mesh_device_shape": [1, 1],
+                                        "device_count": 1,
                                     },
                                     "count": 5,
                                 }
@@ -836,6 +833,7 @@ class TestLoadData:
             (1,),  # operation_id
             (10,),  # model_id (lookup)
             (20,),  # hardware_id (insert)
+            (25,),  # mesh_config_id (insert)
             (30,),  # config_id (insert)
             (40,),  # trace_run_id (insert)
             (100,),  # _fetch_db_totals calls — 9 tables
@@ -864,6 +862,7 @@ class TestLoadData:
             (1,),  # operation_id
             (10,),  # model_id
             (20,),  # hardware_id
+            (25,),  # mesh_config_id
             (30,),  # config_id
             (40,),  # trace_run_id
             (100,),  # _fetch_db_totals (9 tables)
@@ -912,6 +911,44 @@ class TestLoadData:
             load_data(json_path=str(p), tt_metal_sha="sha")
 
     @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
+    def test_load_missing_execution_fields_raises(self, mock_pg, tmp_path):
+        """Missing required machine_info fields → ValueError listing all missing fields."""
+        data = {
+            "operations": {
+                "ttnn::matmul": {
+                    "configurations": [
+                        {
+                            "config_hash": "hash_xyz",
+                            "arguments": {},
+                            "executions": [
+                                {
+                                    "source": "path/demo.py",
+                                    "machine_info": {"board_type": "Wormhole", "card_count": 1},
+                                    "count": 1,
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(data))
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_pg.connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cur
+        mock_cur.fetchone.return_value = (1,)
+        with pytest.raises(ValueError, match="missing required fields") as exc_info:
+            load_data(json_path=str(p), tt_metal_sha="sha")
+        msg = str(exc_info.value)
+        assert "ttnn::matmul" in msg
+        assert "hash_xyz" in msg
+        assert "machine_info.device_series" in msg
+        assert "machine_info.mesh_device_shape" in msg
+        assert "machine_info.device_count" in msg
+
+    @patch("tests.sweep_framework.load_ttnn_ops_data_v2.psycopg2")
     @patch("tests.sweep_framework.load_ttnn_ops_data_v2._append_manifest_drafts")
     def test_load_auto_detects_sha(self, mock_drafts, mock_pg, tmp_path):
         """SHA auto-detection from git when not provided."""
@@ -924,6 +961,7 @@ class TestLoadData:
             (1,),
             (10,),
             (20,),
+            (25,),
             (30,),
             (40,),
             *[(n,) for n in range(9)],
@@ -959,13 +997,16 @@ class TestReconstructFromTraceRun:
         tr_meta = (35, "Wormhole", "tt-galaxy-wh", 32, "abc123", "2026-03-21", 323, "test")
         # trace models
         trace_models = [(1, "models/demos/deepseek_v3/demo/demo.py", None, "deepseek_v3")]
-        # config rows: (op_name, config_id, hash, full_json, mesh, dev_cnt, exec_cnt, src, hf)
+        # config rows: (op_name, config_id, hash, full_json, board, series, cards, mesh, dev_cnt, exec_cnt, src, hf)
         config_rows = [
             (
                 "ttnn::add",
                 100,
                 "hash_abc",
                 {"arguments": {"arg0": {"type": "int", "value": 1}}},
+                "Wormhole",
+                "tt-galaxy-wh",
+                32,
                 None,
                 None,
                 5,
@@ -1005,6 +1046,9 @@ class TestReconstructFromTraceRun:
                 200,
                 "hash_xyz",
                 {"arguments": {}},
+                "Wormhole",
+                "n300",
+                1,
                 None,
                 None,
                 1,

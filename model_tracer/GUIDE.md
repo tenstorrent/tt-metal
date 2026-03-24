@@ -394,7 +394,8 @@ The tracer and reconstructor both produce this format:
                 "board_type": "Wormhole",
                 "device_series": "tt-galaxy-wh",
                 "card_count": 32,
-                "mesh_device_shape": [4, 8]
+                "mesh_device_shape": [4, 8],
+                "device_count": 32
               },
               "count": 128
             }
@@ -412,17 +413,32 @@ The tracer and reconstructor both produce this format:
 }
 ```
 
-**`tensor_placement`** is per-tensor (V2 format). Different placement = different `config_hash`.
+**`tensor_placement`** is per-tensor in arguments. Different placement = different `config_hash`.
 **`full_config_json`** in the DB stores this entire config object for lossless reconstruction.
 **`config_hash`** in the JSON equals `input_hash` in sweep test results — enabling JOIN with performance history.
+
+### Required fields for loading
+
+The loader validates that every execution has the following fields. Missing any of them raises a `ValueError` naming the operation, config_hash, and missing fields.
+
+| Field | Location | Description |
+|---|---|---|
+| `config_hash` | `config.config_hash` | SHA-256 identity of the configuration |
+| `source` | `execution.source` | File path, optionally with `[HF_MODEL:...]` suffix |
+| `board_type` | `execution.machine_info.board_type` | Hardware board type (e.g. `"Wormhole"`, `"Blackhole"`) |
+| `device_series` | `execution.machine_info.device_series` | Device series (e.g. `"n300"`, `"tt-galaxy-wh"`, `"p150b"`) |
+| `card_count` | `execution.machine_info.card_count` | Number of cards (e.g. `1`, `32`) |
+| `mesh_device_shape` | `execution.machine_info.mesh_device_shape` | Mesh topology as an array (e.g. `[1, 1]`, `[4, 8]`) |
+| `device_count` | `execution.machine_info.device_count` | Total device count (e.g. `1`, `32`) |
 
 ### Common pitfalls
 
 | Problem | Wrong | Right |
 |---|---|---|
 | Arguments as array | `"arguments": [{"arg0": ...}]` | `"arguments": {"arg0": ...}` |
-| Global placement | `"machine_info": {"tensor_placements": [...]}` | `"arg0": {"tensor_placement": {...}}` |
+| Missing mesh/device info | `"machine_info": {"board_type": "Wormhole"}` | Include `mesh_device_shape` and `device_count` |
 | Source missing path | `"source": "meta-llama/Llama-3.2-1B"` | `"source": "models/.../demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]"` |
+| Mesh shape in wrong place | `"tensor_placements": [{"mesh_device_shape": ...}]` | `"machine_info": {"mesh_device_shape": [4, 8]}` |
 
 ---
 
