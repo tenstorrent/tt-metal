@@ -587,7 +587,7 @@ class Glm4MoeAttention(LightweightModule):
             K_qkv, N_qkv, qkv_in, qkv_out, K_o, N_o, o_in, o_out,
         )
 
-    def _apply_partial_rope_decode(self, x, cos, sin, trans_mat, sin_neg=None):
+    def _apply_partial_rope_decode(self, x, cos, sin, trans_mat, sin_neg=None, worker_scg=None):
         """Apply partial rotary embedding (decode mode, NeoX-style).
 
         Only the first rotary_dim (64) dims get rotary encoding;
@@ -598,41 +598,47 @@ class Glm4MoeAttention(LightweightModule):
 
         When sin_neg is provided (pre-computed [-sin[:half], sin[half:]]), uses addcmul
         fusion to eliminate neg op: 10 → 8 device ops per call.
+
+        Args:
+            worker_scg: Optional CoreRangeSet restricting ops to worker sub-device cores
+                (cols 0-5) when PREFETCH=1 SubDevice is active. None = use full grid.
         """
         # x: [1, batch, n_heads, head_dim] = [1, B, H, 128]  (DRAM interleaved after QK norm)
         batch = int(x.shape[1])
         n_heads = int(x.shape[2])
 
         # Slice rotary and pass-through portions
-        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, batch, n_heads, self.rotary_dim])
-        x_pass = ttnn.slice(x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim])
+        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, batch, n_heads, self.rotary_dim], sub_core_grids=worker_scg)
+        x_pass = ttnn.slice(x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim], sub_core_grids=worker_scg)
 
         # NeoX-style rotate_half
         half = self.rotary_dim // 2
-        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, batch, n_heads, half])
-        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, batch, n_heads, self.rotary_dim])
+        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, batch, n_heads, half], sub_core_grids=worker_scg)
+        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, batch, n_heads, self.rotary_dim], sub_core_grids=worker_scg)
 
         if sin_neg is not None:
             # Optimized path: sin_neg = [-sin[:half], sin[half:]] pre-computed on host.
             # rearranged = [x2, x1] (no neg needed — absorbed into sin_neg).
             # x_rot_out = x_rot * cos + rearranged * sin_neg
-            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
             x_rot = ttnn.add(
-                ttnn.multiply(x_rot, cos),
-                ttnn.multiply(rearranged, sin_neg),
+                ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
+                ttnn.multiply(rearranged, sin_neg, sub_core_grids=worker_scg),
+                sub_core_grids=worker_scg,
             )
             ttnn.deallocate(rearranged)
         else:
             # Original path: rotated = [-x2, x1], then x_rot*cos + rotated*sin
-            rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rotated = ttnn.concat([ttnn.neg(x2, sub_core_grids=worker_scg), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
             x_rot = ttnn.add(
-                ttnn.multiply(x_rot, cos),
-                ttnn.multiply(rotated, sin),
+                ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
+                ttnn.multiply(rotated, sin, sub_core_grids=worker_scg),
+                sub_core_grids=worker_scg,
             )
             ttnn.deallocate(rotated)
 
         # Concat back: [rotary_dim | pass_dim] = full head_dim
-        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
 
         ttnn.deallocate(x_rot)
         ttnn.deallocate(x_pass)
@@ -825,8 +831,14 @@ class Glm4MoeAttention(LightweightModule):
         # 5. Partial RoPE (rotary_dim=64 of head_dim=128)
         # sin_neg precomputed: saves 1 neg op per partial RoPE call (2/layer × 92 layers = 184 ops).
         sin_neg = rot_mats[3] if len(rot_mats) > 3 else None
-        q = self._apply_partial_rope_decode(q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg)
-        k = self._apply_partial_rope_decode(k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg)
+        # When prefetcher SubDevice is active, restrict eltwise ops to worker cores (cols 0-5)
+        _worker_scg = None
+        if sub_device_id is not None:
+            _worker_scg = ttnn.CoreRangeSet([
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
+            ])
+        q = self._apply_partial_rope_decode(q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg)
+        k = self._apply_partial_rope_decode(k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg)
 
         # Convert back to HEIGHT_SHARDED for paged_update_cache and SDPA
         # (partial RoPE returns DRAM interleaved after concat)
@@ -1030,6 +1042,12 @@ class Glm4MoeAttention(LightweightModule):
         _qkv_kwargs = {}
         if _qkv_pc is not None:
             _qkv_kwargs["program_config"] = _qkv_pc
+
+        # Debug: print weight info to verify correct tensor is used
+        print(f"      [ATTN PREFILL] QKV matmul: x.shape={list(x.shape)}, w.shape={list(_wqkv.shape)}, "
+              f"w.memory_config={_wqkv.memory_config()}, using_interleaved={self.wqkv_interleaved is not None}, "
+              f"pc={'explicit' if _qkv_pc else 'auto'}, dtype={self.ccl_dtype if self.TG else 'bf16'}",
+              flush=True, file=sys.stderr)
         xqkv = ttnn.linear(
             x,
             _wqkv,
@@ -1038,6 +1056,7 @@ class Glm4MoeAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             **_qkv_kwargs,
         )
+        print(f"      [ATTN PREFILL] QKV matmul issued (async), syncing...", flush=True, file=sys.stderr)
 
         _sync("after QKV linear")
 
@@ -1167,6 +1186,8 @@ class Glm4MoeAttention(LightweightModule):
         )
         # -> [1, 1, seq_len, 1536]
 
+        _sync("after concat_heads")
+
         # Reshape for long sequences (must match QKV path threshold)
         _oproj_thresh = self.MAX_QKV_MM_SEQ_LEN
         if seq_len > _oproj_thresh:
@@ -1183,6 +1204,8 @@ class Glm4MoeAttention(LightweightModule):
         _o_kwargs = {}
         if _o_pc is not None:
             _o_kwargs["program_config"] = _o_pc
+
+        print(f"      [ATTN PREFILL] before O-proj linear...", flush=True, file=sys.stderr)
         output = ttnn.linear(
             attn_output,
             _wo,
@@ -1191,6 +1214,7 @@ class Glm4MoeAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             **_o_kwargs,
         )
+        _sync("after O-proj linear")
 
         if seq_len > _oproj_thresh:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
@@ -1198,18 +1222,22 @@ class Glm4MoeAttention(LightweightModule):
 
         _sync("after O projection")
 
+        _sync("before all_reduce")
+
         # 10. All-reduce on cluster_axis=0 (TP reduction for row-parallel O projection)
         # NOTE: Prefill runs outside trace — do NOT pass ccl to avoid async CCL ops
         # conflicting with the existing captured trace's semaphore state.
-        # Use host-side reduce: native ttnn.all_reduce(Ring) hangs on first CCL call
-        # during prefill on TG mesh (no prior kernel compilation from decode warmup).
+        # Use host-side reduce: rs_ag also hangs on first CCL call during prefill
+        # on TG mesh (no prior kernel compilation from decode warmup).
+        # Host reduce is slow but prefill is one-time per prompt.
         output = _simple_all_reduce(
             output,
             self.mesh_device,
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            impl="rs_ag",
+            impl="host",
         )
+        print(f"      [ATTN PREFILL] host all_reduce done", flush=True, file=sys.stderr)
 
         return output
 
