@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dit_minimal_binary_program_factory.hpp"
@@ -147,13 +147,9 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     }
     if (is_fp32) {
         defines["IS_FP32"] = "1";
-        std::cout << "IS_FP32" << std::endl;
     }
     defines["BINARY_OP_INIT"] = binary_op_init;
     defines["BINARY_OP"] = binary_op;
-    defines["NTILES_PER_ROW"] = std::to_string(ntiles_per_row);
-    std::cout << "BINARY_OP_INIT: " << binary_op_init << std::endl;
-    std::cout << "BINARY_OP: " << binary_op << std::endl;
 
     MathFidelity math_fidelity;
     bool fp32_dest_acc_en = false;
@@ -172,7 +168,6 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
         unpack_to_dest_mode[CB_B_TILED] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[CB_OUT_TILED] = UnpackToDestMode::UnpackToDestFp32;
 
-        std::cout << "math_fidelity: " << math_fidelity << std::endl;
     } else {
         math_fidelity = (is_mul && is_wormhole_b0) ? MathFidelity::HiFi3
                         : (is_mul)                 ? MathFidelity::HiFi4

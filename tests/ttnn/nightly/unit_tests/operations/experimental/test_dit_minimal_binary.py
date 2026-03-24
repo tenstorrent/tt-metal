@@ -192,11 +192,11 @@ def test_minimal_binary_add_single_stick(device, dtype):
     shape = (1, 1, 1, 1, 1024)
     tdtype = _torch_dtype(dtype)
 
-    A_torch = torch.randn(shape, dtype=tdtype)
-    B_torch = torch.randn(shape, dtype=tdtype)
+    # A_torch = torch.randn(shape, dtype=tdtype)
+    # B_torch = torch.randn(shape, dtype=tdtype)
 
-    # A_torch = torch.full(shape, 1.0, dtype=tdtype)
-    # B_torch = torch.full(shape, 2.0, dtype=tdtype)
+    A_torch = torch.full(shape, 1.0, dtype=tdtype)
+    B_torch = torch.full(shape, 2.0, dtype=tdtype)
 
     C_ref = A_torch + B_torch
 
@@ -210,6 +210,11 @@ def test_minimal_binary_add_single_stick(device, dtype):
     out = ttnn.experimental.dit_minimal_binary(A_rm, B_rm, op="add")
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
+
+    print(f"A_torch: {A_torch}")
+    print(f"B_torch: {B_torch}")
+    print(f"C_ref_cast: {C_ref_cast}")
+    print(f"C_out: {C_out}")
 
     save_tensor_to_csv(C_out, "debug_csv/C_out.csv")
     save_tensor_to_csv(C_ref_cast, "debug_csv/C_ref.csv")

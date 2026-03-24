@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dit_minimal_binary_device_operation.hpp"
@@ -71,7 +71,7 @@ tt::stl::hash::hash_t DitMinimalRmBinaryDeviceOperation::compute_program_hash(
         static_cast<uint8_t>(args.op_type),
         tensor_args.input_a.dtype(),
         tensor_args.input_a.memory_config(),
-        tensor_args.input_a.padded_shape().volume());
+        tensor_args.input_a.padded_shape()[-1]);
 }
 
 }  // namespace ttnn::experimental::prim

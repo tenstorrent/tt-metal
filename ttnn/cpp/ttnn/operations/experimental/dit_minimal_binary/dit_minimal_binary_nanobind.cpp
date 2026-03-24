@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dit_minimal_binary_nanobind.hpp"
@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::dit_minimal_binary::detail {
 void bind_dit_minimal_binary(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Element-wise binary operation on row-major DRAM tensors without tilize/untilize.
+        Element-wise binary operation on row-major DRAM tensors, tilizing internally for the compute phase.
 
         Both inputs must have identical shape, ROW_MAJOR_LAYOUT, and DRAM interleaved memory.
         Only bfloat16 and float32 dtypes are supported. No broadcast.

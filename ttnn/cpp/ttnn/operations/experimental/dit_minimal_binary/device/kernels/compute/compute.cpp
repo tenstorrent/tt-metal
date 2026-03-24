@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,12 +16,15 @@
 //     add_tiles / mul_tiles (CB_A_TILED + CB_B_TILED → CB_OUT_TILED)
 //     FP32 path uses SFPU (copy_tile + add_binary_tile / mul_binary_tile)
 //
-//   Phase 4 — Untilize (full row-width at once):
-//     untilize_block(CB_OUT_TILED → CB_OUT_RM, full_ct_dim = ntiles_per_row)
+//   Phase 4 — Untilize (one tile at a time, pop-to-advance pattern):
+//     pack_untilize_block<1, ntiles_per_row_ct>(CB_OUT_TILED → CB_OUT_RM)
+//     Bypasses SrcA (19-bit/TF32) via UnpackToDestEn; correct for both bf16 and fp32.
 //
+// Compile-time args: [ntiles_per_row_ct]
+//   ntiles_per_row_ct = last_dim / TILE_WIDTH (baked into pack_untilize template param)
 // Compile-time defines: BINARY_OP_INIT, BINARY_OP, IS_FP32 (optional).
-// RT args: [num_blocks, ntiles_per_row]
-//   num_blocks    = number of TILE_HEIGHT-row blocks for this core
+// RT args: [num_sticks, ntiles_per_row]
+//   num_sticks     = number of sticks (rows) for this core
 //   ntiles_per_row = last_dim / TILE_WIDTH
 
 #include <cstdint>
@@ -33,132 +36,12 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
 
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tensix.h"
-
 constexpr auto CB_A_RM = tt::CBIndex::c_0;
 constexpr auto CB_B_RM = tt::CBIndex::c_1;
 constexpr auto CB_A_TILED = tt::CBIndex::c_2;
 constexpr auto CB_B_TILED = tt::CBIndex::c_3;
 constexpr auto CB_OUT_TILED = tt::CBIndex::c_4;
 constexpr auto CB_OUT_RM = tt::CBIndex::c_16;
-
-template <typename To>
-ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
-    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
-}
-
-template <typename T = uint16_t>
-void print_cb_data(uint32_t cb_id, uint32_t tile_index) {
-    volatile T* ptr = get_pointer_to_cb_data<T>(cb_id, tile_index);
-    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
-        // Iterate through 16 rows within each subtile row
-        for (int local_row = 0; local_row < 16; local_row++) {
-            // Calculate the actual row in original matrix
-            int row = subtile_i * 16 + local_row;
-            // Iterate through 2x2 subtiles horizontally
-            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
-                // Iterate through 16 columns within each subtile
-                for (int local_col = 0; local_col < 16; local_col++) {
-                    // Calculate the actual column in original matrix
-                    int col = subtile_j * 16 + local_col;
-                    // Calculate index using only multiplication and addition
-                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
-                    // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
-                    // /*element_offset=*/index);ptr
-                    if constexpr (std::is_same_v<T, uint16_t>) {
-                        UNPACK(DPRINT << BF16(ptr[index]) << ", ");
-                    } else {
-                        UNPACK(DPRINT << ptr[index] << ", ");
-                    }
-                }
-            }
-            UNPACK(DPRINT << ENDL());
-        }
-    }  // subtile_i
-}
-
-void print_cb_row_data_bf16(uint32_t cb_id, uint32_t tile_index, uint32_t row_index) {
-    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
-
-    int subtile_i = 0;  // only print top faces
-    if (row_index >= 16) {
-        subtile_i = 1;
-    }
-
-    // Iterate through 16 rows within each subtile row
-    int local_row = row_index % 16;
-    // Calculate the actual row in original matrix
-    int row = subtile_i * 16 + local_row;
-    // Iterate through 2x2 subtiles horizontally
-    for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
-        // Iterate through 16 columns within each subtile
-        for (int local_col = 0; local_col < 16; local_col++) {
-            // Calculate the actual column in original matrix
-            int col = subtile_j * 16 + local_col;
-            // Calculate index using only multiplication and addition
-            auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
-            // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
-            // /*element_offset=*/index);ptr
-            UNPACK(DPRINT << BF16(ptr[index]) << ", ");
-        }
-    }
-    UNPACK(DPRINT << ENDL());
-}
-
-void print_cb_row_data_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index) {
-    volatile float* ptr = get_pointer_to_cb_data<float>(cb_id, tile_index);
-
-    int subtile_i = 0;  // only print top faces
-    if (row_index >= 16) {
-        subtile_i = 1;
-    }
-
-    // Iterate through 16 rows within each subtile row
-    int local_row = row_index % 16;
-    // Calculate the actual row in original matrix
-    int row = subtile_i * 16 + local_row;
-    // Iterate through 2x2 subtiles horizontally
-    for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
-        // Iterate through 16 columns within each subtile
-        for (int local_col = 0; local_col < 16; local_col++) {
-            // Calculate the actual column in original matrix
-            int col = subtile_j * 16 + local_col;
-            // Calculate index using only multiplication and addition
-            auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
-            // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
-            // /*element_offset=*/index);ptr
-            UNPACK(DPRINT << ptr[index] << ", ");
-        }
-    }
-    UNPACK(DPRINT << ENDL());
-}
-
-void print_cb_rm_row_bf16(uint32_t cb_id, uint32_t tile_index, uint32_t row_index, uint32_t stick_len) {
-    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
-
-    const uint32_t TILE_WIDTH = 32;
-    const uint32_t TILE_HEIGHT = 32;
-    uint32_t offset = tile_index * TILE_WIDTH * TILE_HEIGHT + row_index * stick_len;
-
-    for (uint32_t i = 0; i < stick_len; i++) {
-        UNPACK(DPRINT << BF16(ptr[offset + i]) << ", ");
-    }
-    UNPACK(DPRINT << ENDL(););
-}
-
-void print_cb_rm_row_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index, uint32_t stick_len) {
-    volatile float* ptr = get_pointer_to_cb_data<float>(cb_id, tile_index);
-
-    const uint32_t TILE_WIDTH = 32;
-    const uint32_t TILE_HEIGHT = 32;
-    uint32_t offset = tile_index * TILE_WIDTH * TILE_HEIGHT + row_index * stick_len;
-
-    for (uint32_t i = 0; i < stick_len; i++) {
-        UNPACK(DPRINT << ptr[offset + i] << ", ");
-    }
-    UNPACK(DPRINT << ENDL(););
-}
 
 void kernel_main() {
     constexpr uint32_t ntiles_per_row_ct = get_compile_time_arg_val(0);

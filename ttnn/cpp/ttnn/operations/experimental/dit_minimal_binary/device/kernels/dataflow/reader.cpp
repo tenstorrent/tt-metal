@@ -7,13 +7,6 @@
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
-void print_data(uint16_t* ptr, uint32_t len) {
-    for (uint32_t i = 0; i < len; ++i) {
-        DPRINT << BF16(ptr[i]) << " ";
-    }
-    DPRINT << ENDL();
-}
-
 void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto a_args = TensorAccessorArgs<1>();
@@ -35,8 +28,7 @@ void kernel_main() {
 
     uint32_t end_stick = start_stick_id + num_sticks;
 
-    uint32_t stick_id = start_stick_id;
-    for (stick_id = start_stick_id; stick_id < end_stick; stick_id += TILE_HEIGHT) {
+    for (uint32_t stick_id = start_stick_id; stick_id < end_stick; stick_id += TILE_HEIGHT) {
         uint32_t nrows = std::min(TILE_HEIGHT, end_stick - stick_id);
 
         cb_reserve_back(cb_a, ntiles_per_row);
