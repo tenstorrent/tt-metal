@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -51,12 +52,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_val_B.buf_desc_id     = buf_desc_id_b;
     td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_B_dst);
 
-    TileShape tile_shape_A = {.num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
-
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-    _llk_unpack_reduce_init_<REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, tile_shape_A, 1 /*num_tiles_per_unpack*/);
+    _llk_unpack_reduce_init_<REDUCE_DIM>(
+        buf_desc_id_a, buf_desc_id_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_unpack_reduce_(i, 0);
@@ -81,12 +81,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    TileShape tile_shape_A = {.num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
-
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
 
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(tile_shape_A);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tiles not yet supported with reduce
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_reduce_(i);
