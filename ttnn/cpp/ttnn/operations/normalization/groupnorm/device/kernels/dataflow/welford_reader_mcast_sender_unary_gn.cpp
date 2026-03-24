@@ -12,6 +12,7 @@
 #include "experimental/noc_semaphore.h"
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
