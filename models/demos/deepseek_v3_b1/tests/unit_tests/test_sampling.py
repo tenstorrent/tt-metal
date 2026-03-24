@@ -400,6 +400,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: 
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
     final_core = active_cores[final_core_idx]
+    logger.info(f"Final core: {final_core}")
 
     num_cores = len(active_cores)
     scores_shape = (1, 160 * num_cores)

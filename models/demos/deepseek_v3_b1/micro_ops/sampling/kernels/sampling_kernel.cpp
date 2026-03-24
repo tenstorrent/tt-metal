@@ -51,7 +51,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
-        get_named_compile_time_arg_val("sampling_scaler_cb")>;
+        get_named_compile_time_arg_val("sampling_scaler_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
         .scores_addr = get_common_arg_val<uint32_t>(0),
@@ -95,9 +97,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_sub_cb"),
         get_named_compile_time_arg_val("sampling_max_cb"),
         get_named_compile_time_arg_val("sampling_sum_cb"),
-        get_named_compile_time_arg_val("sampling_scaler_cb")>;
+        get_named_compile_time_arg_val("sampling_scaler_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>

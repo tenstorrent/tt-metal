@@ -96,6 +96,7 @@ class SamplingOp:
         output_index_tensor,
         k: int,
         p: float,
+        temperature: float = 0.6,
         final_core_coord=None,
         final_mesh_coord=None,
         global_semaphore=None,
@@ -162,6 +163,7 @@ class SamplingOp:
                 output_index_tensor=output_index_tensor,
                 k=k,
                 p=p,
+                temperature=temperature,
                 final_core_coord=final_core_coord,
                 final_mesh_coord=final_mesh_coord,
             )
@@ -355,6 +357,7 @@ class SamplingOp:
         output_index_tensor,
         k: int,
         p: float,
+        temperature: float = 0.6,
         final_core_coord=None,
         final_mesh_coord=None,
     ):
@@ -425,9 +428,13 @@ class SamplingOp:
         sum_cb = 5
         scaler_cb = 6
         softmax_exp_cb = 7
+        temp_cb = 8
+        softmax_sub_cb = 9
         semaphore_id = 0
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
+
+        inv_temp_bf16 = int(torch.tensor(1.0 / temperature, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
         topk_scores_stride = _round_up(k * 2, l1_alignment)
@@ -463,14 +470,18 @@ class SamplingOp:
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_softmax_exp_cb", softmax_exp_cb),
             ("sampling_scaler_cb", scaler_cb),
+            ("sampling_temp_cb", temp_cb),
+            ("sampling_inv_temp_bf16", inv_temp_bf16),
         ]
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_softmax_exp_cb", softmax_exp_cb),
+            ("sampling_softmax_sub_cb", softmax_sub_cb),
             ("sampling_max_cb", max_cb),
             ("sampling_sum_cb", sum_cb),
             ("sampling_scaler_cb", scaler_cb),
+            ("sampling_temp_cb", temp_cb),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
@@ -599,6 +610,25 @@ class SamplingOp:
                 )
             ],
         )
+        temp_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=temp_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                )
+            ],
+        )
+
+        softmax_sub_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=softmax_sub_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                )
+            ],
+        )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
@@ -617,6 +647,8 @@ class SamplingOp:
                 sum_cb_descriptor,
                 scaler_cb_descriptor,
                 softmax_exp_cb_descriptor,
+                temp_cb_descriptor,
+                softmax_sub_cb_descriptor,
             ],
             semaphores=[receiver_semaphore_descriptor],
         )

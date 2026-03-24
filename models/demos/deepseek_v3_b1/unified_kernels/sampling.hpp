@@ -100,6 +100,23 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
+template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t out_cb, uint32_t num_tiles>
+void softmax_mul_block_bcast_scalar() {
+    reconfig_data_format(in0_cb, in1_scalar_cb);
+    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_scalar_cb, 1);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        acquire_dst();
+        mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, 0, 0, 0);
+        cb_reserve_back(out_cb, 1);
+        pack_tile(0, out_cb);
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+    cb_pop_front(in0_cb, num_tiles);
+}
+
 inline void softmax_mul_block_bcast_cols(
     uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     uint32_t num_tiles = rows * cols;
@@ -157,7 +174,9 @@ struct TopKSampling {
         uint32_t SoftmaxInCBId = 0xFFFFFFFF,
         uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
         uint32_t SoftmaxExpCBId = 0xFFFFFFFF,
-        uint32_t ScalerCBId = 0xFFFFFFFF>
+        uint32_t ScalerCBId = 0xFFFFFFFF,
+        uint32_t TempCBId = 0xFFFFFFFF,
+        uint32_t InvTempBF16 = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t topk_k = TopK;
@@ -192,6 +211,8 @@ struct TopKSampling {
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
         static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
+        static constexpr uint32_t temp_cb = TempCBId;
+        static constexpr uint16_t inv_temp_bf16 = static_cast<uint16_t>(InvTempBF16);
 
         // Gather buffer layout (globally split for LLK compatibility):
         //   [core0 scores | core1 scores | ... | coreN scores]
@@ -222,16 +243,20 @@ struct TopKSampling {
         uint32_t SoftmaxInCBId,
         uint32_t SoftmaxOutCBId,
         uint32_t SoftmaxExpCBId,
+        uint32_t SoftmaxSubCBId,
         uint32_t MaxCBId,
         uint32_t SumCBId,
-        uint32_t ScalerCBId>
+        uint32_t ScalerCBId,
+        uint32_t TempCBId>
     struct ComputeCTArgs {
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
         static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
+        static constexpr uint32_t softmax_sub_cb = SoftmaxSubCBId;
         static constexpr uint32_t max_cb = MaxCBId;
         static constexpr uint32_t sum_cb = SumCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
+        static constexpr uint32_t temp_cb = TempCBId;
     };
 
     struct ReaderArgs {
@@ -607,6 +632,16 @@ struct TopKSampling {
                     }
                     cb_push_back(CTArgs::scaler_cb, 1);
 
+                    cb_reserve_back(CTArgs::temp_cb, 1);
+                    {
+                        auto temp_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::temp_cb));
+                        for (uint32_t i = 0; i < 1024; ++i) {
+                            temp_ptr[i] = CTArgs::inv_temp_bf16;
+                        }
+                    }
+                    cb_push_back(CTArgs::temp_cb, 1);
+
                     cb_reserve_back(CTArgs::softmax_in_cb, 1);
                     auto tile_u32 =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
@@ -674,25 +709,21 @@ struct TopKSampling {
             }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsFinalCore) {
+                // Each step writes to a distinct CB — no CB is reused as both input and output.
+                // softmax_in  →[temp_scale]→ softmax_exp  →[MAX reduce]→ max
+                // softmax_exp →[sub_exp]→ softmax_sub  →[SUM reduce]→ sum
+                // sum →[recip]→ sum (in-place ok: single consumer)
+                // softmax_sub + sum →[mul]→ softmax_out
+                softmax_mul_block_bcast_scalar<CTArgs::softmax_in_cb, CTArgs::temp_cb, CTArgs::softmax_exp_cb, 1>();
                 softmax_reduce_c<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    CTArgs::softmax_in_cb,
-                    CTArgs::scaler_cb,
-                    CTArgs::max_cb,
-                    1,
-                    1>();
-                softmax_sub_exp_bcast_cols<CTArgs::softmax_in_cb, CTArgs::max_cb, CTArgs::softmax_exp_cb, 1, 1>();
+                    PoolType::MAX, ReduceDim::REDUCE_ROW,
+                    CTArgs::softmax_exp_cb, CTArgs::scaler_cb, CTArgs::max_cb, 1, 1>();
+                softmax_sub_exp_bcast_cols<CTArgs::softmax_exp_cb, CTArgs::max_cb, CTArgs::softmax_sub_cb, 1, 1>();
                 softmax_reduce_c<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    CTArgs::softmax_exp_cb,
-                    CTArgs::scaler_cb,
-                    CTArgs::sum_cb,
-                    1,
-                    1>();
+                    PoolType::SUM, ReduceDim::REDUCE_ROW,
+                    CTArgs::softmax_sub_cb, CTArgs::scaler_cb, CTArgs::sum_cb, 1, 1>();
                 softmax_recip_block_inplace(CTArgs::sum_cb, 1);
-                softmax_mul_block_bcast_cols(CTArgs::softmax_exp_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
+                softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
             }
 #endif
         }
