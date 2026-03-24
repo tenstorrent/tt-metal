@@ -205,7 +205,9 @@ class MLP(LightweightModule):
                         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                         num_links=1,
                         cluster_axis=cluster_axis,
-                        memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == Mode.DECODE else None,
+                        memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"]
+                        if mode == Mode.DECODE
+                        else None,
                         intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         topology=ttnn.Topology.Linear,
                         chunks_per_sync=10,
@@ -279,7 +281,7 @@ class MLP(LightweightModule):
                 dtype=activation_dtype or ttnn.bfloat8_b,
                 memory_config=w1_out.memory_config(),
             )
-            
+
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )

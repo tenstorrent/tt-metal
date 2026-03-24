@@ -564,7 +564,16 @@ def rename_layers_to_cross_attn(state_dict, config):
     return new_state_dict
 
 
-def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, config=None, name_ffn2=False, name_dense=False, layernorm=False):
+def convert_meta_to_hf(
+    state_dict,
+    head_dim,
+    fuse_qkv=False,
+    fuse_mlp=False,
+    config=None,
+    name_ffn2=False,
+    name_dense=False,
+    layernorm=False,
+):
     state_dict = reindex_layers(state_dict, config)
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
@@ -577,7 +586,9 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, con
     return state_dict
 
 
-def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None, name_ffn2=False, name_dense=False, layernorm=False):
+def convert_meta_to_hf_no_qkv_permute(
+    state_dict, fuse_qkv=False, fuse_mlp=False, config=None, name_ffn2=False, name_dense=False, layernorm=False
+):
     state_dict = reindex_layers(state_dict, config)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
