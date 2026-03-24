@@ -201,19 +201,10 @@ void py_module(nb::module_& m) {
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_gradients",
-            [](const ttml::serialization::NamedParameters& parameters, std::optional<nb::list> cluster_axes_py) {
-                std::optional<ttsl::SmallVector<uint32_t>> cluster_axes;
-                if (cluster_axes_py.has_value()) {
-                    ttsl::SmallVector<uint32_t> axes;
-                    for (nb::handle h : cluster_axes_py.value()) {
-                        axes.push_back(nb::cast<uint32_t>(h));
-                    }
-                    cluster_axes = axes;
-                }
-                ttml::core::distributed::synchronize_gradients(parameters, cluster_axes);
+            [](const ttml::serialization::NamedParameters& parameters) {
+                ttml::core::distributed::synchronize_gradients(parameters);
             },
-            nb::arg("parameters"),
-            nb::arg("cluster_axes") = nb::none());
+            nb::arg("parameters"));
 
         // Set tensor topology placements on an autograd tensor
         py_distributed.def(
