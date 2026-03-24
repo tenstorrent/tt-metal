@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
@@ -36,6 +39,31 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         .packer_l1_acc = default_l1_acc,
         .dst_full_sync_en = default_dst_full_sync_en,
         .throttle_level = default_throttle_level};
+}
+
+void verify_numerical_configuration(
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    tt::ARCH arch,
+    const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config) {
+    if (arch != tt::ARCH::WORMHOLE_B0) {
+        return;
+    }
+    if (!user_compute_kernel_config.has_value()) {
+        return;
+    }
+    const auto& cfg = user_compute_kernel_config.value();
+    if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != MathFidelity::HiFi4) {
+        return;
+    }
+    static std::atomic<bool> warning_generated{false};
+    if (!warning_generated) {
+        log_warning(
+            tt::LogOp,
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
+            "bug. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
+        warning_generated = true;
+    }
 }
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

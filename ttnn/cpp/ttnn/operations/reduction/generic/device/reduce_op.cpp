@@ -89,7 +89,7 @@ Tensor reduce(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
     const auto arch = input_tensor.device()->arch();
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
@@ -99,14 +99,7 @@ Tensor reduce(
         is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
     // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());

@@ -154,7 +154,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
     const auto default_fp32_acc_math_fidelity =
         (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
@@ -392,7 +392,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
     auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
     const auto default_fp32_acc_math_fidelity_sub =
         (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3

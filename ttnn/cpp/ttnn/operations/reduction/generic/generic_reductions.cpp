@@ -15,7 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-logger/tt-logger.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -344,7 +344,7 @@ Tensor non_height_width_reduce(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
     const auto arch = input_tensor.device()->arch();
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
@@ -354,14 +354,7 @@ Tensor non_height_width_reduce(
         is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
         input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());

@@ -413,14 +413,7 @@ static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
     const auto default_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
+    verify_numerical_configuration(arch, compute_kernel_config);
     return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
 }
 

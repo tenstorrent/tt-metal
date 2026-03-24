@@ -5,7 +5,6 @@
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
@@ -276,16 +275,7 @@ std::vector<Tensor> minimal_matmul(
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
-    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hardware bug #38306).
-    // The default (HiFi2 + fp32_acc) is safe; only user-supplied HiFi4+fp32 is vulnerable.
-    if (arch == tt::ARCH::WORMHOLE_B0 && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

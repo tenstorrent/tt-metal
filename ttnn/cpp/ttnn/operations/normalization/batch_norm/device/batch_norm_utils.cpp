@@ -19,7 +19,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
         input.storage_type());
 
     const auto arch = input.device()->arch();
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
     const auto default_fp32_acc_math_fidelity =
         (arch == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;

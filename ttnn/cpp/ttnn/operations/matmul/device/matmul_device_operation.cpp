@@ -1497,7 +1497,7 @@ MatmulParams create_matmul_attributes(
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
     math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
@@ -1546,16 +1546,7 @@ MatmulParams create_matmul_attributes(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/is_float_32,
         /*default_l1_acc=*/!is_float_32);
-    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hardware bug #38306).
-    if (is_wormhole && parameters.compute_kernel_config.has_value() &&
-        parameters.compute_kernel_config->fp32_dest_acc_en &&
-        parameters.compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3 due to a hardware "
-            "bug. "
-            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
-    }
+    ttnn::verify_numerical_configuration(arch, parameters.compute_kernel_config);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);
 
