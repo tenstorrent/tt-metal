@@ -47,6 +47,7 @@ jobs:
         ]
     runs-on:
       - arch-wormhole_b0
+      - pipeline-perf
       - ${{ inputs.topology }}
       - ${{ inputs.runner-label }}
     container:
