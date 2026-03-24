@@ -142,10 +142,10 @@ void matmul_block(
 ### CB Setup (matmul_block)
 
 ```
-in0_cb:    >= in0_block_num_tiles pages (full A block)
-in1_cb:    >= in1_block_num_tiles pages (full B block)
+in0_cb:    >= in0.block_num_tiles pages (full A block)
+in1_cb:    >= in1.block_num_tiles pages (full B block)
 out_cb:    >= total output tiles (for reservation tracking)
-interm_cb: >= out_subblock_num_tiles pages (partial result spill)
+interm_cb: >= out.num_tiles pages (partial result spill)
 ```
 
 `out_cb` and `interm_cb` should share memory (overlapping address space). The output CB
@@ -160,10 +160,39 @@ for partial results.
   DST capacity. Better performance through block-level CB operations. Used in production
   TTNN matmul kernels.
 
+### Parameter Structs (matmul_block)
+
+```cpp
+namespace matmul_block_config {
+
+struct In0BlockParams {
+    uint32_t block_w;              // Inner block dim in tiles (K block size)
+    uint32_t num_subblocks;        // Sub-blocks along M dimension
+    uint32_t block_num_tiles;      // Total tiles per A block (= out.h * block_w * num_subblocks)
+    uint32_t subblock_num_tiles;   // Tiles per A sub-block (= out.h * block_w)
+};
+
+struct In1BlockParams {
+    uint32_t num_subblocks;    // Sub-blocks along N dimension
+    uint32_t block_num_tiles;  // Total tiles per B block (= out.w * block_w * num_subblocks)
+    uint32_t per_core_w;       // Tiles per B row (= out.w * num_subblocks)
+};
+
+struct OutSubblockParams {
+    uint32_t h;          // Output sub-block height in tiles
+    uint32_t w;          // Output sub-block width in tiles
+    uint32_t num_tiles;  // Tiles per output sub-block (= h * w)
+};
+
+}  // namespace matmul_block_config
+```
+
 ### Compute Kernel Example (matmul_block)
 
 ```cpp
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+using namespace compute_kernel_lib::matmul_block_config;
+
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
@@ -183,20 +212,26 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_interm = tt::CBIndex::c_24;
 
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
     compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
-        in0_block_w, in0_num_subblocks, in0_block_num_tiles, in0_subblock_num_tiles,
-        in1_num_subblocks, in1_block_num_tiles, in1_per_core_w,
-        num_blocks, out_subblock_h, out_subblock_w, out_subblock_num_tiles, batch);
+        {.block_w = in0_block_w,
+         .num_subblocks = in0_num_subblocks,
+         .block_num_tiles = in0_block_num_tiles,
+         .subblock_num_tiles = in0_subblock_num_tiles},
+        {.num_subblocks = in1_num_subblocks,
+         .block_num_tiles = in1_block_num_tiles,
+         .per_core_w = in1_per_core_w},
+        num_blocks,
+        {.h = out_subblock_h, .w = out_subblock_w, .num_tiles = out_subblock_num_tiles},
+        batch);
 }
 ```
 
 ### Sub-block dimension relationships
 
 ```
-in0_block_num_tiles    = out_subblock_h * in0_block_w * in0_num_subblocks
-in0_subblock_num_tiles = out_subblock_h * in0_block_w
-in1_block_num_tiles    = out_subblock_w * in0_block_w * in1_num_subblocks
-in1_per_core_w         = out_subblock_w * in1_num_subblocks
-out_subblock_num_tiles = out_subblock_h * out_subblock_w
+in0.block_num_tiles    = out.h * in0.block_w * in0.num_subblocks
+in0.subblock_num_tiles = out.h * in0.block_w
+in1.block_num_tiles    = out.w * in0.block_w * in1.num_subblocks
+in1.per_core_w         = out.w * in1.num_subblocks
+out.num_tiles          = out.h * out.w
 ```

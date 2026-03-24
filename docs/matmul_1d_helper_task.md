@@ -531,3 +531,39 @@ first such test for the helper library.
 - `ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.inl` — implementation
 - `ttnn/cpp/ttnn/kernel_lib/docs/matmul_tile_reference.md` — LLM reference doc
 - `tests/tt_metal/tt_metal/integration/matmul/test_matmul_tile_helper.cpp` — standalone test
+
+## PR Feedback and Revisions (2026-03-24)
+
+### `matmul_block` argument structs
+PR feedback identified that `matmul_block`'s 12 positional `uint32_t` arguments are
+unreadable from the caller side and error-prone for AI code generation. Refactored
+into three descriptive structs in `matmul_block_config` namespace:
+
+- `In0BlockParams` — A-matrix block parameters (block_w, num_subblocks, block_num_tiles, subblock_num_tiles)
+- `In1BlockParams` — B-matrix block parameters (num_subblocks, block_num_tiles, per_core_w)
+- `OutSubblockParams` — output sub-block dimensions (h, w, num_tiles)
+
+Callers now use designated initializers for self-documenting calls:
+```cpp
+compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
+    {.block_w = in0_block_w, .num_subblocks = in0_num_subblocks,
+     .block_num_tiles = in0_block_num_tiles, .subblock_num_tiles = in0_subblock_num_tiles},
+    {.num_subblocks = in1_num_subblocks, .block_num_tiles = in1_block_num_tiles,
+     .per_core_w = in1_per_core_w},
+    num_blocks,
+    {.h = out_subblock_h, .w = out_subblock_w, .num_tiles = out_subblock_num_tiles},
+    batch);
+```
+
+### `bmm.cpp` migration tested
+The TTNN production matmul compute kernel (`bmm.cpp`) was migrated to use
+`matmul_tile` helper. Verified with the full TTNN matmul Python test suite:
+588 passed, 104 skipped, 0 failures.
+
+### Test results (2026-03-24)
+| Test suite | Result | Validates |
+|---|---|---|
+| TTNN matmul Python (test_matmul.py) | 588 passed, 104 skipped | bmm.cpp with matmul_tile helper |
+| Matmul tile helper GTest (4 cases) | 4/4 passed, PCC > 0.997 | matmul_tile helper directly |
+| matmul_multicore_reuse example | Passed, PCC = 0.999 | matmul_block helper with struct API |
+| Integration GTests (large block) | 13/13 passed | Raw LLK matmul_block regression |

@@ -25,6 +25,28 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
 // Note: there is no mm_uninit in the LLK API, so UninitOnly and Neither are both no-ops.
 enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
 
+// Block parameters for the A (in0) input matrix.
+struct In0BlockParams {
+    uint32_t block_w;             // Inner block dimension in tiles (K dimension block size)
+    uint32_t num_subblocks;       // Number of sub-blocks along the M dimension
+    uint32_t block_num_tiles;     // Total tiles per A block (= subblock_h * block_w * num_subblocks)
+    uint32_t subblock_num_tiles;  // Tiles per A sub-block (= subblock_h * block_w)
+};
+
+// Block parameters for the B (in1) input matrix.
+struct In1BlockParams {
+    uint32_t num_subblocks;    // Number of sub-blocks along the N dimension
+    uint32_t block_num_tiles;  // Total tiles per B block (= subblock_w * block_w * num_subblocks)
+    uint32_t per_core_w;       // Tiles per B row (= subblock_w * num_subblocks)
+};
+
+// Output sub-block dimensions.
+struct OutSubblockParams {
+    uint32_t h;          // Output sub-block height in tiles
+    uint32_t w;          // Output sub-block width in tiles
+    uint32_t num_tiles;  // Tiles per output sub-block (= h * w)
+};
+
 }  // namespace matmul_block_config
 
 /**
@@ -58,38 +80,31 @@ enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neith
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in0_block_w           — Inner block dimension in tiles (K dimension block size).
- *   in0_num_subblocks     — Number of sub-blocks along the M dimension.
- *   in0_block_num_tiles   — Total tiles per A block (= out_subblock_h * in0_block_w * in0_num_subblocks).
- *   in0_subblock_num_tiles — Tiles per A sub-block (= out_subblock_h * in0_block_w).
- *   in1_num_subblocks     — Number of sub-blocks along the N dimension.
- *   in1_block_num_tiles   — Total tiles per B block (= out_subblock_w * in0_block_w * in1_num_subblocks).
- *   in1_per_core_w        — Tiles per B row (= out_subblock_w * in1_num_subblocks).
- *   num_blocks            — Number of blocks along the K dimension.
- *   out_subblock_h        — Output sub-block height in tiles.
- *   out_subblock_w        — Output sub-block width in tiles.
- *   out_subblock_num_tiles — Tiles per output sub-block (= out_subblock_h * out_subblock_w).
- *   batch                 — Number of independent batch slices (default: 1).
+ *   in0        — A-matrix block parameters (see In0BlockParams).
+ *   in1        — B-matrix block parameters (see In1BlockParams).
+ *   num_blocks — Number of blocks along the K dimension.
+ *   out        — Output sub-block dimensions (see OutSubblockParams).
+ *   batch      — Number of independent batch slices (default: 1).
  *
  * ── CB Sizing Requirements ─────────────────────────────────────────────────
  *
- *   in0_cb:    >= in0_block_num_tiles pages (full A block loaded at once)
- *   in1_cb:    >= in1_block_num_tiles pages (full B block loaded at once)
+ *   in0_cb:    >= in0.block_num_tiles pages (full A block loaded at once)
+ *   in1_cb:    >= in1.block_num_tiles pages (full B block loaded at once)
  *   out_cb:    >= total output tiles for reservation tracking
- *   interm_cb: >= out_subblock_num_tiles pages (one sub-block of partial results)
+ *   interm_cb: >= out.num_tiles pages (one sub-block of partial results)
  *
  * ── Examples ───────────────────────────────────────────────────────────────
  *
  *   #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+ *   using namespace compute_kernel_lib::matmul_block_config;
  *
  *   // Sub-blocked matmul: 4x4 output divided into 2x2 sub-blocks, inner block width 2
  *   compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
- *       2,           // in0_block_w
- *       2, 8, 4,     // in0_num_subblocks, in0_block_num_tiles, in0_subblock_num_tiles
- *       2, 8, 4,     // in1_num_subblocks, in1_block_num_tiles, in1_per_core_w
- *       3,           // num_blocks
- *       2, 2, 4,     // out_subblock_h, out_subblock_w, out_subblock_num_tiles
- *       1);          // batch
+ *       {.block_w = 2, .num_subblocks = 2, .block_num_tiles = 8, .subblock_num_tiles = 4},
+ *       {.num_subblocks = 2, .block_num_tiles = 8, .per_core_w = 4},
+ *       3,  // num_blocks
+ *       {.h = 2, .w = 2, .num_tiles = 4},
+ *       1); // batch
  */
 template <
     uint32_t in0_cb,
@@ -100,17 +115,10 @@ template <
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         matmul_block_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
 ALWI void matmul_block(
-    uint32_t in0_block_w,
-    uint32_t in0_num_subblocks,
-    uint32_t in0_block_num_tiles,
-    uint32_t in0_subblock_num_tiles,
-    uint32_t in1_num_subblocks,
-    uint32_t in1_block_num_tiles,
-    uint32_t in1_per_core_w,
+    matmul_block_config::In0BlockParams in0,
+    matmul_block_config::In1BlockParams in1,
     uint32_t num_blocks,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_num_tiles,
+    matmul_block_config::OutSubblockParams out,
     uint32_t batch = 1);
 
 }  // namespace compute_kernel_lib

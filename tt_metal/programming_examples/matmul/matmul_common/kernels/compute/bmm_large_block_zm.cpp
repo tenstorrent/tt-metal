@@ -26,16 +26,12 @@ void kernel_main() {
     constexpr uint32_t cb_interm = tt::CBIndex::c_24;
 
     compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
-        in0_block_w,
-        in0_num_subblocks,
-        in0_block_num_tiles,
-        in0_subblock_num_tiles,
-        in1_num_subblocks,
-        in1_block_num_tiles,
-        in1_per_core_w,
+        {.block_w = in0_block_w,
+         .num_subblocks = in0_num_subblocks,
+         .block_num_tiles = in0_block_num_tiles,
+         .subblock_num_tiles = in0_subblock_num_tiles},
+        {.num_subblocks = in1_num_subblocks, .block_num_tiles = in1_block_num_tiles, .per_core_w = in1_per_core_w},
         num_blocks,
-        out_subblock_h,
-        out_subblock_w,
-        out_subblock_num_tiles,
+        {.h = out_subblock_h, .w = out_subblock_w, .num_tiles = out_subblock_num_tiles},
         batch);
 }
