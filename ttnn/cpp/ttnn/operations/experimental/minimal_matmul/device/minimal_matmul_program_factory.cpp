@@ -406,7 +406,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
-        defines["SRS_FUSE_OP_SIGNALER"] = "0";
+        defines["SRS_FUSE_OP_SIGNALER"] = "1";
         srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
     }
 
@@ -747,13 +747,20 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in0_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in0_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->is_rectangular ? 1 : 0));
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
-                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+            if (srs_fused_op_signaler->is_rectangular) {
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_x_start));
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_y_start));
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_x_end));
+                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_y_end));
+            } else {
+                for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                    in0_args.push_back(static_cast<uint32_t>(noc_core.x));
+                    in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+                }
             }
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in0_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -798,13 +805,20 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 in1_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in1_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->is_rectangular ? 1 : 0));
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
-                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+            if (srs_fused_op_signaler->is_rectangular) {
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_x_start));
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_y_start));
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_x_end));
+                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mcast_y_end));
+            } else {
+                for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                    in1_args.push_back(static_cast<uint32_t>(noc_core.x));
+                    in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+                }
             }
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in1_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in0_idx == 0) {
             // in1 sender

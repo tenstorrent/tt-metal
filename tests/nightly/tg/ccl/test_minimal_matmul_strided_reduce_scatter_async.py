@@ -187,8 +187,9 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "enable_trace, num_iters",
     [
         (False, 2),
+        (True, 1),
     ],
-    ids=["check"],
+    ids=["check", "trace"],
 )
 @pytest.mark.parametrize(
     "rs_mode",

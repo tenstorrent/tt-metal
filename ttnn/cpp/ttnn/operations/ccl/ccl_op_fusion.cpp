@@ -213,6 +213,40 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
 
     this->fused_op_receiver_signal_semaphore = CreateSemaphore(program, core_range_to_signal, 0);
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    // Compute the NOC bounding box for multicast signaling.
+    // Convert the two logical corners of the bounding box to NOC coords, then take
+    // element-wise min/max (needed because the NOC mapping is not guaranteed to be
+    // order-preserving for all architectures).
+    CoreRange logical_bbox = std::visit(
+        [](const auto& arg) -> CoreRange {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                return arg;
+            } else {
+                return arg.bounding_box();
+            }
+        },
+        core_range_to_signal);
+    auto noc_start = device->worker_core_from_logical_core(logical_bbox.start_coord);
+    auto noc_end = device->worker_core_from_logical_core(logical_bbox.end_coord);
+    this->mcast_x_start = std::min(static_cast<uint32_t>(noc_start.x), static_cast<uint32_t>(noc_end.x));
+    this->mcast_y_start = std::min(static_cast<uint32_t>(noc_start.y), static_cast<uint32_t>(noc_end.y));
+    this->mcast_x_end = std::max(static_cast<uint32_t>(noc_start.x), static_cast<uint32_t>(noc_end.x));
+    this->mcast_y_end = std::max(static_cast<uint32_t>(noc_start.y), static_cast<uint32_t>(noc_end.y));
+
+    // Check whether the receiver cores fill the bounding box with no gaps AND form a 1D strip.
+    // noc_semaphore_inc_multicast requires a gap-free rectangular grid; fall back
+    // to individual unicast increments when the layout is non-rectangular.
+    // Additionally, restrict to 1D (single row or single column) to avoid NOC deadlocks:
+    // 2D multicast with NOC_CMD_PATH_RESERVE can deadlock under heavy NOC load because the
+    // path reservation for a wide 2D multicast tree competes with in-flight DMA traffic.
+    // 1D multicast (single row or column) reserves a simpler path and is safe.
+    uint32_t bbox_core_count =
+        (this->mcast_x_end - this->mcast_x_start + 1) * (this->mcast_y_end - this->mcast_y_start + 1);
+    bool is_1d = (this->mcast_x_end == this->mcast_x_start) || (this->mcast_y_end == this->mcast_y_start);
+    this->is_rectangular = (bbox_core_count == this->num_fused_op_cores_to_signal) && is_1d;
+
     this->initialized = true;
 }
 
