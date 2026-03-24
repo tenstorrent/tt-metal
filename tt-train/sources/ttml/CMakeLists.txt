@@ -137,6 +137,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
+    # K-Split Gram Matmul (multicast)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/k_split_gram_matmul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
