@@ -29,6 +29,17 @@ Close only issues that are no longer actionable based on the latest completed ru
    - Review failure logs manually yourself.
 5. Never write or use a script that closes tickets automatically.
 
+## Mandatory checks before closing for “now passing”
+
+Generic “job is green” or “some tests PASSED” is not enough.
+
+1. **Narrow identifier** — From the issue, take the most specific failing slice you can: full pytest node id, parametrization substring (e.g. `prefill_seq2048`), gtest filter name, or the exact command/step cited in the ticket.
+2. **Log evidence** — In the **passing** job’s full log, confirm that identifier appears on lines that show **execution** of that case, then **PASSED** / **OK** (or equivalent). If the identifier never appears, or only appears under “deselected” / collection summaries while the job still passes, treat that as **not fixed** (the slice was excluded or not run).
+3. **Launcher / source check** — On current `main`, open the script or workflow fragment that actually runs that job’s tests (e.g. `tests/scripts/t3000/*.sh`, impl YAML, or `pytest` line in the workflow). If that command uses `-k` / `--ignore` / a reduced file list, a commented-out matrix row, or other exclusion that **drops** the failing identifier from what CI runs, **do not close** the issue for “passing”; the failure was sidestepped, not resolved.
+4. **Commits / PRs that reference the issue** — Search recent `main` history for the issue number in **commit messages** and **merged PR** titles/bodies (`#NNNN`, `Refs #NNNN`, `(#NNNN)`, etc.). Examples: `gh search commits "NNNN repo:tenstorrent/tt-metal" --order desc` (cap results, e.g. 10–20) and/or `gh pr list --repo tenstorrent/tt-metal --search "NNNN" --state merged -L 15`. Read any hit that merged after the failures: if it explicitly **skips**, **filters** (`-k not …`), **disables**, or **removes** the job or test slice tied to the ticket, that is strong evidence the green job is a **workaround** — **do not close** for “fixed” unless steps 2–3 still show the original failing slice actually runs and passes.
+
+Steps 2–4 reinforce each other: logs alone can miss `-k 'not foo'`; the launcher shows it; linked merges often **say** it in the PR title or description (e.g. “skip … Refs #NNNN”).
+
 ## Close vs Keep Open Rules
 
 ### Close the issue if either condition is true
@@ -42,7 +53,7 @@ Close only issues that are no longer actionable based on the latest completed ru
 - The difference is cosmetic only (timestamps, ANSI, formatting, host/runner, dynamic IDs).
 - The evidence is only infrastructure noise (transient network/runner/process exit lines).
 - The job is a matrix job with multiple matching instances and at least one still fails with the same root cause.
-- The test appears to pass only because it was disabled, skipped, or removed from the test suite. When a test is "now passing", verify in the job logs that the specific test actually ran and produced a PASSED/OK result, rather than being deselected, skipped, or absent from the run.
+- The test appears to pass only because it was disabled, skipped, removed from the test suite, or **excluded from the CI invocation** (e.g. `pytest -k 'not …'`, narrower file list, skipped matrix job). When a test is "now passing", apply **Mandatory checks before closing for “now passing”** above: logs must show that **the same** failing identifier ran and passed, the launcher on `main` must not exclude it, and **commits/PRs referencing the issue** must not show a merge whose stated purpose is to skip or narrow coverage for that failure.
 
 ## Output File
 

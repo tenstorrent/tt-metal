@@ -19,7 +19,7 @@ Review open CI maintenance issues and close only those no longer relevant based 
 3. **Decide closures**
    - Close if exact failing test now passes, or if root cause is clearly different
    - Do not close for cosmetic differences, infra-only noise, or same root cause
-   - Do not close if the test is only "passing" because it was disabled or removed. Verify the test actually ran and passed in the logs (look for the test name in output with a PASSED/OK status, not SKIPPED/deselected/disabled)
+   - Do not close if the test is only "passing" because it was disabled, removed, or **left out of what CI runs** (e.g. `pytest -k 'not …'`, smaller scope). See `.cursor/rules/ci-close-tickets.mdc` — **Mandatory checks before closing for “now passing”**: (1) take the **specific** failing identifier from the issue, (2) prove it **ran and PASSED/OK** in the passing job log, (3) read on `main` the script/workflow that launches that job and confirm it does **not** exclude that identifier, (4) search **commits / merged PRs** that reference the issue number (`gh search commits`, `gh pr list --search`) and read any that describe skipping or narrowing coverage — if that’s why CI is green, do not close for “fixed”
    - Apply user cap (for example, "close up to N issues") only at final close step
    - Always review the failure logs yourself. Never write a script to close tickets for you
 
