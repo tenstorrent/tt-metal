@@ -155,6 +155,7 @@ jobs:
       pytest_markers: "perf"
       timeout_minutes: 240
       use_durations: false
+      artifact_prefix: "on-pr-perf-"
 
   check-all-green:
     name: "✅ Check all green"
@@ -172,3 +173,4 @@ jobs:
         with:
           jobs: ${{ toJSON(needs) }}
           allowed-skips: build-images, setup-and-test-wormhole, setup-and-test-blackhole, build-quasar, perf-tests
+
