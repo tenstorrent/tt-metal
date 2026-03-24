@@ -48,10 +48,10 @@ def _distribute_gqa(
     modules/distributed/grouped_query_attention.cpp
     """
     mesh_shape = mesh_device.shape
-    tp_size = mesh_shape[tp_axis]
 
     # Handle TP: adjust local head/group counts (child linears get styles on recursion)
-    if tp_size > 1:
+    if tp_axis is not None:
+        tp_size = mesh_shape[tp_axis]
         num_heads = module.num_heads
         num_groups = module.num_groups
 
