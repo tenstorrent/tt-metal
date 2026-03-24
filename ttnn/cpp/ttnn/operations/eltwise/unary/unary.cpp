@@ -159,7 +159,7 @@ Tensor where_tss(
 
     // Convert input tensor to float32 only if input is INT32/UINT32 and scalars are float
     if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && has_float_scalar) {
-        input = ttnn::typecast(condition, DataType::FLOAT32);
+        input = ttnn::typecast(condition, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
     }
     UnaryOpType op_type = UnaryOpType::WHERE_TSS;
     auto param = std::visit(
