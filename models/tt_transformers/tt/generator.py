@@ -490,7 +490,13 @@ class Generator(WarmupForwardMixin):
                 (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
                 self.model_args[0].max_batch_size,
             )
-            if padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
+            if padded_batch > self.model_args[0].max_batch_size:
+                logger.info(
+                    f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
+                    f"max_batch_size {self.model_args[0].max_batch_size}"
+                )
+                use_batched_prefill = False
+            elif padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
                 logger.info(
                     f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
                     f"{padded_batch * prefill_seq_lens[0]} tokens exceeds limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
