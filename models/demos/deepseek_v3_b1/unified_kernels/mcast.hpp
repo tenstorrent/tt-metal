@@ -311,6 +311,7 @@ struct Mcast {
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
+                    noc_async_posted_writes_flushed();
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
             }
@@ -367,6 +368,8 @@ struct Mcast {
                     true,
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
+
+                noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

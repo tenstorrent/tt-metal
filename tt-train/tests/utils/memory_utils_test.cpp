@@ -6,12 +6,14 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 class MemoryUtilsTest : public ::testing::Test {
@@ -80,13 +82,19 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
 
-    size_t binary_size = 16384;          // Size of DRAM buffer used for matmul program
+    size_t binary_size = 16384;  // Size of DRAM buffer used for matmul program
     size_t expected_size = binary_size;  // Allocated left over is program cache
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
+    // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
+    // in unpacker/packer configurations that invoke functions exclusively used for assertions.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size = 61440;
+        expected_size = 20480;
+    }
 
-    auto assert_dram_usage = [](const auto& dram_usage, size_t expected_size, size_t expected_peak_size) {
-        EXPECT_EQ(dram_usage.peak, expected_peak_size);
-        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, expected_size);
+    auto assert_dram_usage = [](const auto& dram_usage, size_t exp_size, size_t exp_peak) {
+        EXPECT_EQ(dram_usage.peak, exp_peak);
+        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, exp_size);
     };
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 
@@ -100,6 +108,10 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     expected_size = 0;
     expected_peak_size = tensor1_size + tensor2_size + result_size + binary_size;  // Binary size is still allocated
+    // LLK_ASSERTs add constant DRAM overhead for assertion-specific function code.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size = 61440;
+    }
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 }
 
@@ -152,9 +164,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     auto q = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto k = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto v = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
-    auto q_tensor = ttml::autograd::create_tensor(q);
-    auto k_tensor = ttml::autograd::create_tensor(k);
-    auto v_tensor = ttml::autograd::create_tensor(v);
+    auto q_tensor = ttml::autograd::create_tensor(q, /* requires_grad */ true);
+    auto k_tensor = ttml::autograd::create_tensor(k, /* requires_grad */ true);
+    auto v_tensor = ttml::autograd::create_tensor(v, /* requires_grad */ true);
 
     auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
@@ -169,15 +181,21 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     size_t expected_size = 0;
     size_t expected_peak_size = 0;
 
-    // tensor 2 is converted to row major + to_layout for some reason allocated additional 4096 bytes
+    // tensor 2 is converted to row major + to_layout for some reason allocated additional bytes
     // TODO: Trace those extra allocations. 99% those are programs caches + intermediate tensors.
-    expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 4096;
+    expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 2048;
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
-        compute_tensor_size(sdpa_result->get_value()) + 1830912;  // All the intermediate tensors / activations
+        compute_tensor_size(sdpa_result->get_value()) + 243712;  // All the intermediate tensors / activations
 
-    expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
+    // LLK_ASSERTs add constant DRAM overhead due to additional assertion code
+    // in unpacker/packer configurations that invoke functions exclusively used for assertions.
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size += 22528;  // Additional program cache overhead
+    }
+
+    expected_size = expected_peak_size;
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     EXPECT_EQ(dram_usage.peak, expected_peak_size);
@@ -225,8 +243,10 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
-        // TODO: verify that 12288 comes from program cache
-        EXPECT_EQ(dram_usage.total_allocations, 12288);
+        // TODO: verify that 10240 comes from program cache
+        // LLK_ASSERTs add constant DRAM overhead (12288 vs 10240) for assertion-specific code.
+        size_t expected_dram_alloc = ttml::core::is_llk_assert_enabled() ? 12288 : 10240;
+        EXPECT_EQ(dram_usage.total_allocations, expected_dram_alloc);
 
         // peak_cb = tile_size * sizeof(bfloat16) * n_cb (cb0, cb1, cb_out)
         size_t expected_peak_cb = 2048 * 2 * 3;
@@ -272,7 +292,9 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
         // DRAM usage from cache miss
-        EXPECT_EQ(dram_usage.total_allocations, 10240);
+        // LLK_ASSERTs add constant DRAM overhead (12288 vs 10240) for assertion-specific code.
+        size_t expected_dram_alloc_2 = ttml::core::is_llk_assert_enabled() ? 12288 : 10240;
+        EXPECT_EQ(dram_usage.total_allocations, expected_dram_alloc_2);
 
         size_t expected_peak_cb = 0;  // CBs are not allocated since add uses sharded inputs as CBs
         EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
@@ -373,27 +395,45 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     ASSERT_EQ(all_l1_usage.size(), 3);
 
     // Verify individual snapshots have captured memory usage with exact values
+    // Two sets of expectations: default and when LLK asserts are enabled.
+    // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
+    // in unpacker/packer configurations that invoke functions exclusively used for assertions.
+    size_t peak_1 = 34816, alloc_1 = 34816, dealloc_1 = 10240;
+    size_t peak_2 = 86016, alloc_2 = 86016, dealloc_2 = 20480;
+    size_t peak_3 = 272384, alloc_3 = 280576, dealloc_3 = 18432;
+    if (ttml::core::is_llk_assert_enabled()) {
+        peak_1 = 36864;
+        alloc_1 = 36864;
+        dealloc_1 = 12288;
+        peak_2 = 90112;
+        alloc_2 = 90112;
+        dealloc_2 = 24576;
+        peak_3 = 276480;
+        alloc_3 = 284672;
+        dealloc_3 = 22528;
+    }
+
     // Snapshot 1: Add operation
     auto dram_usage_1 = ttml::utils::MemoryUsageTracker::get_dram_usage("add_operation");
-    // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 12288 bytes of program cache
-    // 36864 = 3 * (64 * 64) * sizeof(bfloat16) + 12288
-    EXPECT_EQ(dram_usage_1.peak, 36864);
-    EXPECT_EQ(dram_usage_1.total_allocations, 36864);
-    EXPECT_EQ(dram_usage_1.total_deallocations, 12288);
+    // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 10240 bytes of program cache
+    // 34816 = 3 * (64 * 64) * sizeof(bfloat16) + 10240
+    EXPECT_EQ(dram_usage_1.peak, peak_1);
+    EXPECT_EQ(dram_usage_1.total_allocations, alloc_1);
+    EXPECT_EQ(dram_usage_1.total_deallocations, dealloc_1);
 
     // Snapshot 2: Matmul operation
     auto dram_usage_2 = ttml::utils::MemoryUsageTracker::get_dram_usage("matmul_operation");
-    EXPECT_EQ(dram_usage_2.peak, 86016);
-    EXPECT_EQ(dram_usage_2.total_allocations, 86016);
-    EXPECT_EQ(dram_usage_2.total_deallocations, 20480);
+    EXPECT_EQ(dram_usage_2.peak, peak_2);
+    EXPECT_EQ(dram_usage_2.total_allocations, alloc_2);
+    EXPECT_EQ(dram_usage_2.total_deallocations, dealloc_2);
 
     // Snapshot 3: L1 multiply operation
     auto dram_usage_3 = ttml::utils::MemoryUsageTracker::get_dram_usage("multiply_l1_operation");
     auto l1_usage_3 = ttml::utils::MemoryUsageTracker::get_l1_usage("multiply_l1_operation");
-    EXPECT_EQ(dram_usage_3.peak, 274432);
-    // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 20480 /*program cache*/
-    EXPECT_EQ(dram_usage_3.total_allocations, 282624);
-    EXPECT_EQ(dram_usage_3.total_deallocations, 20480);
+    EXPECT_EQ(dram_usage_3.peak, peak_3);
+    // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 18432 /*program cache*/
+    EXPECT_EQ(dram_usage_3.total_allocations, alloc_3);
+    EXPECT_EQ(dram_usage_3.total_deallocations, dealloc_3);
     // peak_l1 = (256 * 256 * sizeof(bfloat16)) * 2 /*DRAM inputs*/ + (256 * 256 * sizeof(bfloat16)) /*L1 output*/
     EXPECT_EQ(l1_usage_3.peak_l1, 393216);
 

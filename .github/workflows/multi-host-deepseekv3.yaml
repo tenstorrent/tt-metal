@@ -76,7 +76,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
 jobs:
   build-artifact:
@@ -167,7 +167,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -192,7 +191,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -218,7 +216,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -232,7 +229,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
-        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -243,7 +240,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -260,7 +256,7 @@ jobs:
       - name: Run dual teacher forced accuracy test
         if: ${{ (inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -269,7 +265,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -293,9 +288,9 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -304,7 +299,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -318,7 +312,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
@@ -331,7 +325,7 @@ jobs:
       - name: Run dual demo test (256 prompts, 1 batch)
         if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 40
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -340,7 +334,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -363,10 +356,10 @@ jobs:
             generated/artifacts/dual_demo_full_results.json
           if-no-files-found: warn
 
-      - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+      - name: Run dual MTP demo parity smoke test
+        if: ${{ ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -375,7 +368,40 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_mtp
+
+      - name: Upload dual MTP demo output artifacts
+        if: ${{ always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-demo-mtp-output-${{ github.run_id }}
+          path: |
+            generated/artifacts/dual_demo_mtp_output.log
+            generated/artifacts/dual_demo_full_results_mtp.json
+          if-no-files-found: warn
+
+      - name: Run quad demo test (512 prompts, 1 batch)
+        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -389,7 +415,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-output-${{ github.run_id }}
@@ -398,11 +424,10 @@ jobs:
             generated/artifacts/quad_demo_full_results.json
           if-no-files-found: warn
 
-      # ── Demo stress tests ───────────────────────────────────────────────
-      - name: Run dual demo stress test (56 prompts, 20 batches)
-        if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+      - name: Run quad MTP demo parity smoke test
+        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -411,7 +436,41 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_mtp
+
+      - name: Upload quad MTP demo output artifacts
+        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quad-demo-mtp-output-${{ github.run_id }}
+          path: |
+            generated/artifacts/quad_demo_mtp_output.log
+            generated/artifacts/quad_demo_full_results_mtp.json
+          if-no-files-found: warn
+
+      # ── Demo stress tests ───────────────────────────────────────────────
+      - name: Run dual demo stress test (56 prompts, 20 batches)
+        if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -437,7 +496,7 @@ jobs:
       - name: Run quad demo stress test (56 prompts, 20 batches)
         if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -446,7 +505,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro

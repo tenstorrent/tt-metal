@@ -1,7 +1,7 @@
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
-target_precompile_headers(ttnn_op_transformer REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_transformer TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
 
 set_target_properties(
@@ -39,6 +39,7 @@ target_sources(
         sdpa/device/ring_distributed_sdpa_device_operation.cpp
         sdpa/device/ring_distributed_sdpa_program_factory.cpp
         sdpa/device/sdpa_device_operation.cpp
+        sdpa/device/sdpa_perf_model.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
         sdpa_decode/device/sdpa_decode_device_operation.cpp

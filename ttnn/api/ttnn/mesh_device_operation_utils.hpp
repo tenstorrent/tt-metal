@@ -29,7 +29,7 @@ using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCa
 template <typename TensorArgs>
 bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
     bool uniform_storage = true;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) { uniform_storage &= tensor.device_storage().is_uniform_storage(); }, tensor_args);
     return uniform_storage;
 }
@@ -39,7 +39,7 @@ bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
 template <typename TensorReturnValue>
 TensorReturnValue filter_tensor_shards(
     const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, const TensorReturnValue& tensor_return_value) {
-    return tt::stl::reflection::transform_object_of_type<Tensor>(
+    return ttsl::reflection::transform_object_of_type<Tensor>(
         [&](const Tensor& tensor) -> Tensor {
             const auto& old_storage = tensor.device_storage();
 
@@ -60,7 +60,8 @@ TensorReturnValue filter_tensor_shards(
             }
 
             // Create new storage with filtered coords, sharing the mesh_buffer
-            tt::tt_metal::DeviceStorage new_storage(old_storage.mesh_buffer, std::move(filtered_coords));
+            tt::tt_metal::DeviceStorage new_storage(
+                old_storage.get_mesh_buffer_leak_ownership(), std::move(filtered_coords));
 
             // Return new tensor with new storage
             return Tensor(std::move(new_storage), tensor.tensor_spec(), tensor.tensor_topology());
@@ -76,7 +77,7 @@ template <typename TensorArgs>
 std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     const TensorArgs& tensor_args, ttnn::MeshDevice* mesh_device = nullptr) {
     std::vector<std::reference_wrapper<const Tensor>> tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
     return ttnn::device_operation::detail::extract_tensor_coordinates_impl(tensors, mesh_device);
 }

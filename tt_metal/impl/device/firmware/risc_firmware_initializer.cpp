@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
@@ -38,12 +39,10 @@ namespace tt::tt_metal {
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
-    dispatch_core_manager& dispatch_core_manager,
-    std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores) :
+    dispatch_core_manager& dispatch_core_manager) :
     FirmwareInitializer(std::move(descriptor)),
     get_control_plane_(get_control_plane),
     dispatch_core_manager_(dispatch_core_manager),
-    get_dispatch_ignore_cores_(std::move(get_dispatch_ignore_cores)),
     num_hw_cqs_(static_cast<uint8_t>(descriptor_->num_cqs())) {
     const Hal& hal = descriptor_->hal();
     size_t worker_l1_size = descriptor_->worker_l1_size();
@@ -157,9 +156,9 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    for (tt::ChipId device_id : device_ids) {
-        if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
-            ClearNocData(device_id);
+    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+        for (tt::ChipId device_id : device_ids) {
+            ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
@@ -194,11 +193,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
     if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
         for (tt::ChipId device_id : all_devices) {
-            std::unordered_set<CoreCoord> ignore_cores;
-            if (get_dispatch_ignore_cores_) {
-                ignore_cores = (*get_dispatch_ignore_cores_)(device_id);
-            }
-            assert_cores(device_id, ignore_cores);
+            assert_cores(device_id);
             cluster_.l1_barrier(device_id);
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
@@ -298,28 +293,13 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
     }
 }
 
-void RiscFirmwareInitializer::assert_tensix_workers_impl(
-    tt::ChipId device_id, const std::unordered_set<CoreCoord>* ignore_virtual_cores) {
+void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
     CoreCoord grid_size = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    const bool teardown_mode = (ignore_virtual_cores != nullptr);
-    const std::unordered_set<CoreCoord>& active_eth_logical =
-        teardown_mode ? this->get_control_plane_().get_active_ethernet_cores(device_id, false)
-                      : std::unordered_set<CoreCoord>{};
-    const bool skip_active_eth_workers = teardown_mode && !hal_.get_eth_fw_is_cooperative();
-
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-
-            if (teardown_mode && ignore_virtual_cores->contains(worker_core)) {
-                log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
-                continue;
-            }
-            if (skip_active_eth_workers && active_eth_logical.contains(logical_core)) {
-                continue;  // Cannot put these cores into reset; they are running base FW (handled below)
-            }
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
         }
     }
@@ -373,19 +353,19 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
         }
     }
 
-    assert_tensix_workers_impl(device_id, nullptr);
-
+    assert_tensix_workers_impl(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
     }
     cluster_.l1_barrier(device_id);
 }
 
-void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id, std::unordered_set<CoreCoord>& ignore_virtual_cores) {
-    assert_tensix_workers_impl(device_id, &ignore_virtual_cores);
+void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
+    assert_tensix_workers_impl(device_id);
     if (!hal_.get_eth_fw_is_cooperative()) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
+    assert_inactive_ethernet_cores(device_id);
 }
 
 CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
@@ -416,6 +396,8 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
     std::vector<uint16_t>& l1_bank_to_noc_xy) {
     BankMapping l1_bank_remap(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
     auto config = L1BankingAllocator::generate_config(
+        descriptor_->metal_context().get_dispatch_core_manager(),
+        descriptor_->env_impl(),
         device_id,
         num_hw_cqs_,
         DEFAULT_L1_SMALL_SIZE,      // Not required for noc table gen

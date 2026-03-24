@@ -153,8 +153,8 @@ uint32_t per_core_rta_arg_idx = 0;
         get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
         get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
         get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
-        get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
-        get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half_size_bytes"),
     };
 
     // RMSNorm2 reader args
@@ -184,13 +184,10 @@ uint32_t per_core_rta_arg_idx = 0;
 
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{
         .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
-        .cos_cb = get_named_compile_time_arg_val("qrope_cos_cb"),
-        .sin_cb = get_named_compile_time_arg_val("qrope_sin_cb"),
+        .cos_sin_cb = get_named_compile_time_arg_val("qrope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
-    };
+        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address")};
 
     // NCRISC: Sender args for QNOPE/QROPE cores
     // Senders write to intermediate CB, then compute tilizes to output CB
@@ -260,13 +257,10 @@ uint32_t per_core_rta_arg_idx = 0;
 
     deepseek_b1_ops::Rope::ReaderArgs krope_args{
         .in_cb = get_named_compile_time_arg_val("krope_in_cb"),
-        .cos_cb = get_named_compile_time_arg_val("krope_cos_cb"),
-        .sin_cb = get_named_compile_time_arg_val("krope_sin_cb"),
+        .cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
-    };
+        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address")};
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 
@@ -365,8 +359,7 @@ uint32_t per_core_rta_arg_idx = 0;
         get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
         get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -579,8 +572,8 @@ uint32_t per_core_rta_arg_idx = 0;
 
     // Gather reduce compute args
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_out_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -624,12 +617,10 @@ uint32_t per_core_rta_arg_idx = 0;
     // Qrope compute args (from compile-time args)
     deepseek_b1_ops::Rope::ComputeArgs qrope_args{
         get_named_compile_time_arg_val("qrope_in_cb"),  // Input from matmul2 output
-        get_named_compile_time_arg_val("qrope_cos_cb"),
-        get_named_compile_time_arg_val("qrope_sin_cb"),
+        get_named_compile_time_arg_val("qrope_cos_sin_cb"),
         get_named_compile_time_arg_val("qrope_trans_mat_cb"),
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("qrope_cos_interm_cb"),
-        get_named_compile_time_arg_val("qrope_sin_interm_cb"),
+        get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
     };
 
@@ -677,23 +668,19 @@ uint32_t per_core_rta_arg_idx = 0;
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
-    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
+    constexpr uint32_t krope_cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb");
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
-    constexpr uint32_t krope_cos_interm_cb = get_named_compile_time_arg_val("krope_cos_interm_cb");
-    constexpr uint32_t krope_sin_interm_cb = get_named_compile_time_arg_val("krope_sin_interm_cb");
+    constexpr uint32_t krope_cos_sin_interm_cb = get_named_compile_time_arg_val("krope_cos_sin_interm_cb");
     constexpr uint32_t krope_output_cb = get_named_compile_time_arg_val("krope_output_cb");
 
     // Compute args: all CB indices
     deepseek_b1_ops::Rope::ComputeArgs krope_args{
         .in_cb = krope_input_cb,
-        .cos_cb = krope_cos_cb,
-        .sin_cb = krope_sin_cb,
+        .cos_sin_cb = krope_cos_sin_cb,
         .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
-        .cos_interm_cb = krope_cos_interm_cb,
-        .sin_interm_cb = krope_sin_interm_cb,
+        .cos_sin_interm_cb = krope_cos_sin_interm_cb,
         .out_cb = krope_output_cb,
     };
 
@@ -1030,9 +1017,7 @@ uint32_t per_core_rta_arg_idx = 0;
         // ====================================================================
         {
             DeviceZoneScopedN("FLASH_MLA");
-            deepseek_b1_ops::FlashMLADecode::
-                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
-                    flash_mla;
+            deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core> flash_mla;
             flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
             flash_mla(flash_mla_args);
         }

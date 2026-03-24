@@ -47,10 +47,10 @@ on:
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
-      (github.event.schedule == '0 */3 * * *' && 'T3K/Dual Validation' ||
-       github.event.schedule == '0 2 * * *'  && 'Quad Nightly' ||
-       'Scheduled Run')
-      || 'Manual Run' }}
+      (github.event.schedule == '0 */3 * * *' && 'Multi host T3K/Dual Galaxy Validation' ||
+       github.event.schedule == '0 4 * * *'  && 'Multi host Quad Galaxy Nightly' ||
+       'Multi host Scheduled Run')
+      || 'Multi host Manual Run' }}
 
 jobs:
   build-artifact:
@@ -104,7 +104,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -157,7 +156,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -211,7 +209,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro

@@ -23,6 +23,8 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/rand_op.hpp"
+#include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
@@ -273,6 +275,19 @@ void py_module(nb::module_& m) {
             nb::arg("key"),
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
+
+        py_attention.def(
+            "scaled_dot_product_attention_composite",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention_composite(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
     }
 
     {
@@ -349,6 +364,28 @@ void py_module(nb::module_& m) {
             nb::arg("gamma"),
             nb::arg("epsilon"));
     }
+
+    m.def(
+        "rand",
+        &ttml::ops::rand,
+        nb::arg("shape"),
+        nb::kw_only(),
+        nb::arg("low") = 0.0f,
+        nb::arg("high") = 1.0f,
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
+
+    m.def(
+        "randn",
+        &ttml::ops::randn,
+        nb::arg("shape"),
+        nb::kw_only(),
+        nb::arg("mean") = 0.0f,
+        nb::arg("std") = 1.0f,
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
