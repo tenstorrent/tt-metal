@@ -92,6 +92,11 @@ PARTITION_DEVICE_MAPPING = {
         "description": "Galaxy (32x1)",
         "max_nodes": 1,
     },
+    "bh_sp5_aisle_c_partial": {
+        "mesh_shape": [32, 1],
+        "description": "BH Galaxy (aisle C partial)",
+        "max_nodes": 4,
+    },
     "n150": {
         "mesh_shape": [1, 1],
         "description": "N150 Single Device (1x1)",
@@ -106,10 +111,10 @@ PARTITION_DEVICE_MAPPING = {
 
 # Available Galaxy nodes for non-lb partitions
 GALAXY_NODES = [
-    "bh-glx-c01u02",
-    "bh-glx-c01u08",
-    "bh-glx-c02u02",
-    "bh-glx-c02u08",
+    "bh-glx-c05u02",
+    "bh-glx-c05u08",
+    "bh-glx-c06u02",
+    "bh-glx-c06u08",
 ]
 
 # Mesh graph descriptor template for LoudBox (lb) partitions
@@ -343,10 +348,9 @@ class JobManager:
         else:
             reset_command = "tt-smi -glx_reset"
 
-        # Nodelist: omit by default so SLURM can schedule on any free node (job queues).
-        # Set TT_USE_NODELIST=1 to pin to GALAXY_NODES for non-lb partitions.
+        # Always pin non-lb jobs to the allowed Galaxy nodes.
         nodelist_directive = ""
-        if not is_lb_partition and os.environ.get("TT_USE_NODELIST") == "1":
+        if not is_lb_partition:
             nodelist_directive = f"#SBATCH --nodelist={','.join(GALAXY_NODES)}"
 
         # Paths to job-specific config files

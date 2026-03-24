@@ -112,29 +112,20 @@ JOBS_BASE_DIR = _default_jobs_base_dir()
 
 # Default SLURM partition — override with DEFAULT_PARTITION env var.
 # Fallback when preferred partition doesn't exist.
-DEFAULT_PARTITION = os.environ.get("DEFAULT_PARTITION", "bh_lb_single")
+DEFAULT_PARTITION = os.environ.get("DEFAULT_PARTITION", "bh_sp5_aisle_c_partial")
+
+# Supported clusters exposed to users. Only these are returned in the catalog.
+SUPPORTED_CLUSTERS = {"bh_galaxy", "4bh_glx"}
 
 # Cluster size → ordered list of partitions that can satisfy it. First with free nodes wins.
-# Single Galaxy: any of these can run 1 node
-# 1 pod: B45, B89, or superpod (4 nodes)
-# 2 pods: only superpod (8 nodes)
 CLUSTER_TO_PARTITIONS = {
+    "bh_galaxy": ["bh_sp5_aisle_c_partial"],
+    "4bh_glx": ["bh_sp5_aisle_c_partial"],
+    # Disabled — not exposed in catalog
     "8xp150": ["bh_lb_single"],
     "4xp150": ["bh_lb_single"],
-    "bh_glx": [
-        "bh_single",
-        "bh_sp_5x4x32_C1_C10",
-        "bh_pod_4x32_B45",
-        "bh_pod_4x32_B89",
-    ],
-    "4bh_glx": ["bh_pod_4x32_B45", "bh_pod_4x32_B89", "bh_sp_5x4x32_C1_C10"],
+    "bh_glx": ["bh_single", "bh_sp_5x4x32_C1_C10", "bh_pod_4x32_B45", "bh_pod_4x32_B89"],
     "5x4bh_glx": ["bh_sp_5x4x32_C1_C10"],
-    "bh_galaxy": [
-        "bh_single",
-        "bh_sp_5x4x32_C1_C10",
-        "bh_pod_4x32_B45",
-        "bh_pod_4x32_B89",
-    ],
 }
 
 # Topology per partition: hierarchy and device counts for multi-host clusters.
@@ -172,6 +163,14 @@ PARTITION_TOPOLOGY = {
         "total_devices": 32,
         "topology": "1×32×1",
     },
+    "bh_sp5_aisle_c_partial": {
+        "mesh_shape": [32, 1],
+        "nodes": 4,
+        "pods": 1,
+        "nodes_per_pod": 4,
+        "total_devices": 128,
+        "topology": "4×32×1",
+    },
     "bh_pod_4x32_B45": {
         "mesh_shape": [32, 1],
         "nodes": 4,
@@ -198,14 +197,8 @@ PARTITION_TOPOLOGY = {
     },
 }
 
-# When primary partition submit fails (e.g. "node config not available"), try this fallback.
-PARTITION_FALLBACK = {
-    "bh_single": "bh_lb_single",
-    "bh_pod_4x32_B45": "bh_lb_single",
-    "bh_pod_4x32_B89": "bh_lb_single",
-    "bh_sp_5x4x32_C1_C10": "bh_lb_single",
-    "bh_galaxy": "bh_lb_single",
-}
+# No fallback partitions — jobs must stay within the allowed partition.
+PARTITION_FALLBACK = {}
 
 
 def _get_cluster_info(cluster: str) -> dict:
@@ -874,7 +867,7 @@ def catalog():
             {"id": "sgd", "display_name": "SGD", "supported": False},
             {"id": "muon", "display_name": "Muon", "supported": False},
         ],
-        "clusters": [_get_cluster_info(c) for c in CLUSTER_TO_PARTITIONS],
+        "clusters": [_get_cluster_info(c) for c in SUPPORTED_CLUSTERS],
     }
 
     log.info("=== CATALOG RESPONSE ===")
@@ -905,6 +898,21 @@ def create_job():
         OBS.info("%s validation_failed missing=model|dataset_url|cluster", _obs_tag("CREATE"))
         return (
             jsonify({"error": {"message": "model, dataset_url, and cluster are required"}}),
+            400,
+        )
+    if cluster not in SUPPORTED_CLUSTERS:
+        OBS.info(
+            "%s unsupported_cluster cluster=%s supported=%s", _obs_tag("CREATE"), cluster, sorted(SUPPORTED_CLUSTERS)
+        )
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Cluster '{cluster}' is not available. Supported: {sorted(SUPPORTED_CLUSTERS)}",
+                        "code": "unsupported_cluster",
+                    }
+                }
+            ),
             400,
         )
 
@@ -1016,8 +1024,10 @@ def create_job():
     log.info("Training params: %s", json.dumps(training_params, indent=2))
 
     partition = _resolve_partition(cluster)
+    # Derive node count from cluster: 4bh_glx needs 4 nodes, bh_galaxy needs 1
+    cluster_nodes = 4 if cluster == "4bh_glx" else 1
     log.info("=== CLUSTER RESOLUTION ===")
-    log.info("Cluster '%s' resolved to partition: %s", cluster, partition)
+    log.info("Cluster '%s' resolved to partition: %s (nodes=%d)", cluster, partition, cluster_nodes)
     batch_size = training_params.get("batch_size", 8)
     if "lb" not in partition.lower() and batch_size % 32 != 0:
         return (
@@ -1081,7 +1091,7 @@ def create_job():
     log.info("=== SLURM JOB CONFIGURATION ===")
     log.info("Job name: %s", job_name)
     log.info("Partition: %s", partition)
-    log.info("Nodes: %d", 1)
+    log.info("Nodes: %d", cluster_nodes)
     log.info("SLURM config: %s", json.dumps(slurm_config, indent=2))
     OBS.info("%s slurm_config=%s job_name=%s", _obs_tag("CREATE"), slurm_config, job_name)
 
@@ -1089,14 +1099,14 @@ def create_job():
     log.info("Attempting sbatch submission with:")
     log.info("  - Config: %s", slurm_config)
     log.info("  - Partition: %s", partition)
-    log.info("  - Nodes: %d", 1)
+    log.info("  - Nodes: %d", cluster_nodes)
     log.info("  - Job name: %s", job_name)
 
     success, msg, slurm_info = manager.submit_job(
         training_config=training_config,
         config=slurm_config,
         partition=partition,
-        nodes=1,
+        nodes=cluster_nodes,
         job_name=job_name,
     )
 
@@ -1127,7 +1137,7 @@ def create_job():
                 training_config=training_config,
                 config=slurm_config,
                 partition=fallback,
-                nodes=1,
+                nodes=cluster_nodes,
                 job_name=job_name,
             )
             log.info("=== FALLBACK SUBMISSION RESULT ===")
