@@ -56,14 +56,14 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
-_DANGEROUS_PATH_PREFIXES = (
-    "/proc/",  # Kernel/process virtual filesystem
-    "/sys/",  # Kernel sysfs
-    "/dev/",  # Device files
-    "/etc/",  # System configuration (passwords, keys, etc.)
-    "/run/",  # Runtime state files (PIDs, sockets)
-    "/boot/",  # Bootloader and kernel images
-    "/var/",  # System logs, etc.
+_DANGEROUS_PATH_ROOTS = (
+    Path("/proc"),  # Kernel/process virtual filesystem
+    Path("/sys"),  # Kernel sysfs
+    Path("/dev"),  # Device files
+    Path("/etc"),  # System configuration (passwords, keys, etc.)
+    Path("/run"),  # Runtime state files (PIDs, sockets)
+    Path("/boot"),  # Bootloader and kernel images
+    Path("/var"),  # System logs, etc.
 )
 
 
@@ -74,10 +74,14 @@ def _is_safe_path(file_path: str) -> bool:
     normalized = Path(file_path)
     if ".." in normalized.parts:
         return False
-    if normalized.is_absolute():
-        normalized_str = str(normalized)
-        if any(normalized_str.startswith(prefix) for prefix in _DANGEROUS_PATH_PREFIXES):
-            return False
+
+    # Resolve existing path components before checking dangerous roots so that a
+    # safe-looking relative path cannot escape into /etc, /proc, etc. via a symlink.
+    # strict=False preserves the current behavior for missing files: callers still
+    # get a clean "?file not found?" later instead of failing here on resolution.
+    resolved = normalized.resolve(strict=False)
+    if any(resolved == root or resolved.is_relative_to(root) for root in _DANGEROUS_PATH_ROOTS):
+        return False
     return True
 
 

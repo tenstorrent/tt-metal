@@ -8,6 +8,7 @@
 
 from datetime import timedelta
 import os
+from pathlib import Path
 import sys
 import pytest
 import subprocess
@@ -66,7 +67,7 @@ HANG_APP_EXPECTED_RESULTS = {
 
 
 def print_process_output(proc):
-    stdout, stderr = proc.communicate(input=None, timeout=5)
+    stdout, stderr = proc.communicate(input=None, timeout=0)
     print("\n=== Process stdout ===")
     print(stdout.decode("utf-8") if stdout else "(empty)")
     print("\n=== Process stderr ===")
@@ -666,10 +667,33 @@ def test_dispatcher_data_missing_build_env_includes_last_error_and_env_hint(monk
     assert "device-id mapping consistency" in message
 
 
+def _get_extract_assert_code():
+    from dump_lightweight_asserts import extract_assert_code
+
+    return extract_assert_code
+
+
 def test_extract_assert_code_handles_none_gracefully():
     """Ensure extract_assert_code never passes None to path/stat (graceful during timeout/corrupted device triage)."""
-    from dump_lightweight_asserts import extract_assert_code
+    extract_assert_code = _get_extract_assert_code()
 
     assert extract_assert_code(None, None, None) == "?"
     assert extract_assert_code(None, 1, 0) == "?"
     assert extract_assert_code("/nonexistent", None, 0) == "?"
+
+
+def test_extract_assert_code_rejects_symlink_to_dangerous_root(tmp_path: Path):
+    """Safe-looking symlinks should still be rejected if they resolve under a blocked system root."""
+    extract_assert_code = _get_extract_assert_code()
+
+    dangerous_target = Path("/etc/hosts")
+    if not dangerous_target.exists():
+        pytest.skip("/etc/hosts is not available on this platform")
+
+    symlink_path = tmp_path / "fake_kernel.cpp"
+    try:
+        symlink_path.symlink_to(dangerous_target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation not supported here: {exc}")
+
+    assert extract_assert_code(str(symlink_path), 1, 0) == "?invalid file path?"
