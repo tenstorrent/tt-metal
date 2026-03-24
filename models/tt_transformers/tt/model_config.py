@@ -559,7 +559,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+        if self.base_model_name in ["Phi-3-mini-128k-instruct", "Molmo2-8B"]:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
@@ -3454,7 +3454,11 @@ class ModelArgs:
 
         processor = None
         try:
-            processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            processor = AutoProcessor.from_pretrained(
+                self.TOKENIZER_PATH,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
+            )
             logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")

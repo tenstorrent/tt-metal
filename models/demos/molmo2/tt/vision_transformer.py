@@ -287,6 +287,62 @@ class VisionTransformer(LightweightModule):
 
         return embedded
 
+    def patch_embed_from_patches_ttnn(self, patches: torch.Tensor) -> ttnn.Tensor:
+        """
+        Apply patch embedding with linear projection on TTNN for pre-unfolded patches.
+
+        This is used when receiving pre-processed patches from vLLM's processor
+        (e.g., from Molmo2Processor which already does the unfold operation).
+
+        Args:
+            patches: Pre-unfolded patches [num_crops, num_patches, patch_features]
+                    where patch_features = patch_size * patch_size * channels (e.g., 14*14*3=588)
+
+        Returns:
+            Embedded patches [1, 1, num_crops*num_patches, hidden_dim] on device
+        """
+        # patches shape: [num_crops, num_patches, 588] e.g., [9, 729, 588]
+        num_crops, num_patches, features = patches.shape
+        total_patches = num_crops * num_patches
+
+        # Reshape to [1, 1, total_patches, features] for TTNN matmul
+        x = patches.reshape(1, 1, total_patches, features).float()
+
+        is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
+
+        # Transfer patches to device
+        x_ttnn = ttnn.from_torch(
+            x,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # TTNN: linear projection -- x @ patch_embed_weight
+        # x: [1, 1, total_patches, 588],  patch_embed_weight: [1, 1, 588, 1152]
+        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_ttnn)
+
+        # Add bias
+        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Add positional embedding: [1, 1, num_patches, 1152]
+        # Need to tile for multi-crop
+        if num_crops == 1:
+            # Shapes match directly -- [1, 1, N, 1152] + [1, 1, N, 1152]
+            embedded = ttnn.add(embedded, self.positional_embedding, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # Tile positional embedding for multi-crop: [1, 1, num_crops*N, 1152]
+            pos_tiles = [self.positional_embedding] * num_crops
+            pos_tiled = ttnn.concat(pos_tiles, dim=2)
+            embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pos_tiled)
+
+        return embedded
+
     def forward(
         self,
         x: ttnn.Tensor,

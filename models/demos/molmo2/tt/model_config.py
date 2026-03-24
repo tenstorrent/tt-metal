@@ -199,6 +199,12 @@ class Molmo2TextModelArgs(ModelArgs):
         # Initialize parent ModelArgs
         super().__init__(*args, **kwargs)
 
+    def _set_hf_params(self, checkpoint_dir):
+        """Override to set trust_remote_code before loading HF config."""
+        # Molmo2 requires trust_remote_code for HuggingFace model loading
+        self.trust_remote_code_hf = True
+        super()._set_hf_params(checkpoint_dir)
+
         # Override with Molmo2-specific text config
         self.text_config = Molmo2TextConfig()
 
