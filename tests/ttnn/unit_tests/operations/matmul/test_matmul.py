@@ -2872,7 +2872,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
     worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid
+    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -2900,15 +2900,17 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
         torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
         torch_output = torch_input_a @ torch_input_b
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
 
         output = ttnn.matmul(
             input_a,
