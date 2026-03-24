@@ -217,7 +217,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t max_scatter_write_pages = 2;
     const uint32_t num_pages_per_packet =
         std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
-    const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    const uint32_t cb_num_pages = 8 * num_pages_per_packet;  // deep buffering for read prefetch
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
