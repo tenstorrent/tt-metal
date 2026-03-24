@@ -169,6 +169,7 @@ class ModelPipeline:
         # All stages: barrier once decode is done, then reset position_ids.
         self.barrier()
         self.pipeline.reset_position_ids()
+        self.barrier()
 
         return generated_tokens
 
