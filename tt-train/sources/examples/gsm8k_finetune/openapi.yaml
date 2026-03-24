@@ -303,7 +303,8 @@ components:
       type: object
       description: |
         Common params shared across all trainer types. Scheduler params go under
-        `scheduler_config` (warmup_steps, hold_steps, min_lr, max_lr). DDP is always
+        `scheduler_config` (warmup_steps, hold_steps, min_lr, max_lr). Checkpoint
+        params (`save_interval`, `checkpoint_dir`) control model saving. DDP is always
         enabled (no enable_ddp param). mesh_shape is derived from
         cluster/partition (8xp150/lb→[8,1], galaxy→[32,1]).
       properties:
@@ -333,6 +334,14 @@ components:
         validation_batch_size:
           type: integer
           default: 4
+        save_interval:
+          type: integer
+          default: 0
+          description: Save checkpoint every N steps (0 = no checkpoints)
+        checkpoint_dir:
+          type: string
+          default: "checkpoints"
+          description: Directory to save checkpoints
         scheduler_config:
           type: object
           description: Learning rate schedule (warmup, hold, min/max LR)
@@ -371,10 +380,40 @@ components:
           properties:
             lora_rank:
               type: integer
+              default: 8
+              minimum: 1
+              description: LoRA rank (dimension of low-rank adaptation)
             lora_alpha:
               type: number
+              default: 16
+              minimum: 0
+              description: LoRA scaling parameter
             lora_dropout:
               type: number
+              default: 0.0
+              minimum: 0.0
+              maximum: 1.0
+              description: Dropout rate for LoRA layers
+            target_modules:
+              type: array
+              items:
+                type: string
+              default: ["q_linear", "kv_linear", "out_linear"]
+              description: List of module names to apply LoRA to
+            use_rslora:
+              type: boolean
+              default: false
+              description: Whether to use RSLoRA scaling
+            is_bias_trainable:
+              type: boolean
+              default: false
+              description: Whether to make bias parameters trainable
+            trainable_modules:
+              type: array
+              items:
+                type: string
+              default: []
+              description: Additional modules to make trainable (beyond LoRA modules)
             group_size:
               type: integer
               description: Grouped-query attention
