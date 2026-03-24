@@ -451,8 +451,6 @@ jobs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/llk-run-perf-tests.yaml
     secrets: inherit
-    with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
   llk-setup-and-test-wh-test:
     name: "🌀 LLK Setup & Test WH (TEST)"
