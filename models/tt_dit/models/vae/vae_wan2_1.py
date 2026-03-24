@@ -986,8 +986,7 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                # No-cache full-T mode: time_conv with zero-padded temporal boundary
-                x_conv_BTHWC = self.time_conv(x_conv_BTHWC, logical_h)
+                raise ValueError("feat_cache cannot be None")
         return x_conv_BTHWC, logical_h
 
 
@@ -1348,8 +1347,6 @@ class WanDecoder(Module):
                 )
                 # Channels first
                 out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-                # Trim padding on output channels
-                out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
                 if output_BCTHW is None:
                     output_BCTHW = out_BCTHW
                 else:
@@ -1359,7 +1356,6 @@ class WanDecoder(Module):
             # No-cache full-T single-pass mode
             out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            output_BCTHW = output_BCTHW[:, : self.out_channels, :, :, :]
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)

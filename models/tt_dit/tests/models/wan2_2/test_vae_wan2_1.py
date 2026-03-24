@@ -1352,7 +1352,7 @@ def test_wan_decoder3d(
         "720p",
     ],
 )
-@pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
+@pytest.mark.parametrize("T", [1, 3, 81], ids=["_1f", "3f", "81f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
@@ -1370,6 +1370,7 @@ def test_wan_decoder3d(
     "mesh_device, h_axis, w_axis, num_links",
     [
         ((1, 1), 0, 1, 1),
+        ((2, 2), 0, 1, 1),
         ((2, 4), 0, 1, 1),
         ((2, 4), 1, 0, 1),
         ((1, 8), 0, 1, 1),
@@ -1381,6 +1382,7 @@ def test_wan_decoder3d(
     ],
     ids=[
         "1x1_h0_w1",
+        "2x2_h0_w1",
         "2x4_h0_w1",
         "2x4_h1_w0",
         "1x8_h0_w1",
@@ -1492,7 +1494,7 @@ def test_wan_decoder(
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
     if not skip_check:
-        logger.info(f"running torch model (use_cache={use_cache})")
+        logger.info(f"running torch model")
         start = time.time()
         with torch.no_grad():
             torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
