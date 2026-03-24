@@ -925,6 +925,7 @@ class TeacherForceResult:
     """Result from a teacher-forcing evaluation run."""
 
     predicted_tokens: list[int]
+    predicted_tokens_per_user: list[list[int]]
     reference_top5: torch.Tensor  # shape [num_tokens, 5]
 
     def top1_accuracy(self) -> float:
@@ -963,43 +964,44 @@ class TeacherForceExecutor:
         """Run teacher-forcing evaluation.
 
         Args:
-            prompt_tokens: Prompt token IDs, shape [1, prompt_len].
+            prompt_tokens: Prompt token IDs, shape [batch_size, prompt_len].
             reference_tokens: Full reference sequence (prompt + target), shape [total_len].
             top5_tokens: Top-5 reference tokens per position, shape [num_target_tokens, 5].
             kv_cache: Per-layer KV cache from allocate_kv_cache.
             page_table: Page table for paged attention, or None.
-            max_batch_size: Maximum batch size (for decode input padding).
+            max_batch_size: Maximum batch size. Must match prompt_tokens.shape[0].
 
         Returns:
             TeacherForceResult with predicted tokens and accuracy metrics.
         """
+        batch_size = prompt_tokens.shape[0]
+        assert (
+            batch_size == max_batch_size
+        ), f"Teacher forcing expects active batch to match max_batch_size, got {batch_size} vs {max_batch_size}"
         prompt_len = prompt_tokens.shape[-1]
         total_len = len(reference_tokens)
         num_target = total_len - prompt_len
 
-        logger.info(f"Teacher forcing: prefilling {prompt_len} tokens")
+        logger.info(f"Teacher forcing: prefilling {prompt_len} tokens with batch={batch_size}")
         prefill_output = self.executor.prefill_forward(
             prompt_tokens,
             page_table=page_table,
             kv_cache=kv_cache,
-            prompt_lens=torch.tensor([prompt_len]),
-            empty_slots=[0],
+            prompt_lens=torch.tensor([prompt_len] * batch_size),
+            empty_slots=list(range(batch_size)),
             enable_trace=False,
             warmup_prefill=False,
         )
 
-        first_logits = prefill_output[0]
-        first_token = torch.argmax(first_logits, dim=-1).item()
-        predicted_tokens = [first_token]
+        first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
+        predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
 
         logger.info(f"Teacher forcing: decoding {num_target - 1} tokens")
         for step in range(1, num_target):
             gt_token = reference_tokens[prompt_len + step - 1]
-            decode_token = torch.full((max_batch_size,), 0, dtype=torch.long)
-            decode_token[0] = gt_token
+            decode_token = torch.full((batch_size,), gt_token, dtype=torch.long)
 
-            current_pos = torch.full((max_batch_size,), -1, dtype=torch.long)
-            current_pos[0] = prompt_len + step - 1
+            current_pos = torch.full((batch_size,), prompt_len + step - 1, dtype=torch.long)
 
             logits, _ = self.executor.decode_forward(
                 decode_token,
@@ -1010,11 +1012,13 @@ class TeacherForceExecutor:
                 read_from_device=True,
             )
 
-            pred = torch.argmax(logits[0], dim=-1).item()
-            predicted_tokens.append(pred)
+            next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
+            for user_id, tok in enumerate(next_tokens):
+                predicted_tokens_per_user[user_id].append(int(tok))
 
         return TeacherForceResult(
-            predicted_tokens=predicted_tokens,
+            predicted_tokens=predicted_tokens_per_user[0],
+            predicted_tokens_per_user=predicted_tokens_per_user,
             reference_top5=top5_tokens[:num_target],
         )
 

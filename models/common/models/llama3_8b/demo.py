@@ -120,19 +120,20 @@ def log_generated_text(prompts, generated_token_ids, tokenizer):
         logger.info(f"\n==USER {user} - PROMPT\n{short_prompt}\n==USER {user} - OUTPUT\n{generated_text}\n")
 
 
-def log_teacher_forcing_text(prompt_tokens, predicted_tokens, reference_tokens, tokenizer):
-    """Print prompt, predicted continuation, and reference continuation for teacher forcing."""
-    prompt_text = tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=True)
-    predicted_text = tokenizer.decode(predicted_tokens, skip_special_tokens=True).strip()
+def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference_tokens, tokenizer):
+    """Print prompt, predicted continuation, and reference continuation for every teacher-forced user."""
     reference_text = tokenizer.decode(reference_tokens.tolist(), skip_special_tokens=True).strip()
-    short_prompt = (
-        prompt_text[:100] + "\n<long prompt not printed in full>\n" + prompt_text[-100:]
-        if len(prompt_text) > 200
-        else prompt_text
-    )
-    logger.info(
-        f"\n==USER 0 - PROMPT\n{short_prompt}\n==USER 0 - OUTPUT\n{predicted_text}\n==USER 0 - REFERENCE\n{reference_text}\n"
-    )
+    for user, user_prompt_tokens in enumerate(prompt_tokens):
+        prompt_text = tokenizer.decode(user_prompt_tokens.tolist(), skip_special_tokens=True)
+        predicted_text = tokenizer.decode(predicted_tokens_per_user[user], skip_special_tokens=True).strip()
+        short_prompt = (
+            prompt_text[:100] + "\n<long prompt not printed in full>\n" + prompt_text[-100:]
+            if len(prompt_text) > 200
+            else prompt_text
+        )
+        logger.info(
+            f"\n==USER {user} - PROMPT\n{short_prompt}\n==USER {user} - OUTPUT\n{predicted_text}\n==USER {user} - REFERENCE\n{reference_text}\n"
+        )
 
 
 def create_model_and_args(mesh_device, optimizations="performance"):
@@ -243,6 +244,7 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     executor = LlamaExecutor(model, mesh_device, model_args=model_args)
 
     max_batch_size = model_args.max_batch_size
+    prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     max_seq_len = model_args.max_seq_len
     block_size = 32
     max_num_blocks_per_user = max_seq_len // block_size
@@ -272,7 +274,9 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     top5 = result.top5_accuracy() * 100
 
     logger.info(f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}%")
-    log_teacher_forcing_text(prompt_tokens[0], result.predicted_tokens, reference_tokens[half:], model_args.tokenizer)
+    log_teacher_forcing_text(
+        prompt_tokens, result.predicted_tokens_per_user, reference_tokens[half:], model_args.tokenizer
+    )
 
     if "top1" in expected:
         assert top1 >= expected["top1"] * (
