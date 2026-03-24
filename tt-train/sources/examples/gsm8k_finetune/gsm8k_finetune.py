@@ -25,7 +25,6 @@ from ttml.common.config import (
     load_config,
     yaml_deep_update,
 )
-from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
     round_up_to_tile,
@@ -36,6 +35,10 @@ from ttml.common.utils import (
 )
 from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
+from ttml.models import RunnerType, WeightTyingType
+from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, NanoGPTExperimentalConfig, load_gpt2_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 
@@ -363,7 +366,8 @@ def train():
         device = ttml.autograd.AutoContext.get_instance().get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
 
-    model_type = model_config["transformer_config"]["model_type"]
+    tc = model_config["transformer_config"]
+    model_type = tc["model_type"]
 
     if model_type == "gpt2":
         repo_id = "gpt2"
@@ -371,34 +375,72 @@ def train():
         repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     print("Loading tokenizer...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
     tokenizer = AutoTokenizer.from_pretrained(repo_id)
 
-    # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
         repo_id=repo_id,
         filename="model.safetensors",
     )
-
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
 
-    # Setup model
-    print("Setting up model...")
     orig_vocab_size = tokenizer.vocab_size
-    tt_model_factory = TransformerModelFactory(yaml_config)
-    tt_model_factory.transformer_config.vocab_size = orig_vocab_size
-    print("Created Model Factory")
-
-    max_sequence_length = tt_model_factory.transformer_config.max_sequence_length
+    padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
     print("Creating model...")
-    tt_model = tt_model_factory.create_model()
-    print("Loading from safetensors...")
-    tt_model.load_from_safetensors(safetensors_path)
-
-    padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
+    if model_type == "gpt2":
+        runner_type = RunnerType.from_string(tc.get("runner_type", "default"))
+        weight_tying = WeightTyingType.from_string(tc.get("weight_tying", "disabled"))
+        gpt2_config = NanoGPTConfig(
+            vocab_size=padded_vocab_size,
+            block_size=tc.get("max_sequence_length", 1024),
+            n_embd=tc.get("embedding_dim", 768),
+            n_layer=tc.get("num_blocks", 12),
+            n_head=tc.get("num_heads", 12),
+            dropout=tc.get("dropout_prob", 0.2),
+            runner_type=runner_type,
+            weight_tying=weight_tying,
+            experimental=NanoGPTExperimentalConfig(
+                use_composite_layernorm=tc.get("experimental", {}).get("use_composite_layernorm", False),
+            ),
+        )
+        tt_model = NanoGPT(gpt2_config)
+        max_sequence_length = gpt2_config.block_size
+        print("Loading GPT-2 weights from safetensors...")
+        load_gpt2_from_safetensors(tt_model, safetensors_path, gpt2_config)
+    elif model_type == "llama":
+        runner_type = RunnerType.from_string(tc.get("runner_type", "default"))
+        weight_tying = WeightTyingType.from_string(tc.get("weight_tying", "disabled"))
+        rope_scaling_cfg = LlamaRopeScalingConfig()
+        if "rope_scaling" in tc:
+            rs = tc["rope_scaling"]
+            rope_scaling_cfg = LlamaRopeScalingConfig(
+                scaling_factor=rs.get("scaling_factor", 0.0),
+                high_freq_factor=rs.get("high_freq_factor", 4.0),
+                low_freq_factor=rs.get("low_freq_factor", 1.0),
+                original_context_length=rs.get("original_context_length", 0),
+            )
+        llama_config = LlamaConfig(
+            hidden_size=tc.get("embedding_dim", 384),
+            num_hidden_layers=tc.get("num_blocks", 6),
+            num_attention_heads=tc.get("num_heads", 6),
+            num_key_value_heads=tc.get("num_groups", 3),
+            vocab_size=padded_vocab_size,
+            max_position_embeddings=tc.get("max_sequence_length", 256),
+            rope_theta=tc.get("theta", 10000.0),
+            attention_dropout=tc.get("dropout_prob", 0.0),
+            mlp_dropout=tc.get("dropout_prob", 0.0),
+            runner_type=runner_type,
+            weight_tying=weight_tying,
+            rope_scaling=rope_scaling_cfg,
+        )
+        tt_model = Llama(llama_config)
+        max_sequence_length = llama_config.max_position_embeddings
+        print("Loading Llama weights from safetensors...")
+        load_from_safetensors(tt_model, safetensors_path, llama_config)
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama")
 
     # Load dataset
     print("Loading GSM8K dataset...")
@@ -458,6 +500,19 @@ def train():
     if use_ddp:
         callbacks.append(DDPCallback())
 
+    peft_config = None
+    lora_cfg = yaml_config.get("lora_config")
+    if lora_cfg:
+        peft_config = LoraConfig(
+            rank=lora_cfg.get("rank", 8),
+            alpha=lora_cfg.get("alpha", 16),
+            target_modules=lora_cfg.get("target_modules", ["q_linear", "kv_linear", "out_linear"]),
+            lora_dropout=lora_cfg.get("lora_dropout", 0.05),
+            use_rslora=lora_cfg.get("use_rslora", False),
+            is_bias_trainable=lora_cfg.get("is_bias_trainable", False),
+            verbose=True,
+        )
+
     trainer = SFTTrainer(
         model=tt_model,
         train_dataloader=train_loader,
@@ -467,6 +522,7 @@ def train():
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
         attention_mask=causal_mask,
         callbacks=callbacks,
+        peft_config=peft_config,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")

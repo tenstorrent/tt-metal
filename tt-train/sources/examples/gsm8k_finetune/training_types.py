@@ -90,6 +90,8 @@ def validate_lora_params(params: dict) -> dict:
         "target_modules", validated.pop("lora_target_modules", ["q_linear", "kv_linear", "out_linear"])
     )
     validated.setdefault("lora_dropout", 0.05)
+    validated.setdefault("use_rslora", False)
+    validated.setdefault("is_bias_trainable", False)
 
     # Basic validation
     if validated["batch_size"] <= 0:
@@ -221,6 +223,8 @@ def build_lora_config(config: dict, output_dir: Path) -> Path:
         "alpha": config.get("lora_alpha", 16),
         "target_modules": config.get("lora_target_modules", ["q_linear", "kv_linear", "out_linear"]),
         "lora_dropout": config.get("lora_dropout", 0.05),
+        "use_rslora": config.get("use_rslora", False),
+        "is_bias_trainable": config.get("is_bias_trainable", False),
     }
 
     config_path = output_dir / "training_overrides.yaml"
@@ -249,9 +253,10 @@ def build_lora_config(config: dict, output_dir: Path) -> Path:
         f.write("\nlora_config:\n")
         for key, value in lora_config.items():
             if key == "target_modules":
-                # Format target_modules as a YAML list
                 modules_str = yaml.dump(value, default_flow_style=True).strip()
                 f.write(f"  {key}: {modules_str}\n")
+            elif isinstance(value, bool):
+                f.write(f"  {key}: {str(value).lower()}\n")
             else:
                 f.write(f"  {key}: {value}\n")
 
@@ -287,7 +292,7 @@ sft_training_config = TrainingTypeConfig(
 # LoRA Training Type Configuration
 lora_training_config = TrainingTypeConfig(
     name="lora",
-    script_path="lora_llama/train_lora_llama_sft.py",
+    script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
     supported_models={"tinyllama", "gpt2", "llama8b"},
     param_validator=validate_lora_params,

@@ -26,6 +26,7 @@ from ttml.modules import (
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
 from .gpt_block import GPTBlock
+from .safetensors_loader import load_gpt2_from_safetensors
 
 
 @dataclass
@@ -170,4 +171,5 @@ __all__ = [
     "NanoGPTExperimentalConfig",
     "NanoGPTConfig",
     "create_nanogpt",
+    "load_gpt2_from_safetensors",
 ]
