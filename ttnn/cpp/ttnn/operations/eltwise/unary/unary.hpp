@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::unary {
@@ -16,43 +17,18 @@ enum class SigmoidMode {
     ACCURATE,
 };
 
+}  // namespace operations::unary
+
 namespace detail {
 
 Tensor unary_impl(
     const Tensor& input_tensor,
-    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const std::vector<operations::unary::EltwiseUnaryWithParam>& op_chain,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace detail
-
-// The ExecuteUnaryTSVariant and ExecuteUnaryWithFloatParameter structures are
-// necessary to `invoke()` for the `fmod`, `minimum` and `maximum` operations --
-// these three are also implemented as binary versions, and declaring binary
-// minimum as a const variable while the unary minimum is defined as a free function
-// will lead to the build error due to the type redefinition. Once the #39697 is merged
-// these two can be migrated.
-template <UnaryOpType unary_op_type>
-struct ExecuteUnaryTSVariant {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        ScalarVariant parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-template <UnaryOpType unary_op_type>
-struct ExecuteUnaryWithFloatParameter {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-}  // namespace operations::unary
 
 #define REGISTER_UNARY_OPERATION(op_name, op_type)                                        \
     inline Tensor op_name(                                                                \
@@ -60,7 +36,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
-        return operations::unary::detail::unary_impl(                                     \
+        return ttnn::detail::unary_impl(                                                  \
             input_tensor,                                                                 \
             {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type}}, \
             memory_config,                                                                \
@@ -75,7 +51,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,                    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,                               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {                               \
-        return operations::unary::detail::unary_impl(                                                     \
+        return ttnn::detail::unary_impl(                                                                  \
             input_tensor,                                                                                 \
             {operations::unary::UnaryWithParam{                                                           \
                 operations::unary::UnaryOpType::op_type, static_cast<float>(fast_and_approximate_mode)}}, \
@@ -91,7 +67,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
-        return operations::unary::detail::unary_impl(                                     \
+        return ttnn::detail::unary_impl(                                                  \
             input_tensor,                                                                 \
             {operations::unary::UnaryWithParam{                                           \
                 operations::unary::UnaryOpType::op_type, static_cast<float>(parameter)}}, \
@@ -108,7 +84,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {                                     \
         return std::visit(                                                                                        \
             [&](auto param) {                                                                                     \
-                return operations::unary::detail::unary_impl(                                                     \
+                return ttnn::detail::unary_impl(                                                                  \
                     input_tensor,                                                                                 \
                     {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::op_type, (param)}}, \
                     memory_config,                                                                                \
@@ -167,6 +143,7 @@ REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID)
 REGISTER_UNARY_OPERATION(hardswish, HARDSWISH)
 REGISTER_UNARY_OPERATION(softsign, SOFTSIGN)
 REGISTER_UNARY_OPERATION(cbrt, CBRT)
+REGISTER_UNARY_OPERATION(lgamma, LGAMMA)
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
