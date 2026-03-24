@@ -166,6 +166,8 @@ from ttnn._ttnn.fabric import (
     FabricNodeId,
     setup_fabric_connection,
     setup_routing_plane_connection,
+    get_fabric_kernel_defines,
+    fabric_connection_rt_args,
 )
 
 # Import cluster functions and types
