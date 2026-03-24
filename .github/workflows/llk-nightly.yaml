@@ -61,6 +61,7 @@ jobs:
     name: "📊 Nightly Summary"
     if: always()
     needs:
+      - build-images
       - nightly-test-wormhole
       - nightly-test-blackhole
     runs-on: ubuntu-latest
@@ -69,3 +70,4 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
+          allowed-skips: build-images

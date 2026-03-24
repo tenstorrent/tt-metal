@@ -12,9 +12,10 @@ permissions:
 env:
   LLK_PATH: tt_metal/third_party/tt_llk
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
-  cancel-in-progress: true
+# NOTE: Concurrency disabled for testing to prevent cancellation conflicts
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
+#   cancel-in-progress: true
 
 jobs:
   build-images:
@@ -59,4 +60,4 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole
+          allowed-skips: build-images, setup-and-test-wormhole, setup-and-test-blackhole
