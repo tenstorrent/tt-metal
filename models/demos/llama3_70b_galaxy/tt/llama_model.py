@@ -580,6 +580,7 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
+            tt_logits = ttnn.typecast(tt_logits, dtype=ttnn.bfloat16)
             logits_list.append(tt_logits)
 
         return logits_list
@@ -840,6 +841,7 @@ class TtTransformer(LightweightModule):
             tt_out_logits_saved.copy_(tt_out_logits)
 
         if capture_sampling_trace:
+            tt_logits = ttnn.typecast(tt_logits, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
             return tt_logits
 
         tt_toks, tt_log_probs = self.sampling.sample(

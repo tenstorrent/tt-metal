@@ -155,7 +155,7 @@ class Generator(WarmupForwardMixin):
             ttnn.from_torch(
                 torch.zeros(1, 1, 1, self.model.args.padded_vocab_size // self.model_args.cluster_shape[0]),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
             )
