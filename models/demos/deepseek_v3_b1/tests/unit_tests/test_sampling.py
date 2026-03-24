@@ -380,12 +380,12 @@ def test_sampling_topk_topp_distribution():
     ), "Top-1 token should be sampled more often than the average of the bottom half"
 
 
-def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: int):
+def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temperature: float, final_core_idx: int):
     """
     Run the top-K sampling kernel (k>1 path) on a single device with rigged
-    scores: 32 random vocabulary positions are set to a high value so they are
-    guaranteed to be the global top-32.  The test asserts that the kernel's
-    selected token is one of these 32 winners.
+    scores: 32 random vocabulary positions are set to distinct high values so
+    they are guaranteed to be the global top-32.  The kernel returns the random
+    value it used, enabling exact host-side golden verification.
     """
     grid_size = device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
@@ -417,7 +417,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: 
         torch_scores[0, pos] = torch.tensor(100.0 - i, dtype=torch.bfloat16)
     winner_indices = set(torch_indices[0, winner_positions].tolist())
 
-    _, golden_topk = SamplingOp.golden(torch_scores, torch_indices, k=k, p=0.9, temperature=0.6)
+    _, golden_topk = SamplingOp.golden(torch_scores, torch_indices, k=k, p=p, temperature=temperature)
     golden_topk_set = set(golden_topk.reshape(-1).tolist())
     assert golden_topk_set == winner_indices, (
         f"Golden top-{k} should match rigged winners.\n"
@@ -444,6 +444,12 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: 
         ttnn.BufferType.L1,
         output_shard_spec,
     )
+    rand_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(final_core_grid, output_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
     ttnn_scores = ttnn.from_torch(
         torch_scores,
         dtype=ttnn.bfloat16,
@@ -469,12 +475,23 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: 
         memory_config=output_mem_config,
     )
 
+    ttnn_rand_output = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=rand_output_mem_config,
+    )
+
     ttnn_result = SamplingOp.op(
         scores_tensor=ttnn_scores,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
         k=k,
-        p=0.9,
+        p=p,
+        temperature=temperature,
+        seed=seed,
+        rand_output_tensor=ttnn_rand_output,
         final_core_coord=final_core,
         final_mesh_coord=None,
     )
@@ -482,27 +499,42 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, final_core_idx: 
     output_torch = ttnn.to_torch(ttnn_result)
     assert output_torch.shape == output_shape, f"Expected output shape {output_shape}, got {output_torch.shape}"
     result_idx = int(output_torch.to(torch.uint32).item())
-    logger.info(f"Kernel selected index: {result_idx}")
+
+    rand_torch = ttnn.to_torch(ttnn_rand_output)
+    rand_value = rand_torch.float().item()
+    logger.info(f"Kernel selected index: {result_idx}, rand_value: {rand_value}")
+
+    golden_idx, golden_topk = SamplingOp.golden(
+        torch_scores, torch_indices, k=k, p=p, temperature=temperature, rand_value=rand_value
+    )
+    golden_selected = int(golden_idx.to(torch.uint32).item())
+    logger.info(f"Golden selected index: {golden_selected}")
+
     assert result_idx in winner_indices, (
         f"Selected index {result_idx} is not in the rigged top-{k} set.\n" f"  Rigged winners: {sorted(winner_indices)}"
     )
+    assert result_idx == golden_selected, (
+        f"Kernel selected {result_idx} but golden selected {golden_selected} "
+        f"(rand_value={rand_value})"
+    )
 
     logger.info(
-        f"Sampling top-K test passed. seed={seed}, k={k}, " f"final_core_idx={final_core_idx}, selected={result_idx}"
+        f"Sampling top-K test passed. seed={seed}, k={k}, "
+        f"final_core_idx={final_core_idx}, selected={result_idx}, rand={rand_value}"
     )
 
 
 @pytest.mark.parametrize(
-    "seed, final_core_idx",
+    "seed, final_core_idx, p, temperature",
     [
-        (2005, 100),
-        (17, 0),
-        (1337, 50),
-        (4242, 73),
+        (2005, 100, 0.95, 0.6),
+        (17, 0, 0.5, 0.4),
+        (1337, 50, 1.0, 0.8),
+        (4242, 73, 0.1, 0.6),
     ],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_single_device(device, seed, final_core_idx):
+def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx):
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
@@ -510,4 +542,4 @@ def test_sampling_topk_single_device(device, seed, final_core_idx):
     The kernel must select a token from within this set, proving that the
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
-    _run_sampling_topk_single_device(device, seed=seed, k=32, final_core_idx=final_core_idx)
+    _run_sampling_topk_single_device(device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx)

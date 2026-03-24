@@ -76,15 +76,20 @@ void kernel_main() {
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
-        0,
-        0,
-        0>;
+        0, 0, 0,
+        get_named_compile_time_arg_val("sampling_topk_k"),
+        get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_rand_cb"),
+        get_named_compile_time_arg_val("sampling_winner_cb"),
+        get_named_compile_time_arg_val("sampling_p_bf16"),
+        get_named_compile_time_arg_val("sampling_topk_scores_stride")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
-        get_common_arg_val<uint32_t>(0),
-        get_common_arg_val<uint32_t>(1),
-        get_common_arg_val<uint32_t>(2),
-        0,
+        .final_noc_x = get_common_arg_val<uint32_t>(0),
+        .final_noc_y = get_common_arg_val<uint32_t>(1),
+        .scratch_addr = get_common_arg_val<uint32_t>(2),
+        .output_addr = get_common_arg_val<uint32_t>(3),
+        .rand_output_addr = get_common_arg_val<uint32_t>(4),
     };
 
     deepseek_b1_ops::TopKSampling::
@@ -101,7 +106,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_max_cb"),
         get_named_compile_time_arg_val("sampling_sum_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb"),
-        get_named_compile_time_arg_val("sampling_temp_cb")>;
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_rand_cb"),
+        get_named_compile_time_arg_val("sampling_seed"),
+        get_named_compile_time_arg_val("sampling_topk_k")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>

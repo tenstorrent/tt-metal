@@ -16,6 +16,162 @@
 #include "api/socket_api.h"
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+
+uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
+    uint16_t sign_a = bf16_a & 0x8000;
+    uint16_t sign_b = bf16_b & 0x8000;
+    int16_t exp_a = (bf16_a & 0x7F80) >> 7;
+    int16_t exp_b = (bf16_b & 0x7F80) >> 7;
+    uint16_t mant_a = (bf16_a & 0x007F) | 0x0080;
+    uint16_t mant_b = (bf16_b & 0x007F) | 0x0080;
+
+    if (exp_a == 0) {
+        mant_a &= 0x007F;
+    }
+    if (exp_b == 0) {
+        mant_b &= 0x007F;
+    }
+
+    if (exp_a > exp_b) {
+        mant_b >>= (exp_a - exp_b);
+    } else if (exp_b > exp_a) {
+        mant_a >>= (exp_b - exp_a);
+        exp_a = exp_b;
+    }
+
+    uint16_t mant_res;
+    uint16_t sign_res;
+    if (sign_a == sign_b) {
+        mant_res = mant_a + mant_b;
+        sign_res = sign_a;
+    } else {
+        if (mant_a >= mant_b) {
+            mant_res = mant_a - mant_b;
+            sign_res = sign_a;
+        } else {
+            mant_res = mant_b - mant_a;
+            sign_res = sign_b;
+        }
+    }
+
+    if (mant_res == 0) {
+        return 0;
+    }
+
+    if (mant_res & 0x0100) {
+        mant_res >>= 1;
+        exp_a += 1;
+    }
+    while (mant_res && !(mant_res & 0x0080)) {
+        mant_res <<= 1;
+        exp_a -= 1;
+    }
+
+    if (exp_a >= 0xFF) {
+        return sign_res | 0x7F80;
+    }
+    if (exp_a <= 0) {
+        mant_res >>= (1 - exp_a);
+        exp_a = 0;
+    }
+
+    uint16_t result = sign_res | (exp_a << 7) | (mant_res & 0x007F);
+    return result;
+}
+
+uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
+    uint16_t sign_a = bf16_a & 0x8000;
+    uint16_t sign_b = bf16_b & 0x8000;
+    int16_t exp_a = (bf16_a & 0x7F80) >> 7;
+    int16_t exp_b = (bf16_b & 0x7F80) >> 7;
+    uint16_t mant_a = bf16_a & 0x007F;
+    uint16_t mant_b = bf16_b & 0x007F;
+
+    int a_is_nan = (exp_a == 0xFF) && (mant_a != 0);
+    int b_is_nan = (exp_b == 0xFF) && (mant_b != 0);
+    int a_is_inf = (exp_a == 0xFF) && (mant_a == 0);
+    int b_is_inf = (exp_b == 0xFF) && (mant_b == 0);
+    int a_is_zero = (exp_a == 0) && (mant_a == 0);
+    int b_is_zero = (exp_b == 0) && (mant_b == 0);
+
+    if (a_is_nan) {
+        return bf16_a;
+    }
+    if (b_is_nan) {
+        return bf16_b | 0x0040;
+    }
+    if (a_is_inf && b_is_inf) {
+        return 0x7FC0;
+    }
+    if (a_is_inf) {
+        return (sign_a ^ sign_b) | 0x7F80;
+    }
+    if (b_is_inf) {
+        return (sign_a ^ sign_b);
+    }
+    if (a_is_zero && b_is_zero) {
+        return 0x7FC0;
+    }
+    if (a_is_zero) {
+        return (sign_a ^ sign_b);
+    }
+    if (b_is_zero) {
+        return (sign_a ^ sign_b) | 0x7F80;
+    }
+
+    if (exp_a == 0) {
+        exp_a = 1;
+        while (mant_a && !(mant_a & 0x80)) {
+            mant_a <<= 1;
+            exp_a -= 1;
+        }
+        if (mant_a) {
+            mant_a &= 0x7F;
+        }
+    } else {
+        mant_a = mant_a | 0x80;
+    }
+
+    if (exp_b == 0) {
+        exp_b = 1;
+        while (mant_b && !(mant_b & 0x80)) {
+            mant_b <<= 1;
+            exp_b -= 1;
+        }
+        if (mant_b) {
+            mant_b &= 0x7F;
+        }
+    } else {
+        mant_b = mant_b | 0x80;
+    }
+
+    uint16_t sign_res = sign_a ^ sign_b;
+    int16_t exp_res = exp_a - exp_b + 127;
+    uint32_t mant_res = ((uint32_t)mant_a << 7) / mant_b;
+
+    while (mant_res && !(mant_res & 0x80)) {
+        mant_res <<= 1;
+        exp_res -= 1;
+    }
+
+    if (exp_res >= 0xFF) {
+        return sign_res | 0x7F80;
+    }
+
+    if (exp_res <= 0) {
+        if (exp_res < -7) {
+            return sign_res;
+        }
+        mant_res >>= (1 - exp_res);
+        exp_res = 0;
+    } else {
+        mant_res &= 0x7F;
+    }
+
+    uint16_t result = sign_res | (exp_res << 7) | (mant_res & 0x7F);
+    return result;
+}
+
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -31,6 +187,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/rand.h"
 
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
 void softmax_sub_exp_bcast_cols() {
@@ -141,6 +298,27 @@ inline void softmax_mul_block_bcast_cols(
     }
     cb_pop_front(in1_cb, rows);
 }
+
+void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
+    init_sfpu(cb_id, cb_id);
+    uint32_t rand_scale = 0;
+    const float one_f = 1.0f;
+    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));
+    uint32_t rand_from = 0;
+    if (seed != 0) {
+        rand_tile_init(seed);
+    }
+    cb_reserve_back(cb_id, 1);
+    tile_regs_acquire();
+    rand_tile(0, rand_from, rand_scale);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_id);
+    pack_tile(0, cb_id, 0);
+    tile_regs_release();
+    cb_push_back(cb_id, 1);
+}
+
 #endif  // COMPILE_FOR_TRISC
 
 namespace deepseek_b1_ops {
@@ -235,13 +413,25 @@ struct TopKSampling {
         uint32_t LocalReadySemaphoreId,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0>
+        uint32_t SocketPageSizeBytes = 0,
+        uint32_t TopK = 1,
+        uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
+        uint32_t RandCBId = 0xFFFFFFFF,
+        uint32_t WinnerCBId = 0xFFFFFFFF,
+        uint32_t PBF16 = 0,
+        uint32_t TopKScoresStride = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr uint32_t topk_k = TopK;
+        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr uint32_t rand_cb = RandCBId;
+        static constexpr uint32_t winner_cb_id = WinnerCBId;
+        static constexpr uint32_t p_bf16 = PBF16;
+        static constexpr uint32_t topk_scores_stride = TopKScoresStride;
     };
 
     template <
@@ -252,7 +442,10 @@ struct TopKSampling {
         uint32_t MaxCBId,
         uint32_t SumCBId,
         uint32_t ScalerCBId,
-        uint32_t TempCBId>
+        uint32_t TempCBId,
+        uint32_t RandCBId = 0xFFFFFFFF,
+        uint32_t Seed = 520,
+        uint32_t TopK = 1>
     struct ComputeCTArgs {
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
@@ -262,6 +455,9 @@ struct TopKSampling {
         static constexpr uint32_t sum_cb = SumCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
         static constexpr uint32_t temp_cb = TempCBId;
+        static constexpr uint32_t rand_cb = RandCBId;
+        static constexpr uint32_t seed = Seed;
+        static constexpr uint32_t topk_k = TopK;
     };
 
     struct ReaderArgs {
@@ -280,6 +476,8 @@ struct TopKSampling {
         uint32_t final_noc_x;
         uint32_t final_noc_y;
         uint32_t scratch_addr;
+        uint32_t output_addr;
+        uint32_t rand_output_addr;
         uint32_t socket_config_addr = 0;
         // Optional persistent-mode next-iteration signal routing (BRISC path).
         uint32_t persistent_enable = 0;
@@ -660,21 +858,10 @@ struct TopKSampling {
                         tile_u16[FACE_ELEMS + i] = global_scores[16 + i];
                     }
                     cb_push_back(CTArgs::softmax_in_cb, 1);
-
-                    cb_wait_front(CTArgs::softmax_out_cb, 1);
-                    auto out_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::softmax_out_cb));
-                    DPRINT << "Top-" << K << " probs (after softmax):" << ENDL();
-                    for (uint32_t i = 0; i < K; ++i) {
-                        uint16_t prob_bf16 = (i < 16) ? out_u16[i] : out_u16[FACE_ELEMS + (i - 16)];
-                        DPRINT << "  [" << i << "] " << BF16(prob_bf16) << ENDL();
-                    }
-                    cb_pop_front(CTArgs::softmax_out_cb, 1);
+                    // softmax_out_cb is consumed by BRISC for top-P + sampling
                 }
 
-                if constexpr (!CTArgs::mesh_mode) {
-                    auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
-                    output_ptr[0] = global_indices[0];
-                } else {
+                if constexpr (CTArgs::mesh_mode) {
                     // TODO: mesh top-K reduction stages
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
                         write_winner_slot(
@@ -710,6 +897,73 @@ struct TopKSampling {
             if constexpr (IsFinalCore) {
                 send_persistent_next_iter_inc_via_fabric_brisc(args, arg_idx);
             }
+
+            if constexpr (IsFinalCore && CTArgs::topk_k > 1) {
+                constexpr uint32_t K = CTArgs::topk_k;
+                constexpr uint32_t FACE_ELEMS = 256;
+
+                cb_wait_front(CTArgs::softmax_out_cb, 1);
+                cb_wait_front(CTArgs::rand_cb, 1);
+
+                auto prob_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    get_read_ptr(CTArgs::softmax_out_cb));
+                auto rand_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    get_read_ptr(CTArgs::rand_cb));
+                auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_write_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_stride);
+
+                uint16_t rand = rand_u16[0];
+                uint16_t bf16_p = static_cast<uint16_t>(CTArgs::p_bf16 >> 16);
+
+                DPRINT << "BRISC sampling: rand=" << BF16(rand)
+                       << " p=" << BF16(bf16_p) << ENDL() << ENDL();
+
+                DPRINT << "Probabilities: " << ENDL();
+                for (uint32_t i = 0; i < K; ++i) {
+                    DPRINT << "Index " << global_indices[i] << " probability " << BF16(prob_u16[i]) << ENDL();
+                }
+                DPRINT << ENDL();
+
+                // Top-P filtering: accumulate probabilities until cum_prob > p
+                uint16_t cum_prob = 0;
+                uint32_t kept_tokens = K;
+                for (uint32_t i = 0; i < K; ++i) {
+                    uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                    cum_prob = bfloat16_add(cum_prob, prob);
+                    if (bfloat16_greater(cum_prob, bf16_p)) {
+                        kept_tokens = i + 1;
+                        break;
+                    }
+                }
+
+                DPRINT << "Top-P kept=" << kept_tokens
+                       << " cum_prob=" << BF16(cum_prob) << ENDL();
+
+                // Inverse-CDF random categorical selection
+                uint16_t cum_sum = 0;
+                uint32_t selected_index = global_indices[0];
+                for (uint32_t i = 0; i < kept_tokens; ++i) {
+                    uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                    cum_sum = bfloat16_add(cum_sum, bfloat16_div(prob, cum_prob));
+                    if (bfloat16_greater(cum_sum, rand)) {
+                        selected_index = global_indices[i];
+                        break;
+                    }
+                }
+
+                DPRINT << "Selected index=" << selected_index << ENDL();
+
+                auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
+                output_ptr[0] = selected_index;
+
+                if (args.rand_output_addr != 0) {
+                    auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.rand_output_addr);
+                    rand_out[0] = rand;
+                }
+
+                cb_pop_front(CTArgs::softmax_out_cb, 1);
+                cb_pop_front(CTArgs::rand_cb, 1);
+            }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsFinalCore) {
                 // Each step writes to a distinct CB — no CB is reused as both input and output.
@@ -727,6 +981,10 @@ struct TopKSampling {
                     CTArgs::softmax_sub_cb, CTArgs::scaler_cb, CTArgs::sum_cb, 1, 1>();
                 softmax_recip_block_inplace(CTArgs::sum_cb, 1);
                 softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
+
+                if constexpr (CTArgs::topk_k > 1) {
+                    generate_rand_tile(CTArgs::rand_cb, CTArgs::seed);
+                }
             }
 #endif
         }

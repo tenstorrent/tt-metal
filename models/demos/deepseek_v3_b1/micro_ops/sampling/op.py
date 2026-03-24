@@ -108,6 +108,8 @@ class SamplingOp:
         k: int,
         p: float,
         temperature: float = 0.6,
+        seed: int = 520,
+        rand_output_tensor=None,
         final_core_coord=None,
         final_mesh_coord=None,
         global_semaphore=None,
@@ -175,6 +177,8 @@ class SamplingOp:
                 k=k,
                 p=p,
                 temperature=temperature,
+                seed=seed,
+                rand_output_tensor=rand_output_tensor,
                 final_core_coord=final_core_coord,
                 final_mesh_coord=final_mesh_coord,
             )
@@ -369,6 +373,8 @@ class SamplingOp:
         k: int,
         p: float,
         temperature: float = 0.6,
+        seed: int = 520,
+        rand_output_tensor=None,
         final_core_coord=None,
         final_mesh_coord=None,
     ):
@@ -441,6 +447,7 @@ class SamplingOp:
         softmax_exp_cb = 7
         temp_cb = 8
         softmax_sub_cb = 9
+        rand_cb = 10
         semaphore_id = 0
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
@@ -448,7 +455,9 @@ class SamplingOp:
         logger.debug(f"Temperature: {temperature}")
         logger.debug(f"1.0 / temperature: {1.0 / temperature}")
         inv_temp_bf16 = float_to_bfloat16_packed(1.0 / temperature)
+        p_bf16 = float_to_bfloat16_packed(p)
         logger.debug(f"Inv temp BF16: {inv_temp_bf16}")
+        logger.debug(f"P BF16: {p_bf16}, seed: {seed}")
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
         topk_scores_stride = _round_up(k * 2, l1_alignment)
@@ -496,10 +505,19 @@ class SamplingOp:
             ("sampling_sum_cb", sum_cb),
             ("sampling_scaler_cb", scaler_cb),
             ("sampling_temp_cb", temp_cb),
+            ("sampling_rand_cb", rand_cb),
+            ("sampling_seed", seed),
+            ("sampling_topk_k", k),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
             ("sampling_local_ready_semaphore_id", 1),
+            ("sampling_topk_k", k),
+            ("sampling_softmax_out_cb", softmax_out_cb),
+            ("sampling_rand_cb", rand_cb),
+            ("sampling_winner_cb", winner_cb),
+            ("sampling_p_bf16", p_bf16),
+            ("sampling_topk_scores_stride", topk_scores_stride),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
@@ -526,6 +544,8 @@ class SamplingOp:
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
                 0,
+                int(output_index_tensor.buffer_address()),
+                int(rand_output_tensor.buffer_address()) if rand_output_tensor is not None else 0,
             ],
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(
@@ -641,6 +661,13 @@ class SamplingOp:
                 )
             ],
         )
+        rand_cb_descriptor = ttnn.CBDescriptor(
+            total_size=bf16_tile_size,
+            core_ranges=final_core_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=rand_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
@@ -661,11 +688,15 @@ class SamplingOp:
                 softmax_exp_cb_descriptor,
                 temp_cb_descriptor,
                 softmax_sub_cb_descriptor,
+                rand_cb_descriptor,
             ],
             semaphores=[receiver_semaphore_descriptor],
         )
 
-        ttnn.generic_op([scores_tensor, indices_tensor, output_index_tensor], program_descriptor)
+        tensors = [scores_tensor, indices_tensor, output_index_tensor]
+        if rand_output_tensor is not None:
+            tensors.append(rand_output_tensor)
+        ttnn.generic_op(tensors, program_descriptor)
         return output_index_tensor
 
     @staticmethod
