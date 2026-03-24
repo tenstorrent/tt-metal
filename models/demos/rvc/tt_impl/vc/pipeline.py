@@ -267,12 +267,14 @@ class Pipeline:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.tt_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             tt_speaker_id = ttnn.from_torch(
                 speaker_id,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             if pitch is not None and pitchf is not None:
                 tt_pitch = ttnn.from_torch(
@@ -280,12 +282,14 @@ class Pipeline:
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.tt_device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 tt_pitchf = ttnn.from_torch(
                     pitch,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.tt_device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 tt_output = self.synthesizer(tt_feats, tt_pitch, tt_pitchf, tt_speaker_id)
             else:

@@ -31,7 +31,9 @@ def ttnn_cumsum_fallback(x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
     # Fallback implementation of cumsum using to_host, torch.cumsum, and from_torch.
     x_torch = ttnn.to_torch(x)
     cumsum_torch = torch.cumsum(x_torch, dim=dim)
-    cumsum = ttnn.from_torch(cumsum_torch, dtype=x.dtype, layout=x.layout, device=x.device())
+    cumsum = ttnn.from_torch(
+        cumsum_torch, dtype=x.dtype, layout=x.layout, device=x.device(), memory_config=x.memory_config()
+    )
     return cumsum
 
 
@@ -361,20 +363,32 @@ class SineGen:
         # f0: [B, T]
         # Upsample f0 to full resolution first using TTNN wrapper.
         f0_up = _interpolate_1d(f0, scale_factor=upp, mode="nearest")
-
-        # Voiced/unvoiced mask.
+        # f0_up = ttnn.pad(f0_up, ((0, 0), (0, (32 - f0_up.shape[1] % 32) % 32), (0, 0)), value=0)
+        f0_up = ttnn.reshape(f0_up, (1, int(f0_up.shape[1] / 32), 32))
         f0_up = ttnn.to_layout(f0_up, ttnn.TILE_LAYOUT)
-        uv = ttnn.gt_(f0_up, self.voiced_threshold)
+        # Voiced/unvoiced mask.
+        uv = ttnn.gt(f0_up, self.voiced_threshold)
 
         # Expand for harmonics: [B, T*upp, H].
-        harmonics = ttnn.arange(start=1, end=self.harmonic_num + 2, dtype=f0_up.dtype, device=self.device)
+        harmonics = ttnn.arange(
+            start=1,
+            end=self.harmonic_num + 2,
+            dtype=f0_up.dtype,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         f0_harm = f0_up * (harmonics / self.sampling_rate)
 
         # Accumulate phase and add random initial offset per harmonic.
         # phase = ttnn.cumsum(f0_harm, dim=1, out=f0_harm)
         # TODO: fallback is faster than native cumsum
         phase = ttnn_cumsum_fallback(f0_harm, dim=1)
-        rand_ini = ttnn.rand((f0_up.shape[0], self.harmonic_num + 1), dtype=ttnn.bfloat16, device=self.device)
+        rand_ini = ttnn.rand(
+            (f0_up.shape[0], self.harmonic_num + 1),
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         phase = ttnn.add(phase, rand_ini, output_tensor=phase)
         phase = ttnn.multiply(phase, 2 * math.pi, output_tensor=phase)
         sine_waves = ttnn.multiply(ttnn.sin(phase, output_tensor=phase), self.sine_amp, output_tensor=phase)
@@ -386,7 +400,10 @@ class SineGen:
             ttnn_randn_fallback(tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device),
             output_tensor=noise_amp,
         )
-        return ttnn.add(sine_waves, noise_amp, output_tensor=sine_waves)
+        out = ttnn.add(sine_waves, noise_amp, output_tensor=sine_waves)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.reshape(out, (out.shape[0], out.shape[1] * out.shape[2], 1))
+        return out
 
 
 class SourceModuleHnNSF:
@@ -605,7 +622,7 @@ class SynthesizerTrnMsNSF:
         prior_mean, prior_log = self.enc_p(phone, pitch)
         latent = (
             prior_mean
-            + ttnn.exp(prior_log)
+            + ttnn.exp(prior_log, output_tensor=prior_log)
             * ttnn_randn_fallback(tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device)
             * 0.66666
         )
