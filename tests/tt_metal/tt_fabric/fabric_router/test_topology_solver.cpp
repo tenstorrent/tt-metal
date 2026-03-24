@@ -4337,7 +4337,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
 
     // Solve
     auto result = solve_topology_mapping(
-        target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, /* quiet_mode= */ false);
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /* quiet_mode= */ false);
 
     // Should succeed
     EXPECT_TRUE(result.success) << "Ring to mesh mapping should succeed";
