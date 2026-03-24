@@ -56,7 +56,9 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     prompt_len = 32
 
     # Create PyTorch reference
-    video_cfg = TransformerConfig(dim=dim, heads=num_heads, d_head=head_dim, context_dim=context_dim)
+    video_cfg = TransformerConfig(
+        dim=dim, heads=num_heads, d_head=head_dim, context_dim=context_dim, cross_attention_adaln=True
+    )
     torch_block = BasicAVTransformerBlock(idx=0, video=video_cfg, audio=None)
     torch_block.eval()
     torch_state = torch_block.state_dict()
@@ -83,9 +85,11 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     x = torch.randn(B, seq_len, dim, dtype=torch.float32)
     context = torch.randn(B, prompt_len, context_dim, dtype=torch.float32)
 
-    # Timestep embedding: 6 modulation params (from AdaLayerNormSingle)
-    # Shape (B, 1, 6*dim) — the middle dim is the "time" index
-    temb = torch.randn(B, 1, 6 * dim, dtype=torch.float32)
+    # Timestep embedding: 9 modulation params (from AdaLayerNormSingle with cross_attention_adaln=True)
+    # Shape (B, 1, 9*dim) — the middle dim is the "time" index
+    temb = torch.randn(B, 1, 9 * dim, dtype=torch.float32)
+    # Prompt modulation: 2 params (shift, scale for prompt cross-attention KV)
+    prompt_temb = torch.randn(B, 1, 2 * dim, dtype=torch.float32)
 
     # RoPE
     t_ids = torch.arange(F)
@@ -106,17 +110,20 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     # embedded_timestep: just the base timestep embedding (B, dim) — not used in basic block
     embedded_timestep = torch.randn(B, dim, dtype=torch.float32)
     with torch.no_grad():
+        # With cross_attention_adaln=True, the reference block uses indices 6:9 for cross-attention
+        # and prompt_scale_shift_table for prompt KV modulation
         torch_args = TransformerArgs(
             x=x,
             context=context,
             context_mask=None,
-            timesteps=temb,  # (B, 6*dim) modulation params
+            timesteps=temb,  # (B, 1, 9*dim) modulation params
             embedded_timestep=embedded_timestep,
             positional_embeddings=(cos_flat, sin_flat),
             cross_positional_embeddings=None,
             cross_scale_shift_timestep=None,
             cross_gate_timestep=None,
             enabled=True,
+            prompt_timestep=prompt_temb,  # (B, 1, 2*dim) for prompt KV modulation
         )
         torch_out_args, _ = torch_block(video=torch_args, audio=None)
         torch_out = torch_out_args.x
@@ -130,9 +137,13 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     prompt = context.unsqueeze(0)  # (1, B, L, D)
     tt_prompt = bf16_tensor(prompt, device=mesh_device)
 
-    # temb: reshape from (B, 1, 6*dim) to (1, B, 6, dim) for the TT block
-    temb_reshaped = temb.reshape(B, 6, dim).unsqueeze(0)  # (1, B, 6, D)
+    # temb: reshape from (B, 1, 9*dim) to (1, B, 9, dim) for the TT block
+    temb_reshaped = temb.reshape(B, 9, dim).unsqueeze(0)  # (1, B, 9, D)
     tt_temb = bf16_tensor(temb_reshaped, device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
+
+    # prompt_temb: reshape from (B, 1, 2*dim) to (1, B, 2, dim)
+    prompt_temb_reshaped = prompt_temb.reshape(B, 2, dim).unsqueeze(0)  # (1, B, 2, D)
+    tt_prompt_temb = bf16_tensor(prompt_temb_reshaped, device=mesh_device)
 
     # RoPE: (B, H, N, head_dim) for per-head application
     cos_heads = cos_freq.reshape(B, seq_len, num_heads, head_dim).permute(0, 2, 1, 3)
@@ -150,6 +161,7 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
+        video_prompt_temb=tt_prompt_temb,
     )
 
     # Gather and compare
@@ -204,6 +216,7 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
         out_channels=out_channels,
         cross_attention_dim=cross_attention_dim,
         use_middle_indices_grid=True,
+        cross_attention_adaln=True,
     )
     torch_model.eval()
     torch_state = torch_model.state_dict()
@@ -259,24 +272,9 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     logger.info(f"PyTorch model output shape: {torch_out.shape}")
 
     # === TT forward ===
-    # Prepare spatial: SP-sharded only (patchify_proj ColParallelLinear handles TP sharding)
-    spatial = latent.unsqueeze(0)  # (1, B, N, in_channels)
-    tt_spatial = bf16_tensor(spatial, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
-
     # Prompt
     prompt = context.unsqueeze(0)  # (1, B, L, D)
     tt_prompt = bf16_tensor(prompt, device=mesh_device)
-
-    # Timestep: the model's adaln_single handles the embedding
-    # Need to pass the scalar timestep * timestep_scale_multiplier
-    # LTXModel internally does: timestep * timestep_scale_multiplier (default 1000)
-    # Then passes to adaln_single
-    tt_timestep = ttnn.from_torch(
-        torch.tensor([[[[timestep_val * 1000.0]]]], dtype=torch.float32).expand(1, 1, B, 1),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.float32,
-    )
 
     # RoPE: compute from positions, same as what the model does internally
     from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
@@ -300,24 +298,29 @@ def test_ltx_transformer_model(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     tt_sin = bf16_tensor_2dshard(sin_heads, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    tt_out = tt_model(
-        spatial_1BND=tt_spatial,
-        temb=tt_timestep,
-        prompt_1BLP=tt_prompt,
-        N=seq_len,
-        rope_cos=tt_cos,
-        rope_sin=tt_sin,
+    # Use inner_step: takes timestep value, multiplies by 1000 internally for adaln
+    # Reference does: timesteps * timestep_scale_multiplier(1000) → adaln
+    # inner_step does: timestep_torch * 1000 → adaln
+    # So pass timestep_val directly to match reference behavior
+    spatial_torch = latent.unsqueeze(0)  # (1, B, N, in_channels)
+    timestep_torch = torch.tensor([timestep_val])  # 500.0 → inner_step makes 500000.0
+
+    tt_out = tt_model.inner_step(
+        video_1BNI_torch=spatial_torch,
+        video_prompt_1BLP=tt_prompt,
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
+        video_N=seq_len,
+        timestep_torch=timestep_torch,
     )
 
-    # Gather SP shards, then take device 0's copy (output is replicated on TP after all_gather + proj_out)
-    if parallel_config.sequence_parallel.factor > 1:
-        tt_out = ccl_manager.all_gather_persistent_buffer(
-            tt_out, dim=2, mesh_axis=parallel_config.sequence_parallel.mesh_axis
-        )
     tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).squeeze(0)
 
-    logger.info(f"TT model output shape: {tt_out_torch.shape}")
+    logger.info(
+        f"TT model output shape: {tt_out_torch.shape}, range=[{tt_out_torch.min():.4f}, {tt_out_torch.max():.4f}]"
+    )
+    logger.info(f"Ref output shape: {torch_out.shape}, range=[{torch_out.min():.4f}, {torch_out.max():.4f}]")
     assert_quality(torch_out, tt_out_torch, pcc=0.992, relative_rmse=0.15)
     logger.info("PASSED: LTX transformer model matches PyTorch reference")
 
@@ -362,6 +365,7 @@ def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, 
         out_channels=out_channels,
         cross_attention_dim=cross_attention_dim,
         use_middle_indices_grid=True,
+        cross_attention_adaln=True,
     )
     torch_model.eval()
     torch_state = torch_model.state_dict()
