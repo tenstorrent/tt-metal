@@ -149,6 +149,7 @@ void kernel_main() {
                 cb_ex_partial.wait_front(1);
 
                 uint32_t l1_read_addr_ex_par = cb_ex_partial.get_read_ptr();
+                cb_ex_external.reserve_back(1);
                 uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
                 experimental::UnicastEndpoint remote_ep;
                 noc.async_read(
@@ -162,8 +163,6 @@ void kernel_main() {
 
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
-
-                cb_ex_external.reserve_back(1);
                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
                     experimental::UnicastEndpoint remote_ep;
                     noc.async_read(

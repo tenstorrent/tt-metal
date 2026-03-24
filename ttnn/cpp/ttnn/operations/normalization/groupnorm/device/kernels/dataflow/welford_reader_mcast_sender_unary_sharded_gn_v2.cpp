@@ -155,7 +155,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < num_batches; ++m) {
         // Read mean and variance arrays from cb_ex_partial, then combine using Welford
 
-        // wait for local data readykj
+        // wait for local data ready
         cb_ex_partial.wait_front(2);
         auto local_means_ptr = cb_ex_partial.get_read_ptr();
         auto local_vars_ptr = local_means_ptr + single_tile_size_bytes;

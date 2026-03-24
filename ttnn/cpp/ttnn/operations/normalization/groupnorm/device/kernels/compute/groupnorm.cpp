@@ -59,7 +59,7 @@ void kernel_main() {
     //       Global Reduce:
     //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           It's reader core the sends this data out to all other cores as cb_ex_global_id
+    //           The reader core then sends this data out to all other cores as cb_ex_global_id
     //
     //     Variance Calc: ∑(x-E[x])^2
     //     This follows the same pattern as the average calculation
@@ -72,7 +72,7 @@ void kernel_main() {
     //       Global Reduce:
     //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           It's reader core the sends this data out to all other cores as cb_ex2_global_id
+    //           The reader core then sends this data out to all other cores as cb_ex2_global_id
     //
     //     cb_ex2pe_id Calculation:
     //       First we add cb_ex2_global_id with cb_eps_id
