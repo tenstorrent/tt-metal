@@ -108,7 +108,10 @@ jobs:
             container_prefix: bh_tray
             mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
             test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/nightly/test_all_gather_nightly.py
-            test_args: "-k test_all_gather_ring_nightly"
+            # Exclude trace tests for tray: A Device firmware offen fails to reinitialize after previous test closes devices, but this is
+            # not something that should be checked in this CI, so it is excluded.
+            # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
+            test_args: "-k 'non-trace and not ring'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}
