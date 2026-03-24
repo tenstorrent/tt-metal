@@ -48,9 +48,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
-// Unlike many verify_* helpers in the codebase, this does not TT_FATAL. If the user supplied a compute
-// kernel config that triggers hardware bug #38306 on Wormhole (HiFi4 + fp32 dest accumulation), logs a
-// warning at most once per process.
 void verify_numerical_configuration(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config);
 

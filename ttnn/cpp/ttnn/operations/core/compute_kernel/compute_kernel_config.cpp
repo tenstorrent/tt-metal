@@ -55,6 +55,7 @@ void verify_numerical_configuration(
     if (!cfg.fp32_dest_acc_en || cfg.math_fidelity != MathFidelity::HiFi4) {
         return;
     }
+    // Only print warning once per process.
     static std::atomic<bool> warning_generated{false};
     if (!warning_generated) {
         log_warning(
