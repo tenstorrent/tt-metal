@@ -34,6 +34,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )
+    parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel groups")
     parser.addoption(
         "--optimizations",
         action="store",

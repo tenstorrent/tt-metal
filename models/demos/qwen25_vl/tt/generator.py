@@ -21,9 +21,13 @@ class Generator(WarmupForwardMixin):
         With model_args you have the checkpoint location, can specify max batch size
         and max seqlen, and other model specific parameters.
 
+        Supports data parallelism: pass lists of models/model_args for DP > 1.
         """
-        # favor composition over inheritance: __ is convention for private variables
-        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
+        if not isinstance(model, list):
+            model = [model]
+        if not isinstance(model_args, list):
+            model_args = [model_args]
+        self._ttt_generator = TTTGenerator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
         # Trace infrastructure for prefill
         # Keyed by padded sequence length string (e.g., "4096")
@@ -32,13 +36,15 @@ class Generator(WarmupForwardMixin):
         self.trace_output_prefill = {}
 
     @property
+    def data_parallel(self):
+        return self._ttt_generator.data_parallel
+
+    @property
     def model(self):
-        # todo)) change this when implementing data parallelism
         return self._ttt_generator.model[0]
 
     @property
     def model_args(self):
-        # todo)) change this when implementing data parallelism
         return self._ttt_generator.model_args[0]
 
     @property
@@ -154,6 +160,9 @@ class Generator(WarmupForwardMixin):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+        # When batch < data_parallel (e.g. warmup with 1 user), route all to model 0
+        effective_dp = min(self.data_parallel, batch)
+        batch_per_dp = max(1, batch // effective_dp)
 
         if page_table is not None:
             assert isinstance(
@@ -167,86 +176,102 @@ class Generator(WarmupForwardMixin):
             if use_trace:
                 logger.info(
                     f"Using trace-based sequential prefill: {batch} users × {batch_seq_len} tokens"
-                    f" = {total_tokens} total tokens"
+                    f" = {total_tokens} total tokens (DP={self.data_parallel})"
                 )
             else:
                 logger.info(
                     f"Using sequential prefill: {batch} users × {batch_seq_len} tokens = {total_tokens} total tokens"
+                    f" (DP={self.data_parallel})"
                 )
 
-        block_size = get_block_size(kv_cache) if kv_cache is not None else None
+        is_dp_kv_cache = isinstance(kv_cache, list)
+        first_kv_cache = kv_cache[0] if is_dp_kv_cache else kv_cache
+        block_size = get_block_size(first_kv_cache) if first_kv_cache is not None else None
         num_blocks_padded = num_blocks_in_seq(batch_seq_len, block_size) if block_size is not None else None
         out_list = []
 
         for user_id in range(batch):
-            logger.info(f"Prefilling User {user_id + 1}")
+            model_id = user_id // batch_per_dp if effective_dp > 1 else 0
+            group_user_id = user_id % batch_per_dp if effective_dp > 1 else user_id
+            model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
+
+            logger.info(f"Prefilling User {user_id + 1} (DP group {model_id}, local user {group_user_id})")
             seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
             if use_trace:
-                # Per-user page table with consistent shape for trace reuse
                 pt_user = page_table[user_id : user_id + 1, :num_blocks_padded]
-
-                # Per-user rotation matrices sliced to padded_len
                 rot_mats_user = (
                     rot_mats[0][user_id : user_id + 1, :, :batch_seq_len, :],
                     rot_mats[1][user_id : user_id + 1, :, :batch_seq_len, :],
                 )
-
-                # Execute via trace (capture on first user, replay on subsequent)
                 tt_hidden = self._easy_trace_prefill(
                     tokens[user_id : user_id + 1],
                     rot_mats_user,
                     pt_user,
-                    kv_cache,
+                    model_kv_cache,
                     batch_seq_len,
                 )
-
-                # Post-process outside trace: slice last-token tile, norm, lm_head
-                logits = self.model.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
-                out_list.append(logits.cpu(blocking=False))
+                model_inst = self._ttt_generator.model[model_id]
+                logits = model_inst.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
+                out_list.append((logits.cpu(blocking=False), model_id))
             else:
                 if page_table is not None:
-                    page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                    if effective_dp > 1:
+                        dp_page_table = page_table[model_id * batch_per_dp : (model_id + 1) * batch_per_dp]
+                    else:
+                        dp_page_table = page_table
+                    page_table_user = self._ttt_generator._get_prefill_user_page_table(
+                        dp_page_table, model_kv_cache, seq_len
+                    )
                 else:
                     page_table_user = None
 
                 logits = self.__prefill_forward_single_user_text(
                     tokens[user_id : user_id + 1],
                     page_table=page_table_user,
-                    user_id=user_id,
+                    user_id=group_user_id,
                     last_token_idx=last_token_idx,
                     rot_mats=rot_mats,
-                    kv_cache=kv_cache,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
                 )
                 output_logits[user_id] = logits
 
         if use_trace:
-            # Process asynchronously-copied outputs
             ttnn.synchronize_device(self.mesh_device)
-            for user_id, out in enumerate(out_list):
+            for user_id, (out, mid) in enumerate(out_list):
                 seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
-                output_logits[user_id] = self.model.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+                model_inst = self._ttt_generator.model[mid]
+                output_logits[user_id] = model_inst.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
         return output_logits
 
     def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
-        self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
+        for model_inst in self._ttt_generator.model:
+            model_inst.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
 
     def update_cos_sin_rows(self, rot_mats_seq_ids):
-        for i, (cos, sin) in enumerate(rot_mats_seq_ids):
-            self.model.rope_setup.cos_matrix_pt[i] = cos[0]
-            self.model.rope_setup.sin_matrix_pt[i] = sin[0]
-        self.update_cos_sin()
+        batch_per_dp = len(rot_mats_seq_ids) // self.data_parallel
+        for dp_id in range(self.data_parallel):
+            model_inst = self._ttt_generator.model[dp_id]
+            for i in range(batch_per_dp):
+                global_idx = dp_id * batch_per_dp + i
+                cos, sin = rot_mats_seq_ids[global_idx]
+                model_inst.rope_setup.cos_matrix_pt[i] = cos[0]
+                model_inst.rope_setup.sin_matrix_pt[i] = sin[0]
+            model_inst.rope_setup.update_cos_sin()
 
     def update_rope_deltas(self, rope_deltas_list: list):
-        # pad rope_deltas_list to the batch size
-        rope_deltas_list = rope_deltas_list + [0] * (self.model.rope_setup.batch_size - len(rope_deltas_list))
-        # convert to torch tensor
-        self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
+        batch_per_dp = len(rope_deltas_list) // self.data_parallel
+        for dp_id in range(self.data_parallel):
+            model_inst = self._ttt_generator.model[dp_id]
+            dp_deltas = rope_deltas_list[dp_id * batch_per_dp : (dp_id + 1) * batch_per_dp]
+            dp_deltas = dp_deltas + [0] * (model_inst.rope_setup.batch_size - len(dp_deltas))
+            model_inst.rope_setup.rope_deltas = torch.tensor(dp_deltas)
 
     def decode_forward(
         self,
@@ -258,19 +283,25 @@ class Generator(WarmupForwardMixin):
         read_from_device=True,
         sampling_params=None,
     ):
+        if not isinstance(kv_cache, list):
+            kv_cache = [kv_cache]
         return self._ttt_generator.decode_forward(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
-            kv_cache=[kv_cache],
+            kv_cache=kv_cache,
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
+    def __prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, model_id=0
+    ):
+        model_inst = self._ttt_generator.model[model_id]
+        model_args_inst = self._ttt_generator.model_args[model_id]
         seq_len = tokens.shape[1]
-        use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
+        use_chunked_prefill = seq_len > model_args_inst.max_prefill_chunk_size
         if use_chunked_prefill:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -286,13 +317,11 @@ class Generator(WarmupForwardMixin):
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
+            chunk_size = get_max_prefill_chunk_size(seq_len, model_args_inst.max_prefill_chunk_size)
             block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx % chunk_size
-            # Calculate which chunk contains the last_token_idx
             last_chunk_start = (last_token_idx // chunk_size) * chunk_size
             page_table_user = page_table[user_id : user_id + 1, :]
-            # Pad page table to match number of blocks in seq_len
             num_padding_blocks = num_blocks_in_seq(seq_len, block_size) - page_table_user.shape[1]
             page_table_user_padded = torch.cat(
                 [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
@@ -312,14 +341,14 @@ class Generator(WarmupForwardMixin):
                     chunk_rot_mats_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
-                ) = self.model.prepare_inputs_prefill(
+                ) = model_inst.prepare_inputs_prefill(
                     chunk_tokens,
                     rot_mats=rot_mats,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                 )
-                tt_logits = self.model.ttnn_prefill_forward(
+                tt_logits = model_inst.ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
@@ -331,20 +360,20 @@ class Generator(WarmupForwardMixin):
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(
+                    logits = model_inst.process_output_prefill(
                         tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32)
                     )
                     return logits
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, rot_mats_prefill, page_table_tt, _ = model_inst.prepare_inputs_prefill(
                 tokens,
                 rot_mats=rot_mats,
                 page_table=page_table,
             )
 
-            tt_logits = self.model.ttnn_prefill_forward(
+            tt_logits = model_inst.ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
@@ -353,10 +382,8 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
+            logits = model_inst.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
 
-            # deallocate device tensors that are not needed by decode
-            # [INFO] logits is a torch tensor
             ttnn.deallocate(tt_logits)
             ttnn.deallocate(prefill_input)
             if page_table is not None:
@@ -383,6 +410,7 @@ class Generator(WarmupForwardMixin):
         """
         Pre-compile programs for expected power-of-2 prefill sequence lengths.
         Uses dummy embeddings and rotation matrices to avoid depending on real data.
+        Warms up all DP model instances.
         """
 
         warmup_seq_lens = [128, 1024, 2048, 4096, 8192, 16384]
@@ -393,32 +421,37 @@ class Generator(WarmupForwardMixin):
             logger.warning("No valid warmup sequence lengths for Qwen2.5-VL prefill")
             return
 
-        logger.info(f"Warming up Qwen2.5-VL prefill for sequence lengths: {warmup_seq_lens}")
+        logger.info(f"Warming up Qwen2.5-VL prefill for sequence lengths: {warmup_seq_lens} (DP={self.data_parallel})")
         hidden_dim = self.model_args.dim
         head_dim = self.model_args.head_dim
 
-        for seq_len in warmup_seq_lens:
-            dummy_tokens = torch.zeros(1, seq_len, hidden_dim, dtype=torch.bfloat16)
-            dummy_cos = torch.ones(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
-            dummy_sin = torch.zeros(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
-            dummy_rot_mats = (dummy_cos, dummy_sin)
+        is_dp_kv_cache = isinstance(kv_cache, list)
+        for model_id in range(self.data_parallel):
+            model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
+            logger.info(f"  Warming up DP group {model_id}")
+            for seq_len in warmup_seq_lens:
+                dummy_tokens = torch.zeros(1, seq_len, hidden_dim, dtype=torch.bfloat16)
+                dummy_cos = torch.ones(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
+                dummy_sin = torch.zeros(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
+                dummy_rot_mats = (dummy_cos, dummy_sin)
 
-            if kv_cache is not None:
-                block_size = get_block_size(kv_cache)
-                num_blocks = num_blocks_in_seq(seq_len, block_size)
-                dummy_page_table = torch.zeros(1, num_blocks, dtype=torch.int32)
-            else:
-                dummy_page_table = None
+                if model_kv_cache is not None:
+                    block_size = get_block_size(model_kv_cache)
+                    num_blocks = num_blocks_in_seq(seq_len, block_size)
+                    dummy_page_table = torch.zeros(1, num_blocks, dtype=torch.int32)
+                else:
+                    dummy_page_table = None
 
-            logger.info(f"  Compiling prefill for seq_len={seq_len}")
-            self.__prefill_forward_single_user_text(
-                dummy_tokens,
-                page_table=dummy_page_table,
-                user_id=0,
-                last_token_idx=seq_len - 1,
-                rot_mats=dummy_rot_mats,
-                kv_cache=kv_cache,
-            )
+                logger.info(f"    Compiling prefill for seq_len={seq_len}")
+                self.__prefill_forward_single_user_text(
+                    dummy_tokens,
+                    page_table=dummy_page_table,
+                    user_id=0,
+                    last_token_idx=seq_len - 1,
+                    rot_mats=dummy_rot_mats,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                )
 
         logger.info("Qwen2.5-VL prefill warmup complete")
 

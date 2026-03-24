@@ -4,7 +4,7 @@
 
 import time
 from types import SimpleNamespace
-from typing import Mapping, Optional, Sequence, Union
+from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
 from loguru import logger
@@ -42,28 +42,32 @@ from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rop
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
-    for layer_idx in range(num_layers):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    kv_cache = []
+    for mesh_idx, model_inst in enumerate(dp_model):
+        model_args_inst = model_inst.args
+        for layer_idx in range(num_layers):
+            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
-        model.layers[layer_idx].attention.layer_past = [
-            ttnn.as_tensor(
-                cache_kv,
-                device=model.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                # Separate cache files for K and V to avoid collision.
-                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
-            )
-            for kv in ["k", "v"]
-        ]
+            model_inst.layers[layer_idx].attention.layer_past = [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=model_inst.mesh_device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=model_args_inst.model_config["ATTN_W_LAYOUT_TILE"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(model_inst.mesh_device),
+                    cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
+                )
+                for kv in ["k", "v"]
+            ]
 
-    return [l.attention.layer_past for l in model.layers]
+        kv_cache.append([l.attention.layer_past for l in model_inst.layers])
+    return kv_cache
 
 
 def get_platform_specific_optimizations(model_name):
@@ -76,38 +80,46 @@ def get_platform_specific_optimizations(model_name):
 
 def initialize_vllm_text_transformer(
     hf_config,
+    tt_data_parallel,
     mesh_device,
     max_batch_size,
     max_seq_len,
     dtype=ttnn.bfloat8_b,
     optimizations=None,
 ):
-    # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
     hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-    tt_model_args = ModelArgs(
-        mesh_device,
-        instruct=("Instruct" in hf_model_id),
-        max_batch_size=max_batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-    )
-    tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
-    assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
-        "-", ""
-    ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
-    state_dict = tt_model_args.load_state_dict()
+    model_args = []
+    for submesh in submesh_devices:
+        tt_model_args = ModelArgs(
+            submesh,
+            instruct=("Instruct" in hf_model_id),
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+        )
+        tt_model_args.use_qk_fused = False
+        assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
+        model_args.append(tt_model_args)
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
-    )
+    state_dict = model_args[0].load_state_dict()
 
-    return tt_model_args, model
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(model_i)
+
+    return tt_model, model_args
 
 
 class CustomNamespace(SimpleNamespace):
@@ -221,7 +233,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_model_id)
         if max_seq_len > max_seq_len_native:
@@ -229,8 +240,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
-        model_args, model = initialize_vllm_text_transformer(
+        tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
+            tt_data_parallel,
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
@@ -238,27 +250,27 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=optimizations,
         )
 
-        ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
+        ref_model_name = model_args[0].CKPT_DIR
         config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-        # config.vision_config.depth = 1 # [INFO] useful for debugging
         reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
             ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
-        # Create the TorchVisionTransformer wrapper using the original vision model as reference
+
+        vision_mesh = tt_model[0].mesh_device if tt_data_parallel > 1 else mesh_device
         vision_model_args = VisionModelArgs(
-            mesh_device,
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=model_args.max_seq_len,
+            vision_mesh,
+            max_batch_size=model_args[0].max_batch_size,
+            max_seq_len=model_args[0].max_seq_len,
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
 
         return cls(
-            model,
+            tt_model,
             model_args,
             mesh_device,
-            tokenizer=model_args.tokenizer,
+            tokenizer=model_args[0].tokenizer,
             reference_model=reference_model,
             visual_model=visual_model,
         )
@@ -269,7 +281,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(
-            *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
+            *args, **kwargs, dp_model=self._ttt_generator.model, tt_cache_path=self.cache_path
         )
 
     def prefill_forward(
