@@ -17,6 +17,12 @@
 ### tt-inference-server Integration (2026-03-24)
 **Status: WORKING ✓ - Multiple image requests stable with `--disable-trace-capture`**
 
+**Video Token Support (2026-03-24):**
+- Added `<|video|>` token support for video inputs (instead of multiple `<|image|>` tokens)
+- Video frames are processed as images but use single `<|video|>` placeholder
+- `get_replacement_video()` generates combined tokens for all frames
+- Committed: d31d2588c9
+
 **Fixed issues:**
 1. Pre-unfolded patch format detection: vLLM's MolmoProcessor outputs pixel_values as `[num_crops, num_patches, 588]` (already patch-extracted), not raw images `[B, C, H, W]`. Added format detection to use `patch_embed_from_patches_ttnn` for pre-unfolded data.
 
@@ -49,10 +55,32 @@ python3 run.py --model Molmo2-8B --device t3k --workflow server --local-server -
 - Vision trace: Disabled for vLLM mode
 - Background trace capture: Disabled (--disable-trace-capture)
 
-**Next steps:**
-1. Consider adding `has_builtin_warmup=True` to Molmo2's model spec to auto-disable background trace capture
-2. Consider full TTTGenerator refactor for long-term maintainability
-3. Investigate re-enabling traces once stability is confirmed
+**Next steps - Trace Support for tt-inference-server:**
+
+To enable traces (for better performance), implement:
+
+1. **`warmup_model_prefill()`** - Implement proper warmup:
+   - Allocate prefill trace tensors (hidden_states, cos, sin)
+   - Capture prefill trace with `ttnn.begin_trace_capture` / `ttnn.end_trace_capture`
+   - Store trace_id for reuse
+
+2. **`warmup_model_decode()`** - Implement proper warmup:
+   - Allocate decode trace tensors
+   - Capture decode trace
+   - Store trace_id for reuse
+
+3. **Configuration:**
+   - Use `override_tt_config["trace_mode"]` to control traces:
+     - `"all"`: Enable both prefill and decode traces
+     - `"decode_only"`: Enable only decode traces
+     - `"none"`: Disable all traces (current default)
+
+4. **Vision trace:** Consider unified trace (vision + prefill combined) from demo.py
+
+Reference implementations:
+- `demo.py:_allocate_prefill_trace_tensors()` (lines 1036-1082)
+- `demo.py:_capture_prefill_trace()` (lines 1086-1107)
+- `demo.py:_allocate_unified_trace_tensors()` (lines 1129-1183)
 
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**
