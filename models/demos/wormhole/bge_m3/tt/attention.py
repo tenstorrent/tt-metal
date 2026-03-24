@@ -14,6 +14,30 @@ MAX_QKV_MM_SEQ_LEN = 2048
 # Match Attention1D long-sequence WO matmul guard.
 MAX_MM_SEQ_LEN = 1024
 
+# SDPA chunk sizes must be multiples of the Tensor tile width (see sdpa_device_operation validation).
+_SDPA_Q_CHUNK = 128
+_SDPA_CANDIDATE_K_CHUNKS = (512, 256, 128)
+
+
+def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
+    """Largest K chunk (128/256/512) that divides seq_len; Q chunk matches the model's 128-token tiling."""
+    if seq_len % _SDPA_Q_CHUNK != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by {_SDPA_Q_CHUNK}")
+    for k_chunk in _SDPA_CANDIDATE_K_CHUNKS:
+        if k_chunk <= seq_len and seq_len % k_chunk == 0:
+            return _SDPA_Q_CHUNK, k_chunk
+    raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len} (expected a multiple of 128)")
+
+
+def _sdpa_program_config_for_seq_len(seq_len: int) -> ttnn.SDPAProgramConfig:
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len)
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
 
 @dataclass
 class BgeM3AttentionConfig:
@@ -226,6 +250,7 @@ class BgeM3Attention(LightweightModule):
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)
 
         # Stage 4: encoder SDPA.
+        sdpa_program_config = cfg.score_prg_config or _sdpa_program_config_for_seq_len(seq_len)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -233,7 +258,7 @@ class BgeM3Attention(LightweightModule):
             is_causal=False,
             attn_mask=sdpa_mask,
             scale=cfg.attention_scale,
-            program_config=cfg.score_prg_config,
+            program_config=sdpa_program_config,
             compute_kernel_config=cfg.score_compute_kernel_cfg,
             memory_config=cfg.score_memcfg,
         )
@@ -303,25 +328,17 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     if config.qkv_compute_kernel_cfg is None:
         to_set["qkv_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
     if config.output_compute_kernel_cfg is None:
         to_set["output_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
-        )
-
-    if config.score_prg_config is None:
-        to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=128,
-            k_chunk_size=512,
-            exp_approx_mode=False,
         )
 
     # Phase D: resolve single target device.
