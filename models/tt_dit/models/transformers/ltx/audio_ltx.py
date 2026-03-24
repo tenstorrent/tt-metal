@@ -237,6 +237,20 @@ class LTXAudioVideoTransformerBlock(Module):
         av_ca_audio_temb: ttnn.Tensor | None = None,
         video_prompt_temb: ttnn.Tensor | None = None,  # (1, B, 2, video_dim) from prompt_adaln_single
         audio_prompt_temb: ttnn.Tensor | None = None,  # (1, B, 2, audio_dim)
+        # Cross-modal positional embeddings for A↔V cross-attention.
+        # Q rope is SP+TP sharded (matches Q's SP-sharded sequence dim).
+        # K rope is TP-only sharded (context is full-sequence replicated).
+        video_cross_pe_cos: ttnn.Tensor | None = None,  # (1, H_local, video_N/SP, D_half) for video Q
+        video_cross_pe_sin: ttnn.Tensor | None = None,
+        audio_cross_pe_cos: ttnn.Tensor | None = None,  # (1, H_local, audio_N/SP, D_half) for audio Q
+        audio_cross_pe_sin: ttnn.Tensor | None = None,
+        video_cross_pe_cos_full: ttnn.Tensor | None = None,  # (1, H_local, video_N, D_half) for video K
+        video_cross_pe_sin_full: ttnn.Tensor | None = None,
+        audio_cross_pe_cos_full: ttnn.Tensor | None = None,  # (1, H_local, audio_N, D_half) for audio K
+        audio_cross_pe_sin_full: ttnn.Tensor | None = None,
+        skip_cross_attn: bool = False,
+        skip_self_attn: bool = False,
+        audio_attn_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Process both video and audio through one transformer block.
 
@@ -274,6 +288,7 @@ class LTXAudioVideoTransformerBlock(Module):
             trans_mat=trans_mat,
             addcmul_residual=video_1BND,
             addcmul_gate=v_gate_sa,
+            skip_qk=skip_self_attn,  # STG: use V passthrough instead of full attention
         )
 
         # === VIDEO TEXT CROSS-ATTENTION (with AdaLN) ===
@@ -317,6 +332,8 @@ class LTXAudioVideoTransformerBlock(Module):
             trans_mat=trans_mat,
             addcmul_residual=audio_1BND,
             addcmul_gate=a_gate_sa,
+            attn_mask=audio_attn_mask,
+            skip_qk=skip_self_attn,
         )
 
         # === AUDIO TEXT CROSS-ATTENTION (with AdaLN) ===
@@ -331,45 +348,72 @@ class LTXAudioVideoTransformerBlock(Module):
         audio_1BND = audio_1BND + audio_ca_out * a_gate_ca
 
         # === BIDIRECTIONAL A↔V CROSS-ATTENTION ===
-        # Video-side cross-attention modulation
-        shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
-        v_ca_shift, v_ca_scale, a_ca_shift_v, a_ca_scale_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
-        v_ca_gate = ttnn.typecast(v_ca_gate, dtype=ttnn.bfloat16)
+        # When skip_cross_attn=True (for modality guidance perturbation), skip this section entirely
+        if not skip_cross_attn:
+            # Video-side cross-attention modulation
+            # Reference table layout: [scale_a2v, shift_a2v, scale_v2a, shift_v2a, gate]
+            shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
+            v_ca_scale, v_ca_shift, a_ca_scale_v, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
+            v_ca_gate = ttnn.typecast(v_ca_gate, dtype=ttnn.bfloat16)
 
-        # Audio-side cross-attention modulation (5 params: a2v_shift, a2v_scale, v2a_shift, v2a_scale, gate)
-        _av_ca_audio_temb = av_ca_audio_temb if av_ca_audio_temb is not None else av_ca_temb[:, :, :5, : self.audio_dim]
-        shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + _av_ca_audio_temb
-        a_shift_a2v, a_scale_a2v, a_shift_v2a, a_scale_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
-        a_ca_gate = ttnn.typecast(a_ca_gate, dtype=ttnn.bfloat16)
-
-        # Norm both modalities for cross-attention
-        video_normed_xattn = self.norm1(video_1BND)
-        audio_normed_xattn = self.audio_norm1(audio_1BND)
-
-        # A→V: audio provides context for video
-        # Q = video_normed * (1 + v_scale[0:2]) + v_shift[0:2]
-        # KV = audio_normed * (1 + a_scale[0:2]) + a_shift[0:2]
-        video_q_a2v = video_normed_xattn * (1.0 + v_ca_scale) + v_ca_shift
-        audio_kv_a2v = audio_normed_xattn * (1.0 + a_scale_a2v) + a_shift_a2v
-        if self.parallel_config.tensor_parallel.factor > 1:
-            audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
-                audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            # Audio-side cross-attention modulation
+            # Reference table layout: [scale_a2v, shift_a2v, scale_v2a, shift_v2a, gate]
+            _av_ca_audio_temb = (
+                av_ca_audio_temb if av_ca_audio_temb is not None else av_ca_temb[:, :, :5, : self.audio_dim]
             )
-        a2v_output = self.audio_to_video_attn(spatial_1BND=video_q_a2v, N=video_N, prompt_1BLP=audio_kv_a2v)
-        video_1BND = video_1BND + a2v_output * v_ca_gate
+            shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + _av_ca_audio_temb
+            a_scale_a2v, a_shift_a2v, a_scale_v2a, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
+            a_ca_gate = ttnn.typecast(a_ca_gate, dtype=ttnn.bfloat16)
 
-        # V→A: video provides context for audio
-        # Q = audio_normed * (1 + a_scale[2:4]) + a_shift[2:4]
-        # KV = video_normed * (1 + v_scale[2:4]) + v_shift[2:4]
-        # v_scale[2:4] = a_ca_shift_v (index 2), a_ca_scale_v (index 3) from video-side table
-        audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
-        video_kv_v2a = video_normed_xattn * (1.0 + a_ca_scale_v) + a_ca_shift_v
-        if self.parallel_config.tensor_parallel.factor > 1:
-            video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
-                video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            # Norm both modalities for cross-attention
+            video_normed_xattn = self.norm1(video_1BND)
+            audio_normed_xattn = self.audio_norm1(audio_1BND)
+
+            # A→V: audio provides context for video
+            # Cross-attention context must be FULL sequence (SP-gathered + TP-gathered)
+            # so each device attends to ALL tokens of the other modality.
+            video_q_a2v = video_normed_xattn * (1.0 + v_ca_scale) + v_ca_shift
+            audio_kv_a2v = audio_normed_xattn * (1.0 + a_scale_a2v) + a_shift_a2v
+            if self.parallel_config.sequence_parallel.factor > 1:
+                audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
+                    audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+                )
+            if self.parallel_config.tensor_parallel.factor > 1:
+                audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
+                    audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            a2v_output = self.audio_to_video_attn(
+                spatial_1BND=video_q_a2v,
+                N=video_N,
+                prompt_1BLP=audio_kv_a2v,
+                rope_cos=video_cross_pe_cos,
+                rope_sin=video_cross_pe_sin,
+                k_rope_cos=audio_cross_pe_cos_full,
+                k_rope_sin=audio_cross_pe_sin_full,
             )
-        v2a_output = self.video_to_audio_attn(spatial_1BND=audio_q_v2a, N=audio_N, prompt_1BLP=video_kv_v2a)
-        audio_1BND = audio_1BND + v2a_output * a_ca_gate
+            video_1BND = video_1BND + a2v_output * v_ca_gate
+
+            # V→A: video provides context for audio
+            audio_q_v2a = audio_normed_xattn * (1.0 + a_scale_v2a) + a_shift_v2a
+            video_kv_v2a = video_normed_xattn * (1.0 + a_ca_scale_v) + a_ca_shift_v
+            if self.parallel_config.sequence_parallel.factor > 1:
+                video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
+                    video_kv_v2a, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+                )
+            if self.parallel_config.tensor_parallel.factor > 1:
+                video_kv_v2a = self.ccl_manager.all_gather_persistent_buffer(
+                    video_kv_v2a, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            v2a_output = self.video_to_audio_attn(
+                spatial_1BND=audio_q_v2a,
+                N=audio_N,
+                prompt_1BLP=video_kv_v2a,
+                rope_cos=audio_cross_pe_cos,
+                rope_sin=audio_cross_pe_sin,
+                k_rope_cos=video_cross_pe_cos_full,
+                k_rope_sin=video_cross_pe_sin_full,
+            )
+            audio_1BND = audio_1BND + v2a_output * a_ca_gate
 
         # === VIDEO FEEDFORWARD ===
         video_normed = self.norm3(video_1BND)
@@ -600,6 +644,18 @@ class LTXAudioVideoTransformerModel(Module):
         # Shared
         trans_mat: ttnn.Tensor | None,
         timestep_torch: torch.Tensor,
+        # Cross-modal positional embeddings (optional — None means skip cross PE)
+        video_cross_pe_cos: ttnn.Tensor | None = None,  # SP+TP sharded
+        video_cross_pe_sin: ttnn.Tensor | None = None,
+        audio_cross_pe_cos: ttnn.Tensor | None = None,  # SP+TP sharded
+        audio_cross_pe_sin: ttnn.Tensor | None = None,
+        video_cross_pe_cos_full: ttnn.Tensor | None = None,  # TP sharded, full seq
+        video_cross_pe_sin_full: ttnn.Tensor | None = None,
+        audio_cross_pe_cos_full: ttnn.Tensor | None = None,  # TP sharded, full seq
+        audio_cross_pe_sin_full: ttnn.Tensor | None = None,
+        skip_cross_attn: bool = False,
+        skip_self_attn_blocks: list[int] | None = None,
+        audio_attn_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step for both video and audio on device."""
         from ....utils.tensor import bf16_tensor, float32_tensor
@@ -651,8 +707,8 @@ class LTXAudioVideoTransformerModel(Module):
         audio_prompt_1B2D = ttnn.reshape(audio_prompt_mod, (1, B, 2, self.audio_inner_dim))
 
         # Cross-attention timestep conditioning
-        # scale_shift produces 4 params per modality (2 for Q side, 2 for KV side)
-        # gate produces 1 param per direction
+        # Both scale_shift and gate use sigma * 1000 (av_ca_timestep_scale_multiplier=1000
+        # in the 22B checkpoint config, matching timestep_scale_multiplier=1000).
         av_ca_video_ss, _ = self.av_ca_video_scale_shift_adaln_single(timestep)
         av_ca_video_ss = ttnn.reshape(av_ca_video_ss, (1, B, 4, self.inner_dim))
         av_ca_a2v_gate, _ = self.av_ca_a2v_gate_adaln_single(timestep)
@@ -679,7 +735,7 @@ class LTXAudioVideoTransformerModel(Module):
         audio_1BND = self.audio_patchify_proj(audio_1BNI)
 
         # Transformer blocks
-        for block in self.transformer_blocks:
+        for block_idx, block in enumerate(self.transformer_blocks):
             video_1BND, audio_1BND = block(
                 video_1BND=video_1BND,
                 audio_1BND=audio_1BND,
@@ -698,6 +754,17 @@ class LTXAudioVideoTransformerModel(Module):
                 av_ca_audio_temb=av_ca_audio_temb,
                 video_prompt_temb=video_prompt_1B2D,
                 audio_prompt_temb=audio_prompt_1B2D,
+                video_cross_pe_cos=video_cross_pe_cos,
+                video_cross_pe_sin=video_cross_pe_sin,
+                audio_cross_pe_cos=audio_cross_pe_cos,
+                audio_cross_pe_sin=audio_cross_pe_sin,
+                video_cross_pe_cos_full=video_cross_pe_cos_full,
+                video_cross_pe_sin_full=video_cross_pe_sin_full,
+                audio_cross_pe_cos_full=audio_cross_pe_cos_full,
+                audio_cross_pe_sin_full=audio_cross_pe_sin_full,
+                skip_cross_attn=skip_cross_attn,
+                skip_self_attn=skip_self_attn_blocks is not None and block_idx in skip_self_attn_blocks,
+                audio_attn_mask=audio_attn_mask,
             )
 
         # Output projection — video
