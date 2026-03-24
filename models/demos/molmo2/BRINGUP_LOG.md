@@ -33,22 +33,27 @@
   - Request 2: TTFT=12726ms (~13s) ✓
   - Request 3: TTFT=7710ms (~8s) ✓
   - Request 4: TIMEOUT at 30984ms (~31s) ✗
-- Root cause investigation needed:
-  - Memory fragmentation from repeated tensor allocations
-  - Resource accumulation (trace buffers, KV cache)
-  - Without trace, text model forward is slower (~10s vs ~2s with trace)
-  - Trace was disabled due to earlier hang issues, but non-traced path has performance degradation
 
-**Workaround in progress:**
+**Root cause identified:**
+- Memory accumulation from tensors not being deallocated
+- Molmo2 was implementing decode_forward from scratch instead of using TTTGenerator pattern like Qwen2.5-VL
+- Missing `__del__` destructor to release traces on cleanup
+
+**Memory management fixes applied (2026-03-24):**
+1. Added `__del__` destructor to release prefill/decode/vision traces on object destruction
+2. Deallocate `token_id_ttnn` after embedding in decode_forward
+3. Deallocate `logits_ttnn` after torch conversion in decode_forward
+4. Conditionally deallocate `logits_ttnn` in prefill_forward when trace is disabled
+
+**Current state:**
 - Increased TT_METAL_OPERATION_TIMEOUT_SECONDS from 5.0 to 30.0 in `run_vllm_api_server.py`
 - Disabled prefill/decode trace (set `enable_trace: bool = False`)
-- Works for first few requests, then degrades
+- Memory management fixes applied - needs testing
 
 **Next steps:**
-1. Investigate trace hang root cause (was working, then started hanging)
-2. Consider re-enabling trace once hang is fixed
-3. Profile memory usage over multiple requests
-4. Check if KV cache reset is needed between requests
+1. Test memory management fixes with multiple sequential requests
+2. If fixes work, consider re-enabling trace for better performance
+3. Consider full TTTGenerator refactor for long-term maintainability
 
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**
