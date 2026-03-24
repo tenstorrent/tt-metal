@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "api/socket_api.h"
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -212,7 +213,7 @@ struct TopKSampling {
         static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
         static constexpr uint32_t scaler_cb = ScalerCBId;
         static constexpr uint32_t temp_cb = TempCBId;
-        static constexpr uint16_t inv_temp_bf16 = static_cast<uint16_t>(InvTempBF16);
+        static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
 
         // Gather buffer layout (globally split for LLK compatibility):
         //   [core0 scores | core1 scores | ... | coreN scores]
@@ -632,15 +633,13 @@ struct TopKSampling {
                     }
                     cb_push_back(CTArgs::scaler_cb, 1);
 
-                    cb_reserve_back(CTArgs::temp_cb, 1);
                     {
+                        DPRINT << "Inv temp BF16: " << BF16((uint16_t)(CTArgs::inv_temp_bf16 >> 16)) << ENDL();
+                        generate_bcast_unary_scalar(CTArgs::temp_cb, CTArgs::inv_temp_bf16);
                         auto temp_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::temp_cb));
-                        for (uint32_t i = 0; i < 1024; ++i) {
-                            temp_ptr[i] = CTArgs::inv_temp_bf16;
-                        }
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::temp_cb));
+                        DPRINT << "Value in temp CB: " << BF16(temp_ptr[0]) << ENDL();
                     }
-                    cb_push_back(CTArgs::temp_cb, 1);
 
                     cb_reserve_back(CTArgs::softmax_in_cb, 1);
                     auto tile_u32 =

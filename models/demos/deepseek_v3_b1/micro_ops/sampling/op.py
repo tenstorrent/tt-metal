@@ -12,6 +12,9 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedKernelDescriptor,
 )
 
+from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed
+from loguru import logger
+
 
 def _round_up(value: int, alignment: int) -> int:
     return ((value + alignment - 1) // alignment) * alignment
@@ -434,7 +437,10 @@ class SamplingOp:
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
 
-        inv_temp_bf16 = int(torch.tensor(1.0 / temperature, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+        logger.debug(f"Temperature: {temperature}")
+        logger.debug(f"1.0 / temperature: {1.0 / temperature}")
+        inv_temp_bf16 = float_to_bfloat16_packed(1.0 / temperature)
+        logger.debug(f"Inv temp BF16: {inv_temp_bf16}")
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
         topk_scores_stride = _round_up(k * 2, l1_alignment)
@@ -614,9 +620,7 @@ class SamplingOp:
             total_size=bf16_tile_size,
             core_ranges=final_core_crs,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(
-                    buffer_index=temp_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
-                )
+                ttnn.CBFormatDescriptor(buffer_index=temp_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
             ],
         )
 
