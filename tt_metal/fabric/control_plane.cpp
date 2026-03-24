@@ -2758,7 +2758,7 @@ void ControlPlane::validate_requested_intermesh_connections(
     if (strict_binding) {
         return;
     }
-    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
+    [[maybe_unused]] const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
     for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
         auto src_mesh_id = MeshId(src_mesh);
         for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {

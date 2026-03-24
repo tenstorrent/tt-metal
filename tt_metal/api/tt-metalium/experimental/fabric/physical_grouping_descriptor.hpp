@@ -151,28 +151,6 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
-    ValidGroupingsMap get_valid_groupings_for_mgd(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
-
-    // Find any valid mapping of a grouping to a physical system descriptor
-    // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
-    // Returns empty set if no valid mapping exists
-    // errors_out can be provided to get detailed error messages (optional, can be nullptr)
-    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
-        const GroupingInfo& grouping,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out = nullptr) const;
-
-    // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
-    // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
-    std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
-
-    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
-    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
-        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
-
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
@@ -181,21 +159,6 @@ private:
     // Two-tier structure: name -> type -> vector of GroupingInfo
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
         resolved_groupings_cache_;
-
-    // Internal helper to convert proto grouping to GroupingInfo
-    GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
-
-    // Helper to get ASIC count for a grouping name (from cache)
-    uint32_t get_grouping_asic_count(const std::string& grouping_name) const;
-
-    // Private helper that takes PSD pointer (used internally by public overloads)
-    ValidGroupingsMap get_valid_groupings_for_mgd(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
-
-    // Private helper that takes PSD pointer (used internally by public overloads)
-    std::vector<GroupingInfo> build_flattened_adjacency_mesh(
-        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;

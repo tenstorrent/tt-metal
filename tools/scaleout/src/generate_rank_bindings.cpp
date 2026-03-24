@@ -23,8 +23,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
@@ -62,12 +63,10 @@ PhysicalSystemDescriptor run_psd_discovery() {
     auto& context = tt::tt_metal::MetalContext::instance();
     auto distributed_context = context.get_distributed_context_ptr();
     const auto& cluster = context.get_cluster();
-    const auto& hal = context.hal();
     const auto& rtoptions = context.rtoptions();
-    constexpr bool run_discovery = true;
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
 
 /**
