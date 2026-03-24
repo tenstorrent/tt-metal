@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -11,9 +12,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-
 from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed
-from loguru import logger
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -41,16 +40,26 @@ class SamplingOp:
         indices: torch.Tensor,
         k: int = 1,
         p: float = 1.0,
-        seed: int | None = None,
-    ) -> torch.Tensor:
+        temperature: float = 1.0,
+        rand_value: float | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         PyTorch reference for sampling.
 
         For k=1, this is argmax with deterministic tie-break on lowest index.
-        For k>1, implements top-k then top-p cumulative probability filtering,
-        then random selection among the surviving candidates.
+        For k>1, implements top-k, temperature scaling, softmax, top-p
+        cumulative probability filtering, then random selection among the
+        surviving candidates.
 
-        Returns a [1, 1] uint32 tensor containing the selected index.
+        The random value used for inverse-CDF selection is determined by:
+          - rand_value: used directly if provided (for host-side verification
+            against a kernel-returned random value).
+          - If neither is given, a non-deterministic random value is used.
+
+        Returns (selected_index, topk_indices) where:
+          - selected_index: [1, 1] uint32 tensor with the chosen token index.
+          - topk_indices:   [1, k] int64 tensor of the top-k original indices
+                            (sorted by descending score).
         """
         scores_f32 = scores.float().reshape(-1)
         indices_i64 = indices.to(torch.int64).reshape(-1)
@@ -59,13 +68,13 @@ class SamplingOp:
             max_score = torch.max(scores_f32)
             tied_mask = scores_f32 == max_score
             selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
-            return selected_index.reshape(1, 1)
+            return selected_index.reshape(1, 1), selected_index.reshape(1, 1).to(torch.int64)
 
         actual_k = min(k, len(scores_f32))
         topk_values, topk_positions = torch.topk(scores_f32, k=actual_k, sorted=True)
         topk_indices = indices_i64[topk_positions]
 
-        probs = torch.softmax(topk_values, dim=-1)
+        probs = torch.softmax(topk_values / temperature, dim=-1)
 
         cum_probs = torch.cumsum(probs, dim=-1)
         num_kept = int((cum_probs < p).sum().item()) + 1
@@ -75,9 +84,8 @@ class SamplingOp:
         kept_indices = topk_indices[:num_kept]
         kept_probs = kept_probs / kept_probs.sum()
 
-        if seed is not None:
-            gen = torch.Generator().manual_seed(seed)
-            rand_val = torch.rand(1, generator=gen).item()
+        if rand_value is not None:
+            rand_val = rand_value
         else:
             rand_val = torch.rand(1).item()
 
@@ -90,7 +98,7 @@ class SamplingOp:
                 break
 
         selected_index = kept_indices[selected_pos].to(torch.uint32)
-        return selected_index.reshape(1, 1)
+        return selected_index.reshape(1, 1), topk_indices.reshape(1, -1)
 
     @staticmethod
     def op(
