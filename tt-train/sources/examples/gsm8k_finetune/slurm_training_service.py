@@ -759,7 +759,6 @@ def list_jobs():
 # Capabilities: what the server/demo actually supports (dashboard should restrict or warn)
 SUPPORTED_TRAINERS = get_supported_trainers()
 SUPPORTED_OPTIMIZERS = {"adamw"}
-SUPPORTED_MODELS = {"tinyllama-1.1b", "gpt2"}  # llama-3.1-8b may need more resources
 SUPPORTED_DATASETS = {"gsm8k"}  # others work in gsm8k_finetune but less tested
 
 
@@ -797,12 +796,15 @@ def catalog():
             else f"model_configs/{model_id}.yaml"
         )
 
+        # Mark smaller models as supported by default, larger ones may need more resources
+        is_supported = model_id in {"tinyllama-1.1b", "tinyllama", "gpt2", "gpt2s"}
+
         models.append(
             {
                 "id": model_id,
                 "display_name": model_display_names.get(model_id, model_id.title()),
                 "model_config": f"configs/{relative_config_path}",
-                "supported": model_id in SUPPORTED_MODELS,
+                "supported": is_supported,
             }
         )
 
