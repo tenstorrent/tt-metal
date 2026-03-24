@@ -18,6 +18,10 @@
 #include "risc_common.h"
 #include "stream_io_map.h"
 
+#if defined(KERNEL_BUILD)
+#include "dprint_tile.h"
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -755,6 +759,60 @@ template <std::size_t N>
 struct device_print_type<const char[N]> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
+
+#if defined(KERNEL_BUILD)
+// TileSlice types
+template <uint32_t MAX_BYTES>
+struct device_print_type<TileSlice<MAX_BYTES>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<MAX_BYTES>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<MAX_BYTES> argument) {
+        static_assert(
+            sizeof(TileSlice<MAX_BYTES>) % 4 == 0,
+            "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        static_assert(MAX_BYTES < 256, "MAX_BYTES must be less than 256 to fit size in a single byte");
+        argument.pad = MAX_BYTES;  // Store the actual size in the padding field
+        TileSlice<MAX_BYTES>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<MAX_BYTES>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+template <>
+struct device_print_type<TileSlice<64>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<64>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<64> argument) {
+        static_assert(
+            sizeof(TileSlice<64>) % 4 == 0, "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        argument.pad = 64;  // Store the actual size in the padding field
+        TileSlice<64>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<64>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+template <>
+struct device_print_type<TileSlice<128>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<128>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<128> argument) {
+        static_assert(
+            sizeof(TileSlice<128>) % 4 == 0, "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        argument.pad = 128;  // Store the actual size in the padding field
+        TileSlice<128>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<128>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+#endif
 
 // Helper to get type character for a single type, removing cv-qualifiers and references
 template <typename T>
