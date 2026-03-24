@@ -91,15 +91,10 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
-    # Enable optional sampling padding for models that regress to single-core TopK.
+    # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
         logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
         return False
-
-    # Issue: https://github.com/tenstorrent/tt-metal/issues/40399
-    # Uncomment this if you want fix for specific models only. Currently only Llama 3.1 70B model experienced perf. degradation
-    # if base_model_name != "Llama-3.1-70B":
-    #    return False
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
