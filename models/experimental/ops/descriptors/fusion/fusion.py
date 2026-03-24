@@ -345,7 +345,6 @@ class FusedOp:
         "kernel_labels",
         "_rebind_output_sources",
         "_branch_ops",
-        "_changed_io_indices",
     )
 
     def __init__(
@@ -365,7 +364,6 @@ class FusedOp:
             rebind_output_sources = None
         self._rebind_output_sources = rebind_output_sources
         self._branch_ops = branch_ops
-        self._changed_io_indices = None
 
     @property
     def descriptor(self):
@@ -387,16 +385,16 @@ class FusedOp:
         visible before dispatch). With one or more positional arguments, those ops
         are passed to :meth:`refresh_merged_io` instead.
 
-        ``patched_generic_op`` diffs io_tensor addresses against the previous
-        dispatch and skips patching unchanged slots. ``_changed_io_indices``
-        records which slots changed.
+        On program cache hits, the device program factory patches only runtime-arg
+        and CB slots that hold ``io_tensors`` buffer addresses when those addresses
+        change (see ``PatchedGenericMeshProgramFactory``).
         """
         if branch_ops_override:
             self.refresh_merged_io(list(branch_ops_override))
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        _, self._changed_io_indices = ttnn._ttnn.operations.experimental.patched_generic_op(io_tensors, self.descriptor)
+        ttnn._ttnn.operations.experimental.patched_generic_op(io_tensors, self.descriptor)
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:

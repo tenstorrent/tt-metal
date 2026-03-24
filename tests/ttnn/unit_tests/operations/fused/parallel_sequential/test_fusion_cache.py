@@ -268,7 +268,6 @@ class TestCacheHitCorrectness:
         outs_fused2 = fused2.run()
 
         # Cache hit reuses the same descriptor (no deep copy).
-        # patched_generic_op patches only tensor address slots on program cache hit.
         assert len(_BUILD_CACHE) == 1
 
     def test_cache_hit_produces_fresh_fused_op(self, device):
@@ -495,41 +494,6 @@ class TestCacheLifecycle:
 # ===========================================================================
 # D7. build_launch sugar
 # ===========================================================================
-
-
-class TestChangedIoIndices:
-    """patched_generic_op returns changed_io_indices — activation slots change, weight/output slots don't."""
-
-    def test_changed_indices_reflect_activations(self, device):
-        """After two launches with different activations but same weights,
-        changed_io_indices should contain only activation and output slots (not weight slots)."""
-        clear_build_cache()
-
-        q1, kv1, _ = _make_branches(device, seed=100)
-        p1 = Parallel(q1, kv1)
-        p1.run()
-        ttnn.synchronize_device(device)
-        fo1 = p1._run_fused
-
-        # First launch: all indices reported as changed (no previous snapshot).
-        first_changed = set(fo1._changed_io_indices)
-        n_io = len(fo1.input_tensors) + len(fo1.output_tensors)
-        assert first_changed == set(
-            range(n_io)
-        ), f"First launch should report all {n_io} indices as changed, got {first_changed}"
-
-        # Second launch with new activations but same weights.
-        q2, kv2, _ = _make_branches(device, seed=200)
-        p2 = Parallel(q2, kv2)
-        p2.run()
-        ttnn.synchronize_device(device)
-        fo2 = p2._run_fused
-
-        second_changed = set(fo2._changed_io_indices)
-        # Activations changed (new tensors), weights are same objects → same address.
-        # Output tensors are freshly allocated → different addresses.
-        # So changed_io_indices should include activation + output slots but not weights.
-        assert len(second_changed) > 0, "Second launch should have some changed indices"
 
 
 class TestLaunchInPlaceBranchIo:
