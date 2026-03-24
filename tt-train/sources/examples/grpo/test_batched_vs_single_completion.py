@@ -4,12 +4,11 @@
 
 import pytest
 
-from batched_inference import generate_answers_multiple_prompts, generate_answers_one_prompt
-from model_accuracy import setup
-
+from utils.setup import setup_inference
+from utils.inference import generate_answers_multiple_prompts, generate_answers_one_prompt
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"
-YAML_CONFIG = "training_grpo_batched_vs_single.yaml"
+YAML_CONFIG = "tt-train/sources/examples/grpo/test_batched_vs_single_completion.yaml"
 
 SYSTEM_PROMPT = (
     "You are a precise geography assistant.\n"
@@ -31,7 +30,7 @@ def to_chat_prompt(tokenizer, user_text: str) -> str:
 
 @pytest.mark.slow
 def test_capitals_one_by_one_equals_single_batch():
-    ctx = setup(
+    ctx = setup_inference(
         yaml_config_path=YAML_CONFIG,
         hf_model_id=HF_MODEL_ID,
         load_pretrained=True,

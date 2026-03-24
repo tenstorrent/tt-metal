@@ -1,0 +1,25 @@
+training_config:
+  batch_size: 32
+  num_epochs: 2
+  model_config: "model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+grpo_config:
+  max_tokens_to_complete: 512
+  group_size: 1
+
+eval_config:
+  temperature: 0.8
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]

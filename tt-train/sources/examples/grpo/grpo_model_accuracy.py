@@ -2,31 +2,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-from transformers import AutoTokenizer
-from huggingface_hub import snapshot_download
-from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import (
-    initialize_device,
-    set_seed,
-    get_tt_metal_home,
-)
-from ttml.common.config import load_config
-from datasets import load_dataset
 import time
-from typing import List, Tuple
-from batched_inference import (
-    InferenceCtx,
-    generate_answers_multiple_prompts,
-    generate_answers_one_prompt,
-)
+from typing import Sequence, Iterator
 
-from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
-from llama_overrides import LlamaCompositeKV
-from typing import Iterator, Sequence
-from string import Template
-
-from eval_utils import setup, extract_hash_answer, get_gsm8k
+from utils.setup import InferenceCtx, setup_inference, setup_grpo_config
+from utils.gsm8k import extract_hash_answer, get_gsm8k
+from utils.inference import generate_answers_multiple_prompts
 
 
 def iter_generated_completions(
@@ -75,32 +56,19 @@ def compare_numeric_answers(completion, golden_answer) -> bool:
 if __name__ == "__main__":
     start_time = time.perf_counter()
 
-    ctx: InferenceCtx = setup(
-        yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
+    yaml_config_path = "tt-train/sources/examples/grpo/grpo_model_accuracy.yaml"
+
+    ctx: InferenceCtx = setup_inference(
+        yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
         load_pretrained=True,
     )
+    grpo_cfg = setup_grpo_config(yaml_config_path)
 
     split = "test"
     print(f"{split=}")
 
-    system_prompt = "You are a helpful math tutor. Show your reasoning step by step and end with exactly one final line in this format: #### <number>"
-    user_prompt_template_str = """Question: There are 48 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 64 trees. How many trees did the grove workers plant today?
-Answer: There are 48 trees originally.
-Then there were 64 trees after some more were planted.
-So there must have been 64 - 48 = 16.
-#### 16
-
-Question: If there are 13 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
-Answer: There are originally 13 cars.
-2 more cars arrive.
-13 + 2 = 15.
-#### 15
-
-Question: $question
-Answer:
-"""
-    prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split=split)
+    prompts, answers = get_gsm8k(ctx, split=split)
 
     for a in answers:
         assert a is not None
@@ -117,7 +85,7 @@ Answer:
     for i, prompt, completion in iter_generated_completions(
         ctx,
         prompts[:prompts_to_test],
-        batch_size=64,
+        batch_size=grpo_cfg.completions_batch_size,
     ):
         print(f"{i=}")
         correct: bool = compare_numeric_answers(completion, answers[i])

@@ -3,19 +3,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from math import ceil
-from ttml.common.utils import (
-    no_grad,
-)
-import ttml
-from ttml.autograd import Function
+from typing import List, Sequence, Iterator
+
 import ttnn
-from typing import List, Sequence, Iterator, Tuple
-from eval_utils import setup, get_gsm8k, extract_hash_answer
-from batched_inference import completion_batched_multiple_prompts, compute_nlog_probs, InferenceCtx, deallocate_tensors
-from ttml_operators import Min, Clip, Exp
-import numpy as np
+import ttml
 import time
+from ttml.common.utils import no_grad
+
+from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, setup_training_optimizer
+from utils.gsm8k import get_gsm8k
+from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
+from utils.loss import compute_nlog_probs, compute_grpo_loss, compute_rewards_advantages
 
 system_prompt = "You are a helpful math tutor. Show your reasoning step by step and end with exactly one final line in this format: #### <number>"
 user_prompt_template_str = """Question: There are 48 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 64 trees. How many trees did the grove workers plant today?
@@ -64,89 +62,32 @@ def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
         yield prompts[start:end], answers[start:end], completions[start:end]
 
 
-def compute_rewards_advantages(ctx: InferenceCtx, answers: List[float], completions: List[List[int]]):
-    assert len(answers) == len(completions)
-
-    completions_strs = [ctx.tokenizer.decode(c, skip_special_tokens=True) for c in completions]
-
-    guesses: List[float | None] = [extract_hash_answer(s) for s in completions_strs]
-
-    rewards_np = np.zeros(len(completions), dtype=np.float32)
-    for i, (g, a) in enumerate(zip(guesses, answers)):
-        if g is None or a is None:
-            rewards_np[i] = 0.0
-            continue
-        rewards_np[i] = 1.0 if abs(g - a) < 1e-3 else 0.0  # or -1.0 for wrong if you prefer
-
-    advantages_np = np.zeros_like(rewards_np)
-    G = ctx.group_size
-    for start in range(0, len(rewards_np), G):
-        end = min(start + G, len(rewards_np))
-        rg = rewards_np[start:end]
-        mu = float(rg.mean())
-        advantages_np[start : start + G] = rg - mu
-
-    return rewards_np, advantages_np
-
-
-def compute_grpo_loss(
-    nlog_probs_old: ttml.autograd.Tensor,
-    nlog_probs_new: ttml.autograd.Tensor,
-    mask: ttml.autograd.Tensor,
-    adv_tt: ttml.autograd.Tensor,
-    B: int,
-    Tp: int,
-    completions_batch_len: int,
-) -> Tuple[ttml.autograd.Tensor, list]:
-    ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
-    eps = 0.2
-    clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
-
-    surr1 = ratio * adv_tt
-    surr2 = clipped_ratio * adv_tt
-    surr = Min.apply(surr1, surr2)
-
-    mask_np = mask.to_numpy()
-    tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
-    weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
-
-    weighted_surr = surr * weight_tt
-    weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
-    loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
-
-    return loss
-
-
 def train_grpo():
     start_training = time.perf_counter()
-    ctx = setup(
-        yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
+
+    yaml_config_path = "tt-train/configs/training_configs/training_grpo_gsm8k_unsloth_llama_3_2_1b_instruct.yaml"
+    ctx = setup_inference(
+        yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
         load_pretrained=True,
-        setup_optimizer=True,
     )
+    grpo_cfg = setup_grpo_config(yaml_config_path)
+    optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
 
-    prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=42)
+    prompts, answers = get_gsm8k(ctx, split="train", shuffle_seed=42)
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
 
-    prompts_to_train = 32
-    prompts, answers = prompts[:prompts_to_train], answers[:prompts_to_train]
+    prompts, answers = prompts[: grpo_cfg.prompts_to_train], answers[: grpo_cfg.prompts_to_train]
 
-    base_lr = 1e-6
-    warmup_steps = 20
     batch = 0
-    micro_batch_size = 16
-    num_mini_epochs = 2
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
-        ctx, prompts, answers, batch_size=4
+        ctx, prompts, answers, batch_size=grpo_cfg.completions_batch_size
     ):
         start_batch = time.perf_counter()
         batch += 1
-        warmup_factor = min(1.0, batch / warmup_steps)
-        ctx.optimizer.set_lr(base_lr * warmup_factor)
-        ctx.optimizer.zero_grad()
+        warmup_factor = min(1.0, batch / grpo_cfg.warmup_steps)
+        optimizer.set_lr(grpo_cfg.base_lr * warmup_factor)
 
         rewards_np, advantages_np = compute_rewards_advantages(ctx, answers_batch, completions_batch)
 
@@ -154,22 +95,22 @@ def train_grpo():
         probs_old_list = []
         ctx.tt_model.eval()
         with no_grad():
-            for p, _, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size):
+            for p, _, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch, grpo_cfg.micro_batch_size):
                 nlog_old, mask, Tp = compute_nlog_probs(ctx, p, c)
                 nlog_old.set_requires_grad(False)
                 mask.set_requires_grad(False)
                 probs_old_list.append((nlog_old, mask, Tp))
 
         # --- Mini epoch loop ---
-        for mini_epoch in range(num_mini_epochs):
-            ctx.optimizer.zero_grad()
+        for mini_epoch in range(grpo_cfg.num_mini_epochs):
+            optimizer.zero_grad()
             ctx.tt_model.train()
 
             for i, (p, ans, c) in enumerate(
-                iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size),
+                iter_micro_batch(prompts_batch, answers_batch, completions_batch, grpo_cfg.micro_batch_size),
             ):
                 B = len(c)
-                adv_slice = advantages_np[i * micro_batch_size : i * micro_batch_size + B]
+                adv_slice = advantages_np[i * grpo_cfg.micro_batch_size : i * grpo_cfg.micro_batch_size + B]
 
                 adv_tt = ttml.autograd.Tensor.from_numpy(
                     adv_slice.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
@@ -179,12 +120,16 @@ def train_grpo():
                 nlog_old, mask_old, Tp = probs_old_list[i]
                 nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
 
-                loss = compute_grpo_loss(nlog_old, nlog_probs_new, mask_old, adv_tt, B, Tp, len(prompts_batch))
+                loss = compute_grpo_loss(
+                    nlog_old, nlog_probs_new, mask_old, adv_tt, B, Tp, len(prompts_batch), grpo_cfg.clip_eps
+                )
                 loss.backward(retain_graph=False)
 
                 deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
-            ctx.optimizer.step()
+            optimizer.step()
+            print("optimizer.step() called.")
+            print(f"{mini_epoch=} done!")
 
         # Deallocate cached old log probs after all mini epochs are done
         for nlog_old, mask_old, _ in probs_old_list:

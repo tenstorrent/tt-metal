@@ -1,33 +1,45 @@
+from dataclasses import dataclass
 from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
 from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import (
-    initialize_device,
-    set_seed,
-    get_tt_metal_home,
-)
-from ttml.optimizers import create_optimizer
+from ttml.common.utils import initialize_device, set_seed, get_tt_metal_home
 from ttml.common.config import load_config
-from datasets import load_dataset
-import time
-from typing import List, Tuple
-from batched_inference import (
-    InferenceCtx,
-    generate_answers_multiple_prompts,
-    generate_answers_one_prompt,
-)
-
+from ttml.optimizers import create_optimizer
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
-from llama_overrides import LlamaCompositeKV
-from typing import Iterator, Sequence
-from string import Template
+from .llama_overrides import LlamaCompositeKV
 
 
-def setup(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
-    set_seed(42)
+@dataclass
+class InferenceCtx:
+    tt_model: object
+    tokenizer: object
+    transformer_config: object
+    pad_token: int
+    max_tokens_to_complete: int
+    temperature: float
+    tile_size: int = 32
+    group_size: int = 1
+    sample_seed: int = 42
+    optimizer: object | None = None
+    _kv_cache: object = None
+    _B: int = None
+    _N: int = None
 
-    yaml_config = load_config(yaml_config_path, f"{get_tt_metal_home()}/tt-train/configs/training_configs")
+
+@dataclass
+class GrpoConfig:
+    clip_eps: float
+    base_lr: float
+    warmup_steps: int
+    micro_batch_size: int
+    num_mini_epochs: int  # from training_config.num_epochs
+    prompts_to_train: int
+    completions_batch_size: int  # from training_config.batch_size
+
+
+def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
+    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
 
     # training_config -> model_config path
     model_config = load_config(yaml_config["training_config"]["model_config"])
@@ -36,6 +48,7 @@ def setup(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False)
 
     # GRPO runtime knobs from training yaml
     grpo_cfg = yaml_config.get("grpo_config", {})
+
     max_tokens_to_complete = int(grpo_cfg["max_tokens_to_complete"])
     group_size = int(grpo_cfg["group_size"])
 
@@ -109,59 +122,28 @@ def setup(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False)
     return ctx
 
 
-def extract_hash_answer(text: str) -> float | None:
-    if "####" not in text:
-        return None
-    s = text.split("####")[1].strip()
+def setup_grpo_config(yaml_config_path) -> GrpoConfig:
+    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
 
-    if s is None:
-        return float("nan")
+    grpo_cfg = yaml_config.get("grpo_config", {})
+    training_cfg = yaml_config["training_config"]
 
-    import re
-
-    number_re = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
-
-    if not number_re.fullmatch(s):
-        return float("nan")
-
-    return float(s.replace(",", ""))
-
-
-def get_gsm8k(
-    ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=None
-) -> Tuple[List[str], List[float]]:
-    data = load_dataset("openai/gsm8k", "main")[split]
-    if shuffle_seed is not None:
-        data = data.shuffle(seed=shuffle_seed)
-
-    dataset = data.map(
-        lambda x: {
-            "prompt": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": x["question"]},
-            ],
-            "answer": extract_hash_answer(x["answer"]),
-        }
+    grpo_config = GrpoConfig(
+        clip_eps=float(grpo_cfg.get("clip_eps", 0.2)),
+        base_lr=float(grpo_cfg.get("base_lr", 1e-6)),
+        warmup_steps=int(grpo_cfg.get("warmup_steps", 20)),
+        micro_batch_size=int(grpo_cfg.get("micro_batch_size", 16)),
+        prompts_to_train=int(grpo_cfg.get("prompts_to_train", 1536)),
+        num_mini_epochs=int(training_cfg.get("num_epochs", 1)),
+        completions_batch_size=int(training_cfg.get("batch_size", 4)),
     )
 
-    questions = [ex["question"] for ex in dataset]
-    answers = [ex["answer"] for ex in dataset]
+    return grpo_config
 
-    t = Template(user_prompt_template_str)
 
-    prompts = [
-        ctx.tokenizer.apply_chat_template(
-            [
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {"role": "user", "content": t.substitute(question=q)},
-            ],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        for q in questions
-    ]
-
-    return prompts, answers
+def setup_training_optimizer(yaml_config_path, tt_model):
+    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
+    return create_optimizer(
+        yaml_config["training_config"]["optimizer"],
+        tt_model.parameters(),
+    )
