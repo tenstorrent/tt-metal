@@ -372,6 +372,20 @@ class Glm4MoeForCausalLM(nn.Module):
             page_table = page_table.clone()
             page_table[:, 0] = torch.arange(page_table.shape[0], dtype=torch.int32)
 
+        # Correctness: zero out unused tail of page table to prevent stale block IDs.
+        # vLLM reuses page table rows across requests without clearing tails. Stale
+        # block IDs in unused slots cause nondeterministic garbled output when KV blocks
+        # are recycled. We zero the tail instead of slicing to preserve the tensor shape
+        # (required for trace replay's copy_host_to_device_tensor shape match).
+        # (Ported from glm4_moe_lite which had the same bug.)
+        if start_pos is not None and page_table.numel() > 0:
+            block_size = 64  # default, matches KV cache block_size in env
+            max_pos = int(start_pos.max().item()) if start_pos.numel() else 0
+            blocks_needed = max(1, max_pos // block_size + 1)
+            if blocks_needed < page_table.shape[1]:
+                page_table = page_table.clone()
+                page_table[:, blocks_needed:] = 0
+
         self._ensure_tt_runner()
         tt_out = self._tt_runner.decode(
             tokens=tokens,

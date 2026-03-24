@@ -850,12 +850,20 @@ class Glm4MoeAttention(LightweightModule):
         keys = kv_cache[0]
         values = kv_cache[1]
 
-        ttnn.experimental.paged_update_cache(
-            keys, k, update_idxs_tensor=current_pos, page_table=page_table
-        )
-        ttnn.experimental.paged_update_cache(
-            values, v, update_idxs_tensor=current_pos, page_table=page_table
-        )
+        # Multi-device correctness: pass mesh_coords to ensure KV update dispatches
+        # to ALL mesh coordinates. Without it, KV boundary corruption observed on TG
+        # mesh when second KV page is first touched. (Ported from glm4_moe_lite.)
+        _puc_kw = dict(update_idxs_tensor=current_pos, page_table=page_table)
+        if self.mesh_device.__class__.__name__ == "MeshDevice":
+            try:
+                _mr, _mc = int(self.mesh_device.shape[0]), int(self.mesh_device.shape[1])
+                _puc_kw["mesh_coords"] = {
+                    ttnn.MeshCoordinate(r, c) for r in range(_mr) for c in range(_mc)
+                }
+            except Exception:
+                pass
+        ttnn.experimental.paged_update_cache(keys, k, **_puc_kw)
+        ttnn.experimental.paged_update_cache(values, v, **_puc_kw)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
