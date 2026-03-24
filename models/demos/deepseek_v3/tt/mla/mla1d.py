@@ -66,7 +66,7 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32):
+def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -79,6 +79,7 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
         batch: Batch dimension (1 for unbatched, >1 for batched)
         tile_h: Tile height (default 32)
         tile_w: Tile width (default 32)
+        mesh_device: Device (or mesh) used for the tests - needed to retrieve the core grid
 
     Returns:
         MatmulMultiCoreReuseMultiCastProgramConfig
@@ -87,15 +88,17 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     K_tiles = even_int_div(k, tile_w)
     N_tiles = even_int_div(n, tile_w)
 
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
-    for x in range(min(8, N_tiles), 0, -1):
+    for x in range(min(compute_grid.x, N_tiles), 0, -1):
         if N_tiles % x == 0:
             grid_x = x
             break
 
     grid_y = 1
-    for y in range(min(8, M_tiles), 0, -1):
+    for y in range(min(compute_grid.y, M_tiles), 0, -1):
         if M_tiles % y == 0:
             grid_y = y
             break
@@ -1666,7 +1669,7 @@ class MLA1D(AbstractModule):
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         wq_b_program_config = build_prefill_matmul_program_config(
-            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim
+            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
 
@@ -1682,7 +1685,11 @@ class MLA1D(AbstractModule):
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
 
         wkv_b1_program_config = build_prefill_matmul_program_config(
-            seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q_nope = ttnn.linear(
             tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
@@ -1764,7 +1771,11 @@ class MLA1D(AbstractModule):
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
 
         wkv_b2_program_config = build_prefill_matmul_program_config(
-            seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
+            seq_len,
+            k=kv_lora_rank,
+            n=v_head_dim,
+            batch=num_heads_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         v_out = ttnn.linear(
             v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
@@ -1795,7 +1806,9 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
-            wo_chunk_program_config = build_prefill_matmul_program_config(SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim)
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
 
             output_chunks = []
             hidden_dim = num_heads * v_head_dim
@@ -1823,7 +1836,9 @@ class MLA1D(AbstractModule):
         else:
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            wo_program_config = build_prefill_matmul_program_config(seq_len, k=wo_k, n=dim)
+            wo_program_config = build_prefill_matmul_program_config(
+                seq_len, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
             out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)  # [1, 1, seq_len, dim]
             ttnn.deallocate(v_out)
 
@@ -2201,7 +2216,9 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
-        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n)
+        wq_kv_a_program_config = build_prefill_matmul_program_config(
+            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+        )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
