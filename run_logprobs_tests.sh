@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run all logprobs-related tests for tt-metal and gpt-oss-120b
-# Usage: bash run_logprobs_tests.sh [--all | --sampling-module | --gpt-oss | --demo | --demo-logprobs]
+# Usage: bash run_logprobs_tests.sh [--all | --sampling-module | --gpt-oss | --demo | --demo-logprobs | --demo-compare]
 #
 # Options:
 #   --all              Run all tests (default)
@@ -8,18 +8,18 @@
 #   --gpt-oss          Run only gpt-oss-120b sampling tests
 #   --demo             Run batch128 demo without logprobs (baseline)
 #   --demo-logprobs    Run batch128 demo with logprobs (top-5)
-#   --demo-all         Run both demo variants (with and without logprobs)
+#   --demo-compare     Run both demos, save output to files, print perf diff
 #
 # Environment variables:
 #   HF_MODEL         Path to gpt-oss-120b weights (default: /localdev/gpt-oss-120b)
-#   TT_CACHE_PATH    Path to TT cache (default: /localdev/divanovic/tt-metal-cache)
+#   TT_CACHE_PATH    Path to TT cache (default: /localdev/gpt-oss-120b)
 
 set -e
 
 cd "$(dirname "$0")"
 
 export HF_MODEL=${HF_MODEL:-/localdev/gpt-oss-120b}
-export TT_CACHE_PATH=${TT_CACHE_PATH:-/localdev/divanovic/tt-metal-cache}
+export TT_CACHE_PATH=${TT_CACHE_PATH:-/localdev/gpt-oss-120b}
 
 MODE="${1:---all}"
 
@@ -39,46 +39,47 @@ run_gpt_oss() {
         -k "test_gpt_oss_topk_logprobs"
 }
 
-run_demo() {
-    echo "=== Running gpt-oss-120b batch128 demo (no logprobs) ==="
-    echo "  HF_MODEL=$HF_MODEL"
-    pytest models/demos/gpt_oss/demo/text_demo.py::test_gpt_oss_demo[batch128-mesh_4x8] \
-        -v -s --timeout 1200
-}
+run_demo_compare() {
+    OUTDIR="generated/logprobs_comparison"
+    mkdir -p "$OUTDIR"
 
-run_demo_logprobs() {
-    echo "=== Running gpt-oss-120b batch128 demo (with logprobs top-5) ==="
-    echo "  HF_MODEL=$HF_MODEL"
-    pytest models/demos/gpt_oss/demo/text_demo.py::test_gpt_oss_demo[batch128_logprobs-mesh_4x8] \
-        -v -s --timeout 1200
+    echo "=== Running batch128 WITHOUT logprobs ==="
+    echo "  Output: $OUTDIR/demo_no_logprobs.log"
+    pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8 and batch128 and not logprobs" \
+        -v -s --timeout 1200 2>&1 | tee "$OUTDIR/demo_no_logprobs.log"
+
+    echo ""
+    echo "=== Running batch128 WITH logprobs (top-5) ==="
+    echo "  Output: $OUTDIR/demo_with_logprobs.log"
+    pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8 and batch128 and logprobs" \
+        -v -s --timeout 1200 2>&1 | tee "$OUTDIR/demo_with_logprobs.log"
+
+    echo ""
+    echo "=== Comparison files saved to $OUTDIR ==="
+    echo ""
+    echo "=== Perf comparison ==="
+    echo "--- Without logprobs ---"
+    grep -E "decode_t/s|TTFT|decode speed|Performance" "$OUTDIR/demo_no_logprobs.log" || true
+    echo "--- With logprobs ---"
+    grep -E "decode_t/s|TTFT|decode speed|Performance" "$OUTDIR/demo_with_logprobs.log" || true
 }
 
 case "$MODE" in
     --sampling-module)
         run_sampling_module
         ;;
-    --gpt-oss)
+    --gpt-oss-sampling-tests)
         run_gpt_oss
         ;;
-    --demo)
-        run_demo
-        ;;
-    --demo-logprobs)
-        run_demo_logprobs
-        ;;
-    --demo-all)
-        run_demo
-        echo ""
-        run_demo_logprobs
+    --demo-compare)
+        run_demo_compare
         ;;
     --all|*)
         run_sampling_module
         echo ""
         run_gpt_oss
         echo ""
-        run_demo
-        echo ""
-        run_demo_logprobs
+        run_demo_compare
         ;;
 esac
 

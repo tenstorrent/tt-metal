@@ -40,6 +40,19 @@ class LogProbsResult:
     topk_logprobs_host: torch.Tensor
     topk_indices_host: torch.Tensor
 
+    def to_cpu(self, blocking: bool = False) -> "LogProbsResult":
+        """Transfer device tensors to host CPU.
+
+        Returns a NEW LogProbsResult so that each iteration gets its own host
+        tensor references (avoids race with trace-captured singletons).
+        """
+        return LogProbsResult(
+            topk_logprobs=None,
+            topk_indices=None,
+            topk_logprobs_host=self.topk_logprobs.cpu(blocking=blocking),
+            topk_indices_host=self.topk_indices.cpu(blocking=blocking),
+        )
+
 
 class LogProbsCalculator:
     """
@@ -275,9 +288,9 @@ class LogProbsCalculator:
             num_links=1,
             buffer_key="LOGPROBS_MAX_REDUCTION",
         )
-        ttnn.deallocate(local_max_tensor)
         # Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        ttnn.deallocate(local_max_tensor)
         D = self.num_devices_for_sharding
         B = gathered_max_tensors.shape[2]
         gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, D, B), **self.common_args)
@@ -291,8 +304,8 @@ class LogProbsCalculator:
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
         subtracted_tensor = ttnn.subtract(logits_tensor, global_max_to_subtract, **self.common_args)
-        ttnn.deallocate(global_max_to_subtract)
         exp_tensor = ttnn.exp(subtracted_tensor, **self.common_args)
+        ttnn.deallocate(global_max_to_subtract)
         ttnn.deallocate(subtracted_tensor)
         sum_exp_tensor = ttnn.sum(exp_tensor, dim=-1, keepdim=True, **self.common_args)
         ttnn.deallocate(exp_tensor)
@@ -303,8 +316,8 @@ class LogProbsCalculator:
             num_links=1,
             buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
         )
-        ttnn.deallocate(sum_exp_tensor)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        ttnn.deallocate(sum_exp_tensor)
         B_sum = gathered_sum_exp_tensors.shape[2]
         gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
@@ -553,19 +566,6 @@ class LogProbsCalculator:
             )
         else:
             return ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-
-    def to_cpu(self, log_probs_result: LogProbsResult, blocking: bool = False):
-        """Transfer LogProbsResult tensors to host CPU.
-
-        Returns a NEW LogProbsResult so that each iteration gets its own host
-        tensor references (avoids race with trace-captured singletons).
-        """
-        return LogProbsResult(
-            topk_logprobs_host=log_probs_result.topk_logprobs.cpu(blocking=blocking, cq_id=0),
-            topk_indices_host=log_probs_result.topk_indices.cpu(blocking=blocking, cq_id=0),
-            topk_logprobs=None,
-            topk_indices=None,
-        )
 
     def transfer_logprobs_to_host(
         self,
