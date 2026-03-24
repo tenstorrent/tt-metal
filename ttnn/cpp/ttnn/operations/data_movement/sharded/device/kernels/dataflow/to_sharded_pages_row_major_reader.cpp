@@ -98,7 +98,6 @@ void kernel_main() {
             const auto output_page_valid_data_bytes = input_page_read_info.output_page_valid_data_bytes;
             cb_reserve_back(cb_id_in1, 1);
             uint32_t l1_output_page_write_addr = get_write_ptr(cb_id_in1);
-            uint32_t l1_output_buffer_temp_write_addr = l1_output_page_write_addr;
 
             // Read the input pages into the CB
             const auto input_pages_to_read = input_last_page_id - input_first_page_id + 1;
@@ -128,10 +127,10 @@ void kernel_main() {
 
                 cb_push_back(cb_id_in0, 1);
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
-                    l1_output_buffer_temp_write_addr,
+                    l1_output_page_write_addr,
                     input_pages_l1_write_addr + input_page_offset_bytes,
                     input_page_overlapping_bytes_with_output_page);
-                l1_output_buffer_temp_write_addr += input_page_overlapping_bytes_with_output_page;
+                l1_output_page_write_addr += input_page_overlapping_bytes_with_output_page;
             }
             cb_push_back(cb_id_in1, 1);
             cb_wait_front(cb_id_in0, input_pages_to_read);

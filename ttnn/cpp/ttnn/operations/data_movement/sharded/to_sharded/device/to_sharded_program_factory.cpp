@@ -62,7 +62,7 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     }
 
     const auto input_pages_cb_index = tt::CBIndex::c_0;
-    const auto output_page_cb_index = tt::CBIndex::c_16;
+    const auto output_page_cb_index = tt::CBIndex::c_1;
 
     // computation of core_grid. To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452 once
     // that is merged
@@ -115,13 +115,14 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     tt::tt_metal::CreateCircularBuffer(program, ordered_cores_with_data_range, input_pages_cb_config);
 
     // Configuring the CB that stores output pages
-    const auto output_page_size =
-        output.buffer()->page_size();  // Output page size doesn't need to be aligned, since we are only writing the
-                                       // valis nonpadding page data to the output buffer in the kernel
+    const auto aligned_output_page_size =
+        output.buffer()->aligned_page_size();  // Output page size doesn't need to be aligned, since we are only writing
+                                               // the valis nonpadding page data to the output buffer in the kernel
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::tt_metal::CircularBufferConfig output_pages_cb_config =
-        tt::tt_metal::CircularBufferConfig(1 * output_page_size, {{output_page_cb_index, output_cb_data_format}})
-            .set_page_size(output_page_cb_index, output_page_size);
+        tt::tt_metal::CircularBufferConfig(
+            2 * aligned_output_page_size, {{output_page_cb_index, output_cb_data_format}})
+            .set_page_size(output_page_cb_index, aligned_output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, ordered_cores_with_data_range, output_pages_cb_config);
 
     // Reader kernel config with compile-time args
