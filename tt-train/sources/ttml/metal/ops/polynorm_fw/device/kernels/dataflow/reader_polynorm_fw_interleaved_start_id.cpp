@@ -8,32 +8,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
-template <typename AddrGen>
-uint16_t read_scalar_bf16_from_tile(const AddrGen& addr_gen, const uint32_t row, const uint32_t col) {
-    constexpr uint32_t cb_scratch = tt::CBIndex::c_5;
-    cb_reserve_back(cb_scratch, onetile);
-    const uint32_t l1_addr = get_write_ptr(cb_scratch);
-    noc_async_read_page(/*tile_idx=*/0U, addr_gen, l1_addr);
-    noc_async_read_barrier();
-    const auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
-    const uint16_t scalar_bf16 = ptr[get_tilized_idx(row, col)];
-    cb_push_back(cb_scratch, onetile);
-    cb_pop_front(cb_scratch, onetile);
-    return scalar_bf16;
-}
-
-void push_scalar_bf16_as_bcast_tile(const uint32_t cb_id, const uint16_t scalar_bf16) {
-    cb_reserve_back(cb_id, onetile);
-    const uint32_t l1_addr = get_write_ptr(cb_id);
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
-    const uint32_t packed_scalar_bf16 =
-        static_cast<uint32_t>(scalar_bf16) | (static_cast<uint32_t>(scalar_bf16) << 16U);
-    for (uint32_t i = 0; i < 512U; ++i) {
-        ptr[i] = packed_scalar_bf16;
-    }
-    cb_push_back(cb_id, onetile);
-}
-
 // Reader kernel: emits constants and three input streams in compute-consumption order.
 void kernel_main() {
     uint32_t arg_idx = 0U;
@@ -70,14 +44,19 @@ void kernel_main() {
     const auto weight_address_generator = TensorAccessor(weight_args, weight_address, tile_bytes);
     const auto bias_address_generator = TensorAccessor(bias_args, bias_address, tile_bytes);
 
-    const uint16_t w0_bf16 = read_scalar_bf16_from_tile(weight_address_generator, /*row=*/0U, /*col=*/0U);
-    const uint16_t w1_bf16 = read_scalar_bf16_from_tile(weight_address_generator, /*row=*/0U, /*col=*/1U);
-    const uint16_t w2_bf16 = read_scalar_bf16_from_tile(weight_address_generator, /*row=*/0U, /*col=*/2U);
-    const uint16_t bias_bf16 = read_scalar_bf16_from_tile(bias_address_generator, /*row=*/0U, /*col=*/0U);
-    push_scalar_bf16_as_bcast_tile(cb_w0, w0_bf16);
-    push_scalar_bf16_as_bcast_tile(cb_w1, w1_bf16);
-    push_scalar_bf16_as_bcast_tile(cb_w2, w2_bf16);
-    push_scalar_bf16_as_bcast_tile(cb_bias, bias_bf16);
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_5;
+    const uint16_t w0_bf16 =
+        read_bfloat16_scalar_from_tile(weight_address_generator, /*row=*/0U, /*col=*/0U, cb_scratch);
+    const uint16_t w1_bf16 =
+        read_bfloat16_scalar_from_tile(weight_address_generator, /*row=*/0U, /*col=*/1U, cb_scratch);
+    const uint16_t w2_bf16 =
+        read_bfloat16_scalar_from_tile(weight_address_generator, /*row=*/0U, /*col=*/2U, cb_scratch);
+    const uint16_t bias_bf16 =
+        read_bfloat16_scalar_from_tile(bias_address_generator, /*row=*/0U, /*col=*/0U, cb_scratch);
+    generate_tile_with_bfloat16_value(cb_w0, w0_bf16);
+    generate_tile_with_bfloat16_value(cb_w1, w1_bf16);
+    generate_tile_with_bfloat16_value(cb_w2, w2_bf16);
+    generate_tile_with_bfloat16_value(cb_bias, bias_bf16);
 
     for (uint32_t row = 0; row < num_rows_to_process; ++row) {
         const uint32_t row_start_idx = (start_row + row) * Wt;
