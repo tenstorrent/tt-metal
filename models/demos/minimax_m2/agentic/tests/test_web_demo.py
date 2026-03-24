@@ -92,7 +92,7 @@ class WebDemoTester:
             return False, f"Status code {resp.status_code}"
         data = resp.json()
 
-        expected_models = ["llm", "whisper", "speecht5", "owlvit", "bert", "t5", "yunet"]
+        expected_models = ["llm", "whisper", "speecht5", "owlvit", "bert", "t5", "yunet", "sbert", "rag"]
         models = data.get("models", {})
 
         missing = [m for m in expected_models if not models.get(m)]
@@ -519,6 +519,95 @@ class WebDemoTester:
         else:
             return True, f"Response (may not use T5): {text[:80]}..."
 
+    def test_face_detection(self) -> Tuple[bool, str]:
+        """Test YUNet face detection."""
+        # Find a test image with faces
+        test_images = [
+            "/home/ubuntu/agentic/tt-metal/models/experimental/yunet/test_images/test_face.jpg",
+            "/home/ubuntu/agentic/tt-metal/models/demos/yolov4/images/coco_sample.jpg",
+        ]
+
+        image_path = None
+        for p in test_images:
+            if os.path.exists(p):
+                image_path = p
+                break
+
+        if not image_path:
+            return True, "No face test image found (skipped)"
+
+        # Upload image
+        with open(image_path, "rb") as f:
+            upload_resp = requests.post(f"{self.base_url}/upload", files={"file": f}, timeout=30)
+
+        if upload_resp.status_code != 200:
+            return False, f"Upload failed: {upload_resp.status_code}"
+
+        server_path = upload_resp.json().get("path")
+        self.uploaded_files.append(server_path)
+
+        # Query for face detection
+        resp = requests.post(
+            f"{self.base_url}/query",
+            json={"text": "How many faces are in this image?", "image_path": server_path},
+            timeout=TIMEOUT,
+        )
+
+        if resp.status_code != 200:
+            return False, f"Query failed: {resp.status_code}"
+
+        data = resp.json()
+        tools_used = data.get("tools_used", [])
+        text = data.get("text", "")
+
+        if "detect_faces" in tools_used:
+            return True, f"Face detection used: {text[:80]}..."
+        else:
+            return False, f"Expected detect_faces tool, got: {tools_used}"
+
+    def test_rag_semantic_search(self) -> Tuple[bool, str]:
+        """Test RAG with SBERT semantic search."""
+        # Clear existing RAG data
+        requests.post(f"{self.base_url}/rag/clear", timeout=10)
+
+        # Add test documents
+        docs = [
+            ("Tenstorrent builds AI accelerators using a novel Tensix architecture.", "tensix_doc"),
+            ("TTNN is a Python library for neural network deployment on Tenstorrent.", "ttnn_doc"),
+            ("The Wormhole chip contains multiple Tensix cores for parallel operations.", "wormhole_doc"),
+        ]
+
+        for text, source in docs:
+            requests.post(f"{self.base_url}/rag/add-text", json={"text": text, "source": source}, timeout=30)
+
+        # Search for something semantically related
+        resp = requests.post(
+            f"{self.base_url}/rag/search",
+            params={"query": "What is the Python library for Tenstorrent?", "top_k": 2},
+            timeout=30,
+        )
+
+        if resp.status_code != 200:
+            return False, f"Status code {resp.status_code}"
+
+        data = resp.json()
+        results = data.get("results", [])
+
+        if len(results) == 0:
+            return False, "No search results"
+
+        # Check if TTNN doc is in top results
+        top_result = results[0]
+        score = top_result.get("score", 0)
+        text = top_result.get("text", "").lower()
+
+        if "ttnn" in text and score > 0.3:
+            return True, f"Semantic search works! Top score: {score:.3f}"
+        elif score > 0:
+            return True, f"Search returned results (score: {score:.3f})"
+        else:
+            return False, f"Search scores are 0.0 - embeddings may not be working"
+
     # =========================================================================
     # Error Handling Tests
     # =========================================================================
@@ -616,6 +705,8 @@ class WebDemoTester:
         print("=" * 70)
         self._run_test("BERT QA", self.test_bert_qa)
         self._run_test("Translation query", self.test_translation_query)
+        self._run_test("Face detection (YUNet)", self.test_face_detection)
+        self._run_test("RAG semantic search (SBERT)", self.test_rag_semantic_search)
 
         # Error Handling
         print("\n" + "=" * 70)

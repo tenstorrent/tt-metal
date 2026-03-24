@@ -122,17 +122,17 @@ def load_all_models(
 
     # All models run on full (1,2) mesh with fabric enabled for multi-chip parallelism.
     #
-    # WARNING: SBERT trace capture conflicts with LLM memory when loaded together.
-    # SBERT works standalone but corrupts LLM output in multi-model setup.
-    # Use load_bge=True (TF-IDF) for web demo until this is resolved.
-
     # --- SBERT (embeddings for RAG - TTNN accelerated) ----------------------
-    # EXPERIMENTAL: Only use in standalone mode, not with LLM
+    # When loading with LLM, use non-traced mode to avoid memory conflicts.
+    # Non-traced mode is slower but compatible with multi-model setup.
     if load_sbert:
-        logger.info("[1/11] Loading Sentence BERT embeddings (TTNN accelerated, must load first)...")
+        # Determine if we need non-traced mode (when LLM is also loaded)
+        use_trace = not load_llm
+        mode_str = "traced" if use_trace else "non-traced (LLM compatible)"
+        logger.info(f"[1/11] Loading Sentence BERT embeddings ({mode_str})...")
         from models.demos.minimax_m2.agentic.tool_wrappers.sbert_tool import SBERTTool
 
-        bundle.sbert = SBERTTool(mesh_device=mesh_device)
+        bundle.sbert = SBERTTool(mesh_device=mesh_device, use_trace=use_trace)
 
         # Initialize RAG system with SBERT embeddings
         logger.info("[1/11] Initializing RAG system with SBERT...")

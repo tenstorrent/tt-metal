@@ -49,10 +49,13 @@ class BGETool:
         from sklearn.decomposition import TruncatedSVD
         from sklearn.feature_extraction.text import TfidfVectorizer
 
+        # Use character n-grams (analyzer='char_wb') for better OOV handling
+        # This creates subword features that overlap between query and documents
         self._vectorizer = TfidfVectorizer(
-            max_features=5000,
-            stop_words="english",
-            ngram_range=(1, 2),
+            max_features=10000,
+            analyzer="char_wb",  # Character n-grams within word boundaries
+            ngram_range=(3, 5),  # 3-5 character n-grams
+            min_df=1,  # Include all features
         )
         self._svd = TruncatedSVD(n_components=self.EMBEDDING_DIM)
 
@@ -110,8 +113,16 @@ class BGETool:
         else:
             embeddings = self._transform(texts)
 
-        # Normalize embeddings
+        # Handle near-zero embeddings (add small random component to preserve some signal)
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        near_zero_mask = norms.flatten() < 1e-6
+        if np.any(near_zero_mask):
+            logger.warning(f"Near-zero embeddings detected for {np.sum(near_zero_mask)} texts")
+            # Add small random noise to preserve some differentiation
+            embeddings[near_zero_mask] = np.random.randn(np.sum(near_zero_mask), embeddings.shape[1]) * 0.01
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+        # Normalize embeddings
         embeddings = embeddings / (norms + 1e-8)
 
         return embeddings

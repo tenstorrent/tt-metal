@@ -25,7 +25,13 @@ class SBERTTool:
     TTNN-accelerated Sentence BERT for text embeddings.
 
     Generates 384-dimensional embeddings for semantic search and RAG.
-    Runs on Tenstorrent N300 at ~780 sentences/sec (2 chips).
+    Runs on Tenstorrent N300 at ~780 sentences/sec (2 chips) with trace.
+
+    Args:
+        mesh_device: TTNN mesh device
+        model_location_generator: Optional model path generator
+        use_trace: If True, capture trace for fast execution. If False, run without
+                   trace (slower but compatible with LLM multi-model setup).
     """
 
     MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
@@ -33,11 +39,12 @@ class SBERTTool:
     BATCH_SIZE = 8
     EMBEDDING_DIM = 768  # BERT base hidden dimension
 
-    def __init__(self, mesh_device, model_location_generator=None):
+    def __init__(self, mesh_device, model_location_generator=None, use_trace: bool = True):
         self.mesh_device = mesh_device
         self.model_location_generator = model_location_generator
         self._runner = None
         self._tokenizer = None
+        self._use_trace = use_trace
         self._num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
         self._init_model()
 
@@ -84,9 +91,46 @@ class SBERTTool:
             position_ids=dummy_position_ids,
         )
 
-        # Capture trace for fast execution
-        logger.info("Capturing Sentence BERT trace...")
-        self._runner._capture_sentencebert_trace_2cqs()
+        if self._use_trace:
+            # Capture trace for fast execution (conflicts with LLM multi-model setup)
+            logger.info("Capturing Sentence BERT trace...")
+            self._runner._capture_sentencebert_trace_2cqs()
+        else:
+            # Non-traced mode: slower but compatible with LLM
+            logger.info("Sentence BERT in non-traced mode (LLM compatible)...")
+            # Setup inputs and run once to warm up JIT compilation
+            (
+                ttnn_input_ids,
+                input_mem_config,
+                ttnn_token_ids,
+                ttnn_pos_ids,
+                ttnn_ext_att_mask,
+                ttnn_att_mask,
+            ) = self._runner.runner_infra.setup_l1_sharded_input()
+
+            # Move to device with sharded memory config
+            self._runner.runner_infra.ttnn_input_ids = ttnn.to_memory_config(
+                ttnn_input_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_token_ids = ttnn.to_memory_config(
+                ttnn_token_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_pos_ids = ttnn.to_memory_config(
+                ttnn_pos_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_ext_att_mask = ttnn.to_memory_config(
+                ttnn_ext_att_mask.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_att_mask = ttnn.to_memory_config(
+                ttnn_att_mask.to(self.mesh_device), input_mem_config
+            )
+
+            # Store input_mem_config for later use
+            self._input_mem_config = input_mem_config
+
+            # Run once to warm up JIT compilation
+            self._runner.runner_infra.run()
+            self._runner.runner_infra.dealloc_output()
 
         logger.info("Sentence BERT embeddings ready.")
 
@@ -152,19 +196,57 @@ class SBERTTool:
         # Prepare inputs
         input_ids, token_type_ids, position_ids, extended_mask, attention_mask = self._prepare_inputs(texts)
 
-        # Run model
-        ttnn_out = self._runner.run(
-            input_ids=input_ids,
-            tokens=token_type_ids,
-            posids=position_ids,
-            ext_att_mask=extended_mask,
-            att_mask=attention_mask,
-        )
+        # Run model (traced or non-traced)
+        if self._use_trace:
+            ttnn_out = self._runner.run(
+                input_ids=input_ids,
+                tokens=token_type_ids,
+                posids=position_ids,
+                ext_att_mask=extended_mask,
+                att_mask=attention_mask,
+            )
+        else:
+            # Non-traced execution: setup inputs and run directly
+            (
+                ttnn_input_ids,
+                input_mem_config,
+                ttnn_token_ids,
+                ttnn_pos_ids,
+                ttnn_ext_att_mask,
+                ttnn_att_mask,
+            ) = self._runner.runner_infra.setup_l1_sharded_input(
+                input_ids, token_type_ids, position_ids, extended_mask, attention_mask
+            )
+
+            # Move to device with sharded memory config
+            self._runner.runner_infra.ttnn_input_ids = ttnn.to_memory_config(
+                ttnn_input_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_token_ids = ttnn.to_memory_config(
+                ttnn_token_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_pos_ids = ttnn.to_memory_config(
+                ttnn_pos_ids.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_ext_att_mask = ttnn.to_memory_config(
+                ttnn_ext_att_mask.to(self.mesh_device), input_mem_config
+            )
+            self._runner.runner_infra.ttnn_att_mask = ttnn.to_memory_config(
+                ttnn_att_mask.to(self.mesh_device), input_mem_config
+            )
+
+            self._runner.runner_infra.run()
+            ttnn_out = self._runner.runner_infra.ttnn_output_tensor[0]
+            # Note: Don't dealloc_output() here - we need the tensor for to_torch() below
 
         # Convert output - sentence BERT outputs last hidden state [batch, seq, hidden]
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if self._num_devices > 1 else None
 
         embeddings = ttnn.to_torch(ttnn_out, dtype=torch.float32, mesh_composer=mesh_composer)
+
+        # Deallocate output tensor after conversion (for non-traced mode)
+        if not self._use_trace:
+            self._runner.runner_infra.dealloc_output()
 
         # Mean pooling over sequence dimension (using attention mask)
         # embeddings shape: [batch, seq_len, hidden_dim]
@@ -230,7 +312,8 @@ class SBERTTool:
         """Release resources."""
         if self._runner is not None:
             try:
-                self._runner.release()
+                if self._use_trace:
+                    self._runner.release()  # Release trace
             except Exception as e:
                 logger.warning(f"SBERT runner release failed: {e}")
             self._runner = None

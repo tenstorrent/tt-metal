@@ -31,7 +31,15 @@ def Linear(
 
     weight = weight
     bias = bias
-    weight_T = ttnn.transpose(weight, -2, -1)
+    # Use permute instead of transpose to avoid segfault on some configurations
+    # permute requires tensor to be on device, so check storage type
+    if weight.device() is None:
+        # Weight is on host, use torch transpose on the underlying data
+        weight_torch = ttnn.to_torch(weight)
+        weight_T_torch = weight_torch.transpose(-2, -1).contiguous()
+        weight_T = ttnn.from_torch(weight_T_torch, dtype=weight.dtype, layout=weight.layout)
+    else:
+        weight_T = ttnn.permute(weight, (0, 1, 3, 2))
 
     def linear_(activation):
         nonlocal bias

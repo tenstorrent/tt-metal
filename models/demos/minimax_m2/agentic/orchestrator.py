@@ -53,6 +53,7 @@ AVAILABLE TOOLS:
 - translate_text(text, source_lang, target_lang): Translate text between languages (T5)
   Supported languages: en (English), de (German), fr (French), ro (Romanian)
 - generate_image(prompt, output_path): Generate an image from text description (Stable Diffusion)
+- search_knowledge_base(query): Search uploaded documents for relevant information (RAG with semantic search)
 
 CRITICAL RULES FOR IMAGE ATTACHMENTS:
 
@@ -75,6 +76,8 @@ RULES FOR TEXT-ONLY (no attachments):
 - "say this aloud" → call text_to_speech
 - Context paragraph + question → call answer_from_context
 - "translate X to German/French" → call translate_text
+- Questions about Tenstorrent, TTNN, tech reports → call search_knowledge_base(query)
+- "what do the documents say about X" → call search_knowledge_base(query)
 
 AFTER receiving tool results, provide your FINAL ANSWER as plain text.
 

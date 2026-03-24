@@ -164,7 +164,7 @@ def make_broadcast_dispatch_tool(broadcast_fn, tools_used_list):
         "generate_image": "Stable Diffusion",
         "detect_faces": "YUNet",
         "translate_text": "T5",
-        "search_knowledge_base": "RAG (BGE)",
+        "search_knowledge_base": "RAG (SBERT)",
     }
 
     def broadcasting_dispatch_tool(name: str, args: Dict, models) -> Any:
@@ -362,7 +362,7 @@ async def startup_event():
             load_sd=False,  # SD hangs when loaded with other models (works standalone)
             load_yunet=True,  # Face detection
             load_t5=True,  # Translation
-            load_bge=True,  # BGE/TF-IDF embeddings for RAG (SBERT conflicts with LLM trace)
+            load_sbert=True,  # SBERT embeddings for RAG (TTNN accelerated, non-traced with LLM)
         )
 
         state.ready = True
@@ -429,7 +429,7 @@ async def status():
             "t5": state.models.t5 is not None,
             "yunet": state.models.yunet is not None,
             "sd": state.models.sd is not None,
-            "bge": state.models.bge is not None,  # TF-IDF embeddings (SBERT conflicts with LLM)
+            "sbert": state.models.sbert is not None,  # SBERT embeddings (TTNN accelerated)
             "rag": state.models.rag is not None,
         }
         # Include RAG stats if available
@@ -473,7 +473,7 @@ async def load_models_endpoint():
             load_sd=False,  # Skip SD for faster startup
             load_yunet=False,
             load_t5=False,
-            load_bge=True,  # BGE/TF-IDF for RAG (SBERT conflicts with LLM trace)
+            load_sbert=True,  # SBERT embeddings (traced mode OK without LLM)
         )
 
         state.ready = True
