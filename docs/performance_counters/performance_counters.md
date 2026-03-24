@@ -206,24 +206,35 @@ Use these to measure compute utilization: `FPU_OR_SFPU_INSTRN / cycles`. Note th
 
 ## Memory Layout (Shared Buffer Architecture)
 
-Configuration and data buffers in L1 use a **single shared buffer** accessed by all threads (UNPACK, MATH, PACK). Layout: 86 config words (344 bytes) + 172 data words (688 bytes) + 1 sync control word = 1036 bytes total.
+Configuration and data buffers in L1 use a **single shared buffer** accessed by all TRISC threads (UNPACK, MATH, PACK, SFPU). The layout is architecture-dependent:
+
+- **Wormhole/Blackhole (3 TRISCs):** UNPACK, FPU/SFPU, PACK
+- **Quasar (4 TRISCs):** UNPACK, FPU/SFPU (SFPU optional), PACK, isolated SFPU
+
+Base layout: 86 config words (344 bytes) + 172 data words (688 bytes) + sync region. The sync region size depends on thread count (see below).
 
 | Buffer Component | Address | Size | Description |
 |-----------------|---------|------|-------------|
 | Config Buffer | 0x16A000 | 86 words (344 bytes) | Counter slot configurations (shared) |
 | Data Buffer | 0x16A158 | 172 words (688 bytes) | Counter results (written by last stopper) |
-| Sync Control Word | 0x16A408 | 1 word (4 bytes) | Synchronization state and last stopper ID |
+| Sync Control Word | 0x16A408 | 1 word (4 bytes) | Synchronization state and starter/stopper IDs |
+
+The sync region also includes per-thread ATINCGET counters (start + stop) and a stop-elect ticket used for last-arrival detection. These are internal to the synchronization logic; see `counters.h` for addresses.
 
 **Shared Buffer Semantics:**
-- All threads (UNPACK, MATH, PACK) call `start_perf_counters()` to set their start bits
+- All threads (UNPACK, MATH, PACK, and SFPU on Quasar) call `start_perf_counters()` to set their start bits
 - The **first thread to call start** (when all start bits are 0) initializes hardware and is recorded as the "starter"
 - All threads call `stop_perf_counters()` to set their stop bits
-- The **last thread to call stop** (when all 3 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper"
+- The **last thread to call stop** (when all 3 stop bits become set on Wormhole/Blackhole, or all 4 on Quasar) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper"
 - Python `read_counters()` returns the snapshot captured by the stopper, along with both starter and stopper thread IDs
 - **No mutex required**: Each thread atomically sets its own bit; checks are simple bit masks
-- This reduces memory usage from 3096 bytes (3 × 1032) to 1036 bytes
+- **Reduces memory usage**: One shared config+data buffer instead of per-thread buffers (e.g. 1032 vs 3×1032 bytes for config+data on 3 TRISCs)
 
-**Sync Control Word Format (0x16A408):**
+**Sync Control Word Format:**
+
+The bit layout differs for 3 vs 4 TRISCs:
+
+*3 TRISCs (Wormhole/Blackhole) – bits 0–2 start, 3–5 stop:*
 
 | Bit(s) | Field | Description |
 |--------|-------|-------------|
@@ -238,6 +249,24 @@ Configuration and data buffers in L1 use a **single shared buffer** accessed by 
 | 9:8 | starter_id | Which thread started hardware (0=UNPACK, 1=MATH, 2=PACK) |
 | 11:10 | stopper_id | Which thread stopped hardware (0=UNPACK, 1=MATH, 2=PACK) |
 | 31:12 | reserved | Reserved for future use |
+
+*4 TRISCs (Quasar) – bits 0–3 start, 4–7 stop:*
+
+| Bit(s) | Field | Description |
+|--------|-------|-------------|
+| 0 | started_unpack | UNPACK thread called start_perf_counters() |
+| 1 | started_math | MATH thread called start_perf_counters() |
+| 2 | started_pack | PACK thread called start_perf_counters() |
+| 3 | started_sfpu | SFPU thread called start_perf_counters() |
+| 4 | stopped_unpack | UNPACK thread called stop_perf_counters() |
+| 5 | stopped_math | MATH thread called stop_perf_counters() |
+| 6 | stopped_pack | PACK thread called stop_perf_counters() |
+| 7 | stopped_sfpu | SFPU thread called stop_perf_counters() |
+| 8 | started_global | At least one thread started counters |
+| 9 | stopped_global | All threads stopped counters |
+| 11:10 | starter_id | Which thread started hardware (0=UNPACK, 1=MATH, 2=PACK, 3=SFPU) |
+| 13:12 | stopper_id | Which thread stopped hardware (0=UNPACK, 1=MATH, 2=PACK, 3=SFPU) |
+| 31:14 | reserved | Reserved for future use |
 
 **Config word encoding:** Each counter slot is a single 32-bit config word with the following format:
 
@@ -420,8 +449,8 @@ Location: `tests/python_tests/helpers/counters.py`
 The `read_counters()` function performs comprehensive validation:
 - **Zero sync word**: Detects if counters were never started (all threads forgot to call `start_perf_counters()`)
 - **Missing global start**: At least one thread must call `start_perf_counters()`
-- **Missing global stop**: All threads must call `stop_perf_counters()`. Reports which specific threads (UNPACK, MATH, PACK) are missing stop calls
-- **Invalid thread IDs**: Validates both starter and stopper thread IDs are in valid range (0-2)
+- **Missing global stop**: All threads must call `stop_perf_counters()`. Reports which specific threads (UNPACK, MATH, PACK, and SFPU on Quasar) are missing stop calls
+- **Invalid thread IDs**: Validates both starter and stopper thread IDs are in valid range (0–2 for 3 TRISCs, 0–3 for Quasar)
 - **Error messages include sync_ctrl value**: All validation errors display the raw sync control word for debugging
 
 **Example validation error:**
@@ -459,9 +488,9 @@ The `PerfCounterManager` class manages performance counter lifecycle using a sin
 | Function | Description |
 |----------|-------------|
 | `llk_perf::start_perf_counters()` | Read config from shared L1 buffer and start all configured banks. Atomically sets the thread's start bit in sync control word. First thread to call this (when all start bits are 0) initializes hardware and is recorded as the "starter". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
-| `llk_perf::stop_perf_counters()` | Stop all configured banks and atomically set the thread's stop bit. Last thread to call this (when all 3 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
+| `llk_perf::stop_perf_counters()` | Stop all configured banks and atomically set the thread's stop bit. Last thread to call this (when all 4 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
 
-**Example usage:**
+**Example usage (3 TRISCs – Wormhole/Blackhole):**
 ```cpp
 #include "counters.h"
 
@@ -480,6 +509,15 @@ void llk_math_main() {
 void llk_pack_main() {
     llk_perf::start_perf_counters();
     // ... pack work ...
+    llk_perf::stop_perf_counters();
+}
+```
+
+**Example usage (4 TRISCs – Quasar):** Same pattern; add `start_perf_counters()` and `stop_perf_counters()` in the SFPU kernel. Required only on Quasar:
+```cpp
+void llk_sfpu_main() {  // Quasar only: 4th TRISC
+    llk_perf::start_perf_counters();
+    // ... SFPU work ...
     llk_perf::stop_perf_counters();
 }
 ```

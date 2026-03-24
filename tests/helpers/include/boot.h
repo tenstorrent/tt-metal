@@ -119,11 +119,10 @@ inline void device_setup()
 
 inline void clear_trisc_soft_reset()
 {
-#ifdef ARCH_QUASAR
-    constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x3000;
-#else
+    // Same mask (bits 12–14) on all archs; which TRISCs it clears is arch-specific.
+    // Quasar: no BRISC bit in the reset register, so 0x7000 clears TRISCs 1–3.
+    // WH/BH: BRISC occupies bit 11, so these three bits clear TRISCs 0–2.
     constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
-#endif
 
     volatile std::uint32_t* reset_before = reinterpret_cast<std::uint32_t*>(0x64FF0);
     volatile std::uint32_t* reset_after  = reinterpret_cast<std::uint32_t*>(0x64FF4);

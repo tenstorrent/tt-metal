@@ -70,13 +70,21 @@ constexpr std::uint32_t TRISC_ID = 0;
 constexpr std::uint32_t TRISC_ID = 1;
 #elif defined(LLK_TRISC_PACK)
 constexpr std::uint32_t TRISC_ID = 2;
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+constexpr std::uint32_t TRISC_ID = 3;
 #else
 #error "Profiler can only be used on TRISC cores"
 #endif
 
 constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
-constexpr std::uint32_t NUM_CORES     = 3;     // TRISC cores: unpack, math, pack
-constexpr std::uint32_t BUFFERS_END   = 0x16E000;
+// Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t NUM_CORES   = 4;
+constexpr std::uint32_t BUFFERS_END = 0x16F000;
+#else
+constexpr std::uint32_t NUM_CORES   = 3;
+constexpr std::uint32_t BUFFERS_END = 0x16E000;
+#endif
 constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
 constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
