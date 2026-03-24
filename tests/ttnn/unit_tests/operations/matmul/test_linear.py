@@ -688,7 +688,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
     worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid
+    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -713,7 +713,7 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
@@ -726,13 +726,16 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
         if torch_bias is not None:
             torch_output = torch_output + torch_bias
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        bias = (
-            ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            if use_bias
-            else None
-        )
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        # Use to_layout outside of ttnn.from_torch to avoid introducing new arguments (subdevice_id / sub_core_grids) for ttnn.from_torch.
+        # There is ongoing activity to unify the interface for subdevices; once complete, to_layout can be removed from here.
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        bias = None
+        if use_bias:
+            bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device)
+            bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
 
         output = ttnn.linear(
             input_a,
