@@ -28,7 +28,6 @@
 
 #include "api/compute/common.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
@@ -161,22 +160,6 @@ void print_cb_rm_row_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index
     UNPACK(DPRINT << ENDL(););
 }
 
-/*
- * Read 1 tiled block from cb_out, pack it and write to cb_out_rm as row-major block
- */
-template <uint32_t block_size>
-ALWI void untilize_row_major_block(const uint32_t cb_out, const uint32_t cb_out_rm, uint32_t num_tiles) {
-    reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
-
-    pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
-    cb_wait_front(cb_out, num_tiles);
-    cb_reserve_back(cb_out_rm, num_tiles);
-    pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
-    cb_push_back(cb_out_rm, num_tiles);
-    cb_pop_front(cb_out, num_tiles);
-    pack_untilize_uninit(cb_out_rm);
-}
-
 void kernel_main() {
     constexpr uint32_t ntiles_per_row_ct = get_compile_time_arg_val(0);
 
@@ -258,15 +241,11 @@ void kernel_main() {
         }
 
         // ============================================================
-        // Phase 4: Untilize — full row at once (full_ct_dim = ntiles_per_row)
+        // Phase 4: Untilize — one tile at a time, popping after each to advance
+        // fifo_rd_ptr.  pack_untilize_block uses llk_unpack_A with UnpackToDestEn,
+        // bypassing SrcA (19-bit / TF32), which is required for fp32 correctness
+        // and harmless for bf16.
         // ============================================================
-#ifdef IS_FP32
-        // fp32 path: pack_untilize routes through DST (32-bit) via UnpackToDestEn,
-        // bypassing the lossy SrcA (19-bit) path used by untilize_block.
-        //
-        // We process one tile per loop iteration and pop it immediately so that
-        // fifo_rd_ptr advances: llk_unpack_A always reads tile 0 relative to the
-        // current read pointer, so the pop is what drives the source tile forward.
         reconfig_data_format(CB_OUT_TILED, CB_OUT_TILED);
         pack_untilize_init<1, ntiles_per_row_ct>(CB_OUT_TILED, CB_OUT_RM);
         cb_reserve_back(CB_OUT_RM, tiles_per_block);
@@ -277,15 +256,6 @@ void kernel_main() {
         }
         cb_push_back(CB_OUT_RM, tiles_per_block);
         pack_untilize_uninit(CB_OUT_RM);
-#else
-        untilize_init(CB_OUT_TILED);
-        cb_wait_front(CB_OUT_TILED, tiles_per_block);
-        cb_reserve_back(CB_OUT_RM, tiles_per_block);
-        untilize_block(CB_OUT_TILED, tiles_per_block, CB_OUT_RM);
-        cb_push_back(CB_OUT_RM, tiles_per_block);
-        cb_pop_front(CB_OUT_TILED, tiles_per_block);
-        untilize_uninit(CB_OUT_TILED);
-#endif
 
         tilize_init_short_with_dt(CB_B_RM, CB_A_RM, tiles_per_block, CB_A_TILED);
     }
