@@ -1182,12 +1182,11 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        # OLMo: use bfloat16 for xqkv at ISL <= 2048 to preserve Q/K norm and RoPE precision.
-        # For ISL >= 4096: ring SDPA casts Q/K/V to bfloat8_b anyway, and
-        # reduce_scatter_minimal_async does not support bfloat16 at the 4096×896 size —
+        # OLMo: use bfloat16 for xqkv up to 8k ISL to preserve Q/K norm and RoPE precision.
+        # For ISL > 8192: ring SDPA casts Q/K/V to bfloat8_b and memory pressure grows —
         # use ccl_dtype (bfloat8_b) to match what ring SDPA requires.
         if self.is_olmo:
-            xqkv_dtype = ttnn.bfloat16 if seq_len <= 2048 else self.ccl_dtype
+            xqkv_dtype = ttnn.bfloat16 if seq_len <= 8192 else self.ccl_dtype
         else:
             xqkv_dtype = self.ccl_dtype if self.TG else ttnn.bfloat16
         xqkv = ttnn.linear(
@@ -1210,9 +1209,9 @@ class TtLlamaAttention(LightweightModule):
         if not skip_input_dealloc:
             ttnn.deallocate(x_11SH)
 
-        # Use QKV_BF16 (bfloat16 all-gather buffer) only for ISL <= 2048 where xqkv is bf16.
-        # For ISL >= 4096, xqkv is bfloat8_b → use the standard "QKV" buffer.
-        qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 2048) else "QKV"
+        # Use QKV_BF16 (bfloat16 all-gather buffer) for ISL <= 8192 where xqkv is bf16.
+        # For ISL > 8192, xqkv is bfloat8_b → use the standard "QKV" buffer.
+        qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 8192) else "QKV"
         _dbg_sync("qkv_allreduce_start")
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
@@ -1508,7 +1507,11 @@ class TtLlamaAttention(LightweightModule):
         )
         wo_compute_cfg_minimal = self.compute_kernel_config_hifi2_fp16
         wo_dtype = ttnn.bfloat16 if self.is_olmo else ttnn.bfloat8_b
-        if seq_len < 4096 or batch_size > 1:
+        # OLMo: extend linear WO to 8k ISL for bfloat16 output and FP32 accumulation.
+        # WO_PREFILL_PROGCFG uses out_subblock_h=1, out_subblock_w=2 (product=2 ≤ 4),
+        # so hifi2 (fp32_dest_acc_en=True) is safe at seq_len<=8192.
+        wo_linear_threshold = 8192 if self.is_olmo else 4095
+        if seq_len <= wo_linear_threshold or batch_size > 1:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 wo_weight,
@@ -1531,10 +1534,10 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # OLMo: select all-reduce buffer based on WO output dtype.
-        # - seq_len < 4096: ttnn.linear with bfloat16 output → use WO_AG_BF16 (bfloat16 buffer).
-        # - seq_len >= 4096: minimal_matmul (bf8 inputs → bf8 output, ring SDPA was already bf8)
+        # - seq_len <= 8192: ttnn.linear with bfloat16 output → use WO_AG_BF16 (bfloat16 buffer).
+        # - seq_len > 8192: minimal_matmul (bf8 inputs → bf8 output, ring SDPA was already bf8)
         #   → use WO_AG (bfloat8_b buffer).
-        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len < 4096 else "WO_AG"
+        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len <= 8192 else "WO_AG"
         _dbg_sync("wo_allreduce_start")
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,

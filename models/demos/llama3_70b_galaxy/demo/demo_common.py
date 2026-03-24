@@ -77,14 +77,16 @@ def load_inputs_simple(user_input, batch, instruct_mode, cache_dir):
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
-            if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(
-                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
-                )
+            ctx = user_input[i]["context"]
+            if ctx.startswith("http://") or ctx.startswith("https://"):
+                if "max_length" in user_input[i]:  # Clip the context to the max length provided
+                    context_text = load_and_cache_context(ctx, cache_dir, max_length=user_input[i]["max_length"])
+                else:
+                    context_text = load_and_cache_context(ctx, cache_dir)
             else:
-                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
+                context_text = ctx  # use inline text directly
             if instruct_mode:
-                prompt = "```" + context_text + "```\n\n" + prompt
+                prompt = context_text + "\n\n" + prompt
             else:
                 prompt = context_text
         in_prompt.append(prompt)

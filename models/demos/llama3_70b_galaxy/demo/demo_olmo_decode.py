@@ -226,6 +226,11 @@ def run_olmo_demo(
                 for p in input_prompts
             ]
             encoded_prompts = [tokenizer.encode(fp, add_special_tokens=False) for fp in formatted_prompts]
+            # Clamp each encoded prompt to the target ISL so that the ChatML overhead
+            # (~56 tokens) never pushes the length past a power-of-2 boundary, which
+            # would double padded_prefill_len and break support_seqlens CCL buffer lookups.
+            target_prefill_len = 1 << (max_generated_tokens.bit_length() - 1)
+            encoded_prompts = [ep[:target_prefill_len] for ep in encoded_prompts]
         else:
             encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
 
@@ -856,116 +861,118 @@ def run_olmo_demo(
             328,  # ~128 prefill + 200 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-1k-b1: ~1k-token prefill + 10 decode
+        (  # isl-1k-b1: ~1k-token prefill + 200 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
-            False,  # instruct mode
+            False,  # instruct mode: raw context as user message
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            1034,  # ~1024 prefill + 10 decode
+            1224,  # ~1024 prefill + 200 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-2k-b1: ~2k-token prefill + 10 decode
+        (  # isl-2k-b1: ~2k-token prefill + 200 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            2058,  # ~2048 prefill + 10 decode
+            2248,  # ~2048 prefill + 200 decode
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-4k-b1: ~4k-token prefill + 10 decode
+        (  # isl-4k-b1: ~4k-token prefill + 1000 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            4106,  # ~4096 prefill + 10 decode
+            4795,  # 3795 prefill + 1000 decode (pads to 4096; <3800 tokens, full sliding window coverage)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 1024},  # capacity: 8192 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-8k-b1: ~8k-token prefill + 10 decode
+        (  # isl-8k-b1: ~8k-token prefill + 200 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            8201,  # 8191 prefill tokens + 10 decode (pads to 8192)
+            8916,  # ~7916 prefill + 1000 decode (pads to 8192)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # capacity: 16384 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-16k-b1: ~16k-token prefill + 10 decode
+        (  # isl-16k-b1: ~16k-token prefill + 200 decode
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            16393,  # 16383 prefill tokens + 10 decode (pads to 16384)
+            16900,  # ~15900 prefill + 1000 decode (pads to 16384)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # capacity: 32768 tokens
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-32k-b1: ~32k-token prefill + 10 decode (eager mode, no trace)
-            # capacity: 4128 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 32,976 tokens ≥ 32,778
+        (  # isl-32k-b1: ~32k-token prefill + 200 decode
+            # capacity: 4128 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 32,976 tokens
+            # context ~32,500 toks + q/template ~150 toks = ~32,650 prefill → pads to 32,768 ✓
             # KV cache memory: 4128 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 4.3 GB/device ✓
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            32777,  # 32767 prefill tokens + 10 decode (pads to 32768)
+            32876,  # 32676 prefill + 200 decode (pads to 32768, within capacity 33024)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4128},  # capacity: 32,976 tokens/user
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # isl-64k-b1: ~64k-token prefill + 10 decode (eager mode, no trace, model max context)
-            # capacity: 8208 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 65,664 tokens ≥ 65,545
+        (  # isl-64k-b1: ~64k-token prefill + 200 decode (model max context)
+            # capacity: 8208 blocks × 64 tok/block / 8 (batch_size_per_device_group) = 65,664 tokens
+            # context ~65,000 toks + q/template ~150 toks = ~65,150 prefill → pads to 65,536 ✓
             # KV cache memory: 8208 × 64 × 128 × 1 byte × 2(K+V) × 64L ≈ 8.6 GB/device ✓
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",
-            False,  # instruct mode
+            True,  # instruct mode: context + question
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            65545,  # 65535 prefill tokens + 10 decode (pads to 65536)
+            65350,  # 65150 prefill + 200 decode (pads to 65536, within capacity 65664)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 8208},  # capacity: 65,664 tokens/user
-            {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
+            {"top_k": 50, "top_p": 0.95, "temperature": 0.6, "seed": 42},
             False,  # stress_test
             0,  # start_pos
         ),

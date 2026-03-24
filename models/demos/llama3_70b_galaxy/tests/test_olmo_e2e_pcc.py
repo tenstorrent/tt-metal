@@ -135,6 +135,26 @@ class TestOlmoE2EPCC:
         self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=2048)
 
     @torch.no_grad()
+    def test_prefill_pcc_64layers_isl4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 4k ISL (padded_len=4096)."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=4096)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 4k ISL (padded_len=4096)."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=4096)
+
+    @torch.no_grad()
+    def test_prefill_pcc_64layers_isl8k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 8k ISL (padded_len=8192)."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=8192)
+
+    @torch.no_grad()
+    def test_prefill_pcc_4layers_isl8k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: 4-layer model at 8k ISL (padded_len=8192)."""
+        self._run_prefill_pcc(mesh_device, n_layers=4, padded_len=8192)
+
+    @torch.no_grad()
     def _run_prefill_pcc(self, mesh_device, n_layers, padded_len=128):
         """Shared implementation for prefill PCC tests."""
         hf_model_path = os.environ.get("HF_MODEL")
@@ -182,17 +202,16 @@ class TestOlmoE2EPCC:
         if tokenizer is None:
             tokenizer = GPT2Tokenizer.from_pretrained(model_args.TOKENIZER_PATH)
 
-        # Use a longer prompt for larger padded_len so there are enough real tokens
+        # Fill to near-full padded_len so the ring SDPA processes real tokens, not padding.
+        # Using only ~500 tokens in a 2048-padded sequence hides sliding-window bugs.
         if padded_len <= 128:
             prompt = "What is your favorite condiment?"
         else:
-            # For larger ISL tests, repeat a paragraph to fill up to padded_len tokens.
-            # The exact content doesn't matter for PCC measurement.
-            base = "The quick brown fox jumps over the lazy dog. " * 50
-            prompt = base
+            base = "The quick brown fox jumps over the lazy dog. "
+            repeat_count = (padded_len * 6) // len(base) + 1
+            prompt = base * repeat_count
         input_ids = tokenizer.encode(prompt, add_special_tokens=True)
-        # Cap input_ids to padded_len - 1 real tokens so padding is at least 1 token
-        input_ids = input_ids[: padded_len - 1]
+        input_ids = input_ids[: padded_len - 5]
         seq_len = len(input_ids)
         input_ids_padded = input_ids + [tokenizer.eos_token_id or 50256] * (padded_len - seq_len)
         tokens_pt = torch.tensor(input_ids_padded, dtype=torch.long).unsqueeze(0)
@@ -412,6 +431,21 @@ class TestOlmoE2EPCC:
         self._run_decode_pcc(mesh_device, n_layers=64)
 
     @torch.no_grad()
+    def test_decode_pcc_64layers_1k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=1023 (ISL=1k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=1023, max_seq_len=2048)
+
+    @torch.no_grad()
+    def test_decode_pcc_64layers_2k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=2047 (ISL=2k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=2047, max_seq_len=4096)
+
+    @torch.no_grad()
+    def test_decode_pcc_64layers_4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=4095 (ISL=4k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=4095, max_seq_len=8192)
+
+    @torch.no_grad()
     def test_decode_pcc_64layers_8k(self, mesh_device, reset_seeds, ensure_gc):
         """Decode PCC: 1 decode step at start_pos=8191 (ISL=8k) with 64-layer model."""
         self._run_decode_pcc(mesh_device, n_layers=64, start_pos=8191, max_seq_len=8192)
@@ -454,6 +488,21 @@ class TestOlmoE2EPCC:
     def test_decode_pcc_4layers(self, mesh_device, reset_seeds, ensure_gc):
         """Decode PCC: 1 decode step, 4-layer model to track per-depth degradation."""
         self._run_decode_pcc(mesh_device, n_layers=4)
+
+    @torch.no_grad()
+    def test_decode_pcc_4layers_1k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=1023 (ISL=1k) with 4-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=4, start_pos=1023, max_seq_len=2048)
+
+    @torch.no_grad()
+    def test_decode_pcc_4layers_2k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=2047 (ISL=2k) with 4-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=4, start_pos=2047, max_seq_len=4096)
+
+    @torch.no_grad()
+    def test_decode_pcc_4layers_4k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=4095 (ISL=4k) with 4-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=4, start_pos=4095, max_seq_len=8192)
 
     @torch.no_grad()
     def test_decode_pcc_2layers(self, mesh_device, reset_seeds, ensure_gc):
