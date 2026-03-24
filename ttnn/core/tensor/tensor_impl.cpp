@@ -1368,6 +1368,55 @@ HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& 
 }
 
 // ======================================================================================
+//                                  .view()
+// ======================================================================================
+
+HostTensor view(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape) {
+    // Just edit shape if shape has a 0 dimension
+    if (tensor.logical_volume() == 0) {
+        TT_FATAL(new_logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
+    }
+    bool is_row_major = tensor.layout() == Layout::ROW_MAJOR;
+    bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
+    const auto& input_memory_config = tensor.memory_config();
+    TT_FATAL(
+        !input_memory_config.is_sharded() || !changing_last_dim ||
+            input_memory_config.shard_spec()->shape[1] == tensor.padded_shape()[-1],
+        "Changing the last dimension of a sharded tensor is not supported unless the shard width matches the input "
+        "last dimension. "
+        "Input shape: {}, New shape: {}, Shard width: {}",
+        tensor.padded_shape(),
+        new_padded_shape,
+        input_memory_config.shard_spec()->shape[1]);
+
+    auto output_memory_config = input_memory_config;
+    if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
+        auto shard_spec = input_memory_config.shard_spec().value();
+        auto shard_volume = shard_spec.numel();
+        shard_spec.shape[1] = new_padded_shape[-1];  // update output shard to match new shard width
+        shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
+        output_memory_config =
+            MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+    }
+
+    auto new_spec = tt::tt_metal::TensorSpec(
+        new_logical_shape,
+        TensorLayout::fromPaddedShape(
+            tensor.dtype(),
+            tensor.tensor_spec().page_config(),
+            output_memory_config,
+            new_logical_shape,
+            new_padded_shape));
+
+    // TODO (#25340): Review tensor topology logic for reshape
+    const auto& buffer = tensor.buffer();
+    return HostTensor(buffer, new_spec, tensor.tensor_topology());
+}
+
+// ======================================================================================
 //                                  .extract_shard()
 // ======================================================================================
 

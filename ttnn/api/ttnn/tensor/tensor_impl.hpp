@@ -145,6 +145,15 @@ HostTensor unpad(
 HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
 // ======================================================================================
+//                                  .view()
+// ======================================================================================
+
+HostTensor view(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
+
+// ======================================================================================
 //                                         Print
 // ======================================================================================
 
