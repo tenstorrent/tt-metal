@@ -43,15 +43,396 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose, profiler
-from models.demos.gpt_oss.tt.experts_throughput.weights import (
-    _FUSED_MAX_TILES_PER_CORE as MAX_W0_W1_TILES_PER_CORE,
-    _FUSED_PAD_CORES as PAD_CORES,
-    _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
-    _prepare_w2_tensor as prepare_w2_tensor,
-    _prepare_w0_b0_w1_b1_tensor as prepare_w0_b0_w1_b1_tensor,
-    _prepare_w2_b2_tensor as prepare_w2_b2_tensor,
-    _build_ring2cores as build_ring2cores,
-)
+
+# Weight preparation helpers (inlined from experts_throughput/weights.py)
+_FUSED_MAX_TILES_PER_CORE = 8
+_FUSED_PAD_CORES = {2, 3, 6, 7, 10, 11}
+MAX_W0_W1_TILES_PER_CORE = _FUSED_MAX_TILES_PER_CORE
+PAD_CORES = _FUSED_PAD_CORES
+
+
+def _tiles_for_core(ring_pos: int) -> int:
+    return 7 if ring_pos in _FUSED_PAD_CORES else 8
+
+
+def _prepare_w0_w1_tensor(
+    torch_w0: torch.Tensor,
+    torch_w1: torch.Tensor,
+    L: int,
+    E: int,
+    K: int,
+    N: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Interleave, shard, and pad w0/w1 weights for the fused MoE kernel.
+
+    Takes w0 (gate) and w1 (up) weights of shape ``(L, E, K, N)`` and produces
+    a tensor of shape ``(12, L, E, 4, K, 128)`` ready for DRAM HEIGHT_SHARDED
+    placement.
+
+    Args:
+        torch_w0: Gate weight tensor ``(L, E, K, N)``.
+        torch_w1: Up weight tensor ``(L, E, K, N)``.
+        L: Number of layers.
+        E: Number of experts.
+        K: Input / hidden dimension (2880).
+        N: Intermediate dimension (2880).
+        ring2cores: Ring-position → ``(core_coord, dram_bank_id, pad_flag)`` mapping.
+
+    Returns:
+        Tensor of shape ``(num_cores, L, E, groups_per_core, K, 4*TILE_SIZE)``.
+    """
+    num_cores = len(ring2cores)
+    Nt = N // ttnn.TILE_SIZE
+
+    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
+    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
+    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
+    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
+    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
+
+    each_shard = []
+    start_tile = 0
+    for ring_pos in range(num_cores):
+        num_tiles = _tiles_for_core(ring_pos)
+        shard = torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
+        start_tile += num_tiles
+
+        if num_tiles < _FUSED_MAX_TILES_PER_CORE:
+            pad_tiles = _FUSED_MAX_TILES_PER_CORE - num_tiles
+            padding = torch.zeros(L, E, pad_tiles, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
+            shard = torch.cat([shard, padding], dim=2)
+
+        each_shard.append(shard)
+
+    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
+    groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
+
+    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K, 2 * ttnn.TILE_SIZE)
+    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
+
+    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, 2, K, 2 * ttnn.TILE_SIZE)
+    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, K, 4 * ttnn.TILE_SIZE)
+
+    return torch_w0_w1_paired
+
+
+def _prepare_w0_b0_w1_b1_tensor(
+    torch_w0: torch.Tensor,
+    torch_b0: torch.Tensor,
+    torch_w1: torch.Tensor,
+    torch_b1: torch.Tensor,
+    L: int,
+    E: int,
+    K: int,
+    N: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Interleave, shard, and pad w0/w1 weights with bias for the fused MoE kernel.
+
+    Concatenates bias along dim 2 (K_new = K + K_b, e.g. 2880 + 32 = 2912),
+    then performs the same interleave/shard/pad as _prepare_w0_w1_tensor.
+    """
+    num_cores = len(ring2cores)
+    torch_w0_b0 = torch.cat([torch_w0, torch_b0], dim=2)
+    torch_w1_b1 = torch.cat([torch_w1, torch_b1], dim=2)
+    K_new = torch_w0_b0.shape[2]  # K + K_b, e.g. 2912
+    Nt = N // ttnn.TILE_SIZE
+
+    w0_b0_chunks = torch_w0_b0.view(L, E, K_new, Nt, ttnn.TILE_SIZE)
+    w1_b1_chunks = torch_w1_b1.view(L, E, K_new, Nt, ttnn.TILE_SIZE)
+    stacked = torch.stack([w0_b0_chunks, w1_b1_chunks], dim=4)
+    interleaved = stacked.view(L, E, K_new, Nt, 2 * ttnn.TILE_SIZE)
+    permuted = interleaved.permute(0, 1, 3, 2, 4)
+
+    each_shard = []
+    start_tile = 0
+    for ring_pos in range(num_cores):
+        num_tiles = _tiles_for_core(ring_pos)
+        shard = permuted[:, :, start_tile : start_tile + num_tiles, :, :]
+        start_tile += num_tiles
+
+        if num_tiles < _FUSED_MAX_TILES_PER_CORE:
+            pad_tiles = _FUSED_MAX_TILES_PER_CORE - num_tiles
+            padding = torch.zeros(L, E, pad_tiles, K_new, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
+            shard = torch.cat([shard, padding], dim=2)
+
+        each_shard.append(shard)
+
+    reordered = torch.cat(each_shard, dim=2)
+    groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
+
+    all_groups = reordered.view(L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K_new, 2 * ttnn.TILE_SIZE)
+    all_groups = all_groups.permute(2, 0, 1, 3, 4, 5)
+
+    pair_2_tiles = all_groups.view(num_cores, L, E, groups_per_core, 2, K_new, 2 * ttnn.TILE_SIZE)
+    pair_2_tiles = pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    paired = pair_2_tiles.reshape(num_cores, L, E, groups_per_core, K_new, 4 * ttnn.TILE_SIZE)
+
+    return paired
+
+
+def _prepare_w2_tensor(
+    torch_w2: torch.Tensor,
+    L: int,
+    E: int,
+    N: int,
+    K: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Shard, pad, and reorder w2 weights for the fused MoE kernel.
+
+    Takes w2 (down) weight of shape ``(L, E, N, K)`` and produces a tensor of
+    shape ``(12, L, E, 2, N, 128)`` ready for DRAM HEIGHT_SHARDED placement.
+
+    Args:
+        torch_w2: Down weight tensor ``(L, E, N, K)``.
+        L: Number of layers.
+        E: Number of experts.
+        N: Intermediate dimension (2880).
+        K: Output / hidden dimension (2880).
+        ring2cores: Ring-position → ``(core_coord, dram_bank_id, pad_flag)`` mapping.
+
+    Returns:
+        Tensor of shape ``(num_cores, L, E, 2, N, 4*TILE_SIZE)``.
+    """
+    num_cores = len(ring2cores)
+    each_shard = []
+
+    start_col = 0
+    for ring_pos in range(num_cores):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+
+        if pad_flag:
+            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+            each_shard.append(torch_w2[:, :, :, start_col : start_col + 3 * ttnn.TILE_SIZE])
+            start_col += 3 * ttnn.TILE_SIZE
+            each_shard.append(torch.zeros(L, E, N, 1 * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+        else:
+            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+
+    torch_w2_reordered = torch.cat(each_shard, dim=-1)
+    all_groups_per_bank = torch_w2_reordered.view(L, E, N, num_cores, 2, 4 * ttnn.TILE_SIZE)
+    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
+
+    Nt = N // ttnn.TILE_SIZE
+    N_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
+
+    core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
+    chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    each_shard = []
+    for core_id in range(num_cores):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        each_shard.append(torch.cat(each_chunk, dim=3))
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
+    return N_reordered
+
+
+def _prepare_w2_b2_tensor(
+    torch_w2: torch.Tensor,
+    torch_b2: torch.Tensor,
+    L: int,
+    E: int,
+    N: int,
+    K: int,
+    ring2cores: dict,
+) -> torch.Tensor:
+    """Shard, pad, and reorder w2 weights with bias for the fused MoE kernel.
+
+    Concatenates bias along dim 2 (N_new = N + 32), column-shards K, then
+    ring-rotates ONLY the 90 weight tile rows. The bias tile row is appended
+    at position 90 (the 91st tile row) so dm0/compute find it at the expected
+    k_tracker == 90 position.
+    """
+    num_cores = len(ring2cores)
+    torch_w2_b2 = torch.cat([torch_w2, torch_b2], dim=2)
+    N_new = N + 32  # e.g., 2912
+
+    # Column shard the full w2_b2 tensor (same column sharding as non-bias version)
+    each_shard = []
+    start_col = 0
+    for ring_pos in range(num_cores):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+
+        if pad_flag:
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 3 * ttnn.TILE_SIZE])
+            start_col += 3 * ttnn.TILE_SIZE
+            each_shard.append(torch.zeros(L, E, N_new, 1 * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+        else:
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            start_col += 4 * ttnn.TILE_SIZE
+
+    torch_w2_b2_reordered = torch.cat(each_shard, dim=-1)
+    all_groups_per_bank = torch_w2_b2_reordered.view(L, E, N_new, num_cores, 2, 4 * ttnn.TILE_SIZE)
+    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
+
+    Nt_all = N_new // ttnn.TILE_SIZE  # 91
+    Nt_weight = N // ttnn.TILE_SIZE  # 90
+    N_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt_all, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
+
+    # Split weight tile rows (0..89) and bias tile row (90)
+    N_weight = N_grouped[:, :, :, :, :Nt_weight, :, :]  # (12, L, E, 2, 90, 32, 128)
+    N_bias = N_grouped[:, :, :, :, Nt_weight:, :, :]  # (12, L, E, 2, 1, 32, 128)
+
+    # Ring-rotate ONLY the weight tile rows (same rotation as non-bias _prepare_w2_tensor)
+    core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
+    chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    each_shard = []
+    for core_id in range(num_cores):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_weight[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        # Append bias tile row at position 90 (always last, not part of rotation)
+        each_chunk.append(N_bias[core_id])
+        each_shard.append(torch.cat(each_chunk, dim=3))
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
+    return N_reordered
+
+
+def _build_ring2cores(device) -> dict:
+    """Build the ring-position → core mapping from device DRAM bank assignment.
+
+    Args:
+        device: A single ttnn device.
+
+    Returns:
+        Dictionary mapping ring position (int) to
+        ``(core_coord, dram_bank_id, pad_flag)`` where *pad_flag* is 1 for
+        cores with 7 tiles and 0 for cores with 8 tiles.
+    """
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(0)
+    core2dram = {core_coords: dram_bank_id for dram_bank_id, core_coords in enumerate(in0_core_coords)}
+
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        ring2cores[ring_pos] = (
+            core_coord,
+            core2dram[core_coord],
+            1 if ring_pos in _FUSED_PAD_CORES else 0,
+        )
+    return ring2cores
+
+
+prepare_w0_w1_tensor = _prepare_w0_w1_tensor
+prepare_w2_tensor = _prepare_w2_tensor
+prepare_w0_b0_w1_b1_tensor = _prepare_w0_b0_w1_b1_tensor
+prepare_w2_b2_tensor = _prepare_w2_b2_tensor
+build_ring2cores = _build_ring2cores
+
+
+# Expert mapping helpers (inlined from config.py + test_moe_compute_6U.py)
+def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):
+    if cluster_axis == 0:
+        cluster_id = expert_id // experts_per_cluster
+        expert_id_within_cluster = expert_id % experts_per_cluster
+        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+
+        return device_id_within_cluster * num_replicated_devices + cluster_id
+    else:
+        return expert_id // experts_per_device
+
+
+def _gen_expert_mapping_6u(
+    num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+):
+    """
+    Create per-device expert mapping tensor that maps each expert to the device it belongs to.
+    Shape: [num_devices, experts] where each entry is the linearized mesh coordinate of the device
+    that owns that expert from the perspective of that source device.
+
+    For now, all devices see the same mapping (no replicated experts).
+    For 256 experts and 128 devices (2 experts per device):
+    expert_mapping[d, e] = e // experts_per_device
+
+    In the future, this can be extended to support replicated experts where each device
+    sees the "optimal" device (e.g., shortest distance) for each expert.
+
+    This tensor is replicated on every device (even devices not along the dispatch axis).
+    """
+    expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
+    for e in range(experts):
+        expert_mapping[0, e] = get_linearized_mesh_coord(
+            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+        )
+    # Replicate across all devices (same mapping for now)
+    expert_mapping = expert_mapping.repeat(num_devices, 1)
+    return expert_mapping
+
+
+def create_expert_mapping_tensors(
+    num_devices: int,
+    num_experts_global: int,
+    mesh_device,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    new_format: bool = False,
+    return_torch: bool = False,
+    cluster_axis: int = 0,
+) -> ttnn.Tensor:
+    """Create expert-to-device mapping tensors for all_to_all operations."""
+    num_experts_per_device = num_experts_global // num_devices
+    if new_format:
+        mesh_rows, mesh_cols = mesh_device.shape
+        num_replicated_devices = mesh_cols if cluster_axis == 0 else mesh_rows
+        experts_per_cluster = num_experts_global // num_replicated_devices
+        mapping = _gen_expert_mapping_6u(
+            num_devices,
+            num_replicated_devices,
+            cluster_axis,
+            num_experts_global,
+            experts_per_cluster,
+            num_experts_per_device,
+        )
+    else:
+        mapping = (
+            torch.eye(num_devices, dtype=torch.int32)
+            .repeat_interleave(num_experts_per_device, dim=0)
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
+
+    if return_torch:
+        return mapping
+
+    return ttnn.from_torch(
+        mapping,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint16,
+        memory_config=memory_config,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
 
 # Helper functions (inlined from test_moe_gpt_single_device.py)
 PCC_THRESHOLD = 0.984
@@ -267,7 +648,7 @@ def tilize_reference(sparse_buffer, expert_indices, expert_mapping, device_idx, 
     return output, per_expert_counts
 
 
-from models.demos.gpt_oss.tt.experts_throughput.config import create_expert_mapping_tensors
+# create_expert_mapping_tensors is inlined above
 
 # Single-iteration values for Tracy device profiling (TT_METAL_DEVICE_PROFILER=1).
 # A single warmup compiles/caches the program; a single measure is profiled.
