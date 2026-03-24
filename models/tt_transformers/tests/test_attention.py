@@ -112,6 +112,7 @@ def test_attention_inference(
         model_args.rope_scaling,
         model_args.use_qk_fused,
         prefetcher=prefetcher,
+        model_args.partial_rotary_factor,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
