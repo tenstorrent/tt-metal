@@ -289,7 +289,6 @@ def _build_ff2_inputs(
     use_real_weights: bool,
     mode: str,
     seq_len: int,
-    fabric_config: ttnn.FabricConfig,
 ):
     """
     Build inputs for FF2 test.
@@ -322,7 +321,7 @@ def _build_ff2_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -490,7 +489,6 @@ def test_ds_ff2(
     use_real_weights,
     program_cache_enabled,
     trace_mode,
-    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -520,7 +518,6 @@ def test_ds_ff2(
         use_real_weights,
         mode,
         seq_len,
-        device_params["fabric_config"],
     )
     _run_ds_ff2_test(
         mesh_device,

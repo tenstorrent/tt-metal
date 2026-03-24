@@ -250,7 +250,6 @@ def _build_mul_inputs(
     force_recalculate_weight_config: bool,
     mode: str,
     seq_len: int,
-    fabric_config: ttnn.FabricConfig,
 ):
     from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 
@@ -262,7 +261,7 @@ def _build_mul_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -364,7 +363,6 @@ def test_ds_mul(
     expected_perf_us,
     program_cache_enabled,
     trace_mode,
-    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -394,7 +392,6 @@ def test_ds_mul(
         force_recalculate_weight_config,
         mode,
         seq_len,
-        device_params["fabric_config"],
     )
     _run_ds_mul_test(
         mesh_device,
@@ -480,7 +477,6 @@ def test_ds_mul_single_device(
     expected_perf_us,
     program_cache_enabled,
     trace_mode,
-    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -520,7 +516,7 @@ def test_ds_mul_single_device(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, device_params["fabric_config"])
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
