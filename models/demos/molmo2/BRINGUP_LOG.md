@@ -14,6 +14,17 @@
 - **vLLM text and image inference working!** Server starts and responds correctly
 - Text model now matches HuggingFace reference exactly (PCC > 0.999)
 
+### tt-inference-server Integration (2026-03-24)
+**Status: In Progress - First image request works, subsequent requests fail**
+
+**Fixed issues:**
+1. Pre-unfolded patch format detection: vLLM's MolmoProcessor outputs pixel_values as `[num_crops, num_patches, 588]` (already patch-extracted), not raw images `[B, C, H, W]`. Added format detection to use `patch_embed_from_patches_ttnn` for pre-unfolded data.
+
+2. Vision trace disabled for vLLM: vLLM uses variable multi-crop image sizes (e.g., 5 crops = 3645 patches), but trace tensors are pre-allocated for fixed sizes. Disabled vision trace in vLLM mode.
+
+**Remaining issue:**
+- Tensor lifecycle: After first successful prefill, subsequent requests fail with "Buffer must be allocated on device" error. The `logits_ttnn` tensor gets deallocated before `ttnn.to_torch()`. Likely state management issue between requests.
+
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**
 - Server starts successfully on port 8000
