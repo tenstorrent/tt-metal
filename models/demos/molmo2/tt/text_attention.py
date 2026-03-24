@@ -474,22 +474,21 @@ class TextAttention(LightweightModule):
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # Get current position as integer for rotary_embedding
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
-
         # Apply RoPE using TTNN rotary embedding
+        # Note: rot_mats already contain cos/sin for the current position, so we pass 0
+        # This avoids reading current_pos from device during traced execution
         q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            int_current_pos,
+            0,  # Position is already embedded in rot_mats
         )
 
         k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            int_current_pos,
+            0,  # Position is already embedded in rot_mats
         )
 
         # Reshape to handle padding from rotary_embedding (pads to 32 heads)
@@ -516,10 +515,7 @@ class TextAttention(LightweightModule):
         # Get KV cache references
         k_cache, v_cache = kv_cache
 
-        # Get update position as integer
-        update_idx = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
-
-        # Convert K, V to match cache shape [batch, kv_heads, seq_len, head_dim]
+        # Convert K, V to DRAM first for permute operation
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -529,10 +525,29 @@ class TextAttention(LightweightModule):
         k = ttnn.permute(k, (1, 2, 0, 3))  # [1, B, H, d] -> [B, H, 1, d]
         v = ttnn.permute(v, (2, 1, 0, 3))  # [1, H, B, d] -> [B, H, 1, d]
 
-        # Update KV cache at current position
-        # update_cache updates the cache at a specific index
-        ttnn.update_cache(k_cache, k, update_idx)
-        ttnn.update_cache(v_cache, v, update_idx)
+        # Create sharded memory config for paged_update_cache
+        # paged_update_cache requires HEIGHT sharded input tensors
+        # KV shape after permute: [B, H, 1, d] = [1, num_kv_heads_per_device, 1, head_dim]
+        grid_size = ttnn.CoreCoord(8, 8)
+        kv_num_cores = batch_size  # 1 core per batch
+        kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
+        kv_shard_height = ((batch_size + 31) // 32) * 32  # Tile-aligned batch
+        kv_shard_width = self.head_dim
+        kv_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(kv_shard_height, kv_shard_width),
+            core_grid=kv_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Convert K, V to sharded memory config for paged_update_cache
+        k = ttnn.to_memory_config(k, kv_mem_cfg)
+        v = ttnn.to_memory_config(v, kv_mem_cfg)
+
+        # Update KV cache at current position using tensor-based indexing
+        # paged_update_cache accepts update_idxs_tensor to avoid device reads during tracing
+        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=None)
+        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=None)
 
         ttnn.deallocate(k)
         ttnn.deallocate(v)

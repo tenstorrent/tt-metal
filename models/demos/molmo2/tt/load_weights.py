@@ -57,9 +57,22 @@ def load_state_dict_from_safetensors(
         State dict with loaded weights
     """
     import json
+    import os
+    from pathlib import Path
 
-    # Download index file
-    index_path = hf_hub_download(model_id, "model.safetensors.index.json")
+    # Check if MODEL_WEIGHTS_DIR is set (for pre-downloaded weights)
+    weights_dir = os.getenv("MODEL_WEIGHTS_DIR")
+    if weights_dir and Path(weights_dir).exists():
+        # Use pre-downloaded weights
+        weights_path = Path(weights_dir)
+        index_path = weights_path / "model.safetensors.index.json"
+        if not index_path.exists():
+            raise FileNotFoundError(f"Weight index not found at {index_path}")
+    else:
+        # Download index file from HuggingFace
+        index_path = hf_hub_download(model_id, "model.safetensors.index.json")
+        weights_path = None
+
     with open(index_path) as f:
         index = json.load(f)
 
@@ -74,10 +87,17 @@ def load_state_dict_from_safetensors(
         if key in weight_map:
             files_needed.add(weight_map[key])
 
-    # Download and load needed files
+    # Load needed files
     state_dict = {}
     for filename in files_needed:
-        filepath = hf_hub_download(model_id, filename)
+        if weights_path:
+            # Use local pre-downloaded weights
+            filepath = weights_path / filename
+            if not filepath.exists():
+                raise FileNotFoundError(f"Weight file not found at {filepath}")
+        else:
+            # Download from HuggingFace
+            filepath = hf_hub_download(model_id, filename)
         with safe_open(filepath, framework="pt", device=device) as f:
             for key in f.keys():
                 if weight_keys is None or key in weight_keys:
