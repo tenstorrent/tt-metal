@@ -196,7 +196,7 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = {},
+            .compile_args = {ntiles_per_row},
             .defines = defines,
         });
 

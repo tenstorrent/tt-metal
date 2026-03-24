@@ -32,7 +32,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/pack_untilize.h"
 
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tensix.h"
@@ -49,8 +49,9 @@ ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
     return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
 }
 
+template <typename T = uint16_t>
 void print_cb_data(uint32_t cb_id, uint32_t tile_index) {
-    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_id, tile_index);
+    volatile T* ptr = get_pointer_to_cb_data<T>(cb_id, tile_index);
     for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
         // Iterate through 16 rows within each subtile row
         for (int local_row = 0; local_row < 16; local_row++) {
@@ -66,7 +67,11 @@ void print_cb_data(uint32_t cb_id, uint32_t tile_index) {
                     auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
                     // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
                     // /*element_offset=*/index);ptr
-                    UNPACK(DPRINT << BF16(ptr[index]) << ", ");
+                    if constexpr (std::is_same_v<T, uint16_t>) {
+                        UNPACK(DPRINT << BF16(ptr[index]) << ", ");
+                    } else {
+                        UNPACK(DPRINT << ptr[index] << ", ");
+                    }
                 }
             }
             UNPACK(DPRINT << ENDL());
@@ -156,15 +161,31 @@ void print_cb_rm_row_f32(uint32_t cb_id, uint32_t tile_index, uint32_t row_index
     UNPACK(DPRINT << ENDL(););
 }
 
+/*
+ * Read 1 tiled block from cb_out, pack it and write to cb_out_rm as row-major block
+ */
+template <uint32_t block_size>
+ALWI void untilize_row_major_block(const uint32_t cb_out, const uint32_t cb_out_rm, uint32_t num_tiles) {
+    reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
+
+    pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
+    cb_wait_front(cb_out, num_tiles);
+    cb_reserve_back(cb_out_rm, num_tiles);
+    pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
+    cb_push_back(cb_out_rm, num_tiles);
+    cb_pop_front(cb_out, num_tiles);
+    pack_untilize_uninit(cb_out_rm);
+}
+
 void kernel_main() {
+    constexpr uint32_t ntiles_per_row_ct = get_compile_time_arg_val(0);
+
     const uint32_t num_sticks = get_arg_val<uint32_t>(0);
     const uint32_t ntiles_per_row = get_arg_val<uint32_t>(1);
 
     const uint32_t tiles_per_block = ntiles_per_row;
 
     binary_op_init_common(CB_A_RM, CB_B_RM, CB_OUT_TILED);
-
-    // ---- Initial hardware setup: enter tilize-A mode ----
 
     constexpr uint32_t TILE_HEIGHT = 32;
     for (uint32_t blk = 0; blk < num_sticks; blk += TILE_HEIGHT) {
@@ -175,7 +196,7 @@ void kernel_main() {
         cb_reserve_back(CB_A_TILED, tiles_per_block);
 
         reconfig_data_format(CB_A_RM, CB_A_RM);
-        pack_reconfig_data_format(CB_A_TILED, CB_A_TILED);
+        pack_reconfig_data_format(CB_A_TILED);
         tilize_init(CB_A_RM, tiles_per_block, CB_A_TILED);
 
         tilize_block(CB_A_RM, tiles_per_block, CB_A_TILED);
@@ -239,24 +260,33 @@ void kernel_main() {
         // ============================================================
         // Phase 4: Untilize — full row at once (full_ct_dim = ntiles_per_row)
         // ============================================================
+#ifdef IS_FP32
+        // fp32 path: pack_untilize routes through DST (32-bit) via UnpackToDestEn,
+        // bypassing the lossy SrcA (19-bit) path used by untilize_block.
+        //
+        // We process one tile per loop iteration and pop it immediately so that
+        // fifo_rd_ptr advances: llk_unpack_A always reads tile 0 relative to the
+        // current read pointer, so the pop is what drives the source tile forward.
+        reconfig_data_format(CB_OUT_TILED, CB_OUT_TILED);
+        pack_untilize_init<1, ntiles_per_row_ct>(CB_OUT_TILED, CB_OUT_RM);
+        cb_reserve_back(CB_OUT_RM, tiles_per_block);
+        for (uint32_t c = 0; c < ntiles_per_row_ct; ++c) {
+            cb_wait_front(CB_OUT_TILED, 1);
+            pack_untilize_block<1, ntiles_per_row_ct>(CB_OUT_TILED, 1, CB_OUT_RM, c);
+            cb_pop_front(CB_OUT_TILED, 1);
+        }
+        cb_push_back(CB_OUT_RM, tiles_per_block);
+        pack_untilize_uninit(CB_OUT_RM);
+#else
         untilize_init(CB_OUT_TILED);
-
-        // untilize_block produces ntiles_per_row tile-sized pages in row-major
-        // order.  Row k starts at byte offset k * row_size_bytes from the block
-        // base; the writer pops all ntiles_per_row pages at once.
         cb_wait_front(CB_OUT_TILED, tiles_per_block);
         cb_reserve_back(CB_OUT_RM, tiles_per_block);
-
         untilize_block(CB_OUT_TILED, tiles_per_block, CB_OUT_RM);
-
         cb_push_back(CB_OUT_RM, tiles_per_block);
         cb_pop_front(CB_OUT_TILED, tiles_per_block);
-
-        // ============================================================
-        // Switch back to tilize-A mode for the next block.
-        // For the last block this uninit is still harmless.
-        // ============================================================
         untilize_uninit(CB_OUT_TILED);
+#endif
+
         tilize_init_short_with_dt(CB_B_RM, CB_A_RM, tiles_per_block, CB_A_TILED);
     }
 }
