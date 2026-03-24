@@ -358,7 +358,13 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            # In multi-device (DDP) setups the tensor is distributed across the
+            # mesh and to_numpy() without a composer fails.  Since DDP replicates
+            # weights, all devices hold identical copies — extract the first one.
+            # TODO: We need to be able to pass a custom composer for TP models
+            device_tensors = ttnn.get_device_tensors(tensor.get_value())
+            single = ttml.autograd.Tensor(device_tensors[0], False)
+            state[name] = single.to_numpy(ttnn.DataType.FLOAT32)
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
