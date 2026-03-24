@@ -39,14 +39,10 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
             [&](const auto& config) {
                 using ProgramConfigType = std::decay_t<decltype(config)>;
                 if (not(std::is_same_v<
-                            ProgramConfigType,
-                            operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                        std::is_same_v<
-                            ProgramConfigType,
-                            operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>)) {
+                        ProgramConfigType,
+                        operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
                     TT_THROW(
-                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 1D or 2D "
-                        "Multicast.");
+                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast.");
                 }
             },
             args.matmul_struct.program_config.value());
@@ -185,11 +181,7 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     ttnn::experimental::prim::ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size =
-            cluster_axis.has_value()
-                ? (cluster_axis.value() == 0 ? static_cast<uint32_t>(input_tensor.device()->get_view().num_rows())
-                                             : static_cast<uint32_t>(input_tensor.device()->get_view().num_cols()))
-                : static_cast<uint32_t>(devices.size()),
+        .ring_size = static_cast<uint32_t>(::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis)),
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,

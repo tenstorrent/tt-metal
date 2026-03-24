@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp"
 
 #include <algorithm>
-#include <tt_stl/overloaded.hpp>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -16,7 +15,6 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
@@ -114,53 +112,23 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_receiver_signal_semaphores,
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
-    // Matmul - dispatch to 1D or 2D multicast based on program config type
-    decltype(MatmulReduceScatterAsyncSharedVariables::matmul_shared_variables) matmul_shared_variables;
-    std::visit(
-        ttsl::overloaded{
-            [&](const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& config) {
-                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-                    program,
-                    tensor_args.input,
-                    tensor_args.weight,
-                    tensor_args.bias,
-                    output_tensors.mm,
-                    bcast_batch,
-                    compute_kernel_config,
-                    config,
-                    untilize_out,
-                    matmul_fused_op_signaler);
-                program = std::move(cached_program.program);
-                matmul_shared_variables = std::move(cached_program.shared_variables);
-            },
-            [&](const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
-                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
-                    program,
-                    tensor_args.input,
-                    {tensor_args.weight},
-                    tensor_args.bias,
-                    {output_tensors.mm},
-                    bcast_batch,
-                    compute_kernel_config,
-                    config,
-                    untilize_out,
-                    matmul_fused_op_signaler,
-                    std::nullopt,
-                    std::nullopt);
-                program = std::move(cached_program.program);
-                matmul_shared_variables = std::move(cached_program.shared_variables);
-            },
-            [&](const auto& /*config*/) {
-                TT_THROW(
-                    "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 1D or 2D "
-                    "Multicast.");
-            }},
-        program_config);
+    // Matmul
+    auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        program,
+        tensor_args.input,
+        tensor_args.weight,
+        tensor_args.bias,
+        output_tensors.mm,
+        bcast_batch,
+        compute_kernel_config,
+        program_config,
+        untilize_out,
+        matmul_fused_op_signaler);
 
     return cached_program_t{
-        std::move(program),
+        std::move(matmul_cached_program.program),
         {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
-         .matmul_shared_variables = std::move(matmul_shared_variables)}};
+         .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
 }
 
 void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
@@ -172,30 +140,14 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        std::visit(
-            ttsl::overloaded{
-                [&](ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& sv) {
-                    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-                        program,
-                        sv,
-                        args.matmul_struct,
-                        {.input_tensors = {tensor_args.input, tensor_args.weight},
-                         .optional_input_tensors = {tensor_args.bias},
-                         .optional_output_tensors = {output_tensors.mm}},
-                        matmul_output_tensors);
-                },
-                [&](ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& sv) {
-                    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-                        program,
-                        sv,
-                        args.matmul_struct,
-                        {.input_tensors = {tensor_args.input, tensor_args.weight},
-                         .optional_input_tensors = {tensor_args.bias},
-                         .optional_output_tensors = {output_tensors.mm}},
-                        matmul_output_tensors);
-                },
-                [&](std::monostate&) { TT_THROW("Uninitialized matmul shared variables"); }},
-            shared_vars.matmul_shared_variables);
+        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+            program,
+            shared_vars.matmul_shared_variables,
+            args.matmul_struct,
+            {.input_tensors = {tensor_args.input, tensor_args.weight},
+             .optional_input_tensors = {tensor_args.bias},
+             .optional_output_tensors = {output_tensors.mm}},
+            matmul_output_tensors);
 
         // Call reduce scatter runtime arguments override directly using artifacts
         ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
