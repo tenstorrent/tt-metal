@@ -7,14 +7,13 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#ifdef TYPECAST_OUTPUT
 #include "api/compute/eltwise_unary/typecast.h"
-#endif
 
 #include <cstdint>
 
 #include "experimental/circular_buffer.h"
 
+template <bool NeedsOutputTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
 ALWI uint32_t batchnorm_bcast_tiles(
     uint32_t cb_bcast,
     uint32_t cb_other,
@@ -27,7 +26,7 @@ ALWI uint32_t batchnorm_bcast_tiles(
     uint32_t cb_bias,
     uint32_t cb_tmp_1,
     uint32_t cb_output_0,
-    [[maybe_unused]] uint32_t cb_output_final,
+    uint32_t cb_output_final,
     uint32_t weight_has,
     uint32_t bias_has,
     uint32_t last_srca_cb) {
@@ -185,35 +184,35 @@ ALWI uint32_t batchnorm_bcast_tiles(
             cb_tmp_1_obj.pop_front(onetile);
         }
 
-#ifdef TYPECAST_OUTPUT
-        cb_output_0_obj.wait_front(onetile);
-        experimental::CircularBuffer cb_output_final_obj(cb_output_final);
-        cb_output_final_obj.reserve_back(onetile);
+        if constexpr (NeedsOutputTypecast) {
+            cb_output_0_obj.wait_front(onetile);
+            experimental::CircularBuffer cb_output_final_obj(cb_output_final);
+            cb_output_final_obj.reserve_back(onetile);
 
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_output_0);
-        last_srca_cb = cb_output_0;
-        for (uint32_t i = 0; i < onetile; ++i) {
-            copy_tile(cb_output_0, i, i * 2);
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_output_0);
+            last_srca_cb = cb_output_0;
+            for (uint32_t i = 0; i < onetile; ++i) {
+                copy_tile(cb_output_0, i, i * 2);
+            }
+            typecast_tile_init<TcInFmt, TcOutFmt>();
+            for (uint32_t i = 0; i < onetile; ++i) {
+                typecast_tile<TcInFmt, TcOutFmt>(i * 2);
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_output_final);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                pack_tile(i * 2, cb_output_final);
+            }
+            tile_regs_release();
+
+            pack_reconfig_data_format(cb_output_final, cb_output_0);
+
+            cb_output_0_obj.pop_front(onetile);
+            cb_output_final_obj.push_back(onetile);
         }
-        TYPECAST_OUTPUT_INIT();
-        for (uint32_t i = 0; i < onetile; ++i) {
-            TYPECAST_OUTPUT(i * 2);
-        }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_output_final);
-        for (uint32_t i = 0; i < onetile; ++i) {
-            pack_tile(i * 2, cb_output_final);
-        }
-        tile_regs_release();
-
-        pack_reconfig_data_format(cb_output_final, cb_output_0);
-
-        cb_output_0_obj.pop_front(onetile);
-        cb_output_final_obj.push_back(onetile);
-#endif
     }
     cb_bcast_obj.pop_front(onetile);
     cb_den_obj.pop_front(onetile);
@@ -248,6 +247,9 @@ void kernel_main() {
     constexpr auto cb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
     constexpr auto cb_bias = get_compile_time_arg_val(10);      // bias tensor
     constexpr auto cb_output_final = get_compile_time_arg_val(11);  // writer-facing output CB (BF16 when typecast)
+    constexpr bool needs_output_typecast = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(13);
+    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(14);
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
@@ -263,7 +265,7 @@ void kernel_main() {
     cb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        last_srca_cb = batchnorm_bcast_tiles(
+        last_srca_cb = batchnorm_bcast_tiles<needs_output_typecast, tc_in_fmt, tc_out_fmt>(
             cb_bcast,
             cb_other,
             tile_freq,
@@ -281,7 +283,7 @@ void kernel_main() {
             last_srca_cb);
     }
     if (remaining_iterations > 0) {
-        last_srca_cb = batchnorm_bcast_tiles(
+        last_srca_cb = batchnorm_bcast_tiles<needs_output_typecast, tc_in_fmt, tc_out_fmt>(
             cb_bcast,
             cb_other,
             remaining_iterations,

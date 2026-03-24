@@ -174,10 +174,12 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     uint32_t e_single_tile_size = tt::tile_size(e_data_format);
     uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
 
-    const bool needs_mean_typecast =
-        running_mean_has_value && (interm_data_format == DataFormat::Float32 && d_data_format != DataFormat::Float32);
-    const bool needs_var_typecast =
-        running_var_has_value && (interm_data_format == DataFormat::Float32 && e_data_format != DataFormat::Float32);
+    auto running_stat_data_format =
+        running_mean_has_value ? d_data_format : (running_var_has_value ? e_data_format : DataFormat::Float16_b);
+    const bool stat_format_needs_typecast =
+        (interm_data_format == DataFormat::Float32 && running_stat_data_format != DataFormat::Float32);
+    const bool needs_mean_typecast = running_mean_has_value && stat_format_needs_typecast;
+    const bool needs_var_typecast = running_var_has_value && stat_format_needs_typecast;
 
     // we parallelize the computation across the output tiles
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -278,6 +280,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         one_cb,
     };
     tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(any_float32));
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(running_mean_has_value),
@@ -295,31 +298,21 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         .append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32));
 
     // READER KERNEL
-    std::map<std::string, std::string> reader_defines;
-    if (any_float32) {
-        reader_defines["FILL_MOMENTUM_FP32"] = "1";
-    }
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // WRITER KERNEL
-    std::map<std::string, std::string> writer_defines;
-    if (d_data_format == DataFormat::Float32) {
-        writer_defines["OLD_MEAN_IS_FP32"] = "1";
-    }
-    if (e_data_format == DataFormat::Float32) {
-        writer_defines["OLD_VAR_IS_FP32"] = "1";
-    }
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -341,6 +334,9 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         }
     }
 
+    auto tc_out_fmt = stat_format_needs_typecast ? static_cast<uint32_t>(running_stat_data_format)
+                                                 : static_cast<uint32_t>(DataFormat::Float32);
+
     std::vector<uint32_t> compute_kernel_args = {
         static_cast<uint32_t>(running_mean_has_value),
         static_cast<uint32_t>(running_var_has_value),
@@ -357,21 +353,10 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         tmp2_cb,
         tmp3_cb,
         writer_updated_m_cb,
-        writer_updated_v_cb};
-
-    std::map<std::string, std::string> compute_defines;
-    if (needs_mean_typecast) {
-        auto in_fmt = static_cast<uint32_t>(DataFormat::Float32);
-        auto out_fmt = static_cast<uint32_t>(d_data_format);
-        compute_defines["TYPECAST_MEAN_INIT"] = fmt::format("typecast_tile_init<{}u, {}u>", in_fmt, out_fmt);
-        compute_defines["TYPECAST_MEAN"] = fmt::format("typecast_tile<{}u, {}u>", in_fmt, out_fmt);
-    }
-    if (needs_var_typecast) {
-        auto in_fmt = static_cast<uint32_t>(DataFormat::Float32);
-        auto out_fmt = static_cast<uint32_t>(e_data_format);
-        compute_defines["TYPECAST_VAR_INIT"] = fmt::format("typecast_tile_init<{}u, {}u>", in_fmt, out_fmt);
-        compute_defines["TYPECAST_VAR"] = fmt::format("typecast_tile<{}u, {}u>", in_fmt, out_fmt);
-    }
+        writer_updated_v_cb,
+        static_cast<uint32_t>(stat_format_needs_typecast),
+        static_cast<uint32_t>(DataFormat::Float32),
+        tc_out_fmt};
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
@@ -385,8 +370,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args,
-            .defines = std::move(compute_defines)});
+            .compile_args = compute_kernel_args});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

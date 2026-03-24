@@ -39,6 +39,8 @@ void kernel_main() {
     constexpr auto batch_var_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<batch_var_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr bool batch_stat_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset()) == 1;
+    constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
@@ -82,11 +84,11 @@ void kernel_main() {
             cb_id_src_obj.reserve_back(onetile);
             noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-#ifdef MEAN_IS_FP32
-            fill_tile_with_first_element<float>(cb_id_src);
-#else
-            fill_tile_with_first_element_bfloat16(cb_id_src);
-#endif
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_src);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_src);
+            }
             cb_id_src_obj.push_back(onetile);
 
             // read a tile from batch variance
@@ -94,11 +96,11 @@ void kernel_main() {
             noc.async_read(
                 batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
-#ifdef VAR_IS_FP32
-            fill_tile_with_first_element<float>(cb_id_batch_var);
-#else
-            fill_tile_with_first_element_bfloat16(cb_id_batch_var);
-#endif
+            if constexpr (batch_stat_is_fp32) {
+                fill_tile_with_first_element<float>(cb_id_batch_var);
+            } else {
+                fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+            }
             cb_id_batch_var_obj.push_back(onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
@@ -106,11 +108,11 @@ void kernel_main() {
                 noc.async_read(
                     weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-#ifdef WEIGHT_IS_FP32
-                fill_tile_with_first_element<float>(cb_id_weight);
-#else
-                fill_tile_with_first_element_bfloat16(cb_id_weight);
-#endif
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_weight);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_weight);
+                }
                 cb_id_weight_obj.push_back(onetile);
             }
 
@@ -118,11 +120,11 @@ void kernel_main() {
                 cb_id_bias_obj.reserve_back(onetile);
                 noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-#ifdef BIAS_IS_FP32
-                fill_tile_with_first_element<float>(cb_id_bias);
-#else
-                fill_tile_with_first_element_bfloat16(cb_id_bias);
-#endif
+                if constexpr (param_is_fp32) {
+                    fill_tile_with_first_element<float>(cb_id_bias);
+                } else {
+                    fill_tile_with_first_element_bfloat16(cb_id_bias);
+                }
                 cb_id_bias_obj.push_back(onetile);
             }
 

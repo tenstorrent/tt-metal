@@ -255,6 +255,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         eps_cb,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(any_float32));
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(weight_has_value),
@@ -271,39 +272,24 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     tt::tt_metal::TensorAccessorArgs(weight_tensor ? weight_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor ? bias_tensor->buffer() : nullptr).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(b_data_format == DataFormat::Float32));
+    auto param_data_format =
+        weight_has_value ? e_data_format : (bias_has_value ? f_data_format : DataFormat::Float16_b);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(param_data_format == DataFormat::Float32));
 
     // READER KERNEL
-    std::map<std::string, std::string> reader_defines;
-    if (any_float32) {
-        reader_defines["FILL_EPS_FP32"] = "1";
-    }
-
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // WRITER KERNEL
-    std::map<std::string, std::string> writer_defines;
-    if (b_data_format == DataFormat::Float32) {
-        writer_defines["MEAN_IS_FP32"] = "1";
-    }
-    if (d_data_format == DataFormat::Float32) {
-        writer_defines["VAR_IS_FP32"] = "1";
-    }
-    if (e_data_format == DataFormat::Float32) {
-        writer_defines["WEIGHT_IS_FP32"] = "1";
-    }
-    if (f_data_format == DataFormat::Float32) {
-        writer_defines["BIAS_IS_FP32"] = "1";
-    }
-
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -333,15 +319,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         weight_tensor_cb,
         temp_1_cb,
         bias_tensor_cb,
-        writer_output_cb};
-
-    std::map<std::string, std::string> compute_defines;
-    if (needs_output_typecast) {
-        auto in_fmt = static_cast<uint32_t>(DataFormat::Float32);
-        auto out_fmt = static_cast<uint32_t>(c_data_format);
-        compute_defines["TYPECAST_OUTPUT_INIT"] = fmt::format("typecast_tile_init<{}u, {}u>", in_fmt, out_fmt);
-        compute_defines["TYPECAST_OUTPUT"] = fmt::format("typecast_tile<{}u, {}u>", in_fmt, out_fmt);
-    }
+        writer_output_cb,
+        static_cast<uint32_t>(needs_output_typecast),
+        static_cast<uint32_t>(DataFormat::Float32),
+        needs_output_typecast ? static_cast<uint32_t>(c_data_format) : static_cast<uint32_t>(DataFormat::Float32)};
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
@@ -355,8 +336,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args,
-            .defines = std::move(compute_defines)});
+            .compile_args = compute_kernel_args});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

@@ -9,10 +9,36 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#if defined(TYPECAST_MEAN) || defined(TYPECAST_VAR)
 #include "api/compute/eltwise_unary/typecast.h"
-#endif
 #include "experimental/circular_buffer.h"
+
+template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
+ALWI void maybe_typecast_stat(
+    experimental::CircularBuffer& src_obj, uint32_t src_cb, uint32_t dst_cb, uint32_t prev_cb, uint32_t tile_index) {
+    if constexpr (NeedsTypecast) {
+        constexpr uint32_t onetile = 1;
+        src_obj.wait_front(onetile);
+        experimental::CircularBuffer dst_obj(dst_cb);
+        dst_obj.reserve_back(onetile);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short_with_dt(prev_cb, src_cb);
+        copy_tile(src_cb, tile_index, tile_index * 2);
+        typecast_tile_init<TcInFmt, TcOutFmt>();
+        typecast_tile<TcInFmt, TcOutFmt>(tile_index * 2);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_reconfig_data_format(dst_cb);
+        pack_tile(tile_index * 2, dst_cb);
+        tile_regs_release();
+
+        pack_reconfig_data_format(dst_cb, src_cb);
+
+        src_obj.pop_front(onetile);
+        dst_obj.push_back(onetile);
+    }
+}
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -32,7 +58,12 @@ void kernel_main() {
     constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
     constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
     constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(14);  // writer-facing updated mean
-    [[maybe_unused]] constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);  // writer-facing updated var
+    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);   // writer-facing updated var
+    constexpr bool stat_needs_typecast = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(17);
+    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(18);
+    constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
+    constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
 
     experimental::CircularBuffer cb_batch_mean_obj(cb_batch_mean);
     experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
@@ -135,30 +166,8 @@ void kernel_main() {
             tile_regs_release();
             cb_updated_running_mean_obj.push_back(onetile);
 
-#ifdef TYPECAST_MEAN
-            {
-                cb_updated_running_mean_obj.wait_front(onetile);
-                experimental::CircularBuffer cb_writer_mean_obj(cb_writer_updated_mean);
-                cb_writer_mean_obj.reserve_back(onetile);
-
-                tile_regs_acquire();
-                copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_updated_running_mean);
-                copy_tile(cb_updated_running_mean, tile_index, tile_index * 2);
-                TYPECAST_MEAN_INIT();
-                TYPECAST_MEAN(tile_index * 2);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_writer_updated_mean);
-                pack_tile(tile_index * 2, cb_writer_updated_mean);
-                tile_regs_release();
-
-                pack_reconfig_data_format(cb_writer_updated_mean, cb_updated_running_mean);
-
-                cb_updated_running_mean_obj.pop_front(onetile);
-                cb_writer_mean_obj.push_back(onetile);
-            }
-#endif
+            maybe_typecast_stat<needs_mean_typecast, tc_in_fmt, tc_out_fmt>(
+                cb_updated_running_mean_obj, cb_updated_running_mean, cb_writer_updated_mean, cb_tmp2, tile_index);
 
             cb_tmp3_obj.pop_front(onetile);
             cb_tmp2_obj.pop_front(onetile);
@@ -241,30 +250,8 @@ void kernel_main() {
             tile_regs_release();
             cb_updated_running_var_obj.push_back(onetile);
 
-#ifdef TYPECAST_VAR
-            {
-                cb_updated_running_var_obj.wait_front(onetile);
-                experimental::CircularBuffer cb_writer_var_obj(cb_writer_updated_var);
-                cb_writer_var_obj.reserve_back(onetile);
-
-                tile_regs_acquire();
-                copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_updated_running_var);
-                copy_tile(cb_updated_running_var, tile_index, tile_index * 2);
-                TYPECAST_VAR_INIT();
-                TYPECAST_VAR(tile_index * 2);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_writer_updated_var);
-                pack_tile(tile_index * 2, cb_writer_updated_var);
-                tile_regs_release();
-
-                pack_reconfig_data_format(cb_writer_updated_var, cb_updated_running_var);
-
-                cb_updated_running_var_obj.pop_front(onetile);
-                cb_writer_var_obj.push_back(onetile);
-            }
-#endif
+            maybe_typecast_stat<needs_var_typecast, tc_in_fmt, tc_out_fmt>(
+                cb_updated_running_var_obj, cb_updated_running_var, cb_writer_updated_var, cb_tmp2, tile_index);
 
             cb_tmp3_obj.pop_front(onetile);
             cb_tmp2_obj.pop_front(onetile);
