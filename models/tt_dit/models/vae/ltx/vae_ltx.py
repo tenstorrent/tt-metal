@@ -305,6 +305,38 @@ class LTXResnetBlock3D(Module):
         return ttnn.add(residual, h)
 
 
+class LTXUNetMidBlock3D(Module):
+    """
+    LTX-2 UNet mid block (res_x type): stack of ResnetBlock3D with same in/out channels.
+
+    No attention, no timestep conditioning (22B checkpoint: timestep_conditioning=False).
+
+    Reference: LTX-2/packages/ltx-core/src/ltx_core/model/video_vae/resnet.py UNetMidBlock3D
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        num_layers: int,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+        self.res_blocks = ModuleList()
+        for _ in range(num_layers):
+            self.res_blocks.append(
+                LTXResnetBlock3D(
+                    in_channels=in_channels, out_channels=in_channels, mesh_device=mesh_device, dtype=dtype
+                )
+            )
+
+    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+        for block in self.res_blocks:
+            x_BTHWC = block(x_BTHWC, causal=causal)
+        return x_BTHWC
+
+
 class LTXDepthToSpaceUpsample(Module):
     """
     LTX-2 upsampler: Conv3d → depth-to-space reshape.
@@ -321,6 +353,7 @@ class LTXDepthToSpaceUpsample(Module):
         in_channels: int,
         stride: tuple[int, int, int],
         out_channels_reduction_factor: int = 1,
+        residual: bool = False,
         spatial_padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
@@ -330,6 +363,8 @@ class LTXDepthToSpaceUpsample(Module):
 
         self.stride = stride
         self.out_channels_reduction_factor = out_channels_reduction_factor
+        self.residual = residual
+        self.in_channels = in_channels
         conv_out_channels = math.prod(stride) * in_channels // out_channels_reduction_factor
 
         self.conv = LTXCausalConv3d(
@@ -342,24 +377,44 @@ class LTXDepthToSpaceUpsample(Module):
             dtype=dtype,
         )
 
+    def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
+        """Apply depth-to-space in BTHWC format: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C)."""
+        p1, p2, p3 = self.stride
+        total_c = x.shape[-1]
+        C = total_c // (p1 * p2 * p3)
+        x = ttnn.reshape(x, (B, T, H, W, C, p1, p2, p3))
+        x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
+        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
+        return x
+
     def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
+        import math
+
         B, T, H, W, _ = x_BTHWC.shape
         p1, p2, p3 = self.stride
 
+        # Residual path: depth-to-space the input, repeat channels to match output
+        if self.residual:
+            x_in = self._depth_to_space_bthwc(x_BTHWC, B, T, H, W)
+            # x_in shape: (B, T*p1, H*p2, W*p3, C_small)
+            # Repeat channels to match conv output after depth-to-space
+            num_repeat = math.prod(self.stride) // self.out_channels_reduction_factor
+            if num_repeat > 1:
+                x_in = ttnn.repeat(x_in, ttnn.Shape([1, 1, 1, 1, num_repeat]))
+            if p1 == 2:
+                x_in = x_in[:, 1:, :, :, :]
+
         x_BTHWC = self.conv(x_BTHWC, causal=causal)
 
-        # Infer C from the conv output: total channels = C * p1 * p2 * p3
-        total_c = x_BTHWC.shape[-1]
-        C = total_c // (p1 * p2 * p3)
-
-        # Depth-to-space: (B, T, H, W, C*p1*p2*p3) → (B, T*p1, H*p2, W*p3, C)
-        x = ttnn.reshape(x_BTHWC, (B, T, H, W, C, p1, p2, p3))
-        x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
-        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
+        # Depth-to-space on conv output
+        x = self._depth_to_space_bthwc(x_BTHWC, B, T, H, W)
 
         # Remove first frame if temporal upsampling (causal padding artifact)
         if p1 == 2:
             x = x[:, 1:, :, :, :]
+
+        if self.residual:
+            x = ttnn.add(x, x_in)
 
         return x
 
@@ -455,12 +510,14 @@ class LTXVideoDecoder(Module):
         out_channels: int = 3,
         patch_size: int = 4,
         base_channels: int = 128,
+        causal: bool = True,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
 
         self.patch_size = patch_size
+        self.causal = causal
         self.mesh_device = mesh_device
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -494,12 +551,14 @@ class LTXVideoDecoder(Module):
                     "compress_time": (2, 1, 1),
                 }
                 multiplier = block_config.get("multiplier", 1)
+                residual = block_config.get("residual", False)
                 new_ch = ch // multiplier
                 self.up_blocks.append(
                     LTXDepthToSpaceUpsample(
                         in_channels=ch,
                         stride=stride_map[block_name],
                         out_channels_reduction_factor=multiplier,
+                        residual=residual,
                         spatial_padding_mode="reflect",
                         mesh_device=mesh_device,
                         dtype=dtype,
@@ -513,6 +572,12 @@ class LTXVideoDecoder(Module):
                     LTXResnetBlock3D(in_channels=ch, out_channels=new_ch, mesh_device=mesh_device, dtype=dtype)
                 )
                 ch = new_ch
+            elif block_name == "res_x":
+                num_layers = block_config.get("num_layers", 1)
+                self.up_blocks.append(
+                    LTXUNetMidBlock3D(in_channels=ch, num_layers=num_layers, mesh_device=mesh_device, dtype=dtype)
+                )
+                # ch stays the same (in == out for mid block)
             else:
                 raise ValueError(f"Unknown decoder block: {block_name}")
 
@@ -574,17 +639,17 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
         # conv_in
-        sample_tt = self.conv_in(sample_tt)
+        sample_tt = self.conv_in(sample_tt, causal=self.causal)
 
         # Up blocks
         for up_block in self.up_blocks:
-            sample_tt = up_block(sample_tt)
+            sample_tt = up_block(sample_tt, causal=self.causal)
 
         # Output: PixelNorm → SiLU → conv_out
         sample_tt = self.norm_out(sample_tt)
         sample_tt = ttnn.silu(sample_tt)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        sample_tt = self.conv_out(sample_tt)
+        sample_tt = self.conv_out(sample_tt, causal=self.causal)
 
         # Convert back to host (take device 0's copy — output is replicated)
         result = ttnn.to_torch(ttnn.get_device_tensors(sample_tt)[0])  # (B, T_out, H_out, W_out, C_out)
