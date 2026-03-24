@@ -219,9 +219,13 @@ def test_llama3_8b(mesh_device, test_config, optimizations):
     if test_config == "token-accuracy":
         _run_token_accuracy(model, model_args, mesh_device, expected)
     elif test_config == "batch-1":
-        _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size=1)
+        _run_perf_benchmark(
+            model, model_args, mesh_device, expected, batch_size=1, case_name=f"{optimizations}/{test_config}"
+        )
     elif test_config == "batch-32":
-        _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size=32)
+        _run_perf_benchmark(
+            model, model_args, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/{test_config}"
+        )
 
 
 # =============================================================================
@@ -293,7 +297,7 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
 # =============================================================================
 
 
-def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
+def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, case_name):
     """Run performance benchmark (TTFT + tok/s/u)."""
     from models.tt_transformers.tt.common import preprocess_inputs_prefill
 
@@ -358,6 +362,6 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
             failures.append(f"tok/s/u {result.tok_s_u:.1f} below target {expected['tok_s_u']}")
         if "ttft_ms" in expected and not targets["ttft_ms"]:
             failures.append(f"ttft_ms {result.ttft_ms:.1f} above target {expected['ttft_ms']}")
-        assert not failures, "; ".join(failures)
+        assert not failures, f"{case_name}: " + "; ".join(failures)
 
     traced_executor.cleanup()
