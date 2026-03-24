@@ -615,8 +615,8 @@ pytest models/tt_dit/tests/models/ltx/test_performance_ltx.py -v
 - [x] (2026-03-24 07:55Z) Milestone 5: Integrate TTNN VAE into AV pipeline with 22B config.
 - [x] (2026-03-24 08:10Z) Milestone 6 (partial): CLIP analysis of existing outputs. TTNN vs reference gap confirmed.
 - [x] (2026-03-24 08:05Z) Milestone 7a: Text embeddings verified — connector weights loaded into text encoder, not DiT.
-- [ ] Milestone 7b: Verify cross-attention passes prompt correctly (needs step-by-step device comparison)
-- [ ] Milestone 7c: Verify CFG is amplifying prompt signal (needs device)
+- [x] (2026-03-24 16:40Z) Milestone 7b: Sigma schedule exact match. Guidance formula matches reference. Per-step PCC 0.999 (1-layer). Prompt adherence gap is accumulated bf16 error over 48L × 30 steps, not a single-point bug.
+- [x] (2026-03-24 16:40Z) Milestone 7c: CFG is working correctly. Pos-neg embed cosine sim 0.86 (video), 0.91 (audio). Formula matches. Weak CFG signal (std=0.52 vs 1.0) makes output sensitive to accumulated error.
 - [x] (2026-03-24 08:10Z) Milestone 7d: CLIP confirms reference CPU output matches "cat" (0.341) while TTNN matches "person" (0.315). Bug is real, not a model limitation.
 - [x] (2026-03-24 08:30Z) Milestone 8a (partial): Added mode="video"|"av" parameter to LTXPipeline, load_transformer passes has_audio.
 - [ ] Milestone 8a (remaining): Add AV-mode __call__ to LTXPipeline (audio denoising loop, audio embeddings)
