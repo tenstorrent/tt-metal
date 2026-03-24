@@ -379,9 +379,19 @@ def collect_and_dump_numeric_metrics(
             if isinstance(value, torch.dtype):
                 return _dtype_name(value)
             if isinstance(value, str):
-                return value
+                normalized = value.replace("ttnn.", "").replace("DataType.", "")
+                if normalized in ("BFLOAT8_B", "bfloat8_b"):
+                    return "bfloat8"
+                if normalized in ("BFLOAT4_B", "bfloat4_b"):
+                    return "bfloat4"
+                return normalized.lower()
             if value is not None:
-                return str(value).replace("ttnn.", "")
+                normalized = str(value).replace("ttnn.", "").replace("DataType.", "")
+                if normalized == "BFLOAT8_B":
+                    return "bfloat8"
+                if normalized == "BFLOAT4_B":
+                    return "bfloat4"
+                return normalized.lower()
             return "unknown"
 
         test_dtype_str = _normalize_test_dtype(test_dtype)
