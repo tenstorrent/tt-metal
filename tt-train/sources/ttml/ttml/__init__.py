@@ -29,6 +29,7 @@ from ._ttml import NamedParameters
 from . import autograd
 from . import models
 from . import modules
+from . import schedulers
 
 # --- Re-export _ttml submodules that have no Python package counterpart ---
 # These are pure C++ nanobind submodules; making them attributes of ttml

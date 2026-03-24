@@ -5,6 +5,7 @@
 #include "core/distributed/distributed.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
 #include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
@@ -38,26 +39,23 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     return result;
 }
 
-void synchronize_gradients(
-    const serialization::NamedParameters& parameters, const std::optional<ttsl::SmallVector<uint32_t>>& cluster_axes) {
-    ttsl::SmallVector<uint32_t> cluster_axes_to_use;
-    if (cluster_axes.has_value()) {
-        cluster_axes_to_use = cluster_axes.value();
-    } else {
-        if (!autograd::ctx().is_parallelism_context_initialized()) {
-            return;
-        }
-        const auto& pctx = autograd::ctx().get_parallelism_context();
-        if (pctx.is_cp_enabled()) {
-            cluster_axes_to_use.push_back(pctx.get_cp_axis().value());
-        }
-        if (pctx.is_ddp_enabled()) {
-            cluster_axes_to_use.push_back(pctx.get_ddp_axis().value());
-        }
-    }
+void synchronize_gradients(const serialization::NamedParameters& parameters) {
+    auto* device = &autograd::ctx().get_device();
     for (auto& [name, tensor] : parameters) {
-        if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes_to_use));
+        if (!tensor->is_grad_initialized()) {
+            continue;
+        }
+        const auto& placements = tensor->get_value().tensor_topology().placements();
+        for (size_t axis = 0; axis < placements.size(); ++axis) {
+            if (!std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[axis])) {
+                continue;
+            }
+            uint32_t num_devices = device->shape()[axis];
+            if (num_devices <= 1) {
+                continue;
+            }
+            auto grad = ttnn_fixed::distributed::all_reduce(tensor->get_grad(), static_cast<uint32_t>(axis));
+            tensor->set_grad(ttnn::multiply(grad, 1.0F / static_cast<float>(num_devices)));
         }
     }
 }

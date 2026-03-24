@@ -45,9 +45,14 @@ from ttml.distributed import (
     ColwiseParallel,
     RowwiseParallel,
     init_ops,
-    DistributedDataParallel,
 )
 from ttml.distributed.debug import DispatchTraceCallback
+from ttml.schedulers import (
+    LRSchedulerBase,
+    LinearScheduler,
+    LambdaScheduler,
+    SequentialScheduler,
+)
 
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -87,6 +92,38 @@ def print_memory_stats(label: str):
 
 def parse_training_config(yaml_config: dict) -> dict:
     return yaml_config.get("training_config", {})
+
+
+# ---------------------------------------------------------------------------
+# Scheduler factories (mirror C++ create_identity_scheduler /
+#                              create_warmup_with_linear_scheduler)
+# ---------------------------------------------------------------------------
+
+
+def create_identity_scheduler(optimizer, total_steps: int) -> LRSchedulerBase:
+    """Constant LR — no change throughout training."""
+    return LambdaScheduler(optimizer, lambda step: 1.0)
+
+
+def create_warmup_linear_scheduler(optimizer, total_steps: int) -> LRSchedulerBase:
+    """10 % linear warmup then linear decay to 1 % of peak lr."""
+    warmup_steps = max(1, int(total_steps * 0.1))
+    decay_steps = max(1, total_steps - warmup_steps)
+    warmup = LinearScheduler(
+        optimizer, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps
+    )
+    decay = LinearScheduler(
+        optimizer, start_factor=1.0, end_factor=0.01, total_steps=decay_steps
+    )
+    return SequentialScheduler(
+        optimizer, [warmup, decay], milestones=[warmup_steps, decay_steps]
+    )
+
+
+_SCHEDULER_FACTORIES = {
+    "identity": create_identity_scheduler,
+    "warmup_linear": create_warmup_linear_scheduler,
+}
 
 
 def parse_model_config(yaml_config: dict) -> LlamaConfig:
@@ -351,10 +388,10 @@ def main():
         help="Directory for checkpoints",
     )
     parser.add_argument(
-        "--warmup_steps",
-        type=int,
-        default=0,
-        help="Number of warmup steps for LR schedule",
+        "--scheduler_type",
+        type=str,
+        default=None,
+        help="LR scheduler type: 'identity' (constant) or 'warmup_linear'. Overrides config.",
     )
     parser.add_argument(
         "--gradient_checkpointing",
@@ -402,6 +439,7 @@ def main():
     clip_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
     optimizer_cfg = tc.get("optimizer", {})
     learning_rate = float(optimizer_cfg.get("lr", tc.get("learning_rate", 3e-4)))
+    scheduler_type = args.scheduler_type or tc.get("scheduler_type", "identity")
 
     # Data
     data_path = args.data_path or tc.get("data_path", "")
@@ -588,18 +626,6 @@ def main():
     else:
         print("\n4. TP/CP not enabled, skipping distribution...")
 
-    # Wrap model with DistributedModelWrapper for gradient sync (DP and/or CP)
-    sync_axes = []
-    if ddp_axis is not None:
-        sync_axes.append(ddp_axis)
-    if cp_axis is not None:
-        sync_axes.append(cp_axis)
-    if sync_axes:
-        print(
-            f"\n   Wrapping model with DistributedModelWrapper (sync_axes={sync_axes})..."
-        )
-        model = DistributedDataParallel(model, sync_axes)
-
     # Create dataloader with distributed collate function
     print("\n5. Creating dataloader...")
     collate_fn = partial(
@@ -628,7 +654,6 @@ def main():
         seed=seed,
         max_seq_len=seq_len,
         learning_rate=learning_rate,
-        warmup_steps=args.warmup_steps,
         max_grad_norm=clip_norm if use_clip else 0.0,
         log_interval=1,
         gradient_checkpointing=args.gradient_checkpointing,
@@ -639,6 +664,16 @@ def main():
         optimizer_cfg if optimizer_cfg else {"type": "AdamW", "lr": learning_rate}
     )
     print(f"   Optimizer: {optimizer_dict}")
+
+    optimizer = ttml.optimizers.create_optimizer(optimizer_dict, model.parameters())
+
+    if scheduler_type not in _SCHEDULER_FACTORIES:
+        raise ValueError(
+            f"Unknown scheduler_type '{scheduler_type}'. "
+            f"Choose from: {list(_SCHEDULER_FACTORIES)}"
+        )
+    scheduler = _SCHEDULER_FACTORIES[scheduler_type](optimizer, max_steps)
+    print(f"   Scheduler: {scheduler_type}")
 
     # Setup callbacks
     callbacks = []
@@ -657,7 +692,8 @@ def main():
         train_dataloader=train_dataloader,
         eval_dataloader=None,
         config=sft_config,
-        optimizer=optimizer_dict,
+        optimizer=optimizer,
+        scheduler=scheduler,
         callbacks=callbacks if callbacks else None,
     )
 

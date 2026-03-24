@@ -462,10 +462,19 @@ In your training configuration YAML file, specify the device configuration:
 
 ```yaml
 device_config:
-  enable_tp: true      # Enable tensor parallelism
-  enable_ddp: true     # Enable data parallelism
   mesh_shape: [4, 8]   # 4 DP groups × 8 TP devices = 32 devices, should be the same as in MGD file
+  ddp_axis: 0          # Data parallel on mesh axis 0
+  tp_axis: 1           # Tensor parallel on mesh axis 1
   device_ids: []       # Optional: specific device IDs to use
+```
+
+The legacy `enable_ddp` / `enable_tp` flags are still accepted (axes are then inferred automatically), but explicit `ddp_axis` / `tp_axis` / `cp_axis` take precedence and are preferred for clarity:
+
+```yaml
+device_config:
+  mesh_shape: [4, 8]
+  enable_tp: true      # legacy: tp assigned to axis 1
+  enable_ddp: true     # legacy: ddp assigned to axis 0
 ```
 
 ### Parallelism Strategy Selection
@@ -536,9 +545,9 @@ if (config.enable_tp && mesh_shape[axis] > 1U) {
 }
 ```
 
-**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions:
-- 1D mesh `[N]`: Can use either DP or TP (but not both)
-- 2D mesh `[M, N]`: Can use both DP and TP together
+**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions. This is enforced identically in C++ (`ParallelismContext`) and Python (`DeviceConfig`):
+- **Line topology** (`[1, N]` or `[N, 1]`): exactly one parallelism type must be enabled
+- **2D mesh** (`[M, N]`, both dims > 1): exactly two parallelism types must be enabled
 
 ## Complete Example
 
@@ -753,9 +762,11 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
    model = parallelize_module(model, mesh_device, LLAMA_TP_PLAN, tp_axis=1, cp_axis=0)
    ```
 
-4. **Forward/backward**: Patched ops run through dispatch; rules decide input/output layouts and collectives. No layout code in the model itself.
+4. **Gradient synchronization** is handled automatically by `SFTTrainer`. After each backward pass, the trainer calls `ttml.core.distributed.synchronize_gradients`, which inspects each parameter's tensor topology and all-reduces gradients along any axis where the parameter is replicated. No explicit wrapping or sync call is needed — DP and CP gradient sync works out of the box as long as parameters are replicated on the corresponding mesh axes.
 
-See `tt-train/sources/examples/llama_tp/train_llama_tp.py` for a full example.
+5. **Forward/backward**: Patched ops run through dispatch; rules decide input/output layouts and collectives. No layout code in the model itself.
+
+See `tt-train/sources/examples/llama_tp/train_llama_distributed.py` for a full example.
 
 ### Column vs row linears, broadcast / all_reduce / all_gather, and gradients
 
@@ -880,6 +891,67 @@ To define a new style (e.g. a variant of column/row parallel):
 | **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
 | **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer). Optional `get_layout` for introspection / tests. |
 | **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; no layout code in user model. |
+| **SFTTrainer (gradient sync)** | After each backward pass, automatically all-reduces gradients across any mesh axis where a parameter is replicated (topology-based; no explicit sync needed). |
+
+---
+
+## Debugging: DispatchTraceCallback
+
+`DispatchTraceCallback` is a trainer callback that records every op dispatch event (op name, input/output layouts, collectives) during training and prints or dumps the trace at the end. It lives in `ttml.distributed.debug` and works with any `SFTTrainer`-based script.
+
+### Usage
+
+```python
+from ttml.distributed.debug import DispatchTraceCallback
+
+callbacks = []
+if args.debug_dispatch_dump:
+    callbacks.append(
+        DispatchTraceCallback(
+            first_step_only=True,          # capture one step then stop
+            dump_path=args.debug_dispatch_dump,  # e.g. "trace.html" or "trace.jsonl"
+        )
+    )
+
+trainer = SFTTrainer(model, config, dataloader, optimizer, callbacks=callbacks)
+```
+
+### Options
+
+| Argument | Default | Description |
+|---|---|---|
+| `max_entries_to_print` | `20` | Max entries printed to stdout. |
+| `first_step_only` | `False` | If `True`, disables tracing after the first training step (cheaper for profiling). |
+| `dump_path` | `None` | File to write the full trace. Use `.html` for an interactive report, any other extension for JSONL. |
+
+### Output formats
+
+- **`.html`**: Self-contained interactive page (open in a browser). Also writes `.folded` (for `flamegraph.pl`) and `_flame.svg` if `flamegraph.pl` is on `PATH`.
+- **`.jsonl`** (any other extension): One JSON object per line; each line is a serialized `TraceEntry`.
+
+### What a trace shows
+
+Each recorded event contains:
+- `op_name`: the dispatched op (e.g. `"linear"`, `"matmul"`)
+- `input_layouts` / `output_layout`: the `Layout` stamped on each tensor
+- `rule_name`: which sharding rule was applied
+- `pre_collectives`: e.g. `Broadcast(axis=1)` before the op
+- `redistributions`: inputs that were resharded to match the rule's required layout
+- `post_collectives`: e.g. `AllReduce(axis=1)` or `AllGather(dim=2, axis=1)` after the op
+- `module_stack`: the module path where the op was called
+
+### Standalone context manager
+
+You can also use `DispatchTracer` directly outside a trainer:
+
+```python
+from ttml.distributed.debug import DispatchTracer, dispatch_trace
+
+with DispatchTracer() as tracer:
+    loss = model(batch)
+
+print(dispatch_trace.format_entries_tree(tracer.entries))
+```
 
 ## Additional Resources
 
@@ -887,4 +959,4 @@ To define a new style (e.g. a variant of column/row parallel):
 - **Multihost Training Examples**: `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/`
 - **Device Config Examples**: `$TT_METAL_HOME/tt-train/configs/training_configs/`
 - **TP+DP Example (Python)**: `$TT_METAL_HOME/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
-- **Llama TP (Python, rules/dispatch)**: `$TT_METAL_HOME/tt-train/sources/examples/llama_tp/train_llama_tp.py` - Full example using `parallelize_module`, `ColwiseParallel`/`RowwiseParallel`, and the rule-based dispatch layer
+- **Llama TP+DP (Python, rules/dispatch)**: `$TT_METAL_HOME/tt-train/sources/examples/llama_tp/train_llama_distributed.py` - Full example using `parallelize_module`, `ColwiseParallel`/`RowwiseParallel`, and the rule-based dispatch layer with automatic DP gradient sync

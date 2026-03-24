@@ -27,6 +27,7 @@ import ttml
 from ttml.common.data import build_causal_mask
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
+from ttml.schedulers import LRSchedulerBase
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -134,6 +135,7 @@ class SFTTrainer:
         config: SFTConfig,
         optimizer: Any = None,
         peft_config: Optional[LoraConfig] = None,
+        scheduler: Optional[LRSchedulerBase] = None,
         lr_schedule: Optional[Callable[[int], float]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         compute_loss_func: Optional[Callable] = None,
@@ -190,6 +192,7 @@ class SFTTrainer:
         self._optimizer = self._build_optimizer(optimizer)
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
+        self._scheduler = scheduler
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         )
@@ -235,10 +238,6 @@ class SFTTrainer:
 
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
         for _ in bar:
-            # self.step is 0-based so external lr_schedule callables (e.g.
-            # SpeedrunScheduler.lr_at) receive the expected step index.
-            lr = self._lr_schedule(self.step)
-            self._optimizer.set_lr(lr)
             self._optimizer.zero_grad()
 
             micro_losses = []
@@ -259,16 +258,23 @@ class SFTTrainer:
                     float(loss.to_numpy(ttnn.DataType.FLOAT32, self._composer).mean())
                 )
 
-                scaled = ttml.ops.binary.mul(
-                    loss, 1.0 / cfg.gradient_accumulation_steps
-                )
+                # Scale loss for gradient accumulation (skip mul when GA=1,
+                # matching C++ GradientAccumulator::scale which is a no-op for 1)
+                if cfg.gradient_accumulation_steps > 1:
+                    loss = ttml.ops.binary.mul(
+                        loss, 1.0 / cfg.gradient_accumulation_steps
+                    )
 
                 # Backward pass
-                scaled.backward(False)
+                loss.backward(False)
                 if micro_step == 0:
                     memory_snapshot("BACKWARD_PASS")
 
                 ttml.autograd.AutoContext.get_instance().reset_graph()
+
+            # Synchronize gradients: all-reduce along axes where params
+            # are replicated (DDP/CP).  No-op on single device.
+            ttml.core.distributed.synchronize_gradients(self.model.parameters())
 
             if cfg.max_grad_norm > 0:
                 ttml.core.clip_grad_norm(
@@ -277,6 +283,13 @@ class SFTTrainer:
 
             # Optimizer step
             self._optimizer.step()
+            if self._scheduler is not None:
+                self._scheduler.step()
+            else:
+                # self.step is 0-based so external lr_schedule callables (e.g.
+                # SpeedrunScheduler.lr_at) receive the expected step index.
+                self._optimizer.set_lr(self._lr_schedule(self.step))
+            lr = float(self._optimizer.get_lr())
             memory_snapshot("OPTIMIZER_STEP")
 
             self.step += 1
@@ -335,6 +348,9 @@ class SFTTrainer:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _sync_gradients(self) -> None:
+        ttml.core.distributed.synchronize_gradients(self.model.parameters())
+
     def _compute_loss(self, batch: Batch, logits: Any):
         """Forward pass + loss computation.
 
@@ -376,7 +392,8 @@ class SFTTrainer:
         losses = []
         with no_grad():
             for batch in self.eval_dataloader:
-                loss = self._compute_loss(batch)
+                logits = self.model(batch.input_ids, self._causal_mask)
+                loss = self._compute_loss(batch, logits)
                 losses.append(
                     float(loss.to_numpy(ttnn.DataType.FLOAT32, self._composer).mean())
                 )

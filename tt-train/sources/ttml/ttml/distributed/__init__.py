@@ -39,8 +39,7 @@ from .rules.registry import (
     get_module_rule,
 )
 from .debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
-from .training import distribute_tensor, parallelize_module, sync_gradients
-from .ddp import DistributedDataParallel
+from .training import distribute_tensor, parallelize_module
 from .style import ParallelStyle, ColwiseParallel, RowwiseParallel
 from ._register_ops import init_ops
 
@@ -79,5 +78,4 @@ __all__ = [
     "ColwiseParallel",
     "RowwiseParallel",
     "init_ops",
-    "DistributedDataParallel",
 ]

@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -34,7 +35,10 @@ import threading
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ttml.trainers import SFTTrainer
 
 from .layout import Layout
 
@@ -544,3 +548,81 @@ class DispatchTracer:
     @property
     def entries(self) -> List[TraceEntry]:
         return dispatch_trace._entries[self._entries_before :]
+
+
+class DispatchTraceCallback:
+    """Trainer callback for dispatch trace logging.
+
+    Args:
+        max_entries_to_print: Maximum entries to print at train end (default 20).
+        first_step_only: If True, disable tracing after the first step completes.
+        dump_path: Optional file path to dump entries. Use .html for an interactive
+            HTML report (also writes .folded and _flame.svg); otherwise JSONL.
+    """
+
+    def __init__(
+        self,
+        max_entries_to_print: int = 20,
+        first_step_only: bool = False,
+        dump_path: Optional[str] = None,
+    ):
+        self.max_entries_to_print = max_entries_to_print
+        self.first_step_only = first_step_only
+        self.dump_path = dump_path
+        self._first_step_done = False
+
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        dispatch_trace.clear()
+        dispatch_trace.enable()
+        self._first_step_done = False
+
+    def on_step_end(
+        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
+    ) -> None:
+        if self.first_step_only and not self._first_step_done:
+            self._first_step_done = True
+            dispatch_trace.disable()
+            self._dump_and_print("first step")
+
+    def on_train_end(self, trainer: "SFTTrainer") -> None:
+        dispatch_trace.disable()
+        if not (self.first_step_only and self._first_step_done):
+            self._dump_and_print("train end")
+
+    def _dump_and_print(self, label: str) -> None:
+        entries = dispatch_trace.entries
+        print(f"\nDispatch trace ({label}): {len(entries)} recorded events")
+        tree = dispatch_trace.format_entries_tree(
+            entries=entries,
+            max_entries=self.max_entries_to_print,
+        )
+        print(tree)
+        if len(entries) > self.max_entries_to_print:
+            print(
+                f"  ... and {len(entries) - self.max_entries_to_print} more (use --debug_dispatch_dump for full trace)"
+            )
+
+        if self.dump_path:
+            if self.dump_path.endswith(".html"):
+                html = dispatch_trace.format_entries_html(
+                    entries=entries, title="Dispatch trace"
+                )
+                with open(self.dump_path, "w") as f:
+                    f.write(html)
+                print(f"  Wrote HTML trace to {self.dump_path} (open in a browser)")
+                base = self.dump_path[:-5]
+                folded_path = base + ".folded"
+                dispatch_trace.export_folded(folded_path, entries=entries)
+                print(
+                    f"  Wrote folded stacks to {folded_path} (use flamegraph.pl for classic SVG)"
+                )
+                svg_path = base + "_flame.svg"
+                if dispatch_trace.build_flamegraph_svg(
+                    entries=entries, out_path=svg_path
+                ):
+                    print(f"  Wrote flame graph to {svg_path} (open in browser)")
+            else:
+                with open(self.dump_path, "w") as f:
+                    for entry in entries:
+                        f.write(json.dumps(entry.to_dict()) + "\n")
+                print(f"  Dumped {len(entries)} entries to {self.dump_path} (JSONL)")
