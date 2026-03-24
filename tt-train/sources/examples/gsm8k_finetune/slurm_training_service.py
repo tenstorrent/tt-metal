@@ -70,6 +70,7 @@ def _rfc3339_normalize(s: Optional[str]) -> Optional[str]:
 from pathlib import Path
 
 from flask import Flask, jsonify, request, g, send_from_directory
+from ttml.common.utils import get_tt_metal_runtime_root
 from job_manager import JobManager, JobStatus, PARTITION_DEVICE_MAPPING
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -93,10 +94,17 @@ PORT = int(os.environ.get("PORT", 8085))
 def _default_jobs_base_dir() -> str:
     if os.environ.get("JOBS_BASE_DIR"):
         return os.environ["JOBS_BASE_DIR"]
-    data_jobs = Path(f"/data/{os.environ.get('USER', '')}/tt-metal/tt-train/sources/examples/gsm8k_finetune/jobs")
-    if (Path("/data") / os.environ.get("USER", "")).exists():
-        return str(data_jobs)
-    return str(Path(__file__).parent / "jobs")
+
+    # Try /data first (for compute nodes)
+    user = os.environ.get("USER", "")
+    if user:
+        data_jobs = Path(f"/data/{user}/tt-metal/tt-train/sources/examples/gsm8k_finetune/jobs")
+        if (Path("/data") / user).exists():
+            return str(data_jobs)
+
+    # Fallback to tt_metal_runtime_root relative path
+    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
+    return f"{tt_train_root}/sources/examples/gsm8k_finetune/jobs"
 
 
 JOBS_BASE_DIR = _default_jobs_base_dir()
@@ -269,14 +277,18 @@ def _resolve_partition(cluster: str, partitions: list = None) -> str:
 
 
 # Map dashboard model IDs to model_config paths (for job_manager.create_training_overrides)
-MODEL_TO_CONFIG = {
-    "tinyllama-1.1b": "model_configs/tinyllama.yaml",
-    "tinyllama": "model_configs/tinyllama.yaml",
-    "gpt2": "model_configs/gpt2s.yaml",
-    "gpt2s": "model_configs/gpt2s.yaml",
-    "llama-3.1-8b": "model_configs/llama8b.yaml",
-    "llama8b": "model_configs/llama8b.yaml",
-}
+def _get_model_to_config_mapping():
+    """Get model config mapping with paths relative to tt_metal_runtime_root."""
+    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
+    return {
+        "tinyllama-1.1b": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
+        "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
+        "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
+        "gpt2s": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
+        "llama-3.1-8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
+        "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
+    }
+
 
 manager = JobManager(jobs_base_dir=JOBS_BASE_DIR)
 
@@ -922,7 +934,7 @@ def create_job():
     training_params.update(optimizer_params)
 
     # Map model ID → model_config (dashboard format)
-    model_config = MODEL_TO_CONFIG.get(model.strip().lower())
+    model_config = _get_model_to_config_mapping().get(model.strip().lower())
     if model_config:
         training_params["model_config"] = model_config
     if "max_steps" not in training_params and "epochs" in training_params:

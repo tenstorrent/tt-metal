@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from enum import Enum
 
+from ttml.common.utils import get_tt_metal_runtime_root
+
 
 class JobStatus(Enum):
     PENDING = "PENDING"
@@ -271,9 +273,7 @@ class JobManager:
                                 partition_info.update(PARTITION_DEVICE_MAPPING[name])
                             else:
                                 partition_info["mesh_shape"] = [1, 1]
-                                partition_info[
-                                    "description"
-                                ] = f"{name} (unknown config)"
+                                partition_info["description"] = f"{name} (unknown config)"
                                 partition_info["max_nodes"] = 1
                             partition_by_name[name] = partition_info
                         else:
@@ -320,9 +320,14 @@ class JobManager:
         Returns:
             Generated SLURM script content
         """
-        # Use script path in same base as output_dir (e.g. /data when jobs are under /data)
-        # so compute nodes can access it when /home may not be mounted
-        script_path = output_dir.parent.parent / "gsm8k_finetune.py"
+        # Use script path relative to tt_metal_runtime_root for consistent resolution
+        tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
+        script_path = Path(f"{tt_train_root}/sources/examples/gsm8k_finetune/gsm8k_finetune.py")
+
+        # If the script doesn't exist at the expected location, try relative to output_dir
+        # (for cases where jobs are run from /data and script is copied there)
+        if not script_path.exists():
+            script_path = output_dir.parent.parent / "gsm8k_finetune.py"
         if not script_path.exists():
             script_path = Path(__file__).parent / "gsm8k_finetune.py"
 
@@ -444,9 +449,7 @@ class JobManager:
 
             f.write("\ndevice_config:\n")
             f.write(f"  enable_ddp: {str(device_config['enable_ddp']).lower()}\n")
-            mesh_str = yaml.dump(
-                device_config["mesh_shape"], default_flow_style=True
-            ).strip()
+            mesh_str = yaml.dump(device_config["mesh_shape"], default_flow_style=True).strip()
             f.write(f"  mesh_shape: {mesh_str}\n")
 
         return config_path
@@ -498,9 +501,7 @@ class JobManager:
         except Exception as e:
             return False, f"Failed to create config: {e}", None
 
-        script_content = self.generate_slurm_script(
-            config, partition, nodes, job_name, job_dir
-        )
+        script_content = self.generate_slurm_script(config, partition, nodes, job_name, job_dir)
         script_path = job_dir / "submit.sh"
         with open(script_path, "w") as f:
             f.write(script_content)
@@ -532,9 +533,7 @@ class JobManager:
                 partition=partition,
                 nodes=nodes,
                 status=JobStatus.PENDING.value,
-                submit_time=datetime.now(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
+                submit_time=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 config=config,
                 output_dir=str(job_dir),
             )
@@ -586,9 +585,7 @@ class JobManager:
                 # Job not in squeue - check sacct. Use -S to look back 30 days
                 # (default sacct window may exclude older completed/cancelled jobs).
                 # Use -X to get job allocation only (not individual steps).
-                start_str = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(
-                    "%Y-%m-%d"
-                )
+                start_str = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
                 result = subprocess.run(
                     [
                         "sacct",
@@ -650,9 +647,7 @@ class JobManager:
             if result.returncode == 0:
                 if job_id in self._jobs_cache:
                     self._jobs_cache[job_id].status = JobStatus.CANCELLED.value
-                    self._jobs_cache[job_id].end_time = (
-                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    )
+                    self._jobs_cache[job_id].end_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                     self._save_job_status(self._jobs_cache[job_id])
                 return True, f"Job {job_id} cancelled successfully"
             else:
@@ -680,18 +675,14 @@ class JobManager:
                 job_info.status = new_status.value
 
                 if new_status == JobStatus.RUNNING and job_info.start_time is None:
-                    job_info.start_time = (
-                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    )
+                    job_info.start_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
                 if new_status in [
                     JobStatus.COMPLETED,
                     JobStatus.FAILED,
                     JobStatus.CANCELLED,
                 ]:
-                    job_info.end_time = (
-                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    )
+                    job_info.end_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
                 self._save_job_status(job_info)
 
@@ -735,9 +726,7 @@ class JobManager:
                 return file_path
         return None
 
-    def delete_job(
-        self, job_id: str, cancel_if_running: bool = True
-    ) -> tuple[bool, str]:
+    def delete_job(self, job_id: str, cancel_if_running: bool = True) -> tuple[bool, str]:
         """Delete a job and its output directory.
 
         Args:
