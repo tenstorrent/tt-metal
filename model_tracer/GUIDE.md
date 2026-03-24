@@ -2,7 +2,7 @@
 
 The model tracer extracts operation configuration data while running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
 
-**Schema:** All data lives in `ttnn_ops_v5` on Metal Ops PostgreSQL.
+**Schema:** All data lives in `ttnn_ops_v5` on Metal Ops PostgreSQL (configurable via `--schema`).
 **Connection:** Set `TTNN_OPS_DATABASE_URL`
 
 ---
@@ -67,6 +67,9 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json a
 
 # Dry run: preview what would be loaded without committing anything
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json --dry-run
+
+# Load into a different schema (default: ttnn_ops_v5)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py --schema ttnn_ops_v6 load path/to/master.json
 ```
 
 On load the tool:
@@ -153,6 +156,9 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
 
 # Reconstruct a single specific trace (all models in that trace)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace 35 output.json
+
+# Reconstruct from a different schema
+python tests/sweep_framework/load_ttnn_ops_data_v2.py --schema ttnn_ops_v6 reconstruct-trace 35 output.json
 ```
 
 **Path resolution:** `MasterConfigLoader` looks for the master JSON in this order:
@@ -281,7 +287,7 @@ ttnn-generate-sweeps (hardware runner, no DB access)
 
 ## Database Schema
 
-All tables live in the `ttnn_ops_v5` schema.
+All tables live in the `ttnn_ops_v5` schema by default. All CLI commands accept `--schema <name>` to target a different schema (e.g., `--schema ttnn_ops_v6`). The schema must already exist in the database; create it from the DDL template in `model_tracer/destructively_create_ttnn_ops_schema_v5.sql`.
 
 ```
 ttnn_operation          ttnn_model ◄─── trace_run_model
@@ -422,7 +428,9 @@ The tracer and reconstructor both produce this format:
 
 ## CLI Reference
 
-All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
+All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py [--schema <name>] <command>`
+
+The global `--schema <name>` flag can appear anywhere on the command line and applies to all commands. Default: `ttnn_ops_v5`.
 
 | Command | Description |
 |---|---|
@@ -433,7 +441,7 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 | `resolve-manifest [manifest] [scope]` | Dry-run: print which trace IDs and model filters would be used |
 | `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run (all models) |
 | `list-traces [filter]` | List all trace_runs in DB |
-| `reconstruct [output] [schema] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
+| `reconstruct [output] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
 | `reconstruct-op <name> [output]` | Reconstruct a single operation |
 | `verify [original] [reconstructed]` | Compare two JSON files |
 | `find-lines <op> <i1,i2,...>` | Find line numbers for config indices in a JSON file |
