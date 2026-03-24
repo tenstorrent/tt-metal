@@ -27,7 +27,7 @@ BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 # Short prompt; script will use --simulate-context-len to repeat to target ISL
 BASE_PROMPT = "Summarize the following document. "
 MAX_NEW_TOKENS = 128
-MESH_ROWS = 1
+MESH_ROWS = 4
 MESH_COLS = 8
 PREFILL_CHUNK_SIZE = 32768
 SCRIPT_PATH = "models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
@@ -62,15 +62,15 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
         "sampling",
     ]
     env = os.environ.copy()
-    env["TT_METAL_GTEST_ETH_DISPATCH"] = "1"
     env["GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"] = "1"
     env["GLM4_MOE_LITE_FUSE_QKV_A"] = "1"
     env["GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"] = "1"
+    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
     env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
     env["GLM4_MOE_LITE_EP_L1"] = "1"
-    env["GLM4_MOE_LITE_EXPLICIT_PROG_CFG"] = "1"
-    env["GLM4_MOE_LITE_TP"] = "1"
-    env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
+    # env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
+    # env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
+    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
 
     result = {
         "isl": isl,

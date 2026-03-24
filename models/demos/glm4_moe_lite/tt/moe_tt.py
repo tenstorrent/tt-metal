@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -116,14 +115,32 @@ def _make_sparse_matmul_program_config(
     per_core_M: int = 1,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     grid = device.compute_with_storage_grid_size()
-    core_x = int(getattr(grid, "x"))
-    core_y = int(getattr(grid, "y"))
+    max_x = int(getattr(grid, "x"))
+    max_y = int(getattr(grid, "y"))
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    # The sparse matmul 1D program assigns 2D blocks across a 2D core grid and requires the
-    # number of blocks not to exceed the number of available cores. Use a conservative
-    # per_core_N based on ceil-div to keep num_blocks_x small when out_features > num_cores.
-    num_cores = max(1, core_x * core_y)
-    per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
+
+    # The sparse matmul 1D mcast program lays out work blocks row-major in the core
+    # grid and requires the bounding box of active cores to be perfectly rectangular
+    # (no partial last row).  This means:
+    #   num_blocks = ceil(n_tiles / per_core_N)
+    #   num_blocks % grid_x == 0           (full rows only)
+    #   num_blocks / grid_x <= grid_y      (fits vertically)
+    #
+    # On grids where n_tiles isn't divisible by grid_x (e.g. 48 tiles on a 7-wide
+    # Galaxy grid), we increase per_core_N and/or reduce grid_x until a valid
+    # rectangular layout exists.
+    core_x, core_y, per_core_N = max_x, max_y, 1
+    found = False
+    for pcn in range(1, n_tiles + 1):
+        num_blocks = -(-n_tiles // pcn)  # ceil division
+        for gx in range(min(max_x, num_blocks), 0, -1):
+            if num_blocks % gx == 0 and num_blocks // gx <= max_y:
+                core_x, per_core_N = gx, pcn
+                found = True
+                break
+        if found:
+            break
+
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=int(in0_block_w),
@@ -286,6 +303,10 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
             per_core_M=per_core_M,
         )
 
+    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
+    ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
+
     return Glm4MoeLiteMoERuntime(
         expert_mapping_tensors=expert_mapping_tensors,
         remap_topk_mask=remap_topk_mask,
@@ -293,8 +314,8 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         expert_end_offset=expert_end_offset,
         dispatch_cluster_axis=dispatch_cluster_axis,
         reduce_cluster_axis=reduce_cluster_axis,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
+        num_links=ccl_num_links,
+        topology=ccl_topology,
         output_concat_dim=2,
         output_shard_dim=2,
         sparsity_block_size=sparsity_block_size,
@@ -615,12 +636,18 @@ def moe_dense_experts_forward_decode_tt(
         ttnn.deallocate(weighted, force=False)
 
         # Sum contributions across devices (experts are sharded across the mesh).
+        _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+        _topo = (
+            ttnn.Topology.Ring
+            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+            else ttnn.Topology.Linear
+        )
         out_full = out_local
         if num_devices > 1:
             out_full = ttnn.all_reduce(
                 out_local,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
+                num_links=_nl,
+                topology=_topo,
                 memory_config=memory_config,
             )
             ttnn.deallocate(out_local, force=False)
@@ -880,11 +907,17 @@ def moe_dense_experts_forward_prefill_tt(
     ttnn.deallocate(weighted, force=False)
 
     # All-reduce across devices (experts sharded across mesh).
+    _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _topo = (
+        ttnn.Topology.Ring
+        if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+        else ttnn.Topology.Linear
+    )
     if num_devices > 1:
         out_full = ttnn.all_reduce(
             out_local,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=_nl,
+            topology=_topo,
             memory_config=memory_config,
         )
         ttnn.deallocate(out_local, force=False)
@@ -1189,11 +1222,17 @@ def moe_packed_experts_forward_prefill_tt(
     # out_accum: [1, 1, T, H] — local expert contribution
 
     # All-reduce across devices (experts sharded across mesh).
+    _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _topo = (
+        ttnn.Topology.Ring
+        if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
+        else ttnn.Topology.Linear
+    )
     if num_devices > 1:
         out_full = ttnn.all_reduce(
             out_accum,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=_nl,
+            topology=_topo,
             memory_config=memory_config,
         )
         ttnn.deallocate(out_accum, force=False)

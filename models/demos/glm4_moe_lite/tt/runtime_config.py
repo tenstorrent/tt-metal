@@ -125,6 +125,10 @@ class Glm4RuntimeConfig:
     tp_axis: int | None
     tp_size: int
 
+    # --- CCL ---
+    ccl_num_links: int
+    ccl_topology: ttnn.Topology
+
     # --- Debug ---
     layer_identity: bool
     skip_kv_update: bool
@@ -191,6 +195,13 @@ class Glm4RuntimeConfig:
             tp_enabled=tp_on,
             tp_axis=tp_ax,
             tp_size=tp_sz,
+            # CCL
+            ccl_num_links=_env_int("GLM4_MOE_LITE_CCL_NUM_LINKS", default=1),
+            ccl_topology=(
+                ttnn.Topology.Ring
+                if _env_str("GLM4_MOE_LITE_CCL_TOPOLOGY", default="linear").lower() == "ring"
+                else ttnn.Topology.Linear
+            ),
             # Debug
             layer_identity=_env_bool("GLM4_MOE_LITE_LAYER_IDENTITY"),
             skip_kv_update=_env_bool("GLM4_MOE_LITE_SKIP_KV_UPDATE"),
