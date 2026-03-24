@@ -1077,6 +1077,10 @@ static void sdpa_inner_loop_step(
                     salad_correct_row(salad_row, w_salad, qktv_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
+                    } else {
+                        cb_push_back(cur.sum, qktv_h);
+                        cb_push_back(out_cb, qktv_h * vDHt);
+                        pushed_rows++;
                     }
 
                     const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
