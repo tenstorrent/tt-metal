@@ -951,6 +951,36 @@ void add_pinning_constraints(
     TT_FATAL(success, "Failed to add pinning constraints");
 }
 
+// Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
+uint32_t max_physical_exit_edges_per_asic_toward_mesh(
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph, MeshId dst_physical_mesh_id) {
+    uint32_t max_toward_dst = 0;
+    for (const auto& src_exit : physical_exit_node_graph.get_nodes()) {
+        uint32_t count = 0;
+        for (const auto& dst_exit : physical_exit_node_graph.get_neighbors(src_exit)) {
+            if (dst_exit.mesh_id == dst_physical_mesh_id) {
+                count++;
+            }
+        }
+        max_toward_dst = std::max(max_toward_dst, count);
+    }
+    return max_toward_dst;
+}
+
+// Total physical inter-mesh links from this mesh toward dst_physical_mesh_id (sum over exit ASICs).
+uint32_t total_physical_exit_edges_toward_mesh(
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph, MeshId dst_physical_mesh_id) {
+    uint32_t total = 0;
+    for (const auto& src_exit : physical_exit_node_graph.get_nodes()) {
+        for (const auto& dst_exit : physical_exit_node_graph.get_neighbors(src_exit)) {
+            if (dst_exit.mesh_id == dst_physical_mesh_id) {
+                total++;
+            }
+        }
+    }
+    return total;
+}
+
 // Helper function to add exit node constraints
 // Constrains certain exit node ASICs on the physical graph to be mappable to exit node fabric nodes in the logical
 // graph
@@ -961,7 +991,8 @@ bool add_exit_node_constraints(
     const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
     const ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>& logical_exit_node_graph,
-    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph) {
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph,
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode) {
     std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
     std::set<FabricNodeId> valid_logical_exit_nodes(logical_graph.get_nodes().begin(), logical_graph.get_nodes().end());
 
@@ -1034,9 +1065,10 @@ bool add_exit_node_constraints(
             continue;
         }
 
-        // Mesh-level: one cardinality constraint per destination logical mesh, with min_count equal to
-        // num_logical_exit_nodes_assigned (duplicate neighbors toward that mesh). The solver must realize that many
-        // (fabric_node, physical_exit_asic) pairs from the cross product in the final mapping.
+        // Mesh-level: one cardinality constraint per destination logical mesh. Each duplicate neighbor is one logical
+        // inter-mesh channel. Per-ASIC parallel link counts and total link count come only from the physical exit graph
+        // toward the mapped physical destination mesh. In RELAXED mode, channel demand for pair math is capped by that
+        // physical link total (not logical multiplicity alone).
         std::map<MeshId, uint32_t> num_logical_exit_nodes_assigned_per_dst_mesh;
         for (const auto& dst_exit_node : dst_exit_nodes) {
             num_logical_exit_nodes_assigned_per_dst_mesh[dst_exit_node.mesh_id]++;
@@ -1059,12 +1091,55 @@ bool add_exit_node_constraints(
 
             const size_t max_mappable_exit_pairs =
                 std::min(valid_logical_exit_nodes.size(), valid_physical_exit_nodes.size());
-            if (num_logical_exit_nodes_assigned > max_mappable_exit_pairs) {
+
+            const uint32_t total_physical_links_toward_dst =
+                total_physical_exit_edges_toward_mesh(physical_exit_node_graph, mapped_physical_dst_mesh_id);
+            const uint32_t max_edges_per_exit_asic =
+                max_physical_exit_edges_per_asic_toward_mesh(physical_exit_node_graph, mapped_physical_dst_mesh_id);
+            const uint32_t physical_links_per_exit_asic = std::max(1u, max_edges_per_exit_asic);
+
+            uint32_t channels_for_pair_count = num_logical_exit_nodes_assigned;
+            if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                channels_for_pair_count = std::min(num_logical_exit_nodes_assigned, total_physical_links_toward_dst);
+            }
+
+            const uint32_t required_exit_pair_count =
+                (channels_for_pair_count + physical_links_per_exit_asic - 1) / physical_links_per_exit_asic;
+
+            uint32_t effective_exit_pair_min_count = required_exit_pair_count;
+            if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                effective_exit_pair_min_count = static_cast<uint32_t>(
+                    std::min(static_cast<size_t>(required_exit_pair_count), max_mappable_exit_pairs));
+                if (effective_exit_pair_min_count < num_logical_exit_nodes_assigned) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Relaxed mode: mesh-level exit toward logical mesh {}: {} logical channel(s), {} physical "
+                        "link(s) toward mapped mesh → {} channel(s) for pair math (up to {} parallel link(s)/exit "
+                        "ASIC); need at least {} (fabric_node, exit-ASIC) pair(s); exit cardinality min_count {} "
+                        "(mappable pair cap {}).",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned,
+                        total_physical_links_toward_dst,
+                        channels_for_pair_count,
+                        physical_links_per_exit_asic,
+                        required_exit_pair_count,
+                        effective_exit_pair_min_count,
+                        max_mappable_exit_pairs);
+                }
+            } else if (required_exit_pair_count > max_mappable_exit_pairs) {
                 return false;
             }
 
+            if (effective_exit_pair_min_count == 0) {
+                return false;
+            }
+
+            MeshId src_logical_mesh_for_log = MeshId{0};
+            if (!logical_graph.get_nodes().empty()) {
+                src_logical_mesh_for_log = logical_graph.get_nodes().front().mesh_id;
+            }
             if (!intra_mesh_constraints.add_cardinality_constraint(
-                    valid_logical_exit_nodes, valid_physical_exit_nodes, num_logical_exit_nodes_assigned)) {
+                    valid_logical_exit_nodes, valid_physical_exit_nodes, effective_exit_pair_min_count)) {
                 return false;
             }
         }
@@ -1373,7 +1448,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     mesh_mappings,
                     logical_graph,
                     logical_exit_node_graph,
-                    physical_exit_node_graph);
+                    physical_exit_node_graph,
+                    inter_mesh_validation_mode);
 
                 // If exit node constraints cannot be satisfied (no valid physical exit nodes or over-constrained),
                 // treat this as a mapping failure and try next combination

@@ -2754,30 +2754,45 @@ void ControlPlane::validate_requested_intermesh_connections(
     if (strict_binding) {
         return;
     }
+    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
     for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
         auto src_mesh_id = MeshId(src_mesh);
         for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
             auto dst_mesh_id = MeshId(dst_mesh);
             const auto& ports = port_descriptors.at(src_mesh_id).at(dst_mesh_id);
-            // Debug: Print detailed port info when validation would fail or for diagnostics
-            std::string port_directions_str;
-            for (size_t i = 0; i < ports.size(); ++i) {
-                if (i > 0) {
-                    port_directions_str += ", ";
+            if (inter_mesh_relaxed) {
+                // Mesh-level FABRIC counts under RELAXED policy are logical bandwidth requests; they may exceed
+                // physical host-to-host links (aligned with RELAXED inter-mesh topology mapping).
+                TT_FATAL(
+                    !(num_channels > 0 && ports.empty()),
+                    "Requested {} channels between mesh {} and {}, but no physical ports were assigned between these "
+                    "meshes.",
+                    num_channels,
+                    src_mesh,
+                    dst_mesh);
+                if (num_channels > ports.size()) {
+                    log_info(
+                        tt::LogFabric,
+                        "Relaxed inter-mesh: mesh graph requests {} channels between mesh {} and {}, but only {} "
+                        "physical link(s) are available; inter-mesh pairing will use {} port(s).",
+                        num_channels,
+                        src_mesh,
+                        dst_mesh,
+                        ports.size(),
+                        ports.size());
                 }
-                port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
-                                       std::to_string(ports[i].port_id.second);
+            } else {
+                TT_FATAL(
+                    num_channels <= ports.size(),
+                    "Requested {} channels between {} and {}, but only have {} physical links. "
+                    "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
+                    "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
+                    "generate_rank_bindings does not yet validate Z vs non-Z port capacity.",
+                    num_channels,
+                    src_mesh,
+                    dst_mesh,
+                    ports.size());
             }
-            TT_FATAL(
-                num_channels <= ports.size(),
-                "Requested {} channels between {} and {}, but only have {} physical links. "
-                "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
-                "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
-                "generate_rank_bindings does not yet validate Z vs non-Z port capacity.",
-                num_channels,
-                src_mesh,
-                dst_mesh,
-                ports.size());
         }
     }
 }

@@ -637,11 +637,17 @@ void write_phase2_mock_mapping_yaml(
  * Format: rank N=hostname slot=X
  * Replaces "localhost" with actual hostname.
  *
+ * When mock_cluster_rankfile is true (TT_METAL_MOCK_CLUSTER_DESC_PATH was set on ranks), PSD hostnames
+ * come from mock YAMLs (e.g. real cluster names) but Phase 1/2 processes still run on this machine only.
+ * OpenMPI rejects a rankfile that names unallocated hosts; tt-run also omits --host for mock Phase 2.
+ * Use a single local placement hostname for every rank in that case.
+ *
  * The rank N in the rankfile is binding.rank, which is a sequential MPI rank (0, 1, 2, ...).
  * It must match: (1) the rank in rank_bindings.yaml, and (2) the rank key in phase2_mock_mapping.yaml.
  * Entries are sorted by rank to ensure correct MPI rank assignment.
  */
-void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const std::string& output_file) {
+void write_rankfile(
+    const std::vector<RankBindingConfig>& rank_bindings, const std::string& output_file, bool mock_cluster_rankfile) {
     std::ofstream out_file(output_file);
     if (!out_file.is_open()) {
         throw std::runtime_error("Failed to open rankfile for writing: " + output_file);
@@ -654,8 +660,10 @@ void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const s
             return a.rank < b.rank;
         });
 
+    const std::string local_placement_host = mock_cluster_rankfile ? get_actual_hostname("localhost") : std::string{};
+
     for (const auto& binding : sorted_bindings) {
-        std::string hostname = get_actual_hostname(binding.hostname);
+        std::string hostname = mock_cluster_rankfile ? local_placement_host : get_actual_hostname(binding.hostname);
         out_file << "rank " << binding.rank << "=" << hostname << " slot=" << binding.slot << "\n";
     }
 
@@ -800,7 +808,8 @@ int main(int argc, char** argv) {
             log_info(tt::LogFabric, "Successfully wrote: {}", output_file.string());
 
             std::filesystem::path rankfile_path = output_dir / "rankfile";
-            write_rankfile(rank_bindings, rankfile_path.string());
+            const bool mock_cluster_rankfile = !mpi_rank_to_cluster_desc_path.empty();
+            write_rankfile(rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
             log_info(tt::LogFabric, "Successfully wrote: {}", rankfile_path.string());
 
             if (!mpi_rank_to_cluster_desc_path.empty()) {
