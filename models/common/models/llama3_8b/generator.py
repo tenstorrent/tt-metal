@@ -9,7 +9,7 @@ Just signature adaptation for TTModelRunner.
 """
 
 import ttnn
-from models.common.models.llama3_8b.executor import LlamaExecutor, TracedLlamaExecutor
+from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
 from models.common.models.llama3_8b.model import Llama3Transformer1D
 
 
@@ -25,7 +25,7 @@ class Llama3Generator:
 
     model_capabilities = {"supports_prefix_caching": True}
 
-    def __init__(self, executor: LlamaExecutor | TracedLlamaExecutor, model_args=None):
+    def __init__(self, executor: EagerLlamaExecutor | TracedLlamaExecutor, model_args=None):
         self.executor = executor
         self.model = executor.model
         self.model_args = model_args

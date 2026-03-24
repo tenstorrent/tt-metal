@@ -30,7 +30,7 @@ from loguru import logger
 
 import ttnn
 from models.common.models.llama3_8b.executor import (
-    LlamaExecutor,
+    EagerLlamaExecutor,
     PerfBenchmarkExecutor,
     TeacherForceExecutor,
     TracedLlamaExecutor,
@@ -245,7 +245,7 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     half = len(reference_tokens) // 2
     prompt_tokens = reference_tokens[:half].unsqueeze(0)  # [1, half]
 
-    executor = LlamaExecutor(model, mesh_device, model_args=model_args)
+    executor = EagerLlamaExecutor(model, mesh_device, model_args=model_args)
 
     max_batch_size = model_args.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)

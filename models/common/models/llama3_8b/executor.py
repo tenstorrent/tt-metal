@@ -4,7 +4,7 @@
 """
 Executors for Llama 3.1-8B.
 
-LlamaExecutor         — direct execution (canonical path, no tracing)
+EagerLlamaExecutor    — direct execution (canonical path, no tracing)
 TracedLlamaExecutor   — traced execution (sibling, not wrapper)
 TeacherForceExecutor  — accuracy measurement via teacher forcing
 PerfBenchmarkExecutor — performance measurement (TTFT, tok/s/u)
@@ -78,11 +78,11 @@ def _get_prefill_user_page_table(page_table, kv_cache, prefill_len, trace_enable
 
 
 # =============================================================================
-# LlamaExecutor — direct execution
+# EagerLlamaExecutor — direct execution
 # =============================================================================
 
 
-class LlamaExecutor:
+class EagerLlamaExecutor:
     """Direct (non-traced) executor for Llama 3.1-8B.
 
     Handles: input preparation, output processing, chunked prefill,
@@ -506,7 +506,7 @@ class LlamaExecutor:
 
 
 class TracedLlamaExecutor:
-    """Traced executor for Llama 3.1-8B. Sibling of LlamaExecutor.
+    """Traced executor for Llama 3.1-8B. Sibling of EagerLlamaExecutor.
 
     Same model, same config. Execution uses TTNN trace capture/replay.
     Follows tt_cnn's TracedModelExecutor pattern.
@@ -516,7 +516,7 @@ class TracedLlamaExecutor:
         self.model = model
         self.mesh_device = mesh_device
         self.model_args = model_args
-        self._direct = LlamaExecutor(model, mesh_device, model_args)
+        self._direct = EagerLlamaExecutor(model, mesh_device, model_args)
         self._cleaned_up = False
 
         self.trace_id_prefill = defaultdict(lambda: None)
@@ -940,14 +940,14 @@ class TeacherForceResult:
 class TeacherForceExecutor:
     """Accuracy measurement via teacher forcing.
 
-    Takes only a direct (non-traced) LlamaExecutor — tracing is
+    Takes only a direct (non-traced) EagerLlamaExecutor — tracing is
     incompatible with teacher forcing because inputs change every step.
     """
 
-    def __init__(self, executor: LlamaExecutor):
-        if not isinstance(executor, LlamaExecutor):
+    def __init__(self, executor: EagerLlamaExecutor):
+        if not isinstance(executor, EagerLlamaExecutor):
             raise TypeError(
-                f"TeacherForceExecutor requires LlamaExecutor (non-traced), got {type(executor).__name__}. "
+                f"TeacherForceExecutor requires EagerLlamaExecutor (non-traced), got {type(executor).__name__}. "
                 "Teacher forcing is incompatible with tracing because inputs change every step."
             )
         self.executor = executor
