@@ -140,6 +140,7 @@ struct PipelineStageSync {
                 const uint32_t stalling_device_chip_id = CTArgs::stalling_device_chip_id;
                 const uint32_t stalling_device_mesh_id = CTArgs::stalling_device_mesh_id;
 
+                PacketHeaderPool::reset();
                 constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
                 auto route_id = PacketHeaderPool::allocate_header_n(1);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
