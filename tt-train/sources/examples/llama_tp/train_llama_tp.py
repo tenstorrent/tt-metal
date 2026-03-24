@@ -48,7 +48,7 @@ from ttml.distributed import (
     sync_gradients,
     init_ops,
 )
-from ttml.distributed.debug import DispatchTracer, dispatch_trace
+from ttml.distributed.debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
 
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -215,10 +215,6 @@ class DistributedModelWrapper:
         return getattr(self._model, name)
 
 
-# Backward compatibility alias
-DataParallelModel = DistributedModelWrapper
-
-
 # ---------------------------------------------------------------------------
 # Dataset helpers (same as NanoGPT example)
 # ---------------------------------------------------------------------------
@@ -253,7 +249,7 @@ def distributed_collate_fn(
     examples: list,
     seq_length: int,
     mesh_device: Any = None,
-    dp_axis: Optional[int] = None,
+    ddp_axis: Optional[int] = None,
     cp_axis: Optional[int] = None,
 ) -> Batch:
     """Collate samples into a Batch with distributed tensor support.
@@ -264,14 +260,14 @@ def distributed_collate_fn(
     Use with functools.partial to bind parameters::
 
         collate = partial(distributed_collate_fn, seq_length=1024,
-                          mesh_device=mesh_device, dp_axis=0, cp_axis=1)
+                          mesh_device=mesh_device, ddp_axis=0, cp_axis=1)
         dataloader = InMemoryDataloader(dataset, collate, batch_size=8)
 
     Args:
         examples: List of dicts with "input_ids" and "labels" keys.
         seq_length: Sequence length for the batch.
         mesh_device: Mesh device for distributed tensors.
-        dp_axis: Data parallel axis for batch sharding (None to disable).
+        ddp_axis: Data parallel axis for batch sharding (None to disable).
         cp_axis: Context parallel axis for sequence sharding (None to disable).
 
     Returns:
@@ -291,7 +287,7 @@ def distributed_collate_fn(
 
     # Determine sharding strategy
     # DP shards batch (dim 0), CP shards sequence (dim 3 for input_ids, dim 1 for labels)
-    if mesh_device is not None and (dp_axis is not None or cp_axis is not None):
+    if mesh_device is not None and (ddp_axis is not None or cp_axis is not None):
         # Build placements list for each mesh axis
         # input_ids: (batch, 1, 1, seq_length) -> DP shards dim 0, CP shards dim 3
         # labels: (batch, seq_length) -> DP shards dim 0, CP shards dim 1
@@ -302,9 +298,9 @@ def distributed_collate_fn(
         input_placements = [None] * ndim
         labels_placements = [None] * ndim
 
-        if dp_axis is not None:
-            input_placements[dp_axis] = 0  # Shard batch dim
-            labels_placements[dp_axis] = 0  # Shard batch dim
+        if ddp_axis is not None:
+            input_placements[ddp_axis] = 0  # Shard batch dim
+            labels_placements[ddp_axis] = 0  # Shard batch dim
 
         if cp_axis is not None:
             input_placements[cp_axis] = 3  # Shard sequence dim (dim 3 for input_ids)
@@ -346,90 +342,6 @@ def distributed_collate_fn(
         labels=labels_t,
         loss_mask=None,
     )
-
-
-# ---------------------------------------------------------------------------
-# Callbacks
-# ---------------------------------------------------------------------------
-
-
-class DispatchTraceCallback(TrainerCallback):
-    """Callback for dispatch trace logging.
-
-    Args:
-        max_entries_to_print: Maximum entries to print at train end (default 20).
-        first_step_only: If True, disable tracing after the first step completes.
-        dump_path: Optional file path to dump all entries as JSON lines.
-    """
-
-    def __init__(
-        self,
-        max_entries_to_print: int = 20,
-        first_step_only: bool = False,
-        dump_path: Optional[str] = None,
-    ):
-        self.max_entries_to_print = max_entries_to_print
-        self.first_step_only = first_step_only
-        self.dump_path = dump_path
-        self._first_step_done = False
-
-    def on_train_begin(self, trainer: "SFTTrainer") -> None:
-        dispatch_trace.clear()
-        dispatch_trace.enable()
-        self._first_step_done = False
-
-    def on_step_end(
-        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
-    ) -> None:
-        if self.first_step_only and not self._first_step_done:
-            self._first_step_done = True
-            dispatch_trace.disable()
-            self._dump_and_print("first step")
-
-    def on_train_end(self, trainer: "SFTTrainer") -> None:
-        dispatch_trace.disable()
-        if not (self.first_step_only and self._first_step_done):
-            self._dump_and_print("train end")
-
-    def _dump_and_print(self, label: str) -> None:
-        entries = dispatch_trace.entries
-        print(f"\nDispatch trace ({label}): {len(entries)} recorded events")
-        tree = dispatch_trace.format_entries_tree(
-            entries=entries,
-            max_entries=self.max_entries_to_print,
-        )
-        print(tree)
-        if len(entries) > self.max_entries_to_print:
-            print(
-                f"  ... and {len(entries) - self.max_entries_to_print} more (use --debug_dispatch_dump for full trace)"
-            )
-
-        if self.dump_path:
-            if self.dump_path.endswith(".html"):
-                html = dispatch_trace.format_entries_html(
-                    entries=entries, title="Dispatch trace"
-                )
-                with open(self.dump_path, "w") as f:
-                    f.write(html)
-                print(f"  Wrote HTML trace to {self.dump_path} (open in a browser)")
-                base = self.dump_path[:-5]
-                folded_path = base + ".folded"
-                dispatch_trace.export_folded(folded_path, entries=entries)
-                print(
-                    f"  Wrote folded stacks to {folded_path} (use flamegraph.pl for classic SVG)"
-                )
-                svg_path = base + "_flame.svg"
-                if dispatch_trace.build_flamegraph_svg(
-                    entries=entries, out_path=svg_path
-                ):
-                    print(f"  Wrote flame graph to {svg_path} (open in browser)")
-            else:
-                import json
-
-                with open(self.dump_path, "w") as f:
-                    for entry in entries:
-                        f.write(json.dumps(entry.to_dict()) + "\n")
-                print(f"  Dumped {len(entries)} entries to {self.dump_path} (JSONL)")
 
 
 # ---------------------------------------------------------------------------
@@ -487,10 +399,10 @@ def main():
         help="Tensor parallel axis (0 or 1). Overrides config tp_axis. Use -1 to disable.",
     )
     parser.add_argument(
-        "--dp_axis",
+        "--ddp_axis",
         type=int,
         default=None,
-        help="Data parallel axis (0 or 1). Overrides config dp_axis. Use -1 to disable.",
+        help="Data parallel axis (0 or 1). Overrides config ddp_axis. Use -1 to disable.",
     )
     parser.add_argument(
         "--cp_axis",
@@ -640,10 +552,10 @@ def main():
     else:
         tp_axis = device_cfg.tp_axis  # Uses config or legacy enable_tp
 
-    if args.dp_axis is not None:
-        dp_axis = args.dp_axis if args.dp_axis >= 0 else None
+    if args.ddp_axis is not None:
+        ddp_axis = args.ddp_axis if args.ddp_axis >= 0 else None
     else:
-        dp_axis = device_cfg.dp_axis  # Uses config or legacy enable_ddp
+        ddp_axis = device_cfg.ddp_axis  # Uses config or legacy enable_ddp
 
     if args.cp_axis is not None:
         cp_axis = args.cp_axis if args.cp_axis >= 0 else None
@@ -656,32 +568,36 @@ def main():
         raise ValueError(
             f"tp_axis={tp_axis} out of range for mesh with {mesh_dims} dims"
         )
-    if dp_axis is not None and dp_axis >= mesh_dims:
+    if ddp_axis is not None and ddp_axis >= mesh_dims:
         raise ValueError(
-            f"dp_axis={dp_axis} out of range for mesh with {mesh_dims} dims"
+            f"ddp_axis={ddp_axis} out of range for mesh with {mesh_dims} dims"
         )
     if cp_axis is not None and cp_axis >= mesh_dims:
         raise ValueError(
             f"cp_axis={cp_axis} out of range for mesh with {mesh_dims} dims"
         )
-    if tp_axis is not None and dp_axis is not None and tp_axis == dp_axis:
-        raise ValueError(f"tp_axis and dp_axis cannot be the same (both are {tp_axis})")
+    if tp_axis is not None and ddp_axis is not None and tp_axis == ddp_axis:
+        raise ValueError(
+            f"tp_axis and ddp_axis cannot be the same (both are {tp_axis})"
+        )
     if tp_axis is not None and cp_axis is not None and tp_axis == cp_axis:
         raise ValueError(f"tp_axis and cp_axis cannot be the same (both are {tp_axis})")
-    if dp_axis is not None and cp_axis is not None and dp_axis == cp_axis:
-        raise ValueError(f"dp_axis and cp_axis cannot be the same (both are {dp_axis})")
+    if ddp_axis is not None and cp_axis is not None and ddp_axis == cp_axis:
+        raise ValueError(
+            f"ddp_axis and cp_axis cannot be the same (both are {ddp_axis})"
+        )
 
     tp_size = device_cfg.mesh_shape[tp_axis] if tp_axis is not None else 1
-    dp_size = device_cfg.mesh_shape[dp_axis] if dp_axis is not None else 1
+    dp_size = device_cfg.mesh_shape[ddp_axis] if ddp_axis is not None else 1
     cp_size = device_cfg.mesh_shape[cp_axis] if cp_axis is not None else 1
-    if dp_axis is not None and batch_size % dp_size != 0:
+    if ddp_axis is not None and batch_size % dp_size != 0:
         raise ValueError(
             f"batch_size ({batch_size}) must be divisible by DP size ({dp_size}) "
             "so each data-parallel rank gets an equal batch shard (same check as C++ nano_gpt)."
         )
     print(f"   Mesh shape: {device_cfg.mesh_shape}")
     print(
-        f"   TP axis: {tp_axis} (size={tp_size}), DP axis: {dp_axis} (size={dp_size}), "
+        f"   TP axis: {tp_axis} (size={tp_size}), DP axis: {ddp_axis} (size={dp_size}), "
         f"CP axis: {cp_axis} (size={cp_size})"
     )
 
@@ -759,8 +675,8 @@ def main():
 
     # Wrap model with DistributedModelWrapper for gradient sync (DP and/or CP)
     sync_axes = []
-    if dp_axis is not None:
-        sync_axes.append(dp_axis)
+    if ddp_axis is not None:
+        sync_axes.append(ddp_axis)
     if cp_axis is not None:
         sync_axes.append(cp_axis)
     if sync_axes:
@@ -775,7 +691,7 @@ def main():
         distributed_collate_fn,
         seq_length=seq_len,
         mesh_device=mesh_device,
-        dp_axis=dp_axis,
+        ddp_axis=ddp_axis,
         cp_axis=cp_axis,
     )
     train_dataloader = InMemoryDataloader(

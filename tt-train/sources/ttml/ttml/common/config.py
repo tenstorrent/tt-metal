@@ -22,9 +22,9 @@ class DeviceConfig:
             mesh_shape: [rows, cols] shape of device mesh
             device_ids: Optional list of device IDs to use
             enable_tp: Enable tensor parallelism (legacy, use tp_axis instead)
-            enable_ddp: Enable data parallelism (legacy, use dp_axis instead)
+            enable_ddp: Enable data parallelism (legacy, use ddp_axis instead)
             tp_axis: Tensor parallel axis (0 or 1), None to disable
-            dp_axis: Data parallel axis (0 or 1), None to disable
+            ddp_axis: Data parallel axis (0 or 1), None to disable
             cp_axis: Context parallel axis (0 or 1), None to disable
         """
         device_config = {}
@@ -43,12 +43,27 @@ class DeviceConfig:
         # New explicit axis configuration (takes precedence over enable flags)
         # None means disabled, 0 or 1 specifies the mesh axis
         self._tp_axis = device_config.get("tp_axis", None)
-        self._dp_axis = device_config.get("dp_axis", None)
+        self._ddp_axis = device_config.get("ddp_axis", None)
         self._cp_axis = device_config.get("cp_axis", None)
 
-        # Validate mesh shape for combined parallelism
-        if self.enable_ddp and self.enable_tp:
-            assert len(self.mesh_shape) >= 2, "DP+TP requires 2D mesh"
+        # Validate parallelism configuration against mesh shape (mirrors C++ ParallelismContext)
+        tp_enabled = self.enable_tp or self._tp_axis is not None
+        ddp_enabled = self.enable_ddp or self._ddp_axis is not None
+        cp_enabled = self._cp_axis is not None
+        num_enabled = sum([tp_enabled, ddp_enabled, cp_enabled])
+
+        if num_enabled > 0:
+            is_line_topology = len(self.mesh_shape) <= 1 or min(self.mesh_shape) == 1
+            if is_line_topology:
+                assert num_enabled == 1, (
+                    f"For line mesh topology (shape {self.mesh_shape}), exactly one parallelism "
+                    f"type must be enabled. Got: ddp={ddp_enabled}, tp={tp_enabled}, cp={cp_enabled}"
+                )
+            else:
+                assert num_enabled == len(self.mesh_shape), (
+                    f"For 2D mesh (shape {self.mesh_shape}), number of enabled parallelization "
+                    f"axes ({num_enabled}) must equal mesh dimensions ({len(self.mesh_shape)})."
+                )
 
     @property
     def tp_axis(self) -> int:
@@ -63,16 +78,16 @@ class DeviceConfig:
         self._tp_axis = value
 
     @property
-    def dp_axis(self) -> int:
+    def ddp_axis(self) -> int:
         """Get data parallel axis. Returns axis from config or infers from enable_ddp."""
-        if self._dp_axis is not None:
-            return self._dp_axis
+        if self._ddp_axis is not None:
+            return self._ddp_axis
         # Legacy: if enable_ddp is set, default to axis 0
         return 0 if self.enable_ddp else None
 
-    @dp_axis.setter
-    def dp_axis(self, value):
-        self._dp_axis = value
+    @ddp_axis.setter
+    def ddp_axis(self, value):
+        self._ddp_axis = value
 
     @property
     def cp_axis(self) -> int:

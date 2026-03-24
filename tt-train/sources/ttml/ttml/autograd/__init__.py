@@ -77,13 +77,15 @@ def to_numpy(tensor_or_grad, new_type=None, composer=None):
     """
     # Check if it's a ttml.autograd.Tensor by checking for get_value method
     # (both have to_numpy but with different signatures)
-    if hasattr(tensor_or_grad, "get_value"):
+    if isinstance(tensor_or_grad, Tensor):
         # It's a ttml.autograd.Tensor - signature: to_numpy(new_type, composer)
         return tensor_or_grad.to_numpy(new_type, composer)
 
     # It's a raw ttnn.Tensor (e.g., from tensor.get_grad())
     # ttnn.Tensor.to_numpy signature: to_numpy(mesh_composer=None)
-    if hasattr(tensor_or_grad, "to_numpy"):
+    import ttnn
+
+    if isinstance(tensor_or_grad, ttnn.Tensor):
         return tensor_or_grad.to_numpy(composer)
 
     raise TypeError(f"Cannot convert {type(tensor_or_grad)} to numpy")
