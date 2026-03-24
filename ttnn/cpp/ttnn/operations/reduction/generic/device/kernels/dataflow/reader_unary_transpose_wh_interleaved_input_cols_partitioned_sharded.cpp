@@ -8,6 +8,7 @@
 #include "experimental/circular_buffer.h"
 #include "experimental/endpoints.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -16,13 +17,20 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(3);
     uint32_t row_size_bytes = get_arg_val<uint32_t>(4);
     uint32_t batch_size_bytes = get_arg_val<uint32_t>(5);
+    uint32_t is_last_w_padded = get_arg_val<uint32_t>(6);
+    uint32_t is_last_h_padded = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t IN_DF = get_compile_time_arg_val(2);
+    constexpr uint32_t LAST_W = get_compile_time_arg_val(3);
+    constexpr uint32_t LAST_H = get_compile_time_arg_val(4);
+    constexpr uint32_t NEUTRAL_POLICY = get_compile_time_arg_val(5);
+    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_POLICY);
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
-    uint32_t scalar = get_arg_val<uint32_t>(6);
+    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(6);
+    uint32_t scalar = get_arg_val<uint32_t>(8);
     generate_reduce_scaler(cb_id_in2, scalar);
 #endif
 
@@ -54,6 +62,18 @@ void kernel_main() {
                     {.offset_bytes = 0});
                 curr_l1_addr += row_size_bytes;
                 noc.async_read_barrier();
+
+                if constexpr (LAST_W > 0) {
+                    if (is_last_w_padded && (i == Wt - 1)) {
+                        apply_width_padding<IN_DF, LAST_W, NEUTRAL>(cb_in0.get_write_ptr());
+                    }
+                }
+                if constexpr (LAST_H > 0) {
+                    if (is_last_h_padded && (j == Ht - 1)) {
+                        apply_height_padding<IN_DF, LAST_H, NEUTRAL>(cb_in0.get_write_ptr());
+                    }
+                }
+
                 cb_in0.push_back(onetile);
             }
             col_l1_addr += tile_bytes;

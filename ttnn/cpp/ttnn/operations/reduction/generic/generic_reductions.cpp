@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -336,6 +337,12 @@ bool call_fast_nc(DataType dtype) {
     return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B;
 }
 
+template <reduction_common::ReduceType reduce_type>
+constexpr bool supports_native_reduce_padding_for_type() {
+    return reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean ||
+           reduce_type == reduction_common::ReduceType::Max;
+}
+
 Tensor non_height_width_reduce(
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<int> dims,
@@ -370,13 +377,25 @@ Tensor reduce(
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
-    // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-    if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
-        auto dims = split_height_width_dims(dim, input_tensor);
+    if (call_fast_nc<reduce_type>(input_tensor_arg.dtype())) {
+        auto dims = split_height_width_dims(dim, input_tensor_arg);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
+    }
+
+    const bool uses_fast_nc_non_hw_dims =
+        call_fast_nc<reduce_type>(input_tensor_arg.dtype()) && !non_height_width_dims.empty();
+    const bool use_native_padding =
+        is_tiled && supports_native_reduce_padding_for_type<reduce_type>() &&
+        ttnn::operations::reduction::supports_native_reduce_padding(input_tensor_arg.dtype(), /*negate=*/false) &&
+        !uses_fast_nc_non_hw_dims;
+    auto input_tensor = use_native_padding ? input_tensor_arg
+                                           : (is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value)
+                                                       : input_tensor_arg);
+
+    // TODO: generalize to support all types, parameters, and formats. Issue #18566
+    if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
 
         if (!non_height_width_dims.empty()) {
             auto rank = input_tensor_arg.logical_shape().rank();

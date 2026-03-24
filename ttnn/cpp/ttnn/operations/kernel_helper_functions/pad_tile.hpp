@@ -5,6 +5,35 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
+#include "api/numeric/bfloat16.h"
+#include "api/numeric/float32.h"
+
+enum class NeutralPolicy : uint32_t {
+    Zero = 0,
+    NegInf = 1,
+    PosInf = 2,
+};
+
+template <DataFormat data_format, NeutralPolicy policy>
+constexpr auto get_neutral_value() {
+    if constexpr (data_format == DataFormat::Float32) {
+        if constexpr (policy == NeutralPolicy::NegInf) {
+            return NEG_INF_FLOAT32;
+        } else if constexpr (policy == NeutralPolicy::PosInf) {
+            return POS_INF_FLOAT32;
+        } else {
+            return static_cast<uint32_t>(0);
+        }
+    } else {
+        if constexpr (policy == NeutralPolicy::NegInf) {
+            return NEG_INF_BFLOAT16;
+        } else if constexpr (policy == NeutralPolicy::PosInf) {
+            return POS_INF_BFLOAT16;
+        } else {
+            return static_cast<uint16_t>(0);
+        }
+    }
+}
 
 /**
  * @brief Pads a face within a tile.
@@ -200,5 +229,47 @@ void pad_last_transposed_ktile(uint32_t l1_write_addr_in0) {
     } else if constexpr (in0_data_format == DataFormat::Float16_b) {
         fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
             l1_write_addr_in0, /*pad_value=*/0);
+    }
+}
+
+template <DataFormat data_format, uint32_t last_tile_w, NeutralPolicy policy>
+void pad_last_wtile(uint32_t l1_write_addr) {
+    using namespace tt::constants;
+    if constexpr (data_format == DataFormat::Float32) {
+        constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
+        fill_pad_tile<uint32_t, last_tile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(l1_write_addr, fill_value);
+    } else if constexpr (data_format == DataFormat::Float16_b) {
+        constexpr uint16_t fill_value = get_neutral_value<data_format, policy>();
+        fill_pad_tile<uint16_t, last_tile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(l1_write_addr, fill_value);
+    }
+}
+
+template <DataFormat data_format, uint32_t last_tile_h, NeutralPolicy policy>
+void pad_last_htile(uint32_t l1_write_addr) {
+    using namespace tt::constants;
+    if constexpr (data_format == DataFormat::Float32) {
+        constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
+        fill_pad_tile<uint32_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
+    } else if constexpr (data_format == DataFormat::Float16_b) {
+        constexpr uint16_t fill_value = get_neutral_value<data_format, policy>();
+        fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
+    }
+}
+
+template <uint32_t in_df, uint32_t last_w, NeutralPolicy policy>
+void apply_width_padding(uint32_t l1_write_addr) {
+    if constexpr (in_df == static_cast<uint32_t>(DataFormat::Float32)) {
+        pad_last_wtile<DataFormat::Float32, last_w, policy>(l1_write_addr);
+    } else if constexpr (in_df == static_cast<uint32_t>(DataFormat::Float16_b)) {
+        pad_last_wtile<DataFormat::Float16_b, last_w, policy>(l1_write_addr);
+    }
+}
+
+template <uint32_t in_df, uint32_t last_h, NeutralPolicy policy>
+void apply_height_padding(uint32_t l1_write_addr) {
+    if constexpr (in_df == static_cast<uint32_t>(DataFormat::Float32)) {
+        pad_last_htile<DataFormat::Float32, last_h, policy>(l1_write_addr);
+    } else if constexpr (in_df == static_cast<uint32_t>(DataFormat::Float16_b)) {
+        pad_last_htile<DataFormat::Float16_b, last_h, policy>(l1_write_addr);
     }
 }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_multi_core_h_program_factory.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -26,6 +27,9 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
     uint32_t HtWt = Ht * Wt;
+    const auto& logical_shape = a.logical_shape();
+    uint32_t last_w = 0;
+    uint32_t last_h = 0;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -34,10 +38,15 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+    if (ttnn::operations::reduction::supports_native_reduce_padding(src0_cb_data_format, operation_attributes.negate)) {
+        last_w = logical_shape[3] % tile_width;
+        last_h = logical_shape[2] % tile_height;
+    }
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    uint32_t neutral_policy = ttnn::operations::reduction::get_neutral_policy(operation_attributes.math_op);
 
     tt_metal::IDevice* device = a.device();
 
@@ -142,7 +151,14 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
 
     if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {
+            src0_cb_index,
+            src1_cb_index,
+            static_cast<uint32_t>(src0_cb_data_format),
+            last_w,
+            last_h,
+            neutral_policy,
+            scaler_cb_index};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
@@ -152,7 +168,16 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        std::vector<uint32_t> reader_compile_time_args = {
+            Ht,
+            Wt,
+            HtWt,
+            chunk_size,
+            static_cast<uint32_t>(src0_cb_data_format),
+            last_w,
+            last_h,
+            neutral_policy,
+            packed_scaler_value};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
@@ -244,9 +269,22 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
-        std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
+        const bool row_major = a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
+        const auto shard_cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+        for (const auto& core : shard_cores) {
+            const bool core_has_last_width_shard = last_w > 0 && core == shard_cores.back();
+            std::vector<uint32_t> reader_rt_args = {
+                num_cols_per_core_group_1 * Ht,
+                shard_Wt,
+                Ht,
+                NC,
+                shard_row_size,
+                shard_batch_size,
+                static_cast<uint32_t>(core_has_last_width_shard),
+                static_cast<uint32_t>(last_h > 0),
+                packed_scaler_value};
+            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        }
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);

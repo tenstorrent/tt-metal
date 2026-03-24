@@ -12,13 +12,21 @@
 #else
 #include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
 #endif
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     constexpr uint32_t scaler = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t IN_DF = get_compile_time_arg_val(3);
+    constexpr uint32_t LAST_W = get_compile_time_arg_val(4);
+    constexpr uint32_t LAST_H = get_compile_time_arg_val(5);
+    constexpr uint32_t NEUTRAL_POLICY = get_compile_time_arg_val(6);
+    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_POLICY);
+    constexpr auto tensor_args = TensorAccessorArgs<7>();
 
     constexpr uint32_t cb_id_in2 = 2;
 #ifndef REDUCE_ROW_SUM_VIA_MM
@@ -37,11 +45,32 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);
 
+    uint32_t current_row = start_id / Wt;
+    uint32_t current_col = start_id % Wt;
+
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         cb_in0.reserve_back(onetile);
         noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
+
+        if constexpr (LAST_W > 0) {
+            if (current_col == Wt - 1) {
+                apply_width_padding<IN_DF, LAST_W, NEUTRAL>(cb_in0.get_write_ptr());
+            }
+        }
+        if constexpr (LAST_H > 0) {
+            if ((current_row % Ht) == Ht - 1) {
+                apply_height_padding<IN_DF, LAST_H, NEUTRAL>(cb_in0.get_write_ptr());
+            }
+        }
+
         cb_in0.push_back(onetile);
+
+        current_col++;
+        if (current_col == Wt) {
+            current_col = 0;
+            current_row++;
+        }
     }
 }

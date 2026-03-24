@@ -100,6 +100,7 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
+        tensor_args.logical_shape(),
         tensor_args.padded_shape());
 }
 

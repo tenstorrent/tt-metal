@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_multi_core_w_program_factory.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -24,13 +25,21 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const auto& logical_shape = a.logical_shape();
+    uint32_t last_w = 0;
+    uint32_t last_h = 0;
+    if (ttnn::operations::reduction::supports_native_reduce_padding(src0_cb_data_format, operation_attributes.negate)) {
+        last_w = logical_shape[3] % tile_width;
+        last_h = logical_shape[2] % tile_height;
+    }
+    uint32_t neutral_policy = ttnn::operations::reduction::get_neutral_policy(operation_attributes.math_op);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
 
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
@@ -79,7 +88,14 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {
+        packed_scaler_value,
+        Wt,
+        Ht,
+        static_cast<uint32_t>(src0_cb_data_format),
+        last_w,
+        last_h,
+        neutral_policy};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};

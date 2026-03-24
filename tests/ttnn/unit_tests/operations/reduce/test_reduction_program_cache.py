@@ -15,7 +15,7 @@ The ReduceDeviceOperation uses 3 ProgramFactory variants:
 compute_program_hash() includes:
   math_op, dim, scaler, output_mem_config, output_dtype, compute_kernel_config,
   sub_core_grids, negate, program_factory.index(), input dtype,
-  input memory_config, input padded_shape.
+  input memory_config, input logical_shape, input padded_shape.
 
 override_runtime_arguments() only updates buffer addresses — shape/work distribution
 changes require separate cache entries (padded_shape is in hash).
@@ -143,6 +143,22 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
+    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+
+    assert device.num_program_cache_entries() == 2
+
+
+def test_reduce_cache_miss_same_padded_shape_different_logical_shape(device, isolate_program_cache):
+    """Different logical shapes that share a padded shape still need separate cache entries.
+
+    Native reduce padding bakes the logical tail sizes into reader compile-time args.
+    Reusing a program across the same padded tile shape but different logical shapes
+    would apply the wrong terminal-tile masking.
+    """
+    torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, [1, 1, 9, 9], dim=-1, dtype=ttnn.bfloat16)
+    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+
+    torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 37, 9], dim=-1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.num_program_cache_entries() == 2

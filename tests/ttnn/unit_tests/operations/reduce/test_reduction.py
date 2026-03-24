@@ -537,6 +537,72 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+def _run_torch_reduce(op_name, torch_input_tensor, dim, keepdim):
+    if op_name == "sum":
+        return torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
+    if op_name == "mean":
+        return torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim)
+    if op_name == "max":
+        if isinstance(dim, list):
+            return torch.amax(torch_input_tensor, dim=dim, keepdim=keepdim)
+        return torch.max(torch_input_tensor, dim=dim, keepdim=keepdim).values
+    if op_name == "min":
+        if isinstance(dim, list):
+            return torch.amin(torch_input_tensor, dim=dim, keepdim=keepdim)
+        return torch.min(torch_input_tensor, dim=dim, keepdim=keepdim).values
+    raise ValueError(f"Unsupported reduction op: {op_name}")
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "op_name, pad_value",
+    [("sum", 42.0), ("mean", 42.0), ("max", 10000.0)],
+)
+@pytest.mark.parametrize(
+    "input_shape, dim, keepdim",
+    [
+        ((2, 37, 41), -1, True),
+        ((2, 37, 41), -2, True),
+        ((2, 37, 41), [-2, -1], True),
+        ((32, 6, 7), -3, True),
+    ],
+)
+def test_reduce_with_padding(device, dtype, op_name, pad_value, input_shape, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input_tensor = torch_random(input_shape, -1, 1, dtype=torch_dtype)
+    torch_output_tensor = _run_torch_reduce(op_name, torch_input_tensor, dim, keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn.fill_implicit_tile_padding(input_tensor, pad_value)
+
+    output_tensor = getattr(ttnn, op_name)(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("dim", [-1, -2, [-2, -1], -3])
+def test_min_reduce_with_padding_uses_fallback(device, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((32, 6, 7), -1, 1, dtype=torch.bfloat16)
+    torch_output_tensor = _run_torch_reduce("min", torch_input_tensor, dim, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.fill_implicit_tile_padding(input_tensor, -10000.0)
+
+    output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=True)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
 def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
     batch_size, in_c, in_h, in_w = input_shape
