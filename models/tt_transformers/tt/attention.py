@@ -734,7 +734,7 @@ class Attention(LightweightModule):
                 use_height_and_width_as_shard_shape=False,
             )
             # TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
-            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)Expand commentComment on line R477
+            rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
             # HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.L1_MEMORY_CONFIG)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.L1_MEMORY_CONFIG)

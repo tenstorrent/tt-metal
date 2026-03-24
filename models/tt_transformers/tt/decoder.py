@@ -230,7 +230,6 @@ class TransformerBlock(LightweightModule):
                 chunk_page_table,
                 chunk_start_idx,
                 kv_cache,
-                batch_size,
             )
 
         TG = self.args.is_galaxy
@@ -369,7 +368,7 @@ class TransformerBlock(LightweightModule):
 
         # Phi uses a single input layer norm and parallel residual (residual + attn + mlp).
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        normed_input = self.input_norm(x, mode, norm_config=attn_norm_config)
+        normed_input = self.attention_norm(x, mode, norm_config=attn_norm_config)
 
         # Phi runs attention and MLP from the same normalized input. Attention frees its input
         # internally, so keep an explicit clone alive for the parallel MLP branch.

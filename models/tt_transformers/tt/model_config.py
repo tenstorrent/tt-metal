@@ -3869,13 +3869,19 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
+        try:
+            name_dense = hasattr(model.model.layers[0].self_attn, "dense")
+            name_ffn2 = hasattr(model.model.layers[0].mlp, "fc2")
+            name_final_layernorm = hasattr(model.model, "final_layernorm")
+        except:
+            name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(
                 convert_meta_to_hf_no_qkv_permute(x, fuse_mlp=self.fuse_mlp)
             )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2, layernorm=name_final_layernorm)
             )
         return layer
 

@@ -271,7 +271,15 @@ class MLP(LightweightModule):
 
                 if mode == Mode.DECODE:
                     w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
-
+        else:
+            w2_in = ttnn.mul(
+                w1_out,
+                1.0,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
+            
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
