@@ -1113,49 +1113,97 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Check for vLLM-style pre-processed images first
             if has_vllm_images and user_id < len(pixel_values) and pixel_values[user_id] is not None:
                 # vLLM provides pre-processed pixel_values
-                pv = pixel_values[user_id]
-                # Handle nested list structure from vLLM
-                if isinstance(pv, list) and len(pv) > 0:
-                    pv = pv[0]  # Take first image's pixel values
-                if isinstance(pv, torch.Tensor):
-                    pv_tensor = pv
-                else:
-                    pv_tensor = torch.from_numpy(pv) if hasattr(pv, "__array__") else torch.tensor(pv)
+                # For video: pixel_values is a list of 8 frame tensors
+                # For image: pixel_values[user_id] is a single tensor with crops
 
-                # Get image_token_pooling - compute from image_grids
-                # NOTE: We always compute from image_grids (not cache) because:
-                # 1. Cache doesn't work across vLLM's separate processes
-                # 2. Cache can have stale data from warmup images
-                pooling = None
+                # Detect video: multiple items in pixel_values when batch_size == 1
+                is_video_input = batch_size == 1 and len(pixel_values) > 1
 
-                # Compute from image_grids - this is the reliable source
-                if image_grids is not None and len(image_grids) > user_id:
-                    grid_data = image_grids[user_id]
-                    logger.info(f"  prefill_forward: image_grids[{user_id}] raw = {grid_data}, type={type(grid_data)}")
-                    if isinstance(grid_data, list) and len(grid_data) > 0:
-                        grid_data = grid_data[0]
-                    if grid_data is not None:
+                if is_video_input:
+                    # Video: concatenate all frames' pixel_values
+                    logger.info(f"  prefill_forward: Detected video input with {len(pixel_values)} frames")
+                    frame_tensors = []
+                    for frame_idx, pv in enumerate(pixel_values):
+                        if isinstance(pv, list) and len(pv) > 0:
+                            pv = pv[0]
+                        if isinstance(pv, torch.Tensor):
+                            frame_tensors.append(pv)
+                        elif hasattr(pv, "__array__"):
+                            frame_tensors.append(torch.from_numpy(pv))
+                        else:
+                            frame_tensors.append(torch.tensor(pv))
+                    pv_tensor = torch.cat(frame_tensors, dim=0)
+                    logger.info(f"  prefill_forward: Combined video pixel_values shape={pv_tensor.shape}")
+
+                    # For video, compute pooling from all frames' image_grids
+                    pooling = None
+                    if image_grids is not None and len(image_grids) > 0:
                         import numpy as np
 
-                        if hasattr(grid_data, "numpy"):
-                            grid_arr = grid_data.numpy().flatten()
-                        else:
-                            grid_arr = np.array(grid_data).flatten()
-                        logger.info(f"  prefill_forward: Computing pooling from grid_data={grid_arr}")
-                        # Get num_crops from pixel_values shape
-                        num_crops = pv_tensor.shape[0] if pv_tensor.dim() >= 2 else 1
-                        logger.info(f"  prefill_forward: pv_tensor.shape={pv_tensor.shape}, num_crops={num_crops}")
-                        computed_pooling = compute_image_token_pooling(grid_data, num_crops)
-                        pooling = computed_pooling.unsqueeze(0)
-                        logger.info(f"  prefill_forward: Computed pooling shape={pooling.shape}")
+                        all_pooling = []
+                        total_crops_offset = 0
+                        for frame_idx, grid_data in enumerate(image_grids):
+                            if isinstance(grid_data, list) and len(grid_data) > 0:
+                                grid_data = grid_data[0]
+                            if grid_data is not None:
+                                if hasattr(grid_data, "numpy"):
+                                    grid_arr = grid_data.numpy().flatten()
+                                else:
+                                    grid_arr = np.array(grid_data).flatten()
+                                # Get num_crops for this frame
+                                num_crops = frame_tensors[frame_idx].shape[0] if frame_idx < len(frame_tensors) else 9
+                                frame_pooling = compute_image_token_pooling(grid_data, num_crops)
+                                # Offset indices for this frame
+                                frame_pooling = frame_pooling + total_crops_offset * 729  # 729 patches per crop
+                                all_pooling.append(frame_pooling)
+                                total_crops_offset += num_crops
+                                logger.info(f"  prefill_forward: Frame {frame_idx} pooling shape={frame_pooling.shape}")
+
+                        if all_pooling:
+                            pooling = torch.cat(all_pooling, dim=0).unsqueeze(0)
+                            logger.info(f"  prefill_forward: Combined video pooling shape={pooling.shape}")
+                else:
+                    # Single image
+                    pv = pixel_values[user_id]
+                    # Handle nested list structure from vLLM
+                    if isinstance(pv, list) and len(pv) > 0:
+                        pv = pv[0]  # Take first image's pixel values
+                    if isinstance(pv, torch.Tensor):
+                        pv_tensor = pv
+                    else:
+                        pv_tensor = torch.from_numpy(pv) if hasattr(pv, "__array__") else torch.tensor(pv)
+
+                    # Get image_token_pooling - compute from image_grids
+                    # NOTE: We always compute from image_grids (not cache) because:
+                    # 1. Cache doesn't work across vLLM's separate processes
+                    # 2. Cache can have stale data from warmup images
+                    pooling = None
+
+                    # Compute from image_grids - this is the reliable source
+                    if image_grids is not None and len(image_grids) > user_id:
+                        grid_data = image_grids[user_id]
+                        logger.info(
+                            f"  prefill_forward: image_grids[{user_id}] raw = {grid_data}, type={type(grid_data)}"
+                        )
+                        if isinstance(grid_data, list) and len(grid_data) > 0:
+                            grid_data = grid_data[0]
+                        if grid_data is not None:
+                            import numpy as np
+
+                            if hasattr(grid_data, "numpy"):
+                                grid_arr = grid_data.numpy().flatten()
+                            else:
+                                grid_arr = np.array(grid_data).flatten()
+                            logger.info(f"  prefill_forward: Computing pooling from grid_data={grid_arr}")
+                            # Get num_crops from pixel_values shape
+                            num_crops = pv_tensor.shape[0] if pv_tensor.dim() >= 2 else 1
+                            logger.info(f"  prefill_forward: pv_tensor.shape={pv_tensor.shape}, num_crops={num_crops}")
+                            computed_pooling = compute_image_token_pooling(grid_data, num_crops)
+                            pooling = computed_pooling.unsqueeze(0)
+                            logger.info(f"  prefill_forward: Computed pooling shape={pooling.shape}")
 
                 if pooling is None:
                     logger.warning(f"  No image_token_pooling available - vision features may not work correctly")
-
-                # Detect video input (multiple frames) vs image (crops)
-                # Video: pv_tensor.shape[0] == 8 frames
-                # Image: pv_tensor.shape[0] == 1-9 crops
-                is_video = pv_tensor.shape[0] == 8 and pooling is not None and pooling.shape[1] > 1000
 
                 # Run prefill with pre-processed image/video
                 # NOTE: Vision trace disabled for vLLM mode because vLLM uses multi-crop
