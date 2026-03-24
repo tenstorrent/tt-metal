@@ -205,11 +205,11 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    // }
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -607,13 +607,13 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    // }
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -965,11 +965,11 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
     std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-    //     unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    //     unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    // }
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
