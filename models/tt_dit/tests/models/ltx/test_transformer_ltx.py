@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerBlock
 from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
-from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -19,7 +19,7 @@ from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
-from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
 
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
@@ -66,14 +66,15 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
 
     tt_block = LTXTransformerBlock(
-        dim=dim,
-        ffn_dim=dim * 4,
-        num_heads=num_heads,
-        cross_attention_dim=context_dim,
+        video_dim=dim,
+        video_ffn_dim=dim * 4,
+        video_num_heads=num_heads,
+        video_cross_attention_dim=context_dim,
         eps=1e-6,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        has_audio=False,
     )
     tt_block.load_torch_state_dict(torch_state)
 
@@ -142,12 +143,12 @@ def test_ltx_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_ax
 
     # TT forward
     tt_out = tt_block(
-        spatial_1BND=tt_spatial,
-        prompt_1BLP=tt_prompt,
-        temb_1BTD=tt_temb,
-        N=seq_len,
-        rope_cos=tt_cos,
-        rope_sin=tt_sin,
+        video_1BND=tt_spatial,
+        video_prompt=tt_prompt,
+        video_temb=tt_temb,
+        video_N=seq_len,
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
     )
 
@@ -437,12 +438,12 @@ def test_ltx_transformer_inner_step(mesh_device: ttnn.MeshDevice, sp_axis: int, 
     timestep_torch = torch.tensor([timestep_val])
 
     tt_out = tt_model.inner_step(
-        spatial_1BNI_torch=spatial_torch,
-        prompt_1BLP=tt_prompt,
-        rope_cos=tt_cos,
-        rope_sin=tt_sin,
+        video_1BNI_torch=spatial_torch,
+        video_prompt_1BLP=tt_prompt,
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
-        N=seq_len,
+        video_N=seq_len,
         timestep_torch=timestep_torch,
     )
 

@@ -25,8 +25,8 @@ from loguru import logger
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
 from ...models.transformers.ltx.rope_ltx import precompute_freqs_cis
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.mochi import get_rot_transformation_mat
@@ -448,12 +448,12 @@ class LTXPipeline:
 
             # Forward pass (conditioned)
             tt_denoised = self.transformer.inner_step(
-                spatial_1BNI_torch=spatial_torch,
-                prompt_1BLP=tt_prompt,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
+                video_1BNI_torch=spatial_torch,
+                video_prompt_1BLP=tt_prompt,
+                video_rope_cos=rope_cos,
+                video_rope_sin=rope_sin,
                 trans_mat=trans_mat,
-                N=num_tokens,
+                video_N=num_tokens,
                 timestep_torch=timestep_torch,
             )
             # Model output is velocity; convert to x0: denoised = sample - velocity * sigma
@@ -463,12 +463,12 @@ class LTXPipeline:
             # CFG
             if do_cfg:
                 tt_uncond = self.transformer.inner_step(
-                    spatial_1BNI_torch=spatial_torch,
-                    prompt_1BLP=tt_negative_prompt,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
+                    video_1BNI_torch=spatial_torch,
+                    video_prompt_1BLP=tt_negative_prompt,
+                    video_rope_cos=rope_cos,
+                    video_rope_sin=rope_sin,
                     trans_mat=trans_mat,
-                    N=num_tokens,
+                    video_N=num_tokens,
                     timestep_torch=timestep_torch,
                 )
                 uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)

@@ -209,7 +209,7 @@ def main():
 
     # 2. Open TT mesh and load TTNN transformer
     import ttnn
-    from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
+    from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
     from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline, compute_sigmas, euler_step
@@ -334,12 +334,12 @@ def main():
 
         # Conditioned forward pass
         tt_denoised = pipeline.transformer.inner_step(
-            spatial_1BNI_torch=spatial_torch,
-            prompt_1BLP=tt_prompt,
-            rope_cos=tt_cos,
-            rope_sin=tt_sin,
+            video_1BNI_torch=spatial_torch,
+            video_prompt_1BLP=tt_prompt,
+            video_rope_cos=tt_cos,
+            video_rope_sin=tt_sin,
             trans_mat=tt_trans_mat,
-            N=num_tokens,
+            video_N=num_tokens,
             timestep_torch=timestep_torch,
         )
         # Model output is velocity; convert to x0: denoised = sample - velocity * sigma
@@ -350,12 +350,12 @@ def main():
         # CFG with variance rescaling (matching reference MultiModalGuider.calculate)
         if do_cfg:
             tt_uncond = pipeline.transformer.inner_step(
-                spatial_1BNI_torch=spatial_torch,
-                prompt_1BLP=tt_neg_prompt,
-                rope_cos=tt_cos,
-                rope_sin=tt_sin,
+                video_1BNI_torch=spatial_torch,
+                video_prompt_1BLP=tt_neg_prompt,
+                video_rope_cos=tt_cos,
+                video_rope_sin=tt_sin,
                 trans_mat=tt_trans_mat,
-                N=num_tokens,
+                video_N=num_tokens,
                 timestep_torch=timestep_torch,
             )
             uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)

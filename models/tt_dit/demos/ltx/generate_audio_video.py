@@ -6,7 +6,7 @@
 LTX-2.3 Audio+Video Generation Demo
 
 Both video and audio denoising run on TT devices (2x4 WH LB mesh) using
-the TTNN LTXAudioVideoTransformerModel. Text encoding and VAE/vocoder
+the TTNN LTXTransformerModel. Text encoding and VAE/vocoder
 decode use the reference LTX-2 pipeline (torch, CPU).
 
 Usage:
@@ -158,7 +158,7 @@ def main():
 
     # 2. Load AV model on TT mesh
     import ttnn
-    from models.tt_dit.models.transformers.ltx.audio_ltx import LTXAudioVideoTransformerModel
+    from models.tt_dit.models.transformers.ltx.ltx_transformer import LTXTransformerModel
     from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.pipelines.ltx.pipeline_ltx import compute_sigmas, euler_step
@@ -192,11 +192,12 @@ def main():
     del raw
 
     t0 = time.time()
-    model = LTXAudioVideoTransformerModel(
+    model = LTXTransformerModel(
         num_layers=args.num_layers,
         mesh_device=mesh,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        has_audio=True,
     )
     model.load_torch_state_dict(state_dict)
     logger.info(f"AV transformer loaded in {time.time()-t0:.1f}s")
@@ -403,8 +404,8 @@ def main():
 
         # Helper: run model and convert velocity to denoised (X0)
         def velocity_to_denoised(v_out_tt, a_out_tt):
-            vv = LTXAudioVideoTransformerModel.device_to_host(v_out_tt).squeeze(0)
-            av = LTXAudioVideoTransformerModel.device_to_host(a_out_tt).squeeze(0)
+            vv = LTXTransformerModel.device_to_host(v_out_tt).squeeze(0)
+            av = LTXTransformerModel.device_to_host(a_out_tt).squeeze(0)
             vd = (video_latent.bfloat16().float() - vv.float() * sigma).bfloat16()
             ad = (audio_latent.bfloat16().float() - av.float() * sigma).bfloat16()
             return vd, ad
