@@ -7,6 +7,11 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -63,23 +68,28 @@ void kernel_main() {
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(10);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(11);
 
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
-    constexpr uint32_t cb_in = tt::CBIndex::c_29;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_28;
+    constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
 
-    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_reread_write_out_id = tt::CBIndex::c_22;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr uint32_t cb_out = tt::CBIndex::c_30;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (fuse_gamma or fuse_beta) ? cb_out0 : cb_reread_write_out;
+    constexpr uint32_t cb_out_id = (fuse_gamma or fuse_beta) ? cb_out0_id : cb_reread_write_out_id;
 #endif
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_out);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
+    experimental::CircularBuffer cb_gamma(cb_gamma_id);
+    experimental::CircularBuffer cb_beta(cb_beta_id);
+    experimental::CircularBuffer cb_out(cb_out_id);
 
-    // input mask
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
+    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
+
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
@@ -105,15 +115,15 @@ void kernel_main() {
         row_offset = num_cols_per_group;
 
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-            cb_reserve_back(cb_input_mask, block_w);
-            uint32_t l1_write_addr_input_mask = get_write_ptr(cb_input_mask);
+            cb_input_mask.reserve_back(block_w);
+            uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc_async_read_tile(input_mask_tile_id, mask, l1_write_addr_input_mask);
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_mask, block_w);
+            noc.async_read_barrier();
+            cb_input_mask.push_back(block_w);
 
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
@@ -133,12 +143,12 @@ void kernel_main() {
                 generate_bcast_col_scalar(eps_cb_id, eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+                    const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr, page_size);
 
-                    cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
+                    cb_gamma.reserve_back(num_cols_tile_gamma_beta);
 
-                    const uint32_t base_l1_write_addr_gamma = get_write_ptr(cb_gamma);
+                    const uint32_t base_l1_write_addr_gamma = cb_gamma.get_write_ptr();
                     uint32_t l1_write_addr_gamma = base_l1_write_addr_gamma;
 
                     // We want this data to appear as the first row of the tile.
@@ -157,7 +167,7 @@ void kernel_main() {
                         noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 64);
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
 
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_gamma = base_l1_write_addr_gamma;
@@ -168,20 +178,19 @@ void kernel_main() {
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma, num_cols_tile_gamma_beta);
+                    noc.async_read_barrier();
+                    cb_gamma.push_back(num_cols_tile_gamma_beta);
                 }
 
                 if constexpr (fuse_beta) {
                     // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
                     // Then copy the second set of 32 bytes into the second face
-
-                    const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
+                    const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
                     const auto beta = TensorAccessor(beta_args, beta_addr, page_size);
 
-                    cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
+                    cb_beta.reserve_back(num_cols_tile_gamma_beta);
 
-                    const uint32_t base_l1_write_addr_beta = get_write_ptr(cb_beta);
+                    const uint32_t base_l1_write_addr_beta = cb_beta.get_write_ptr();
                     uint32_t l1_write_addr_beta = base_l1_write_addr_beta;
 
                     // Read the first 64 bytes of the tile into the first face
@@ -191,7 +200,7 @@ void kernel_main() {
                         noc_async_read(beta_noc_addr, l1_write_addr_beta, 64);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
 
                     // Copy the second set of 32 bytes into the second face
                     l1_write_addr_beta = base_l1_write_addr_beta;
@@ -202,8 +211,8 @@ void kernel_main() {
                         l1_write_addr_beta += beta_tile_bytes;
                     }
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_beta, num_cols_tile_gamma_beta);
+                    noc.async_read_barrier();
+                    cb_beta.push_back(num_cols_tile_gamma_beta);
                 }
             }
 
@@ -222,8 +231,8 @@ void kernel_main() {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
-                cb_wait_front(cb_out, out_block_hw_normal);
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                cb_out.wait_front(out_block_hw_normal);
+                uint32_t l1_read_addr = cb_out.get_read_ptr();
 
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
@@ -238,11 +247,10 @@ void kernel_main() {
                         }
                         l1_read_addr += single_tile_size_bytes;
                     }
-                    // l1_read_addr += (single_tile_size_bytes * (block_w-block_w_curr));
                 }
                 out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, out_block_hw_normal);
+                noc.async_write_barrier();
+                cb_out.pop_front(out_block_hw_normal);
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
