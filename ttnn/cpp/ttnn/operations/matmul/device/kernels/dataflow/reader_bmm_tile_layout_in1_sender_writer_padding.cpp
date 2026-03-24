@@ -456,16 +456,21 @@ void kernel_main() {
                                 current_dram_bank_id[next_bank_id_and_dram_stride_index], in3_tensor_addr);
 
                             if (i == 0) {
-                                in3_base_addr += dram_tensor_start_offset;
+                                // dram_tensor_start_offset is in in1 tile bytes; convert to
+                                // bias tile bytes since bias_dtype may differ from in1_dtype.
+                                in3_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                 bias_single_tile_size_bytes;
                             }
 
                             noc_async_read_one_packet_set_state<true>(in3_base_addr, bias_single_tile_size_bytes, vc);
 
                             uint32_t l1_read_addr_in3 = 0;
                             uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3) + l1_write_addr_in3_offset;
+                            // in1_block_w_dram_stride_bytes is in in1 tile bytes, so divide
+                            // by in1_single_tile_size_bytes (not bias) to get the tile count.
                             uint32_t in3_block_w_dram =
                                 in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
-                                bias_single_tile_size_bytes;
+                                in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
                                 noc_async_read_one_packet_with_state<true, true>(
@@ -474,8 +479,8 @@ void kernel_main() {
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;
                             }
-                            l1_write_addr_in3_offset +=
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
+                            // Advance L1 offset in bias tile bytes, not in1 stride bytes.
+                            l1_write_addr_in3_offset += in3_block_w_dram * bias_single_tile_size_bytes;
                             next_bank_id_and_dram_stride_index += 2;
                         }
                         noc_async_read_barrier();
