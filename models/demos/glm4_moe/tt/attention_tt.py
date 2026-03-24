@@ -620,7 +620,7 @@ class Glm4MoeAttention(LightweightModule):
             # Optimized path: sin_neg = [-sin[:half], sin[half:]] pre-computed on host.
             # rearranged = [x2, x1] (no neg needed — absorbed into sin_neg).
             # x_rot_out = x_rot * cos + rearranged * sin_neg
-            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
+            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
             x_rot = ttnn.add(
                 ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
                 ttnn.multiply(rearranged, sin_neg, sub_core_grids=worker_scg),
@@ -629,7 +629,7 @@ class Glm4MoeAttention(LightweightModule):
             ttnn.deallocate(rearranged)
         else:
             # Original path: rotated = [-x2, x1], then x_rot*cos + rotated*sin
-            rotated = ttnn.concat([ttnn.neg(x2, sub_core_grids=worker_scg), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
+            rotated = ttnn.concat([ttnn.neg(x2, sub_core_grids=worker_scg), x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
             x_rot = ttnn.add(
                 ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
                 ttnn.multiply(rotated, sin, sub_core_grids=worker_scg),
@@ -638,7 +638,7 @@ class Glm4MoeAttention(LightweightModule):
             ttnn.deallocate(rotated)
 
         # Concat back: [rotary_dim | pass_dim] = full head_dim
-        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=worker_scg)
+        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
 
         ttnn.deallocate(x_rot)
         ttnn.deallocate(x_pass)

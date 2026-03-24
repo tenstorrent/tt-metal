@@ -244,6 +244,14 @@ class Glm4MoePrefetcherSetup:
             num_cores=16, M=32, shard_dim=5120, ring_cores=oproj_ring_cores,
         )
 
+        # Centralized worker grid configs (eliminates hardcoded copies in model files).
+        # Full worker CoreRangeSet: cols 0-5, rows 0-8 = 54 cores.
+        self.worker_scg = self.worker_core_range_set
+        # 5-core norm range: [0,0]-(4,0) for hidden=5120 (1024 elems/core)
+        self.norm_core_range = ttnn.CoreRangeSet([
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))
+        ])
+
         logger.info(
             "Glm4MoePrefetcherSetup: n_tensors={}, n_layers={}, global_cb_size={}",
             n_tensors_per_layer, n_layers, self.global_cb_size,
