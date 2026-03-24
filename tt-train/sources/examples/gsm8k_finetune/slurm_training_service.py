@@ -71,6 +71,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, g, send_from_directory
 from ttml.common.utils import get_tt_metal_runtime_root
+from .training_types import get_training_type, get_supported_trainers
 from job_manager import JobManager, JobStatus, PARTITION_DEVICE_MAPPING
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -274,20 +275,6 @@ def _resolve_partition(cluster: str, partitions: list = None) -> str:
     for p in partitions:
         return p["name"]
     return DEFAULT_PARTITION
-
-
-# Map dashboard model IDs to model_config paths (for job_manager.create_training_overrides)
-def _get_model_to_config_mapping():
-    """Get model config mapping with paths relative to tt_metal_runtime_root."""
-    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
-    return {
-        "tinyllama-1.1b": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
-        "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
-        "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
-        "gpt2s": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
-        "llama-3.1-8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
-        "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
-    }
 
 
 manager = JobManager(jobs_base_dir=JOBS_BASE_DIR)
@@ -770,7 +757,7 @@ def list_jobs():
 
 
 # Capabilities: what the server/demo actually supports (dashboard should restrict or warn)
-SUPPORTED_TRAINERS = {"sft"}
+SUPPORTED_TRAINERS = get_supported_trainers()
 SUPPORTED_OPTIMIZERS = {"adamw"}
 SUPPORTED_MODELS = {"tinyllama-1.1b", "gpt2"}  # llama-3.1-8b may need more resources
 SUPPORTED_DATASETS = {"gsm8k"}  # others work in gsm8k_finetune but less tested
@@ -891,18 +878,19 @@ def create_job():
     optimizer = raw_optimizer["type"]
     optimizer_params = dict(raw_optimizer.get("params", {}))
 
-    if trainer not in SUPPORTED_TRAINERS:
+    supported_trainers = get_supported_trainers()
+    if trainer not in supported_trainers:
         OBS.info(
             "%s unsupported_trainer trainer=%s supported=%s",
             _obs_tag("CREATE"),
             trainer,
-            SUPPORTED_TRAINERS,
+            supported_trainers,
         )
         return (
             jsonify(
                 {
                     "error": {
-                        "message": f"Unsupported trainer: '{trainer}'. Supported: {sorted(SUPPORTED_TRAINERS)}. Check GET /v1/catalog for capabilities.",
+                        "message": f"Unsupported trainer: '{trainer}'. Supported: {sorted(supported_trainers)}. Check GET /v1/catalog for capabilities.",
                         "code": "unsupported_trainer",
                     }
                 }
@@ -933,8 +921,25 @@ def create_job():
     # Merge optimizer params into training_params for downstream
     training_params.update(optimizer_params)
 
+    # Get training type configuration and validate parameters
+    training_config = get_training_type(trainer)
+    try:
+        training_params = training_config.param_validator(training_params)
+    except ValueError as e:
+        return (
+            jsonify(
+                {
+                    "error": {
+                        "message": f"Parameter validation failed: {str(e)}",
+                        "code": "invalid_training_params",
+                    }
+                }
+            ),
+            400,
+        )
+
     # Map model ID → model_config (dashboard format)
-    model_config = _get_model_to_config_mapping().get(model.strip().lower())
+    model_config = training_config.model_configs.get(model.strip().lower())
     if model_config:
         training_params["model_config"] = model_config
     if "max_steps" not in training_params and "epochs" in training_params:
@@ -1015,6 +1020,7 @@ def create_job():
     log.info("  - Job name: %s", job_name)
 
     success, msg, slurm_info = manager.submit_job(
+        training_config=training_config,
         config=slurm_config,
         partition=partition,
         nodes=1,
@@ -1045,6 +1051,7 @@ def create_job():
                 fallback,
             )
             success, msg, slurm_info = manager.submit_job(
+                training_config=training_config,
                 config=slurm_config,
                 partition=fallback,
                 nodes=1,
