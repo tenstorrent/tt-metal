@@ -173,6 +173,49 @@ class VisionBackbone(LightweightModule):
 
         return image_features
 
+    def _pooled_features_for_projector(self, pooled_features: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Image pooling returns [1, B*N_out, 1, W] or [1, 1, B*N_out, W]. TTNN matmul uses
+        padded_shape[-1]; logical shape[-1] can be 1152 while padded is wider (e.g. 1764).
+        """
+        _, s1, s2, s3 = (
+            pooled_features.shape[0],
+            pooled_features.shape[1],
+            pooled_features.shape[2],
+            pooled_features.shape[3],
+        )
+        pw = pooled_features.padded_shape[-1]
+
+        if s1 != 1 and s2 == 1:
+            batch_seq = s1
+            if pw > self.adapter_hidden_dim:
+                pooled_features = ttnn.slice(
+                    pooled_features,
+                    (0, 0, 0, 0),
+                    (1, batch_seq, 1, self.adapter_hidden_dim),
+                )
+        elif s1 == 1 and s2 != 1:
+            batch_seq = s2
+            if pw > self.adapter_hidden_dim:
+                pooled_features = ttnn.slice(
+                    pooled_features,
+                    (0, 0, 0, 0),
+                    (1, 1, batch_seq, self.adapter_hidden_dim),
+                )
+        else:
+            raise RuntimeError(
+                f"Unexpected pooled_features layout shape={list(pooled_features.shape)}; "
+                "expected [1, S, 1, W] or [1, 1, S, W]."
+            )
+
+        if s3 < self.adapter_hidden_dim:
+            raise RuntimeError(f"Pooled logical feature width {s3} < adapter_hidden_dim {self.adapter_hidden_dim}")
+
+        return ttnn.reshape(
+            pooled_features,
+            [1, 1, batch_seq, self.adapter_hidden_dim],
+        )
+
     def encode_image_from_pixels(
         self,
         pixel_values: torch.Tensor,
@@ -361,8 +404,7 @@ class VisionBackbone(LightweightModule):
         if attn_mask_ttnn is not None:
             ttnn.deallocate(attn_mask_ttnn)
 
-        # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
-        pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+        pooled_features = self._pooled_features_for_projector(pooled_features)
 
         # 7. Project to language model dimension
         visual_embeddings = self.image_projector(
@@ -510,8 +552,7 @@ class VisionBackbone(LightweightModule):
         ttnn.deallocate(to_pool)
         ttnn.deallocate(gathered)
 
-        # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
-        pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+        pooled_features = self._pooled_features_for_projector(pooled_features)
 
         # Optional: move to L1 so projector matmuls read from L1 when tensor is small
         _pooled_el = batch_size * n_out * self.adapter_hidden_dim

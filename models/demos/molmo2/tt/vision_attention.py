@@ -203,8 +203,10 @@ class VisionAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences
-        if seq_len > 2048:
+        # Chunk QKV input only when seq_len is a multiple of 2048; otherwise
+        # seq_len // 2048 * 2048 != seq_len and reshape fails (e.g. video: 8*729=5832).
+        chunk_qkv = seq_len > 2048 and (seq_len % 2048 == 0)
+        if chunk_qkv:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
         # QKV projection
@@ -218,8 +220,7 @@ class VisionAttention(LightweightModule):
 
         # Add bias
 
-        # Reshape back if needed
-        if seq_len > 2048:
+        if chunk_qkv:
             qkv = ttnn.reshape(qkv, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x)
@@ -263,8 +264,9 @@ class VisionAttention(LightweightModule):
             memory_config=matmul_output_memory_config,
         )
 
-        # Output projection
-        if seq_len > 1024:
+        # Same divisibility rule for wo matmul chunking (1024-wide tiles).
+        chunk_wo = seq_len > 1024 and (seq_len % 1024 == 0)
+        if chunk_wo:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
         output = ttnn.linear(
@@ -275,7 +277,7 @@ class VisionAttention(LightweightModule):
             memory_config=matmul_output_memory_config,
         )
 
-        if seq_len > 1024:
+        if chunk_wo:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         ttnn.deallocate(attn_output)

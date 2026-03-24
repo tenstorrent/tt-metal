@@ -163,6 +163,8 @@ class TextModel(LightweightModule):
         # Language model head
         # Note: lm_head is at top level, not under model.transformer
         lm_head = state_dict["lm_head.weight"]
+        # HF: [vocab, hidden]; linear output width must match this (not TILE padding past it).
+        self.lm_head_vocab_size = lm_head.shape[0]
         lm_head_t = torch.transpose(lm_head, -2, -1).unsqueeze(0).unsqueeze(0)
 
         self.lm_head = ttnn.as_tensor(
@@ -182,6 +184,20 @@ class TextModel(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    def _slice_logits_to_vocab(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Remove TILE padding on the vocab dimension so argmax / sampling matches HF logits."""
+        v = self.lm_head_vocab_size
+        rank = len(logits.shape)
+        if rank < 1:
+            return logits
+        logical_last = logits.shape[-1]
+        padded_last = logits.padded_shape[-1]
+        if logical_last <= v and padded_last <= v:
+            return logits
+        starts = (0,) * rank
+        ends = tuple(logits.shape[i] if i < rank - 1 else min(logical_last, v) for i in range(rank))
+        return ttnn.slice(logits, starts, ends)
 
     def embed_tokens(
         self,
@@ -264,6 +280,7 @@ class TextModel(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        logits = self._slice_logits_to_vocab(logits)
 
         return logits, new_kv_caches
 
@@ -336,6 +353,7 @@ class TextModel(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        logits = self._slice_logits_to_vocab(logits)
 
         return logits
 

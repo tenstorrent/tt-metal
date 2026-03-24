@@ -122,6 +122,16 @@ class ImageProjector(LightweightModule):
             packer_l1_acc=True,
         )
 
+    def _slice_to_input_dim_if_padded(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Matmul uses padded last dim; logical shape[-1] may still be input_dim while padded is wider."""
+        if x.padded_shape[-1] > self.input_dim:
+            return ttnn.slice(
+                x,
+                (0, 0, 0, 0),
+                (x.shape[0], x.shape[1], x.shape[2], self.input_dim),
+            )
+        return x
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -136,11 +146,16 @@ class ImageProjector(LightweightModule):
         Returns:
             Output tensor of shape [1, 1, num_tokens, output_dim]
         """
+        x = self._slice_to_input_dim_if_padded(x)
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences
-        if seq_len > 1024:
+        # Reshape for long sequences: only when seq_len is an exact multiple of 1024.
+        # Otherwise seq_len // 1024 * 1024 != seq_len and ttnn.reshape fails (e.g. video:
+        # n_frames * N_out like 8 * 196 = 1568 tokens).
+        chunk_ok = seq_len > 1024 and (seq_len % 1024 == 0)
+        if chunk_ok:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+            x = self._slice_to_input_dim_if_padded(x)
 
         # w1 (gate projection) with SiLU activation
         gate = ttnn.linear(
@@ -173,8 +188,8 @@ class ImageProjector(LightweightModule):
         )
         ttnn.deallocate(hidden)
 
-        # Reshape back if needed
-        if seq_len > 1024:
+        # Reshape back if we chunked (same condition as above)
+        if chunk_ok:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output

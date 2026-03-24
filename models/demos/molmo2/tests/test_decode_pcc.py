@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
+from models.demos.molmo2.reference.functional import _apply_rope, rmsnorm
 
 
 def calculate_pcc(a, b):
@@ -49,42 +50,33 @@ def reference_attention_with_kv_cache(
     head_dim=128,
     rope_theta=1000000.0,
 ):
-    """Reference attention with KV cache for decode."""
+    """Reference attention with KV cache for decode.
+
+    Uses the same RoPE as TTNN (half-span via ``_apply_rope``) and the same GQA
+    broadcast as ``text_attention_forward`` in reference/functional.py.
+    """
     batch_size = hidden_states.shape[0]
     num_kv_groups = num_heads // num_kv_heads
 
-    # Q, K, V projections
-    q = F.linear(hidden_states, wq)  # [B, 1, num_heads * head_dim]
-    k = F.linear(hidden_states, wk)  # [B, 1, num_kv_heads * head_dim]
+    # Q, K, V projections (same layout as models.demos.molmo2.reference.functional)
+    q = F.linear(hidden_states, wq)
+    k = F.linear(hidden_states, wk)
     v = F.linear(hidden_states, wv)
 
-    # Reshape
-    q = q.view(batch_size, 1, num_heads, head_dim).transpose(1, 2)  # [B, num_heads, 1, head_dim]
-    k = k.view(batch_size, 1, num_kv_heads, head_dim).transpose(1, 2)
-    v = v.view(batch_size, 1, num_kv_heads, head_dim).transpose(1, 2)
+    q = q.view(batch_size, 1, num_heads, head_dim)
+    k = k.view(batch_size, 1, num_kv_heads, head_dim)
+    v = v.view(batch_size, 1, num_kv_heads, head_dim)
 
-    # QK-norm (RMSNorm)
-    def rms_norm(x, weight, eps=1e-5):
-        variance = x.pow(2).mean(-1, keepdim=True)
-        x = x * torch.rsqrt(variance + eps)
-        return x * weight
+    q = rmsnorm(q, q_norm_weight)
+    k = rmsnorm(k, k_norm_weight)
 
-    q = rms_norm(q, q_norm_weight)
-    k = rms_norm(k, k_norm_weight)
+    position_ids = torch.full((batch_size, 1), current_pos, dtype=torch.long, device=hidden_states.device)
+    q, k = _apply_rope(q, k, position_ids, head_dim, rope_theta)
 
-    # RoPE
-    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    freqs = current_pos * inv_freq
-    cos = torch.cos(freqs).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-    sin = torch.sin(freqs).unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-    def apply_rope(x, cos, sin):
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rope = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-        return x_rope.flatten(-2)
-
-    q = apply_rope(q, cos, sin)
-    k = apply_rope(k, cos, sin)
+    # [B, 1, heads, D] -> [B, heads, 1, D]
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
 
     # Update KV cache at current position
     kv_cache_k[:, :, current_pos : current_pos + 1, :] = k
@@ -94,14 +86,23 @@ def reference_attention_with_kv_cache(
     k_full = kv_cache_k[:, :, : current_pos + 1, :]
     v_full = kv_cache_v[:, :, : current_pos + 1, :]
 
-    # Expand K, V for GQA
-    k_expanded = k_full.repeat_interleave(num_kv_groups, dim=1)
-    v_expanded = v_full.repeat_interleave(num_kv_groups, dim=1)
+    # GQA: match functional.py expand+reshape (same ordering as repeat_interleave on dim=1)
+    seq_kv = current_pos + 1
+    k_expanded = (
+        k_full.unsqueeze(2)
+        .expand(batch_size, num_kv_heads, num_kv_groups, seq_kv, head_dim)
+        .reshape(batch_size, num_heads, seq_kv, head_dim)
+    )
+    v_expanded = (
+        v_full.unsqueeze(2)
+        .expand(batch_size, num_kv_heads, num_kv_groups, seq_kv, head_dim)
+        .reshape(batch_size, num_heads, seq_kv, head_dim)
+    )
 
-    # Attention
-    scale = 1.0 / (head_dim**0.5)
+    # Attention (decode: one query position attends over full KV length)
+    scale = head_dim**-0.5
     attn_weights = torch.matmul(q, k_expanded.transpose(-2, -1)) * scale
-    attn_weights = F.softmax(attn_weights, dim=-1)
+    attn_weights = F.softmax(attn_weights.float(), dim=-1).to(attn_weights.dtype)
     attn_output = torch.matmul(attn_weights, v_expanded)
 
     # Reshape and output projection

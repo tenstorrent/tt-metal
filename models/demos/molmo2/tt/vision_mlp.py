@@ -137,8 +137,9 @@ class VisionMLP(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Reshape for long sequences to fit matmul on device
-        if seq_len > 1024:
+        # Only chunk when seq_len % 1024 == 0; else reshape volume mismatch (e.g. video ViT).
+        chunk_mlp = seq_len > 1024 and (seq_len % 1024 == 0)
+        if chunk_mlp:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
         # w1 with QuickGELU activation (gelu_pytorch_tanh in HF)
@@ -162,8 +163,7 @@ class VisionMLP(LightweightModule):
         )
         ttnn.deallocate(hidden)
 
-        # Reshape back if needed
-        if seq_len > 1024:
+        if chunk_mlp:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output

@@ -525,13 +525,28 @@ class TextAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-        )  # Output: [1, B, H, d]
+        )  # Output: [1, B_pad, H_pad, d_pad] — B_pad is often padded to 32 for TILE, not a sequence dim.
 
         ttnn.deallocate(q)
 
-        # Reshape: [1, B, H, d] -> [1, 1, B, H*d]
-        # SDPA decode output is [1, B, H, d] = [1, 1, num_heads_per_device, head_dim]
-        attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, self.num_heads_per_device * self.head_dim])
+        # Take logical batch and heads only. Do NOT reshape using B_pad as the middle dim: that treats padding
+        # slots as extra "tokens" and feeds garbage into wo (collapsed / repeated logits on long multimodal prefill).
+        logical_attn_w = self.num_heads_per_device * self.head_dim
+        attn_output = ttnn.slice(
+            attn_output,
+            (0, 0, 0, 0),
+            (1, batch_size, self.num_heads_per_device, self.head_dim),
+        )
+        attn_output = ttnn.reshape(attn_output, [1, 1, batch_size, logical_attn_w])
+
+        # Trim TILE tail padding on the K dim so wo matches HF [hidden, heads*head_dim].
+        pw = attn_output.padded_shape[-1]
+        if pw > logical_attn_w:
+            attn_output = ttnn.slice(
+                attn_output,
+                (0, 0, 0, 0),
+                (1, 1, batch_size, logical_attn_w),
+            )
 
         # Output projection (row parallel) - use L1 for decode
         output = ttnn.linear(

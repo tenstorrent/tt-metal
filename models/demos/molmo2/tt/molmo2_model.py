@@ -18,6 +18,7 @@ Architecture:
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -259,17 +260,37 @@ class Molmo2Model(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
-        # visual_embeddings_ttnn: [1, 1, N_out, hidden_dim] -> [1, N_out, hidden_dim] for gather
-        visual_for_gather = ttnn.reshape(visual_embeddings_ttnn, [1, -1, hidden_dim])
+        # visual_embeddings_ttnn: [1, 1, N_vis, W] — W may be TILE-padded (e.g. 4160 vs 4096).
+        # Reshape must use the tensor's logical W: [1, -1, 4096] fails when N_vis * W % 4096 != 0.
+        n_vis_tokens = visual_embeddings_ttnn.shape[2]
+        embed_width = visual_embeddings_ttnn.shape[3]
+        visual_for_gather = ttnn.reshape(
+            visual_embeddings_ttnn,
+            [1, n_vis_tokens, embed_width],
+        )
         valid_visual_ttnn = ttnn.embedding(valid_indices_ttnn, visual_for_gather)
         ttnn.deallocate(valid_indices_ttnn)
 
-        # valid_visual_ttnn: [1, num_valid, hidden_dim] -> [1, 1, num_valid, hidden_dim]
-        valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
+        # valid_visual_ttnn: [1, num_valid, embed_width] -> [1, 1, num_valid, embed_width]
+        valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, embed_width])
+        if embed_width != hidden_dim:
+            valid_visual_ttnn = ttnn.slice(
+                valid_visual_ttnn,
+                (0, 0, 0, 0),
+                (1, 1, num_valid, hidden_dim),
+            )
 
         # Build selector matrix on CPU (fast, input_ids-sized sparse matrix)
         image_positions = (input_ids[0] == self.image_patch_id).nonzero(as_tuple=True)[0]
         if len(image_positions) != num_valid:
+            logger.warning(
+                "Multimodal fusion skipped: image_patch_id count ({}) != valid visual tokens ({}). "
+                "Decoder will see text embeddings only at patch positions (degraded video/image quality). "
+                "Check tokenizer vs. hardcoded image_patch_id={}.",
+                len(image_positions),
+                num_valid,
+                self.image_patch_id,
+            )
             ttnn.deallocate(valid_visual_ttnn)
             return text_embeddings_ttnn
 

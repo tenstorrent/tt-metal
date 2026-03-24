@@ -513,7 +513,12 @@ def preprocess_video_molmo2(
     }
 
 
-def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
+def create_model(
+    mesh_device,
+    state_dict,
+    num_layers: Optional[int] = None,
+    max_seq_len: int = 8192,
+):
     """
     Create the Molmo2 TTNN model.
 
@@ -521,6 +526,7 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         mesh_device: TTNN device or mesh device
         state_dict: Model state dict
         num_layers: Optional number of text layers (default: 36)
+        max_seq_len: RoPE table length; use >= KV cache max (e.g. 16384 for video)
 
     Returns:
         Molmo2Model instance
@@ -556,7 +562,7 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         text_num_kv_heads=8,
         text_head_dim=128,
         vocab_size=152064,
-        max_seq_len=8192,
+        max_seq_len=max_seq_len,
         rope_theta=1000000.0,
         rms_norm_eps=1e-5,
         dtype=ttnn.bfloat8_b,
@@ -924,15 +930,25 @@ class Molmo2Generator:
                 mesh_mapper=self.mesh_mapper,
             )
 
-            # Reshape visual embeddings for gather: [1, 1, n_out, hidden_dim] -> [n_out, hidden_dim]
-            visual_for_gather = ttnn.reshape(visual_embeddings_ttnn, [1, -1, hidden_dim])
+            # Reshape for gather using logical dims (last dim may be TILE-padded; [1,-1,4096] breaks reshape).
+            n_vis_tokens = visual_embeddings_ttnn.shape[2]
+            embed_width = visual_embeddings_ttnn.shape[3]
+            visual_for_gather = ttnn.reshape(
+                visual_embeddings_ttnn,
+                [1, n_vis_tokens, embed_width],
+            )
 
-            # Gather valid embeddings: [1, num_valid, hidden_dim]
+            # Gather valid embeddings: [1, num_valid, embed_width]
             valid_visual_ttnn = ttnn.embedding(valid_indices_ttnn, visual_for_gather)
             ttnn.deallocate(valid_indices_ttnn)
 
-            # Reshape to 4D for matmul: [1, num_valid, hidden_dim] -> [1, 1, num_valid, hidden_dim]
-            valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, hidden_dim])
+            valid_visual_ttnn = ttnn.reshape(valid_visual_ttnn, [1, 1, num_valid, embed_width])
+            if embed_width != hidden_dim:
+                valid_visual_ttnn = ttnn.slice(
+                    valid_visual_ttnn,
+                    (0, 0, 0, 0),
+                    (1, 1, num_valid, hidden_dim),
+                )
 
             # 3. Create selector matrix for fusion (CPU - just positions, very fast)
             # S[seq_pos, visual_idx] = 1.0 where seq_pos should get visual_idx embedding
@@ -2215,7 +2231,7 @@ def run_video_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(device, state_dict, num_layers, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -2324,7 +2340,7 @@ def run_demo(
 
     try:
         # Create model
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(device, state_dict, num_layers, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         # Create generator
