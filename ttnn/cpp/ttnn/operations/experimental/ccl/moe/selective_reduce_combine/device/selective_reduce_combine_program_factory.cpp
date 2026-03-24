@@ -53,11 +53,11 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
-    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
+    constexpr auto num_buffers_full_size_channels = 15;
+    constexpr auto num_buffers_header_only_channels = 15;
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t l1_unreserved_base_address =
+    const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
@@ -66,6 +66,16 @@ auto launch_mux_workers(
         num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
+
+    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
+    if (occupied_l1_tensor_addr.has_value()) {
+        TT_FATAL(
+            mux_kernel_config.get_memory_map_end_address() <= *occupied_l1_tensor_addr,
+            "Mux L1 memory [base={:#x}, end={:#x}] overlaps with L1 tensor {:#x} and is in danger of being clobbered.",
+            l1_unreserved_base_address,
+            mux_kernel_config.get_memory_map_end_address(),
+            *occupied_l1_tensor_addr);
+    }
 
     const auto needed_mux_core_range_set =
         select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
