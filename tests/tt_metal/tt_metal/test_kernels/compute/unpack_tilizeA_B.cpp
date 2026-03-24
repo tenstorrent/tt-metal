@@ -10,9 +10,9 @@
 #include "experimental/circular_buffer.h"
 
 // #include "api/debug/dprint.h"
-inline void tilizeA_B_binary_init(
-    uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));
+inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb) {
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+    UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block)));
 
     MATH((llk_math_eltwise_binary_init<ELWADD, NONE, MathFidelity::LoFi>(0 /*acc_to_dest*/)));
 }

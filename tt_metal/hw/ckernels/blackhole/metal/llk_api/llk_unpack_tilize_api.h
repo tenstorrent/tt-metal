@@ -73,25 +73,23 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t ct_dim,
-    const std::uint32_t num_faces = 4,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
-
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     LLK_ASSERT((are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        unpack_src_format[get_operand_id(operandB)],
-        unpack_dst_format[get_operand_id(operandB)],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
         unpA_face_r_dim,
         unpB_face_r_dim,
         num_faces,
-        get_operand_num_faces(get_operand_id(operandB)))),
+        get_operand_num_faces(operandB_id))),
     "");
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
@@ -111,15 +109,12 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
-    std::uint32_t block_ct_dim,
-    std::uint32_t num_faces = 4,
-    std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
+    std::uint32_t block_ct_dim) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
 
-    // TODO: RT face_r_dim should be taken from get_operand_face_r_dim(operandA_id);
-    // But currently ops do not populate that array correctly
-    const std::uint32_t face_r_dim = unpA_face_r_dim;
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
+    const std::uint32_t num_faces_eff = get_operand_num_faces(operandA_id);
 
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -137,7 +132,7 @@ inline void llk_unpack_tilizeA_B(
         unpack_dst_format[operandB_id],
         face_r_dim,
         get_operand_face_r_dim(operandB_id),
-        num_faces,
+        num_faces_eff,
         get_operand_num_faces(operandB_id))),
     "");
 
@@ -152,7 +147,7 @@ inline void llk_unpack_tilizeA_B(
         tile_index_a,
         tile_index_b,
         block_ct_dim,
-        num_faces
+        num_faces_eff
     );
 
     WAYPOINT("UPTD");
@@ -163,11 +158,10 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
-    std::uint32_t tile_idx_b,
-    std::uint32_t num_faces = 4,
-    std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
+    std::uint32_t tile_idx_b) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
+        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+            operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
     }
 }
 

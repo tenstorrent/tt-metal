@@ -44,6 +44,8 @@ public:
 
     const std::optional<Tile>& tile(uint32_t buffer_index) const;
 
+    const std::optional<std::pair<uint32_t, uint32_t>>& unpack_face_geometry(uint32_t buffer_index) const;
+
     uint32_t address() const;
 
     bool is_on_logical_corerange(const CoreRange& logical_cr) const;

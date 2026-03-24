@@ -35,7 +35,9 @@ template <
     bool last_tile_is_partial,
     uint32_t dilation_h,
     uint32_t dilation_w,
-    bool zero_pages>
+    bool zero_pages,
+    uint32_t in_cb_sz,
+    uint32_t bf16_init_value>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -43,6 +45,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
+    constexpr uint32_t num_tilized_rows =
+        wide_reduction ? (in_cb_sz / (MAX_TILES_PER_REDUCTION * TILE_WIDTH)) : (in_cb_sz / (in_ntiles_c * TILE_WIDTH));
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
@@ -61,6 +65,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
                 zero_out_page<in_cb_id>(get_write_ptr(in_cb_id));
+            }
+        }
+        // When unpack face_r_dim is aligned to a divisor of TILE_HEIGHT (see align_pool_unpack_face_r_dim), the
+        // CB holds TILE_HEIGHT rows but the kernel window may be smaller; pad with init so max/avg are correct.
+        if constexpr (!is_large_kernel) {
+            if (num_tilized_rows > total_elems_to_reduce) {
+                fill_with_val(get_write_ptr(in_cb_id), in_cb_sz, static_cast<uint16_t>(bf16_init_value));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -320,7 +331,9 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-                zero_pages>(ind, in_l1_read_base_addr);
+                zero_pages,
+                in_cb_sz,
+                bf16_init_value>(ind, in_l1_read_base_addr);
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }

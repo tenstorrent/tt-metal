@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -105,23 +106,24 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const uint32_t in1_cb_pagesize =
         std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
     const uint32_t tilize_reduce_cb_0 = next_cb_index++;
-    tt::tt_metal::create_cb(
-        tilize_reduce_cb_0,
-        program,
-        all_cores,
-        in1_cb_pagesize,
-        4 * buffering_factor,
-        input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
+    {
+        tt::tt_metal::CircularBufferConfig cfg0(
+            in1_cb_pagesize * 4 * buffering_factor, {{tilize_reduce_cb_0, input_cb_data_format}});
+        cfg0.set_page_size(tilize_reduce_cb_0, in1_cb_pagesize);
+        // Match compute bilinear.cpp: 2 logical faces, 4 rows per face (2×2 sampling window).
+        cfg0.set_unpack_face_geometry(tilize_reduce_cb_0, 4, 2);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cfg0);
+    }
 
     // second intermediate CB
     const uint32_t tilize_reduce_cb_1 = next_cb_index++;
-    tt::tt_metal::create_cb(
-        tilize_reduce_cb_1,
-        program,
-        all_cores,
-        in_cb_pagesize,
-        4 * buffering_factor,
-        input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
+    {
+        tt::tt_metal::CircularBufferConfig cfg1(
+            in_cb_pagesize * 4 * buffering_factor, {{tilize_reduce_cb_1, input_cb_data_format}});
+        cfg1.set_page_size(tilize_reduce_cb_1, in_cb_pagesize);
+        cfg1.set_unpack_face_geometry(tilize_reduce_cb_1, 4, 2);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cfg1);
+    }
 
     // scalar intermediate CBs
     const uint32_t in_scalar_cb_pagesize = tt::tile_size(input_cb_data_format);

@@ -59,6 +59,8 @@ CircularBufferConfig from_flatbuffer(
         }
     }
 
+    std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry = {};
+
     // Convert FlatBuffer vector to unordered_set of uint8_t
     auto create_uint8_set = [](auto* fb_vector) {
         std::unordered_set<uint8_t> result;
@@ -75,6 +77,7 @@ CircularBufferConfig from_flatbuffer(
         data_formats,
         page_sizes,
         tiles,
+        unpack_face_geometry,
         create_uint8_set(config_fb->buffer_indices()),
         create_uint8_set(config_fb->local_buffer_indices()),
         create_uint8_set(config_fb->remote_buffer_indices()),

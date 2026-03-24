@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
+#include <algorithm>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -43,6 +44,18 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
     return std::bit_cast<uint16_t>(bfloat16::truncate(value));
+}
+
+uint32_t align_pool_unpack_face_r_dim(uint32_t raw_face_r) {
+    TT_ASSERT(raw_face_r >= 1 && raw_face_r <= tt::constants::FACE_HEIGHT);
+    // Divisors of TILE_HEIGHT (32) that are valid unpack face row counts (<= FACE_HEIGHT).
+    static constexpr uint32_t kValidFaceRDims[] = {1, 2, 4, 8, 16};
+    for (uint32_t d : kValidFaceRDims) {
+        if (d >= raw_face_r) {
+            return d;
+        }
+    }
+    return tt::constants::FACE_HEIGHT;
 }
 
 bool is_pool_op_one_scalar_per_core(
@@ -149,8 +162,13 @@ FactoryParameters get_factory_parameters(
     // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
     // so the in_cb height must be equal to the TILE_HEIGHT, but for kernels spanning only one face we set the
     // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
+    const uint32_t raw_face_r = std::min(kernel_size_hw, tt::constants::FACE_HEIGHT);
+    const uint32_t aligned_face_r_for_unpack = align_pool_unpack_face_r_dim(raw_face_r);
+    const bool need_unpack_pad_tilize_tile = (aligned_face_r_for_unpack != raw_face_r);
     uint32_t num_tilized_rows =
-        kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
+        need_unpack_pad_tilize_tile
+            ? tt::constants::TILE_HEIGHT
+            : (kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
     // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
     uint32_t effective_tile_width_for_output =

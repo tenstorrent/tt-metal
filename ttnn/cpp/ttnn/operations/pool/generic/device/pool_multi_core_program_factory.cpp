@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
 #include <algorithm>
@@ -436,12 +438,30 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_cb_pagesize = cb_sizes.in_cb_pagesize;
     const uint32_t in_cb_npages = cb_sizes.in_cb_npages;
 
-    tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
+    const uint32_t window_size_hw = kernel_h * kernel_w;
+    const uint32_t raw_face_r = std::min(window_size_hw, 16u);
+    const uint32_t face_r_dim_for_unpack = align_pool_unpack_face_r_dim(raw_face_r);
+    const uint32_t num_faces_in_input_tile_for_cb =
+        (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
+            ? 2u
+            : 4u;
+
+    {
+        tt::tt_metal::CircularBufferConfig in_cb_config_0(
+            in_cb_npages * in_cb_pagesize, {{in_cb_id_0, params.data_format}});
+        in_cb_config_0.set_page_size(in_cb_id_0, in_cb_pagesize);
+        in_cb_config_0.set_unpack_face_geometry(in_cb_id_0, face_r_dim_for_unpack, num_faces_in_input_tile_for_cb);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_0);
+    }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
     if (cb_sizes.has_split_reader) {
         in_cb_id_1 = next_cb_index++;
-        tt::tt_metal::create_cb(in_cb_id_1, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
+        tt::tt_metal::CircularBufferConfig in_cb_config_1(
+            in_cb_npages * in_cb_pagesize, {{in_cb_id_1, params.data_format}});
+        in_cb_config_1.set_page_size(in_cb_id_1, in_cb_pagesize);
+        in_cb_config_1.set_unpack_face_geometry(in_cb_id_1, face_r_dim_for_unpack, num_faces_in_input_tile_for_cb);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_1);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 

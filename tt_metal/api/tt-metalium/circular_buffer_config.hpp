@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
 #include <unordered_set>
 
 #include <tt-metalium/buffer.hpp>
@@ -47,6 +48,7 @@ public:
         const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
         const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
         const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
+        const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
         const std::unordered_set<uint8_t>& buffer_indices,
         const std::unordered_set<uint8_t>& local_buffer_indices,
         const std::unordered_set<uint8_t>& remote_buffer_indices,
@@ -66,7 +68,14 @@ public:
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
+    /// Override unpack face row count and logical face count for this buffer index (feeds JIT unpack_tile_* arrays).
+    /// Use when operand geometry differs from \ref Tile (e.g. pool tilize on 32×32 pages with 2 logical faces).
+    /// Requires tile height (default 32) divisible by \p face_r_dim (see jit_build/genfiles.cpp).
+    CircularBufferConfig& set_unpack_face_geometry(uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces);
+
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;
+
+    const std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry() const;
 
     uint32_t total_size() const;
 
@@ -124,6 +133,7 @@ private:
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
+    std::array<std::optional<std::pair<uint32_t, uint32_t>>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry_;
     std::unordered_set<uint8_t> buffer_indices_;
     std::unordered_set<uint8_t> local_buffer_indices_;
     std::unordered_set<uint8_t> remote_buffer_indices_;

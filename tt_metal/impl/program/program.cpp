@@ -1289,19 +1289,24 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                auto tile = circular_buffer->tile(buffer_index);
-                if (tile.has_value()) {
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                if (tile_opt.has_value() || unpack_geom.has_value()) {
+                    Tile default_tile{};
+                    const Tile& tile = tile_opt.value_or(default_tile);
+                    uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->second : tile.get_num_faces();
+                    uint32_t face_r_dim = unpack_geom.has_value() ? unpack_geom->first : tile.get_face_shape()[0];
                     build_options.set_cb_tile_dims_all_cores(
                         static_cast<CBIndex>(buffer_index),
-                        tile->get_num_faces(),
-                        tile->get_partial_face(),
-                        tile->get_face_shape()[0],
-                        tile->get_narrow_tile(),
-                        tile->get_tile_shape()[0],
-                        tile->get_tile_shape()[1]);
+                        num_faces,
+                        tile.get_partial_face(),
+                        face_r_dim,
+                        tile.get_narrow_tile(),
+                        tile.get_tile_shape()[0],
+                        tile.get_tile_shape()[1]);
                     build_options.set_cb_tile_size_all_cores(
                         static_cast<CBIndex>(buffer_index),
-                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
+                        tile.get_tile_size(circular_buffer->data_format(buffer_index)));
                 } else {
                     Tile t;
                     build_options.set_cb_tile_size_all_cores(

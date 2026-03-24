@@ -23,7 +23,7 @@ inline void llk_push_pages_bilinear(const std::int32_t operand, const std::int32
     }
 }
 
-template <uint32_t tiles_per_reduction, uint32_t unpA_face_r_dim>
+template <uint32_t tiles_per_reduction>
 inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
     tile_regs_acquire();
     cb_wait_front(in_cb_id, 4);
@@ -39,7 +39,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     constexpr uint32_t num_faces = 2;  // Unpack 2 faces (top faces contain 4 rows needed for bilinear interpolation)
 
     unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        in_cb_id, in_scalar_cb_id, tiles_per_reduction, scalar_tile_idx, num_faces, unpA_face_r_dim);
+        in_cb_id, in_scalar_cb_id, tiles_per_reduction, scalar_tile_idx);
     for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
         reduce_tile_math(c_i, num_faces);  // Reduce the 2 faces (containing 4 rows for bilinear interpolation)
     }
@@ -86,7 +86,7 @@ void kernel_main() {
     constexpr uint32_t face_r_dim = 4;       // 4 rows per face (sufficient for bilinear interpolation)
 
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
-        tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id, num_faces, face_r_dim);
+        tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, 1, num_faces); /* pack 1 row (1x32) from 2 faces */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
         const uint32_t cb_id = (i % 2 == 0) ? tilize_reduce_cb_0 : tilize_reduce_cb_1;
@@ -94,10 +94,10 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < blocks - 1; j++) {
             // Wait for the core to push data in cb
-            reduce_h_fused<max_tiles_per_iter, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
+            reduce_h_fused<max_tiles_per_iter>(cb_id, scalar_cb_id, out_cb_id);
             cb_pop_front(scalar_cb_id, 1);
         }
-        reduce_h_fused<partial_iter_output_tiles, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
+        reduce_h_fused<partial_iter_output_tiles>(cb_id, scalar_cb_id, out_cb_id);
         cb_pop_front(scalar_cb_id, 1);
     }
 }  // void kernel_main()

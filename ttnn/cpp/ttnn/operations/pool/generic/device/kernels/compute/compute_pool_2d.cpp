@@ -53,8 +53,8 @@ void kernel_main() {
 
     constexpr bool use_split_reader = split_reader;
 
-    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
@@ -84,7 +84,8 @@ void kernel_main() {
 
     constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb);
+
     pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -131,19 +132,24 @@ void kernel_main() {
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                 }
             }
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
+                unpack_reconfig_A_B_block<DST_ACCUM_MODE>(
+                    in_cb_id_0,
+                    curr_in_cb_id,
+                    in_scalar_cb_id_0,
+                    curr_scalar_cb_id,
+                    num_faces_in_input_tile,
+                    face_r_dim);
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                    num_faces_in_input_tile,
-                    face_r_dim);
+                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
@@ -195,7 +201,7 @@ void kernel_main() {
                     tilize_stick_counter = 0;
 
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                     // init math for reduction again since FPU gets reprogrammed by tilize
                     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
