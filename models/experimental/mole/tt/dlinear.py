@@ -40,17 +40,28 @@ class TtDLinearExpert(TtExpertBase):
             kernel_size=self.config.moving_average_kernel_size,
         )
         moving_average_bias = self.reference_model.seasonal_projection.bias.detach().new_zeros(self.config.seq_len)
+<<<<<<< HEAD
         self._tt_parameters = _TtDLinearUploaded(
             moving_average=upload_linear(
+=======
+        self._tt_parameters = {
+            "moving_average": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 moving_average_weight,
                 moving_average_bias,
                 device=device,
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
             seasonal=up(self.reference_model.seasonal_projection),
             trend=up(self.reference_model.trend_projection),
         )
+=======
+            "seasonal": up(self.reference_model.seasonal_projection),
+            "trend": up(self.reference_model.trend_projection),
+        }
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         self._cached_device = device
         register_trace_release_hook(device=device, hook=self._release_prediction_trace)
 
@@ -59,6 +70,7 @@ class TtDLinearExpert(TtExpertBase):
         self._ensure_parameters(input_tensor.device())
 
         mc = self.activation_memory_config
+<<<<<<< HEAD
         # Match reference: moving average and seq_len projections run on [batch, channels, seq_len].
         input_channels_first = ttnn.permute(input_tensor, (0, 1, 3, 2))
         tp = self._tt_parameters
@@ -67,6 +79,16 @@ class TtDLinearExpert(TtExpertBase):
         prediction = ttnn.add(
             apply_linear(seasonal, tp.seasonal, memory_config=mc),
             apply_linear(trend, tp.trend, memory_config=mc),
+=======
+        trend = apply_linear(input_tensor, self._tt_parameters["moving_average"], memory_config=mc)
+        seasonal = ttnn.subtract(input_tensor, trend, memory_config=mc)
+
+        seasonal = ttnn.permute(seasonal, (0, 1, 3, 2))
+        trend = ttnn.permute(trend, (0, 1, 3, 2))
+        prediction = ttnn.add(
+            apply_linear(seasonal, self._tt_parameters["seasonal"], memory_config=mc),
+            apply_linear(trend, self._tt_parameters["trend"], memory_config=mc),
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             memory_config=mc,
         )
         prediction = ttnn.permute(prediction, (0, 1, 3, 2))

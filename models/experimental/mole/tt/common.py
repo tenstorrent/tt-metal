@@ -17,6 +17,7 @@ LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+<<<<<<< HEAD
 class _TraceReleaseHookTable:
     """Weakref hooks keyed by ``id(device)`` — avoids a module-level dict literal."""
 
@@ -52,6 +53,9 @@ class _TraceReleaseHookTable:
 
 
 _TRACE_RELEASE_HOOKS = _TraceReleaseHookTable()
+=======
+_ACTIVE_TRACE_RELEASE_HOOKS: dict[int, list[weakref.ReferenceType]] = {}
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
 
 def register_trace_release_hook(*, device: Any, hook: Callable[[], None]) -> None:

@@ -78,6 +78,7 @@ class TtRLinearExpert(TtExpertBase):
                 self._tt_parameters["projection"],
                 memory_config=mc,
             )
+<<<<<<< HEAD
             # project_individual_channels returns [1, channels, batch, pred_len]; map to [1, batch, pred_len, channels].
             return ttnn.permute(projected, (0, 2, 3, 1))
         projected = apply_linear(
@@ -85,6 +86,14 @@ class TtRLinearExpert(TtExpertBase):
             self._tt_parameters["projection"],
             memory_config=mc,
         )
+=======
+        else:
+            projected = apply_linear(
+                ttnn.permute(normalized, (0, 1, 3, 2)),
+                self._tt_parameters["projection"],
+                memory_config=mc,
+            )
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         return ttnn.permute(projected, (0, 1, 3, 2))
 
     def _denormalize(self, prediction, mean, stdev):

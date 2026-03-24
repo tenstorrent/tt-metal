@@ -101,6 +101,7 @@ class TtMoLE:
         self._packed_dlinear_parameters = None
         self._packed_rlinear_parameters = None
         self._packed_rmlp_parameters = None
+<<<<<<< HEAD
         self.experts = self._build_individual_experts_if_needed(
             reference_model, single_expert_config, expert_runtime_options
         )
@@ -147,6 +148,49 @@ class TtMoLE:
             return
         with contextlib.suppress(Exception):
             ttnn.release_trace(self.device, state.trace_id)
+=======
+        self.experts = None
+        if config.base_model_type == "dlinear":
+            pass
+        elif config.base_model_type == "rlinear" and not config.individual:
+            pass
+        elif config.base_model_type == "rmlp" and not config.individual:
+            pass
+        elif config.base_model_type == "rlinear":
+            expert_class = TtRLinearExpert
+        elif config.base_model_type == "rmlp":
+            expert_class = TtRMLPExpert
+        else:
+            raise ValueError(f"unsupported base_model_type: {config.base_model_type}")
+
+        if config.base_model_type not in {"dlinear"} and not (
+            (config.base_model_type == "rlinear" and not config.individual)
+            or (config.base_model_type == "rmlp" and not config.individual)
+        ):
+            self.experts = [
+                expert_class(
+                    single_expert_config,
+                    reference_model=reference_expert,
+                    runtime_options=expert_runtime_options,
+                )
+                for reference_expert in reference_model.experts
+            ]
+        self._reference_experts = reference_model.experts
+        self._reference_router = reference_model.router
+        self._tt_router_parameters = None
+        self._prediction_trace_state = None
+        self._forward_trace_state = None
+        self._trace_capture_enabled = True
+        register_trace_release_hook(device=self.device, hook=self._release_traces)
+
+    def _release_trace_state(self, state) -> None:
+        if state is None:
+            return
+        try:
+            ttnn.release_trace(self.device, state["trace_id"])
+        except Exception:
+            pass
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     def _release_prediction_trace(self) -> None:
         self._release_trace_state(self._prediction_trace_state)
@@ -163,9 +207,12 @@ class TtMoLE:
     def __del__(self):
         self._release_traces()
 
+<<<<<<< HEAD
     def _expected_time_features(self) -> int:
         return 4 if self.config.freq.lower().endswith("h") else 5
 
+=======
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
     def _ensure_router_parameters(self) -> None:
         if self._tt_router_parameters is not None:
             return
@@ -203,29 +250,46 @@ class TtMoLE:
             kernel_size=self.config.moving_average_kernel_size,
         )
         moving_average_bias = seasonal_bias.new_zeros(self.config.seq_len)
+<<<<<<< HEAD
         self._packed_dlinear_parameters = _PackedDLinearParams(
             moving_average=upload_linear(
+=======
+        self._packed_dlinear_parameters = {
+            "moving_average": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 moving_average_weight,
                 moving_average_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
             seasonal=upload_linear(
+=======
+            "seasonal": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 seasonal_weight,
                 seasonal_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
             trend=upload_linear(
+=======
+            "trend": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 trend_weight,
                 trend_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
         )
+=======
+        }
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     def _compute_dlinear_expert_projection(
         self,
@@ -236,12 +300,20 @@ class TtMoLE:
         batch_size = input_tensor.shape[1]
 
         input_channels_first = ttnn.permute(input_tensor, (0, 1, 3, 2))
+<<<<<<< HEAD
         p = self._packed_dlinear_parameters
         trend = apply_linear(input_channels_first, p.moving_average, memory_config=mc)
         seasonal = ttnn.subtract(input_channels_first, trend, memory_config=mc)
         combined = ttnn.add(
             apply_linear(seasonal, p.seasonal, memory_config=mc),
             apply_linear(trend, p.trend, memory_config=mc),
+=======
+        trend = apply_linear(input_channels_first, self._packed_dlinear_parameters["moving_average"], memory_config=mc)
+        seasonal = ttnn.subtract(input_channels_first, trend, memory_config=mc)
+        combined = ttnn.add(
+            apply_linear(seasonal, self._packed_dlinear_parameters["seasonal"], memory_config=mc),
+            apply_linear(trend, self._packed_dlinear_parameters["trend"], memory_config=mc),
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             memory_config=mc,
         )
         combined = ttnn.reshape(
@@ -267,6 +339,7 @@ class TtMoLE:
         constants = []
         for expert in self._reference_experts:
             projection_bias = expert.projection.bias.detach()
+<<<<<<< HEAD
             affine_weight = expert.rev.affine_weight.detach()
             affine_bias = expert.rev.affine_bias.detach()
             denom = affine_weight + (self.config.revin_eps**2)
@@ -275,6 +348,20 @@ class TtMoLE:
             constant = (
                 row_sum * affine_bias.unsqueeze(0) + projection_bias.unsqueeze(1) - affine_bias.unsqueeze(0)
             ) / denom.unsqueeze(0)
+=======
+            if expert.rev is None:
+                scale = torch.ones(self.config.input_dim, dtype=projection_bias.dtype, device=projection_bias.device)
+                constant = projection_bias.unsqueeze(1).repeat(1, self.config.input_dim)
+            else:
+                affine_weight = expert.rev.affine_weight.detach()
+                affine_bias = expert.rev.affine_bias.detach()
+                denom = affine_weight + (self.config.revin_eps**2)
+                scale = affine_weight / denom
+                row_sum = expert.projection.weight.detach().sum(dim=1, keepdim=True)
+                constant = (
+                    row_sum * affine_bias.unsqueeze(0) + projection_bias.unsqueeze(1) - affine_bias.unsqueeze(0)
+                ) / denom.unsqueeze(0)
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             scales.append(scale)
             constants.append(constant)
 
@@ -283,29 +370,46 @@ class TtMoLE:
             1, 1, self.config.input_dim * self.config.num_experts, self.config.pred_len
         )
 
+<<<<<<< HEAD
         self._packed_rlinear_parameters = _PackedRLinearParams(
             projection=upload_linear(
+=======
+        self._packed_rlinear_parameters = {
+            "projection": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 projection_weight,
                 zero_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
             scale=ttnn.from_torch(
+=======
+            "scale": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_scale,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
             constant=ttnn.from_torch(
+=======
+            "constant": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_constant,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self.parameter_memory_config,
             ),
+<<<<<<< HEAD
         )
+=======
+        }
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     def _compute_rlinear_expert_projection(
         self,
@@ -315,6 +419,7 @@ class TtMoLE:
         mc = self.activation_memory_config
         batch_size = input_tensor.shape[1]
 
+<<<<<<< HEAD
         mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
         centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
         variance = ttnn.multiply(centered, centered, memory_config=mc)
@@ -326,6 +431,22 @@ class TtMoLE:
         projected = apply_linear(
             ttnn.permute(normalized, (0, 1, 3, 2)),
             pr.projection,
+=======
+        mean = None
+        stdev = None
+        normalized = input_tensor
+        if self._reference_experts[0].rev is not None:
+            mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
+            centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
+            variance = ttnn.multiply(centered, centered, memory_config=mc)
+            variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
+            stdev = ttnn.sqrt(ttnn.add(variance, self.config.revin_eps, memory_config=mc))
+            normalized = ttnn.div(centered, stdev, memory_config=mc)
+
+        projected = apply_linear(
+            ttnn.permute(normalized, (0, 1, 3, 2)),
+            self._packed_rlinear_parameters["projection"],
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             memory_config=mc,
             compute_kernel_config=LOW_FIDELITY_LINEAR_COMPUTE_KERNEL_CONFIG,
         )
@@ -333,8 +454,13 @@ class TtMoLE:
             projected,
             (1, batch_size, self.config.input_dim * self.config.num_experts, self.config.pred_len),
         )
+<<<<<<< HEAD
         projected = ttnn.multiply(projected, pr.scale, memory_config=mc)
         projected = ttnn.add(projected, pr.constant, memory_config=mc)
+=======
+        projected = ttnn.multiply(projected, self._packed_rlinear_parameters["scale"], memory_config=mc)
+        projected = ttnn.add(projected, self._packed_rlinear_parameters["constant"], memory_config=mc)
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         projected = ttnn.reshape(
             projected,
             (1, batch_size * self.config.input_dim, self.config.num_experts, self.config.pred_len),
@@ -371,10 +497,31 @@ class TtMoLE:
         seq_len = self.config.seq_len
         pred_len = self.config.pred_len
         for expert in self._reference_experts:
+<<<<<<< HEAD
             affine_weight = expert.rev.affine_weight.detach()
             affine_bias = expert.rev.affine_bias.detach()
             output_bias = affine_bias
             output_denom = affine_weight + (self.config.revin_eps**2)
+=======
+            if expert.rev is None:
+                affine_weight = torch.ones(
+                    self.config.input_dim, dtype=projection_bias.dtype, device=projection_bias.device
+                )
+                affine_bias = torch.zeros(
+                    self.config.input_dim, dtype=projection_bias.dtype, device=projection_bias.device
+                )
+                output_bias = torch.zeros(
+                    self.config.input_dim, dtype=projection_bias.dtype, device=projection_bias.device
+                )
+                output_denom = torch.ones(
+                    self.config.input_dim, dtype=projection_bias.dtype, device=projection_bias.device
+                )
+            else:
+                affine_weight = expert.rev.affine_weight.detach()
+                affine_bias = expert.rev.affine_bias.detach()
+                output_bias = affine_bias
+                output_denom = affine_weight + (self.config.revin_eps**2)
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
             affine_weight_blocks.append(affine_weight.unsqueeze(1).repeat(1, seq_len))
             affine_bias_blocks.append(affine_bias.unsqueeze(1).repeat(1, seq_len))
@@ -394,57 +541,90 @@ class TtMoLE:
             1, 1, self.config.input_dim, self.config.num_experts * pred_len
         )
 
+<<<<<<< HEAD
         self._packed_rmlp_parameters = _PackedRmlpParams(
             temporal_1=upload_linear(
+=======
+        self._packed_rmlp_parameters = {
+            "temporal_1": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 temporal_1_weight,
                 temporal_1_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             temporal_2=upload_linear(
+=======
+            "temporal_2": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 temporal_2_weight,
                 temporal_2_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             projection=upload_linear(
+=======
+            "projection": upload_linear(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 projection_weight,
                 projection_bias,
                 device=self.device,
                 dtype=self.dtype,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             affine_weight=ttnn.from_torch(
+=======
+            "affine_weight": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_affine_weight,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             affine_bias=ttnn.from_torch(
+=======
+            "affine_bias": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_affine_bias,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             output_bias=ttnn.from_torch(
+=======
+            "output_bias": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_output_bias,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
             output_denom=ttnn.from_torch(
+=======
+            "output_denom": ttnn.from_torch(
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 packed_output_denom,
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=packed_parameter_memory_config,
             ),
+<<<<<<< HEAD
         )
+=======
+        }
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     def _compute_rmlp_expert_projection(
         self,
@@ -457,6 +637,7 @@ class TtMoLE:
         normalized, mean, stdev = self._compute_shared_normalized_input(input_tensor)
         packed_input = ttnn.permute(normalized, (0, 1, 3, 2))
         packed_input = ttnn.concat([packed_input] * self.config.num_experts, dim=3, memory_config=mc)
+<<<<<<< HEAD
         pm = self._packed_rmlp_parameters
         packed_input = ttnn.multiply(packed_input, pm.affine_weight, memory_config=mc)
         packed_input = ttnn.add(packed_input, pm.affine_bias, memory_config=mc)
@@ -464,23 +645,43 @@ class TtMoLE:
         temporal_hidden = apply_linear(
             packed_input,
             pm.temporal_1,
+=======
+        packed_input = ttnn.multiply(packed_input, self._packed_rmlp_parameters["affine_weight"], memory_config=mc)
+        packed_input = ttnn.add(packed_input, self._packed_rmlp_parameters["affine_bias"], memory_config=mc)
+
+        temporal_hidden = apply_linear(
+            packed_input,
+            self._packed_rmlp_parameters["temporal_1"],
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             memory_config=mc,
         )
         temporal_hidden = ttnn.relu(temporal_hidden)
         temporal_hidden = apply_linear(
             temporal_hidden,
+<<<<<<< HEAD
             pm.temporal_2,
+=======
+            self._packed_rmlp_parameters["temporal_2"],
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             memory_config=mc,
         )
         temporal_hidden = ttnn.add(temporal_hidden, packed_input, memory_config=mc)
 
         projected = apply_linear(
             temporal_hidden,
+<<<<<<< HEAD
             pm.projection,
             memory_config=mc,
         )
         projected = ttnn.subtract(projected, pm.output_bias, memory_config=mc)
         projected = ttnn.div(projected, pm.output_denom, memory_config=mc)
+=======
+            self._packed_rmlp_parameters["projection"],
+            memory_config=mc,
+        )
+        projected = ttnn.subtract(projected, self._packed_rmlp_parameters["output_bias"], memory_config=mc)
+        projected = ttnn.div(projected, self._packed_rmlp_parameters["output_denom"], memory_config=mc)
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         projected = ttnn.reshape(
             projected,
             (1, batch_size, self.config.input_dim, self.config.num_experts, self.config.pred_len),
@@ -496,6 +697,7 @@ class TtMoLE:
         self,
         input_tensor: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
+<<<<<<< HEAD
         mc = self.activation_memory_config
         mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
         centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
@@ -593,15 +795,38 @@ class TtMoLE:
         self,
         input_tensor: ttnn.Tensor,
         input_marks: ttnn.Tensor,
+=======
+        mean = None
+        stdev = None
+        normalized = input_tensor
+        if self._reference_experts[0].rev is not None:
+            mc = self.activation_memory_config
+            mean = ttnn.sum(input_tensor, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
+            centered = ttnn.subtract(input_tensor, mean, memory_config=mc)
+            variance = ttnn.multiply(centered, centered, memory_config=mc)
+            variance = ttnn.sum(variance, dim=2, keepdim=True, scalar=1.0 / self.config.seq_len, memory_config=mc)
+            stdev = ttnn.sqrt(ttnn.add(variance, self.config.revin_eps, memory_config=mc))
+            normalized = ttnn.div(centered, stdev, memory_config=mc)
+        return normalized, mean, stdev
+
+    def _prediction_and_gating_weights(
+        self,
+        input_tensor: ttnn.Tensor,
+        input_marks: ttnn.Tensor,
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         *,
         return_channelwise_weights: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         validate_timeseries_input(input_tensor, seq_len=self.config.seq_len, input_dim=self.config.input_dim)
+<<<<<<< HEAD
         validate_time_marks(
             input_marks,
             seq_len=self.config.seq_len,
             expected_features=self._expected_time_features(),
         )
+=======
+        validate_time_marks(input_marks, seq_len=self.config.seq_len)
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         self._ensure_router_parameters()
 
         batch_size = input_tensor.shape[1]
@@ -621,6 +846,7 @@ class TtMoLE:
             gating_weights = ttnn.reshape(gating_flat, (1, batch_size, self.config.input_dim, self.config.num_experts))
             gating_weights = ttnn.permute(gating_weights, (0, 1, 3, 2))
 
+<<<<<<< HEAD
         c = self.config
         if c.base_model_type == "dlinear":
             prediction = self._predict_packed_dlinear(input_tensor, gating_flat, batch_size)
@@ -636,6 +862,101 @@ class TtMoLE:
             )
         return prediction, gating_weights
 
+=======
+        if self.config.base_model_type == "dlinear":
+            projected = self._compute_dlinear_expert_projection(input_tensor)
+            prediction = reduce_weighted_heads_batch_major(
+                projected,
+                gating_flat,
+                batch_size=batch_size,
+                channels=self.config.input_dim,
+                pred_len=self.config.pred_len,
+                num_predictions=self.config.num_experts,
+                memory_config=self.activation_memory_config,
+            )
+        elif self.config.base_model_type == "rlinear" and not self.config.individual:
+            projected, mean, stdev = self._compute_rlinear_expert_projection(input_tensor)
+            prediction = reduce_weighted_heads_batch_major(
+                projected,
+                gating_flat,
+                batch_size=batch_size,
+                channels=self.config.input_dim,
+                pred_len=self.config.pred_len,
+                num_predictions=self.config.num_experts,
+                memory_config=self.activation_memory_config,
+            )
+            if stdev is not None and mean is not None:
+                prediction = ttnn.multiply(prediction, stdev, memory_config=self.activation_memory_config)
+                prediction = ttnn.add(prediction, mean, memory_config=self.activation_memory_config)
+        elif self.config.base_model_type == "rmlp" and not self.config.individual:
+            projected, mean, stdev = self._compute_rmlp_expert_projection(input_tensor)
+            prediction = reduce_weighted_heads_batch_major(
+                projected,
+                gating_flat,
+                batch_size=batch_size,
+                channels=self.config.input_dim,
+                pred_len=self.config.pred_len,
+                num_predictions=self.config.num_experts,
+                memory_config=self.activation_memory_config,
+            )
+            if stdev is not None and mean is not None:
+                prediction = ttnn.multiply(prediction, stdev, memory_config=self.activation_memory_config)
+                prediction = ttnn.add(prediction, mean, memory_config=self.activation_memory_config)
+        else:
+            shared_normalized = None
+            mean = None
+            stdev = None
+            if self.config.base_model_type == "rmlp":
+                shared_normalized, mean, stdev = self._compute_shared_normalized_input(input_tensor)
+
+            prediction = None
+            for expert_index, expert in enumerate(self.experts):
+                if shared_normalized is None:
+                    expert_prediction = expert.forward(input_tensor, input_marks)
+                else:
+                    expert._ensure_parameters(input_tensor.device())
+                    expert_prediction = expert._forward_normalized_prediction(shared_normalized)
+                expert_weight = ttnn.slice(
+                    gating_weights,
+                    (0, 0, expert_index, 0),
+                    (1, batch_size, expert_index + 1, self.config.input_dim),
+                )
+                weighted_prediction = ttnn.multiply(
+                    expert_prediction,
+                    expert_weight,
+                    memory_config=self.activation_memory_config,
+                )
+                prediction = (
+                    weighted_prediction
+                    if prediction is None
+                    else ttnn.add(prediction, weighted_prediction, memory_config=self.activation_memory_config)
+                )
+            if prediction is None:
+                raise RuntimeError("expected at least one expert prediction")
+            if shared_normalized is not None and mean is not None and stdev is not None:
+                prediction = ttnn.multiply(prediction, stdev, memory_config=self.activation_memory_config)
+                prediction = ttnn.add(prediction, mean, memory_config=self.activation_memory_config)
+        return prediction, gating_weights
+
+    def _compute_router_weights(self, input_marks: ttnn.Tensor) -> ttnn.Tensor:
+        validate_time_marks(input_marks, seq_len=self.config.seq_len)
+        self._ensure_router_parameters()
+        batch_size = input_marks.shape[1]
+        gating_logits = apply_two_layer_mlp(
+            extract_initial_marks(input_marks),
+            self._tt_router_parameters,
+            memory_config=self.activation_memory_config,
+        )
+        _, gating_weights = temporal_gating(
+            gating_logits,
+            batch_size=batch_size,
+            channels=self.config.input_dim,
+            num_predictions=self.config.num_experts,
+            return_channelwise_weights=True,
+        )
+        return gating_weights
+
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
     def forward_prediction_no_trace(self, input_tensor: ttnn.Tensor, input_marks: ttnn.Tensor) -> ttnn.Tensor:
         prediction, _ = self._prediction_and_gating_weights(
             input_tensor,
@@ -666,9 +987,17 @@ class TtMoLE:
             except Exception:
                 self._trace_capture_enabled = False
                 if trace_id is not None:
+<<<<<<< HEAD
                     with contextlib.suppress(Exception):
                         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
                         ttnn.release_trace(self.device, trace_id)
+=======
+                    try:
+                        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+                        ttnn.release_trace(self.device, trace_id)
+                    except Exception:
+                        pass
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
                 self._release_prediction_trace()
                 return prediction
             self._prediction_trace_state = _MoLEPredictionTraceState(
@@ -691,6 +1020,17 @@ class TtMoLE:
             raise RuntimeError("full forward expects channel-wise router weights")
         return prediction, gating_weights
 
+<<<<<<< HEAD
+=======
+    def forward_no_trace(self, input_tensor: ttnn.Tensor, input_marks: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        prediction, _ = self._prediction_and_gating_weights(
+            input_tensor,
+            input_marks,
+            return_channelwise_weights=False,
+        )
+        return prediction, self._compute_router_weights(input_marks)
+
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
     def forward(self, input_tensor: ttnn.Tensor, input_marks: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if not self._trace_capture_enabled:
             return self.forward_no_trace(input_tensor, input_marks)
@@ -698,7 +1038,11 @@ class TtMoLE:
         state = self._forward_trace_state
         current_ids = (id(input_tensor), id(input_marks))
 
+<<<<<<< HEAD
         if state is None or state.input_ids != current_ids:
+=======
+        if state is None or state["input_ids"] != current_ids:
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
             self._release_forward_trace()
             self._release_prediction_trace()
 
@@ -713,6 +1057,7 @@ class TtMoLE:
             except Exception:
                 self._trace_capture_enabled = False
                 if trace_id is not None:
+<<<<<<< HEAD
                     with contextlib.suppress(Exception):
                         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
                         ttnn.release_trace(self.device, trace_id)
@@ -727,6 +1072,23 @@ class TtMoLE:
         fst = self._forward_trace_state
         ttnn.execute_trace(self.device, fst.trace_id, cq_id=0, blocking=False)
         return fst.output
+=======
+                    try:
+                        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+                        ttnn.release_trace(self.device, trace_id)
+                    except Exception:
+                        pass
+                self._release_forward_trace()
+                return output
+            self._forward_trace_state = {
+                "trace_id": trace_id,
+                "output": output,
+                "input_ids": current_ids,
+            }
+
+        ttnn.execute_trace(self.device, self._forward_trace_state["trace_id"], cq_id=0, blocking=False)
+        return self._forward_trace_state["output"]
+>>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     def forward_from_torch_input(
         self,
