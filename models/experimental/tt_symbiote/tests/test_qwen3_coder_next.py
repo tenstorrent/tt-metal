@@ -3,14 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
+from loguru import logger
 import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+from transformers.generation.streamers import BaseStreamer
 
 import ttnn
 from transformers.models.qwen3_next.modeling_qwen3_next import (
@@ -18,6 +21,8 @@ from transformers.models.qwen3_next.modeling_qwen3_next import (
     Qwen3NextGatedDeltaNet,
     Qwen3NextSparseMoeBlock,
 )
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from torch import nn
 from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
@@ -32,6 +37,55 @@ QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next"
 # When > 0, stop after N identical generated token ids in a row (can truncate answers). Default off.
 QWEN3_SAME_TOKEN_STREAK_STOP = 0
 QWEN3_RNG_SEED = 42
+
+
+class _LatencyStreamer(BaseStreamer):
+    """Lightweight streamer that records wall-clock timestamps for every token batch
+    emitted by ``generate()``.  The first ``put()`` call corresponds to the prompt echo
+    (or first-token emission); the gap between construction (or explicit ``reset()``) and
+    that first call is the **real** Time-to-First-Token (TTFT).
+    """
+
+    def __init__(self):
+        self._t_start: float = time.perf_counter()
+        self._timestamps: List[float] = []
+
+    def reset(self):
+        self._t_start = time.perf_counter()
+        self._timestamps.clear()
+
+    def put(self, value):
+        self._timestamps.append(time.perf_counter())
+
+    def end(self):
+        pass
+
+    @property
+    def ttft(self) -> float:
+        """Seconds from start/reset to first token emission."""
+        if not self._timestamps:
+            return 0.0
+        return self._timestamps[0] - self._t_start
+
+    @property
+    def per_token_latencies(self) -> List[float]:
+        """Seconds between consecutive token emissions (decode steps)."""
+        lats = []
+        for i in range(1, len(self._timestamps)):
+            lats.append(self._timestamps[i] - self._timestamps[i - 1])
+        return lats
+
+    @property
+    def total_decode_time(self) -> float:
+        """Wall time from first to last token emission (pure decode)."""
+        if len(self._timestamps) < 2:
+            return 0.0
+        return self._timestamps[-1] - self._timestamps[0]
+
+    @property
+    def n_decode_steps(self) -> int:
+        """Number of decode steps (token emissions after the first)."""
+        return max(0, len(self._timestamps) - 1)
 
 
 def _model_max_context_length(model, tokenizer) -> int:
@@ -57,8 +111,17 @@ def _compute_max_new_tokens(model, tokenizer, prompt_len: int) -> int:
     return available
 
 
-# Run only on T3K (symbiote DeviceArch). Uses MESH_DEVICE env if set, else T3K.
-MESH_DEVICE = (os.environ.get("MESH_DEVICE") or "T3K").upper()
+def _main_max_new_tokens(available: int, main_max_new_tokens: int) -> int:
+    """``main_max_new_tokens`` is the test parameter: >0 caps decode; <=0 uses full ``available``."""
+    if main_max_new_tokens <= 0:
+        return available
+    return min(available, main_max_new_tokens)
+
+
+# Run only on T3K (symbiote DeviceArch). @run_on_devices reads os.environ["MESH_DEVICE"], not a Python default.
+if not (os.environ.get("MESH_DEVICE") or "").strip():
+    os.environ["MESH_DEVICE"] = "T3K"
+MESH_DEVICE = os.environ["MESH_DEVICE"].strip().upper()
 MESH_SHAPE_T3K = (1, 8)
 
 
@@ -203,8 +266,16 @@ def _load_qwen3_model():
     [MESH_SHAPE_T3K],
     indirect=True,
 )
-def test_qwen3_coder_next(mesh_device):
-    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K."""
+@pytest.mark.parametrize(
+    "main_max_new_tokens",
+    [256],
+    ids=["decode_max_256"],
+)
+def test_qwen3_coder_next(mesh_device, main_max_new_tokens: int):
+    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K.
+
+    ``main_max_new_tokens``: cap on new tokens for the main ``generate`` (pytest param; add values or use ``<=0`` for full context).
+    """
     if MESH_DEVICE != "T3K":
         pytest.skip(f"test_qwen3_coder_next runs only on T3K (MESH_DEVICE={os.environ.get('MESH_DEVICE')!r})")
     tokenizer, model = _load_qwen3_model()
@@ -222,7 +293,7 @@ def test_qwen3_coder_next(mesh_device):
     messages = [
         {
             "role": "user",
-            "content": "Write a Python function to calculate fibonacci numbers using dynamic programming.",
+            "content": "Write a quick sort algorithm.",
         },
     ]
 
@@ -261,20 +332,89 @@ def test_qwen3_coder_next(mesh_device):
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
 
+    batch_size = int(inputs["input_ids"].shape[0])
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    profiler.start("compile_prefill")
     warm_in = _clone_model_inputs(inputs)
     wk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
     if wk.get("do_sample", False):
         _seed_torch_for_generate()
     model.generate(**warm_in, max_new_tokens=2, use_cache=True, **wk)
+    profiler.end("compile_prefill")
 
+    DispatchManager.clear_timings()
     prompt_len = int(inputs["input_ids"].shape[-1])
-    max_new = _compute_max_new_tokens(model, tokenizer, prompt_len)
+    available = _compute_max_new_tokens(model, tokenizer, prompt_len)
+    max_new = _main_max_new_tokens(available, main_max_new_tokens)
+    logger.info(
+        f"Main generate max_new_tokens={max_new} (param main_max_new_tokens={main_max_new_tokens}, "
+        f"prompt_len={prompt_len}, context_budget={available})"
+    )
     main_in = _clone_model_inputs(inputs)
     mk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
     if mk.get("do_sample", False):
         _seed_torch_for_generate()
-    outputs = model.generate(**main_in, max_new_tokens=max_new, use_cache=True, **mk)
+
+    latency_streamer = _LatencyStreamer()
+    latency_streamer.reset()
+    profiler.start("inference_generate")
+    outputs = model.generate(**main_in, max_new_tokens=max_new, use_cache=True, streamer=latency_streamer, **mk)
+    profiler.end("inference_generate")
+
+    profiler.end("run")
 
     output_ids = outputs[0][prompt_len:].tolist()
+    num_new = len(output_ids)
     content = tokenizer.decode(output_ids, skip_special_tokens=True)
-    print(f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{content}")
+    print(f"Qwen3-Coder-Next output ({num_new} new tokens):\n{content}")
+
+    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_decode_time = 0.0
+    full_generation_time = profiler.get_duration("inference_generate")
+
+    # Real TTFT from streamer: wall time from generate() entry to first token emission.
+    # This includes the full prefill forward pass (but NOT warmup compile, which ran earlier).
+    real_ttft = latency_streamer.ttft
+    real_decode_time = latency_streamer.total_decode_time
+    n_decode_steps = latency_streamer.n_decode_steps
+
+    total_inference_prefill_time = real_ttft
+    total_inference_decode_time = real_decode_time
+
+    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    avg_decode_iteration_time = total_inference_decode_time / n_decode_steps if n_decode_steps > 0 else 0.0
+    prefill_tok_s = prompt_len / total_inference_prefill_time * batch_size if total_inference_prefill_time > 0 else 0.0
+    decode_tok_s_user = (
+        n_decode_steps / total_inference_decode_time if n_decode_steps > 0 and total_inference_decode_time > 0 else 0.0
+    )
+    decode_tok_s = decode_tok_s_user * batch_size
+
+    per_tok_lats = latency_streamer.per_token_latencies
+
+    logger.info("")
+    logger.info("=== Performance metrics ===")
+    logger.info(
+        f"Prompt tokens: {prompt_len} | Generated tokens: {num_new} | Decode steps (streamer): {n_decode_steps}"
+    )
+    logger.info("==")
+    logger.info(f"Prefill compile time (warmup): {round(compile_prefill_time, 2)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s (included in warmup)")
+    logger.info("")
+    logger.info(f"Time to First Token (TTFT, measured): {round(avg_time_to_first_token * 1000, 2)}ms")
+    logger.info(
+        f"Prefill throughput: {round(prefill_tok_s, 2)} tok/s "
+        f"({prompt_len} tokens in {round(total_inference_prefill_time, 3)}s)"
+    )
+    logger.info("")
+    logger.info(
+        f"Decode speed: {round(avg_decode_iteration_time * 1000, 2)}ms/tok @ "
+        f"{round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
+    )
+    logger.info(f"Decode wall time: {round(total_inference_decode_time, 2)}s for {n_decode_steps} steps")
+    logger.info("")
+    logger.info(f"Full generate() wall time: {round(full_generation_time, 2)}s")
+
+    DispatchManager.save_stats_to_file("qwen3_coder_next_timing_stats.csv")
+    TracedRun.release_all()

@@ -188,7 +188,7 @@ def gated_deltanet_forward_ttnn(
     """
     TTNN forward pass for the Gated DeltaNet layer.
 
-    Parity checklist vs torch (core/torch_gated_deltanet.py):
+    Parity checklist vs PyTorch reference (when available):
     [x] 1. Linear projections q,k,v (ttnn.linear)
     [x] 2. Causal conv1d + SiLU on q,k,v (causal_conv1d_ttnn) - NO conv_state for T==1; use torch fallback
     [x] 3. Reshape to [B,T,H,D] and GVA repeat_interleave for q,k when num_v_heads > num_heads
