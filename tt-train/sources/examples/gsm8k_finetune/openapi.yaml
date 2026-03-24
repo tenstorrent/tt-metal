@@ -260,11 +260,11 @@ components:
           type: string
           description: |
             Model identifier. Supported values (mapped to model_config path):
-            - tinyllama-1.1b → model_configs/tinyllama.yaml
-            - gpt2 | gpt2s → model_configs/gpt2s.yaml
+            - tinyllama → model_configs/tinyllama.yaml
+            - gpt2 → model_configs/gpt2s.yaml
             - llama-3.1-8b → model_configs/llama8b.yaml (if available)
             Any other value is passed through; training service does not validate.
-          example: tinyllama-1.1b
+          example: tinyllama
         dataset_url:
           type: string
           description: |

@@ -270,11 +270,8 @@ def _get_model_to_config_mapping():
     """Get model config mapping with paths relative to tt_metal_runtime_root."""
     tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
     return {
-        "tinyllama-1.1b": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
         "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
         "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
-        "gpt2s": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
-        "llama-3.1-8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
         "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
     }
 
@@ -287,7 +284,7 @@ sft_training_config = TrainingTypeConfig(
     name="sft",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama-1.1b", "tinyllama", "gpt2", "gpt2s", "llama-3.1-8b", "llama8b"},
+    supported_models={"tinyllama", "gpt2", "llama8b"},
     param_validator=validate_sft_params,
     config_builder=build_sft_config,
 )
@@ -297,7 +294,7 @@ lora_training_config = TrainingTypeConfig(
     name="lora",
     script_path="lora_llama/train_lora_llama_sft.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama-1.1b", "tinyllama", "gpt2", "gpt2s", "llama-3.1-8b", "llama8b"},
+    supported_models={"tinyllama", "gpt2", "llama8b"},
     param_validator=validate_lora_params,
     config_builder=build_lora_config,
 )

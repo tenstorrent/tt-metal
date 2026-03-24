@@ -71,7 +71,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, g, send_from_directory
 from ttml.common.utils import get_tt_metal_runtime_root
-from .training_types import get_training_type, get_supported_trainers, get_supported_models, TRAINING_TYPES
+from training_types import get_training_type, get_supported_trainers, get_supported_models, TRAINING_TYPES
 from job_manager import JobManager, JobStatus, PARTITION_DEVICE_MAPPING
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -773,11 +773,8 @@ def catalog():
     # Generate models dynamically from training registry
     all_models = get_supported_models()
     model_display_names = {
-        "tinyllama-1.1b": "TinyLlama 1.1B",
         "tinyllama": "TinyLlama 1.1B",
         "gpt2": "GPT-2",
-        "gpt2s": "GPT-2 Small",
-        "llama-3.1-8b": "Llama 3.1 8B",
         "llama8b": "Llama 3.1 8B",
     }
 
@@ -797,7 +794,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama-1.1b", "tinyllama", "gpt2", "gpt2s"}
+        is_supported = model_id in {"tinyllama", "gpt2"}
 
         models.append(
             {
