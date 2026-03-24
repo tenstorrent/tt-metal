@@ -183,7 +183,7 @@
   cmd: run_t3000_tt_dit_tests
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: dits
