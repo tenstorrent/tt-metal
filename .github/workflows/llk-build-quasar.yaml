@@ -1,11 +1,4 @@
 name: "⚙️ LLK Compile for Quasar"
-# ============================================================================
-# Reusable workflow to compile LLK tests for Quasar architecture.
-# Adapted from tt_llk/.github/workflows/build-quasar.yml
-#
-# This workflow compiles tests without running them (Quasar is a future
-# architecture that may not have hardware available yet).
-# ============================================================================
 
 on:
   workflow_call:
@@ -39,7 +32,6 @@ permissions:
 
 env:
   LLK_PATH: tt_metal/third_party/tt_llk
-  CHIP_ARCH: quasar
 
 jobs:
   generate-matrix:
@@ -65,11 +57,10 @@ jobs:
 
     name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
-      # Step 1: Checkout the repository with submodules
+      # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
           submodules: recursive
 
       # Step 2: Install SFPI

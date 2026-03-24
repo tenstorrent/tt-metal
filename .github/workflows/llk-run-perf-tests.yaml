@@ -1,90 +1,56 @@
 name: 🚀 LLK Run Performance Tests
-# ============================================================================
-# Performance test workflow for LLK.
-# Adapted from tt_llk/.github/workflows/run-perf-tests.yml
-#
-# This workflow runs performance tests on both Wormhole and Blackhole.
-# Can be called via workflow_call or triggered manually via workflow_dispatch.
-# ============================================================================
 
 on:
   workflow_dispatch:
-    inputs:
-      docker_image:
-        description: "Optional: specific Docker image to use (if not provided, one will be built)"
-        required: false
-        type: string
-      test_splits:
-        description: "Number of test groups"
-        required: false
-        default: 5
-        type: number
-      timeout_minutes:
-        description: "Timeout in minutes for tests"
-        required: false
-        default: 240
-        type: number
   workflow_call:
-    inputs:
-      docker_image:
-        description: "The Docker image to use for the container"
-        required: false
-        type: string
-      test_splits:
-        description: "Number of test groups"
-        required: false
-        default: 5
-        type: number
-      timeout_minutes:
-        description: "Timeout in minutes for tests"
-        required: false
-        default: 240
-        type: number
 
 permissions:
   checks: write
   contents: read
   packages: write
 
+env:
+  LLK_PATH: tt_metal/third_party/tt_llk
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  docker:
+  build-images:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
-    if: inputs.docker_image == ''
     secrets: inherit
 
   setup-and-test-wormhole:
     name: "🌀 Performance tests (Wormhole)"
     uses: ./.github/workflows/llk-setup-and-test.yaml
-    needs: docker
+    needs: build-images
     with:
-      docker_image: ${{ inputs.docker_image || needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: ${{ inputs.test_splits }}
+      test_splits: 5
       pytest_markers: "perf"
-      timeout_minutes: ${{ inputs.timeout_minutes }}
+      timeout_minutes: 240
       use_durations: true
 
   setup-and-test-blackhole:
     name: "🕳️ Performance tests (Blackhole)"
     uses: ./.github/workflows/llk-setup-and-test.yaml
-    needs: docker
+    needs: build-images
     with:
-      docker_image: ${{ inputs.docker_image || needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: ${{ inputs.test_splits }}
+      test_splits: 5
       pytest_markers: "perf"
-      timeout_minutes: ${{ inputs.timeout_minutes }}
+      timeout_minutes: 240
       use_durations: true
 
   check-all-green:
     name: "✅ Check all green"
     if: always()
     needs:
+      - build-images
       - setup-and-test-wormhole
       - setup-and-test-blackhole
     runs-on: ubuntu-latest

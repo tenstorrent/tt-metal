@@ -1,18 +1,4 @@
 name: 🛠️ LLK PR Pipeline
-# ============================================================================
-# Standalone PR pipeline for LLK testing.
-# Adapted from tt_llk/.github/workflows/on-pr.yml
-#
-# This workflow runs on workflow_dispatch for manual testing before connecting
-# to the actual PR gate. It detects which LLK directories changed and runs
-# the appropriate tests.
-#
-# Tests run:
-# - Wormhole: when tt_llk_wormhole_b0/** changes
-# - Blackhole: when tt_llk_blackhole/** changes
-# - Quasar: when tt_llk_quasar/** changes (compile only)
-# - Performance: when **/*perf** or **/*profiler** files change
-# ============================================================================
 
 on:
   workflow_dispatch:
@@ -23,6 +9,12 @@ on:
         default: false
         type: boolean
   workflow_call:
+    inputs:
+      run_all_tests:
+        description: "Run all tests regardless of changes"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -33,8 +25,6 @@ env:
   LLK_PATH: tt_metal/third_party/tt_llk
 
 concurrency:
-  # Use github.run_id on main branch (never cancel)
-  # Use github.ref on other branches
   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
@@ -50,9 +40,8 @@ jobs:
       documentation: ${{ steps.filter.outputs.documentation_any_changed }}
       performance: ${{ steps.filter.outputs.performance_any_changed }}
       quasar: ${{ steps.filter.outputs.quasar_any_changed }}
-      any_changed: ${{ steps.filter.outputs.any_changed }}
     steps:
-      - name: Checkout code with submodules
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 200
@@ -85,7 +74,7 @@ jobs:
               - '${{ env.LLK_PATH }}/**/*perf**'
               - '${{ env.LLK_PATH }}/**/*profiler**'
 
-  docker:
+  build-images:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -93,7 +82,7 @@ jobs:
   setup-and-test-wormhole:
     name: "🌀 Perform checks (Wormhole)"
     uses: ./.github/workflows/llk-setup-and-test.yaml
-    needs: [docker, detect-changes]
+    needs: [build-images, detect-changes]
     if: >-
       ${{
         inputs.run_all_tests == true ||
@@ -102,7 +91,7 @@ jobs:
         needs.detect-changes.outputs.github == 'true'
       }}
     with:
-      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
@@ -111,7 +100,7 @@ jobs:
   setup-and-test-blackhole:
     name: "🕳️ Perform checks (Blackhole)"
     uses: ./.github/workflows/llk-setup-and-test.yaml
-    needs: [docker, detect-changes]
+    needs: [build-images, detect-changes]
     if: >-
       ${{
         inputs.run_all_tests == true ||
@@ -120,7 +109,7 @@ jobs:
         needs.detect-changes.outputs.github == 'true'
       }}
     with:
-      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
@@ -129,14 +118,14 @@ jobs:
   build-quasar:
     name: "🌟 Build Quasar tests"
     uses: ./.github/workflows/llk-build-quasar.yaml
-    needs: [docker, detect-changes]
+    needs: [build-images, detect-changes]
     if: >-
       ${{
         inputs.run_all_tests == true ||
         needs.detect-changes.outputs.quasar == 'true'
       }}
     with:
-      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: tt-ubuntu-2204-xlarge-stable
       test_splits: 1
       pytest_markers: "quasar"
@@ -144,7 +133,7 @@ jobs:
   perf-tests:
     name: "⚡ Performance tests (${{ matrix.target }})"
     uses: ./.github/workflows/llk-setup-and-test.yaml
-    needs: [docker, detect-changes]
+    needs: [build-images, detect-changes]
     if: >-
       ${{
         inputs.run_all_tests == true ||
@@ -159,7 +148,7 @@ jobs:
           - target: Blackhole
             runs_on: tt-ubuntu-2204-p150b-stable
     with:
-      docker_image: ${{ needs.docker.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
       runs_on: ${{ matrix.runs_on }}
       test_splits: 5
       pytest_markers: "perf"
@@ -170,7 +159,7 @@ jobs:
     name: "✅ Check all green"
     if: always()
     needs:
-      - docker
+      - build-images
       - setup-and-test-wormhole
       - setup-and-test-blackhole
       - build-quasar
