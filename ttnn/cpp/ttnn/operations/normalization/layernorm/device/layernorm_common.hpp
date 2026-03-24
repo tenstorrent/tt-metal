@@ -16,6 +16,7 @@ namespace ttnn::prim {
 // Creates a program config from shard spec.
 // - If shard_spec has value, creates a sharded config derived from it
 // - Otherwise, returns a default interleaved config
-LayerNormProgramConfig create_layernorm_program_config(const std::optional<tt::tt_metal::ShardSpec>& shard_spec);
+LayerNormProgramConfig create_layernorm_program_config(
+    const std::optional<tt::tt_metal::ShardSpec>& shard_spec, uint32_t tile_height = 32, uint32_t tile_width = 32);
 
 }  // namespace ttnn::prim

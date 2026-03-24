@@ -76,7 +76,7 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-target_precompile_headers(ttnn_core REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_core TTNN::PCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -123,6 +123,13 @@ target_sources(
             cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
+            cpp/ttnn/kernel_lib/cb_helpers.hpp
+            cpp/ttnn/kernel_lib/cb_helpers.inl
+            cpp/ttnn/kernel_lib/dest_helpers.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.inl
+            cpp/ttnn/kernel_lib/untilize_helpers.hpp
+            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -205,6 +212,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation/creation_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/bcast/bcast_nanobind.cpp
@@ -271,8 +279,11 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
@@ -281,6 +292,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -397,7 +410,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/where/where_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/rand/rand_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
@@ -475,9 +487,10 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/reports.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/bfp_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/copy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation/creation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor_accessor_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
@@ -503,7 +516,7 @@ add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-target_precompile_headers(ttnncpp REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnncpp TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(
@@ -598,7 +611,7 @@ target_sources(
             api/ttnn/types.hpp
             api/ttnn/tensor/py_to_tt_tensor.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
-            cpp/ttnn/operations/creation.hpp
+            cpp/ttnn/operations/creation/creation.hpp
             cpp/ttnn/operations/functions.hpp
             cpp/ttnn/operations/compute_throttle_utils.hpp
             cpp/ttnn/operations/cb_utils.hpp
@@ -620,6 +633,8 @@ target_sources(
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -676,8 +691,13 @@ target_link_libraries(
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
+        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
+        TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
+        TTNN::Ops::Experimental::DeepSeekPrefill::Combine
+        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
+        TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -686,7 +706,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
-        TTNN::Ops::Experimental::Where
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Full
         TTNN::Ops::FullLike
@@ -914,12 +933,17 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
@@ -930,7 +954,6 @@ add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
-add_subdirectory(cpp/ttnn/operations/experimental/where)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)

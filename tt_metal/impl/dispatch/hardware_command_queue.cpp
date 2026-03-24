@@ -17,6 +17,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "dispatch_query_manager.hpp"
 #include "device_command.hpp"
+#include "impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -24,7 +25,7 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) :
+HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
     id_(id), manager_(device->sysmem_manager()), device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
@@ -60,7 +61,7 @@ void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
 
-IDevice* HWCommandQueue::device() { return this->device_; }
+Device* HWCommandQueue::device() { return this->device_; }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
     return this->virtual_enqueue_program_dispatch_core_;
@@ -72,7 +73,8 @@ void HWCommandQueue::terminate() {
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB =
+        MetalContext::instance(this->device_->get_context_id()).hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);

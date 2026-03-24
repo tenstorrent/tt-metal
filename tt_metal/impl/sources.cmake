@@ -27,10 +27,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
@@ -85,7 +87,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/dispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_to_flatbuffer.cpp
@@ -108,4 +109,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
 )

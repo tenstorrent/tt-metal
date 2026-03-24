@@ -11,16 +11,16 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
 void bind_moreh_matmul_backward_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_matmul_backward">(
         mod,
-        ttnn::moreh_matmul_backward,
         "Moreh Matmul Backward Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_matmul_backward,
             nb::arg("output_grad"),
             nb::arg("input_a"),
             nb::arg("input_b"),
@@ -29,6 +29,6 @@ void bind_moreh_matmul_backward_operation(nb::module_& mod) {
             nb::arg("input_a_grad") = nb::none(),
             nb::arg("input_b_grad") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

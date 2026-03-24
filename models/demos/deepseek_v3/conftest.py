@@ -204,7 +204,7 @@ def hf_config_short(request, hf_config):
     if max_seq_len_override is not None:
         hf_config_out.max_seq_len = int(max_seq_len_override)
     else:
-        hf_config_out.max_seq_len = 128
+        hf_config_out.max_seq_len = 512
     return hf_config_out
 
 

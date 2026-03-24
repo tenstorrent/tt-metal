@@ -13,12 +13,11 @@ from PIL import Image
 from transformers import CLIPTextModelWithProjection
 
 from conftest import is_galaxy
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
     MAX_SEQUENCE_LENGTH,
     SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     TEXT_ENCODER_2_PROJECTION_DIM,
     determinate_min_batch_size,
@@ -34,6 +33,8 @@ from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompts,
     images,
@@ -81,10 +82,10 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        sdxl_refiner_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -242,7 +243,6 @@ def run_demo_inference(
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -250,7 +250,6 @@ def run_demo_inference(
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
@@ -318,6 +317,8 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_refiner_pipeline_location,
     image_resolution,
     prompt,
     images_or_path,
@@ -338,6 +339,9 @@ def test_demo(
     timesteps,
     sigmas,
 ):
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
+
     if isinstance(images_or_path, str):
         images = [Image.open(images_or_path).convert("RGB")]
     else:
@@ -347,6 +351,8 @@ def test_demo(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_refiner_pipeline_location,
         image_resolution,
         prompt,
         images,

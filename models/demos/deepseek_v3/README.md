@@ -65,7 +65,7 @@ Many unit tests and submodule tests can run on a single Galaxy without requiring
 
 ```bash
 # Run tests directly (no launch script needed)
-pytest models/demos/deepseek_v3/tests/test_mlp.py
+pytest models/demos/deepseek_v3/tests/t3k_compat/test_mlp.py
 pytest models/demos/deepseek_v3/tests/test_attention.py
 ```
 
@@ -81,6 +81,7 @@ MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
 ```
 
 This is useful for development and testing when multi-host resources are not available.
+By default, the demo stops recording output once EOS is produced. Add `--no-stop-at-eos` when you need fixed-length outputs for stress or benchmark-style runs.
 
 ## Demo
 
@@ -121,6 +122,8 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
 - `--cache-dir PATH`: Directory for converted TTNN weights/cache. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
+- `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
+- `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS. Use this for fixed-length stress or perf runs.
 - `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
 - `--generator {bp}`: Select batch-parallel generator implementation (default: `bp`).
 - `--enable-trace`: Enable tracing for the batch-parallel generator decode path.
@@ -160,6 +163,8 @@ Use `--num-prompts` to truncate large prompt sets. For example, there are 256 to
 python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
 ```
 
+Use `--no-stop-at-eos` with the command above if you need fixed-length outputs for stress or benchmarking workflows.
+
 ### Programmatic usage
 
 ```python
@@ -170,6 +175,9 @@ run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3"
 
 # Random-weights smoke test (prompt optional)
 run_demo(None, random_weights=True)
+
+# Fixed-length generation even after EOS
+run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3", stop_at_eos=False)
 ```
 
 ### Performance metrics

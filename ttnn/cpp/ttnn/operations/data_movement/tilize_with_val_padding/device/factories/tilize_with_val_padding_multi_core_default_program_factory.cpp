@@ -72,10 +72,11 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
-    uint32_t page_size = a.buffer()->page_size();
+    uint32_t page_size = a.logical_shape()[-1] * a.element_size();
     uint32_t aligned_page_size = a.buffer()->aligned_page_size();
-    uint32_t size_of_valid_data_in_last_page_in_row = a.buffer()->page_size();
-    if (a.is_sharded()) {
+    uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
+    if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        page_size = a.buffer()->page_size();
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
@@ -110,12 +111,20 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
 
     /** compute
      */
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core, num_tiles_per_row}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
@@ -123,7 +132,9 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
     /* RUNTIME ARGS */
