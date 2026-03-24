@@ -1296,9 +1296,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)in1_B,        // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
+        (std::uint32_t)K * N,                                        // KtNt
+        (std::uint32_t)((in0_B == 1 && in1_B > 1) ? in1_B : in0_B),  // batch
+        (std::uint32_t)bcast_batch,                                  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
