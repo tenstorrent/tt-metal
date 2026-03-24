@@ -500,3 +500,182 @@ class LTXPipeline:
             return video
 
         return latent
+
+    def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Compute audio RoPE using AudioPatchifier time-in-seconds positions."""
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        from ltx_core.model.audio_vae.audio_vae import AudioPatchifier
+
+        a_positions = AudioPatchifier.get_patch_grid_bounds(audio_N_real, 48000, 24)
+        a_padded = torch.zeros(audio_N, 2)
+        a_padded[:audio_N_real] = a_positions
+
+        a_cos, a_sin = precompute_freqs_cis(
+            a_padded.unsqueeze(0),
+            dim=2048,
+            out_dtype=torch.float32,
+            max_pos=self.positional_embedding_max_pos,
+            num_attention_heads=32,
+        )
+        a_cos_h = a_cos.reshape(1, audio_N, 32, 64).permute(0, 2, 1, 3)
+        a_sin_h = a_sin.reshape(1, audio_N, 32, 64).permute(0, 2, 1, 3)
+
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        return (
+            bf16_tensor_2dshard(a_cos_h, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+            bf16_tensor_2dshard(a_sin_h, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+        )
+
+    def _prepare_audio_masks(self, audio_N: int, audio_N_real: int) -> tuple:
+        """Create audio attention mask (for SDPA) and padding mask (for A-to-V)."""
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        if audio_N <= audio_N_real:
+            return None, None
+
+        audio_N_local = audio_N // sp_factor
+        mask = torch.zeros(1, 1, audio_N_local, audio_N)
+        mask[:, :, :, audio_N_real:] = float("-inf")
+        tt_attn_mask = bf16_tensor(mask, device=self.mesh_device)
+
+        pad_mask = torch.ones(1, 1, audio_N, 1)
+        pad_mask[:, :, audio_N_real:, :] = 0.0
+        tt_pad_mask = bf16_tensor(pad_mask, device=self.mesh_device)
+        return tt_attn_mask, tt_pad_mask
+
+    @torch.no_grad()
+    def call_av(
+        self,
+        video_prompt_embeds: torch.Tensor,
+        audio_prompt_embeds: torch.Tensor,
+        neg_video_prompt_embeds: torch.Tensor | None = None,
+        neg_audio_prompt_embeds: torch.Tensor | None = None,
+        num_frames: int = 33,
+        height: int = 512,
+        width: int = 768,
+        num_inference_steps: int = 30,
+        video_cfg_scale: float = 3.0,
+        audio_cfg_scale: float = 7.0,
+        video_stg_scale: float = 1.0,
+        audio_stg_scale: float = 1.0,
+        video_modality_scale: float = 3.0,
+        audio_modality_scale: float = 3.0,
+        rescale_scale: float = 0.7,
+        stg_block: int = 28,
+        seed: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent)."""
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        from ltx_core.types import AudioLatentShape, VideoPixelShape
+
+        B = 1
+        latent_frames = (num_frames - 1) // 8 + 1
+        latent_h, latent_w = height // 32, width // 32
+        video_N = latent_frames * latent_h * latent_w
+
+        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+        als = AudioLatentShape.from_video_pixel_shape(vps)
+        audio_N_real = als.frames
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+
+        logger.info(f"AV: {num_frames}f@{height}x{width}, vN={video_N}, aN={audio_N}(real={audio_N_real})")
+
+        v_cos, v_sin, trans_mat = self._prepare_rope(latent_frames, latent_h, latent_w)
+        a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+        tt_attn_mask, tt_pad_mask = self._prepare_audio_masks(audio_N, audio_N_real)
+
+        tt_vp = self._prepare_prompt(video_prompt_embeds)
+        tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
+        tt_nv = self._prepare_prompt(neg_video_prompt_embeds) if neg_video_prompt_embeds is not None else None
+        tt_na = (
+            bf16_tensor(neg_audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
+            if neg_audio_prompt_embeds is not None
+            else None
+        )
+
+        sigmas = compute_sigmas(steps=num_inference_steps)
+        if seed is not None:
+            torch.manual_seed(seed)
+        video_lat = torch.randn(B, video_N, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+        audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+        audio_lat = torch.zeros(B, audio_N, self.in_channels)
+        audio_lat[:, :audio_N_real, :] = audio_lat_real
+
+        do_cfg = video_cfg_scale > 1.0 or audio_cfg_scale > 1.0
+        do_stg = video_stg_scale != 0.0 or audio_stg_scale != 0.0
+        do_mod = video_modality_scale != 1.0 or audio_modality_scale != 1.0
+
+        for step_idx in range(num_inference_steps):
+            sigma = sigmas[step_idx].item()
+            sigma_next = sigmas[step_idx + 1].item()
+
+            def _run(vp, ap, skip_ca=False, skip_sa_blocks=None):
+                v, a = self.transformer.inner_step(
+                    video_1BNI_torch=video_lat.unsqueeze(0),
+                    video_prompt_1BLP=vp,
+                    video_rope_cos=v_cos,
+                    video_rope_sin=v_sin,
+                    video_N=video_N,
+                    audio_1BNI_torch=audio_lat.unsqueeze(0),
+                    audio_prompt_1BLP=ap,
+                    audio_rope_cos=a_cos,
+                    audio_rope_sin=a_sin,
+                    audio_N=audio_N,
+                    trans_mat=trans_mat,
+                    timestep_torch=torch.tensor([sigma]),
+                    skip_cross_attn=skip_ca,
+                    skip_self_attn_blocks=skip_sa_blocks,
+                    audio_attn_mask=tt_attn_mask,
+                    audio_padding_mask=tt_pad_mask,
+                )
+                vv = LTXTransformerModel.device_to_host(v).squeeze(0)
+                av = LTXTransformerModel.device_to_host(a).squeeze(0)
+                vd = (video_lat.bfloat16().float() - vv.float() * sigma).bfloat16()
+                ad = (audio_lat.bfloat16().float() - av.float() * sigma).bfloat16()
+                return vd, ad
+
+            v_den, a_den = _run(tt_vp, tt_ap)
+
+            v_unc = a_unc = v_ptb = a_ptb = v_iso = a_iso = 0.0
+            if do_cfg:
+                v_unc, a_unc = _run(tt_nv, tt_na)
+            if do_stg:
+                v_ptb, a_ptb = _run(tt_vp, tt_ap, skip_sa_blocks=[stg_block])
+            if do_mod:
+                v_iso, a_iso = _run(tt_vp, tt_ap, skip_ca=True)
+
+            if do_cfg or do_stg or do_mod:
+                for label, den, unc, ptb, iso, cfg_s, stg_s, mod_s in [
+                    ("v", v_den, v_unc, v_ptb, v_iso, video_cfg_scale, video_stg_scale, video_modality_scale),
+                    ("a", a_den, a_unc, a_ptb, a_iso, audio_cfg_scale, audio_stg_scale, audio_modality_scale),
+                ]:
+                    c = den.float()
+                    pred = c
+                    if do_cfg and isinstance(unc, torch.Tensor):
+                        pred = pred + (cfg_s - 1) * (c - unc.float())
+                    if do_stg and isinstance(ptb, torch.Tensor):
+                        pred = pred + stg_s * (c - ptb.float())
+                    if do_mod and isinstance(iso, torch.Tensor):
+                        pred = pred + (mod_s - 1) * (c - iso.float())
+                    if rescale_scale != 0:
+                        pred = pred * (rescale_scale * (c.std() / pred.std()) + (1 - rescale_scale))
+                    if label == "v":
+                        v_den = pred.bfloat16()
+                    else:
+                        a_den = pred.bfloat16()
+
+            video_lat = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
+            a_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
+            audio_lat = torch.zeros_like(audio_lat)
+            audio_lat[:, :audio_N_real, :] = a_new[:, :audio_N_real, :]
+
+            if (step_idx + 1) % 5 == 0 or step_idx == 0:
+                logger.info(f"Step {step_idx+1}/{num_inference_steps}: σ {sigma:.4f}→{sigma_next:.4f}")
+
+        logger.info(f"AV done. video: {video_lat.shape}, audio: ({B},{audio_N_real},{self.in_channels})")
+        return video_lat, audio_lat[:, :audio_N_real, :]
