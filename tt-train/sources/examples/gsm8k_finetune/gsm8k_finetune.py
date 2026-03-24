@@ -347,19 +347,23 @@ def train():
     Main training loop for fine-tuning on GSM8K dataset.
     """
     yaml_config = load_config(CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs")
-    model_config = load_config(yaml_config["training_config"]["model_config"])
 
     override_config_path = os.environ.get(
         "TT_TRAIN_OVERRIDES_PATH",
         f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml",
     )
 
+    override_config = None
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
 
         override_config = load_config(override_config_path)
-
         yaml_config = yaml_deep_update(yaml_config, override_config)
+
+    # Load model_config after applying overrides so that a model_config path change
+    # (e.g. switching from tinyllama to gpt2) is reflected before the file is read.
+    model_config = load_config(yaml_config["training_config"]["model_config"])
+    if override_config is not None:
         model_config = yaml_deep_update(model_config, override_config)
 
         # pretty output of yaml config
