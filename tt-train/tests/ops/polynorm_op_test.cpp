@@ -33,6 +33,10 @@ protected:
 };
 
 namespace {
+constexpr float kForwardRtol = 2.5e-2F;
+constexpr float kForwardAtol = 2.5e-2F;
+constexpr float kBackwardRtol = 2.0e-2F;
+constexpr float kBackwardAtol = 2.0e-2F;
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -234,7 +238,7 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     EXPECT_EQ(out_xt.shape(), out_reference_xt.shape());
     EXPECT_TRUE(xt::all(xt::isfinite(out_xt)));
     EXPECT_TRUE(xt::all(xt::isfinite(out_reference_xt)));
-    expect_allclose_with_metrics(out_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_xt_reference");
+    expect_allclose_with_metrics(out_xt, out_reference_xt, kForwardRtol, kForwardAtol, "fused_forward_vs_xt_reference");
 
     auto target = autograd::create_tensor(core::zeros_like(out->get_value()));
     auto mse = ops::mse_loss(out, target);
@@ -254,9 +258,9 @@ void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float
     EXPECT_TRUE(xt::all(xt::isfinite(grad_x)));
     EXPECT_TRUE(xt::all(xt::isfinite(grad_w)));
     EXPECT_TRUE(xt::all(xt::isfinite(grad_b)));
-    expect_allclose_with_metrics(grad_x, grad_x_ref, 1.0e-1F, 1.0e-1F, "backward_grad_x_vs_xt_reference");
-    expect_allclose_with_metrics(grad_w, grad_w_ref, 1.0e-1F, 1.0e-1F, "backward_grad_w_vs_xt_reference");
-    expect_allclose_with_metrics(grad_b, grad_b_ref, 1.0e-1F, 1.0e-1F, "backward_grad_b_vs_xt_reference");
+    expect_allclose_with_metrics(grad_x, grad_x_ref, kBackwardRtol, kBackwardAtol, "backward_grad_x_vs_xt_reference");
+    expect_allclose_with_metrics(grad_w, grad_w_ref, kBackwardRtol, kBackwardAtol, "backward_grad_w_vs_xt_reference");
+    expect_allclose_with_metrics(grad_b, grad_b_ref, kBackwardRtol, kBackwardAtol, "backward_grad_b_vs_xt_reference");
 
     autograd::ctx().reset_graph();
 }
