@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -o pipefail
-
 # Function to display help
 show_help() {
     cat << EOF
