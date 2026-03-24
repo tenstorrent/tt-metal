@@ -45,6 +45,11 @@ on:
         required: false
         default: "WARNING"
         type: string
+      artifact_prefix:
+        description: "Prefix for artifact names to avoid conflicts when multiple workflows run in the same workflow run"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -99,6 +104,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v12
         continue-on-error: true
         with:
+          repo: tenstorrent/tt-llk
           workflow: collect-test-durations.yml
           workflow_conclusion: success
           branch: main
@@ -188,22 +194,22 @@ jobs:
         uses: actions/upload-artifact@v4
         if: ${{ inputs.coverage }}
         with:
-          name: llk-code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          name: ${{ inputs.artifact_prefix }}llk-code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: ${{ env.LLK_PATH }}/code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.info
 
-      # Step 5: Upload performance data
+      # Step 5: Upload performance data (only if zip was actually created)
       - name: Upload performance data
         uses: actions/upload-artifact@v4
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('${{ env.LLK_PATH }}/tests/python_tests/perf_data-*.zip') != ''
+        if: always() && hashFiles(format('{0}/tests/python_tests/perf_data-{1}-{2}.zip', env.LLK_PATH, env.CHIP_ARCH, matrix.test_group)) != ''
         with:
-          name: llk-perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          name: ${{ inputs.artifact_prefix }}llk-perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: llk-test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          name: ${{ inputs.artifact_prefix }}llk-test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
@@ -212,9 +218,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: >-
-            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
-                && 'llk-perf-' || 'llk-' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          name: ${{ inputs.artifact_prefix }}llk-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
 
       # Step 7: Publish the test results
@@ -253,7 +257,7 @@ jobs:
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: llk-code-coverage-${{ env.CHIP_ARCH }}*
+          pattern: ${{ inputs.artifact_prefix }}llk-code-coverage-${{ env.CHIP_ARCH }}*
           path: ./merged_coverage_files
       - name: Unzip artefacts, merge coverage data, and generate HTML report
         shell: bash
@@ -275,7 +279,7 @@ jobs:
       - name: Upload merged coverage .info file
         uses: actions/upload-artifact@v4
         with:
-          name: llk-code_coverage_for_${{ env.CHIP_ARCH }}
+          name: ${{ inputs.artifact_prefix }}llk-code_coverage_for_${{ env.CHIP_ARCH }}
           path: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
 
       # NOTE: Codecov upload skipped for now - can be added later
@@ -287,4 +291,5 @@ jobs:
       #     files: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
       #     name: coverage-report-${{ env.CHIP_ARCH }}
       #     verbose: true
+
 
