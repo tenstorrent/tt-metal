@@ -58,19 +58,38 @@ def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     return ttnn.multiply(x_normed, scale)
 
 
-def _get_sdpa_program_config(device, seq_len):
+def _get_sdpa_program_config(device, seq_len, q_seq_len=None):
     """Build SDPAProgramConfig with chunk sizes tuned to sequence length.
 
-    Follows the same pattern as tt_transformers model_config.py:
-      - T >= 2048 -> q/k chunk = 256
-      - T < 2048  -> q/k chunk = 64
+    For decode with pre-allocated cache (q_seq_len=1), use small chunks.
+    For segmented prefill (q_seq_len < seq_len, both > 1), use small chunks.
+    For regular prefill, scale chunks based on seq_len.
     """
     grid_size = device.compute_with_storage_grid_size()
-    q_chunk = 256 if seq_len >= 2048 else 64
+    if q_seq_len is not None and q_seq_len <= 1 and seq_len >= 512:
+        # Decode with large pre-allocated cache: use small chunks to avoid L1 OOM
+        q_chunk = 32
+        k_chunk = 64
+    elif q_seq_len is not None and q_seq_len > 1 and seq_len > q_seq_len:
+        # Segmented prefill: Q shorter than KV, use small chunks to avoid L1 OOM
+        q_chunk = 64
+        k_chunk = 64
+    elif seq_len >= 8192:
+        q_chunk = 64
+        k_chunk = 64
+    elif seq_len >= 4096:
+        q_chunk = 128
+        k_chunk = 128
+    elif seq_len >= 2048:
+        q_chunk = 256
+        k_chunk = 256
+    else:
+        q_chunk = 64
+        k_chunk = 64
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=q_chunk,
-        k_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
         exp_approx_mode=False,
     )
 
@@ -101,14 +120,28 @@ def gated_attention_forward_ttnn(
     device,
     norm_eps=1e-6,
     use_optimized_concat=False,
+    past_key=None,
+    past_value=None,
+    compute_kernel_config=None,
+    kv_cache_key=None,
+    kv_cache_value=None,
+    cache_pos=None,
+    cache_len=None,
+    memory_config=None,
+    norm_weights_pre_offset=False,
+    # Trace-compatible mode: save new K/V to buffers, write to staging pos, use full cache + mask
+    trace_new_k_buf=None,
+    trace_new_v_buf=None,
+    trace_attn_mask=None,
+    trace_kv_pad_zeros=None,
+    trace_staging_pos=None,
 ):
     """
-    TTNN forward pass for Gated Attention.
+    TTNN forward pass for Gated Attention with KV cache support.
 
     Uses ttnn.transformer.scaled_dot_product_attention (FlashAttention-2 kernel)
     with SDPAProgramConfig for tiling and WormholeComputeKernelConfig for precision.
-    The fused kernel handles causal masking and GQA (num_q_heads != num_kv_heads)
-    internally, avoiding explicit repeat_kv and O(T^2) attention-matrix allocation.
+    The fused kernel handles GQA (num_q_heads != num_kv_heads) internally.
 
     Args:
         hidden_states: ttnn.Tensor [B, T, hidden_size]
@@ -122,52 +155,156 @@ def gated_attention_forward_ttnn(
         device: ttnn device
         norm_eps: RMSNorm epsilon
         use_optimized_concat: if True, use ttnn.transformer.concatenate_heads
-                              instead of ttnn.transpose + ttnn.reshape
+        past_key: ttnn.Tensor [B, H_kv, S_past, D] or None
+        past_value: ttnn.Tensor [B, H_kv, S_past, D] or None
 
     Returns:
         output: ttnn.Tensor [B, T, hidden_size]
+        new_key: ttnn.Tensor [B, H_kv, S_total, D] updated KV cache key
+        new_value: ttnn.Tensor [B, H_kv, S_total, D] updated KV cache value
     """
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
 
     # Q projection: 2x wide
-    qg = ttnn.linear(hidden_states, q_proj_weight)
+    ckc = compute_kernel_config
+    qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
     qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
     # Split into query and gate
     query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+    ttnn.deallocate(qg)
     gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
     # Q norm + transpose to [B, H_q, T, D]
-    query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+    if norm_weights_pre_offset:
+        query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+    else:
+        query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
     query_states = ttnn.transpose(query_states, 1, 2)
 
     # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight)
+    key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
     key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
-    key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+    if norm_weights_pre_offset:
+        key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
+    else:
+        key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
     key_states = ttnn.transpose(key_states, 1, 2)
 
     # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight)
+    value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
 
     # RoPE
     query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
+    # KV cache handling
+    if trace_new_k_buf is not None and trace_attn_mask is not None:
+        # Trace-compatible mode: save new K/V to buffers AND write to staging position in cache.
+        # The staging position (always unmasked) ensures SDPA sees the current token's K/V.
+        # Between replays, host code copies staging data to the actual position.
+        ttnn.copy(key_states, trace_new_k_buf)
+        ttnn.copy(value_states, trace_new_v_buf)
+        # Write current K/V to staging position in cache (baked in trace at fixed position)
+        if trace_kv_pad_zeros is not None and trace_staging_pos is not None:
+            k_padded = ttnn.concat([key_states, trace_kv_pad_zeros], dim=2)
+            v_padded = ttnn.concat([value_states, trace_kv_pad_zeros], dim=2)
+            ttnn.update_cache(kv_cache_key, k_padded, update_idx=trace_staging_pos)
+            ttnn.update_cache(kv_cache_value, v_padded, update_idx=trace_staging_pos)
+            ttnn.deallocate(k_padded)
+            ttnn.deallocate(v_padded)
+        # Attend to full pre-allocated cache using mask to hide invalid positions
+        key_states = kv_cache_key
+        value_states = kv_cache_value
+        new_key = kv_cache_key
+        new_value = kv_cache_value
+        S_total = kv_cache_key.shape[2]
+        is_causal = False
+        segmented_attn_mask = None
+    elif kv_cache_key is not None and cache_pos is not None:
+        # Pre-allocated KV cache mode: write new K/V at cache_pos, read 0..cache_pos+T
+        # Write new tokens into cache at position cache_pos
+        # kv_cache_key shape: [B, H_kv, max_seq_len, D]
+        ttnn.copy(key_states, kv_cache_key[:, :, cache_pos : cache_pos + T, :])
+        ttnn.copy(value_states, kv_cache_value[:, :, cache_pos : cache_pos + T, :])
+
+        # Read valid portion of cache for attention
+        valid_len = cache_pos + T
+        key_states = kv_cache_key[:, :, :valid_len, :]
+        key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
+        value_states = kv_cache_value[:, :, :valid_len, :]
+        value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
+
+        new_key = kv_cache_key
+        new_value = kv_cache_value
+        S_total = valid_len
+        is_causal = T > 1  # Only causal during prefill
+        segmented_attn_mask = None
+    elif past_key is not None:
+        # Legacy concat mode — used during segmented prefill
+        past_len = past_key.shape[2]
+        key_states = ttnn.concat([past_key, key_states], dim=2)
+        value_states = ttnn.concat([past_value, value_states], dim=2)
+        new_key = key_states
+        new_value = value_states
+        S_total = key_states.shape[2]
+        if T > 1 and S_total > T:
+            # Segmented prefill: Q_len != KV_len, need explicit causal mask
+            # Each query position i (in current segment) can attend to:
+            #   positions 0..past_len+i (all past tokens + tokens up to i in current segment)
+            import torch as _torch
+
+            row_idx = _torch.arange(T).unsqueeze(1)  # [T, 1]
+            col_idx = _torch.arange(S_total).unsqueeze(0)  # [1, S_total]
+            # Mask future positions: col > past_len + row means future token
+            mask = (
+                _torch.where(
+                    col_idx > past_len + row_idx,
+                    _torch.tensor(-1e4, dtype=_torch.bfloat16),
+                    _torch.tensor(0.0, dtype=_torch.bfloat16),
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )  # [1, 1, T, S_total]
+            segmented_attn_mask = ttnn.from_torch(
+                mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            is_causal = False
+        else:
+            segmented_attn_mask = None
+            is_causal = False
+    else:
+        # First call (prefill, no cache yet)
+        new_key = key_states
+        new_value = value_states
+        S_total = key_states.shape[2]
+        is_causal = True
+        segmented_attn_mask = None
+
     # Fused scaled dot-product attention
-    # SDPAProgramConfig sets chunk tiling; WormholeComputeKernelConfig sets fp32 accum.
-    # The kernel handles GQA (num_q_heads != num_kv_heads) and causal masking internally.
+    if trace_new_k_buf is not None:
+        _attn_mask = trace_attn_mask
+    elif past_key is not None and segmented_attn_mask is not None:
+        _attn_mask = segmented_attn_mask
+    else:
+        _attn_mask = None
     attn_output = ttnn.transformer.scaled_dot_product_attention(
         query_states,
         key_states,
         value_states,
-        is_causal=True,
+        attn_mask=_attn_mask,
+        is_causal=is_causal,
         scale=scaling,
-        program_config=_get_sdpa_program_config(device, T),
+        program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
         compute_kernel_config=_get_sdpa_compute_kernel_config(),
     )
+    ttnn.deallocate(query_states)
 
     # Convert from [B, H, T, D] back to [B, T, H*D]
     if use_optimized_concat:
@@ -179,8 +316,9 @@ def gated_attention_forward_ttnn(
     # Apply sigmoid gate
     gate = ttnn.sigmoid(gate)
     attn_output = ttnn.multiply(attn_output, gate)
+    ttnn.deallocate(gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight)
+    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
 
-    return attn_output
+    return attn_output, new_key, new_value

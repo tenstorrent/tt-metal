@@ -312,10 +312,11 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
 
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     """L2 normalization along a given dimension."""
-    x_sq = ttnn.multiply(x, x, memory_config=None)
-    norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=None)
-    inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=None), memory_config=None)
-    return ttnn.multiply(x, inv_norm, memory_config=None)
+    mc = ttnn.L1_MEMORY_CONFIG
+    x_sq = ttnn.multiply(x, x, memory_config=mc)
+    norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=mc)
+    inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=mc), memory_config=mc)
+    return ttnn.multiply(x, inv_norm, memory_config=mc)
 
 
 def fused_decay_and_write_ttnn(
@@ -342,10 +343,10 @@ def fused_decay_and_write_ttnn(
     # decay: [B, H] -> [B, H, 1, 1]
     # decay_t is already exp(g_t); keep recurrent path in BF16.
     decay = ttnn.typecast(decay_t, ttnn.bfloat16)
-    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=None)
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # beta: [B, H] -> [B, H, 1, 1]
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=None)
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # k_t: [B, H, K] -> [B, H, K, 1]
     k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=None)
@@ -468,6 +469,147 @@ def recurrent_delta_rule_step_ttnn(
     return o_t, h
 
 
+def recurrent_gated_delta_rule_decode_ttnn(
+    q,
+    k,
+    v,
+    beta,
+    g,
+    scale=None,
+    initial_state=None,
+    device=None,
+):
+    """
+    Optimized single-token (T=1) decode path for gated delta rule.
+
+    Eliminates overhead from the general recurrent path:
+    - No loop (T is always 1)
+    - No slicing/concat for timesteps
+    - Reduced transpose/typecast operations
+    - Keeps state in current memory config
+
+    Args:
+        q: [B, 1, H, K]
+        k: [B, 1, H, K]
+        v: [B, 1, H, V]
+        beta: [B, 1, H]
+        g: [B, 1, H]
+        scale: float
+        initial_state: [B, H, K, V]
+        device: ttnn device
+
+    Returns:
+        output: [B, 1, H, V]
+        final_state: [B, H, K, V]
+    """
+    B = q.shape[0]
+    H = q.shape[2]
+    K = q.shape[3]
+    V = v.shape[3]
+
+    # L2 norm
+    q = l2_norm_ttnn(q, dim=-1)
+    k = l2_norm_ttnn(k, dim=-1)
+
+    if scale is None:
+        scale = K**-0.5
+    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Squeeze T=1 dimension and transpose to [B, H, K] / [B, H, V]
+    q_t = ttnn.reshape(q, [B, H, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_t = ttnn.reshape(k, [B, H, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_t = ttnn.reshape(v, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
+    g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Compute decay
+    decay_t = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Ensure state is ready
+    h = initial_state
+    if h is None:
+        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.bfloat16, memory_config=None)
+
+    # Run single recurrent step
+    # h is always TILE_LAYOUT: either from fused_decay_and_write_ttnn, ttnn.zeros with TILE_LAYOUT,
+    # or _init_recurrent_state which uses ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT)
+    h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+
+    read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    read_query_prog_cfg = None
+    if device is not None:
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+        except Exception:
+            pass
+
+    # Read from state: v_read = k @ h
+    q_t = ttnn.to_layout(q_t, ttnn.TILE_LAYOUT)
+    k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT)
+    v_t = ttnn.to_layout(v_t, ttnn.TILE_LAYOUT)
+
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
+    v_read = ttnn.matmul(
+        k_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
+    )
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=None)
+
+    # Delta and state update
+    delta = ttnn.subtract(v_t, v_read, memory_config=None)
+    h = fused_decay_and_write_ttnn(h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device)
+
+    # Query state: o = q @ h
+    q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    q_row = ttnn.to_layout(q_row, ttnn.TILE_LAYOUT)
+    o_t = ttnn.matmul(
+        q_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
+    )
+
+    # Reshape output to [B, 1, H, V]
+    o = ttnn.reshape(o_t, [B, 1, H, V], memory_config=None)
+
+    return o, h
+
+
+def recurrent_gated_delta_rule_decode_inplace_ttnn(
+    q,
+    k,
+    v,
+    beta,
+    g,
+    state_buffer,
+    scale=None,
+    device=None,
+):
+    """Like recurrent_gated_delta_rule_decode_ttnn but writes state back to pre-allocated buffer.
+
+    For trace capture: state_buffer is a pre-allocated [B, H, K, V] tensor.
+    After computing the new state, we copy it back to state_buffer so the
+    trace replay reads the correct address on the next iteration.
+    """
+    o, new_h = recurrent_gated_delta_rule_decode_ttnn(
+        q=q,
+        k=k,
+        v=v,
+        beta=beta,
+        g=g,
+        scale=scale,
+        initial_state=state_buffer,
+        device=device,
+    )
+    # Copy new state back to pre-allocated buffer for trace consistency
+    ttnn.copy(new_h, state_buffer)
+    ttnn.deallocate(new_h)
+    return o, state_buffer
+
+
 def recurrent_gated_delta_rule_ttnn(
     q,
     k,
@@ -556,6 +698,30 @@ def recurrent_gated_delta_rule_ttnn(
     return o, h
 
 
+def create_chunk_masks(chunk_size, device):
+    """Pre-create all mask matrices needed by chunk_gated_delta_rule_ttnn.
+
+    Call once during model init and pass as `cached_masks` to avoid
+    recreating these constant matrices on every forward call (24 layers × every prefill).
+    """
+    triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=None)
+    tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=None)
+    strict_lower = _create_strict_lower_tril_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=None)
+    eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=None)
+    lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    return {
+        "triu_ones": triu_ones,
+        "tril_mask": tril_mask,
+        "strict_lower": strict_lower,
+        "eye": eye,
+        "lower_causal": lower_causal,
+    }
+
+
 def chunk_gated_delta_rule_ttnn(
     q,
     k,
@@ -566,6 +732,7 @@ def chunk_gated_delta_rule_ttnn(
     scale=None,
     initial_state=None,
     device=None,
+    cached_masks=None,
 ):
     """
     Chunked gated delta rule using TTNN ops. Used for prefill.
@@ -717,8 +884,15 @@ def chunk_gated_delta_rule_ttnn(
     v_beta_c = ttnn.reshape(v_beta, [batch, chunk_size, V], memory_config=None)
     g_c = ttnn.reshape(g, [batch, chunk_size], memory_config=None)
 
-    triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
-    triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=None)
+    # Use cached masks if available, otherwise create them
+    if cached_masks is not None:
+        triu_ones = cached_masks["triu_ones"]
+        tril_mask = cached_masks["tril_mask"]
+    else:
+        triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+        triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=None)
+        tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+        tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=None)
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
     decay = ttnn.reshape(
@@ -727,8 +901,20 @@ def chunk_gated_delta_rule_ttnn(
         memory_config=None,
     )
 
+    # Per-chunk normalization: subtract first element so cumsum starts at 0.
+    # This keeps values in [-decay_range, 0] instead of starting at a large negative.
+    # Used for Site 1 (L_diff mask) and Site 5 (decay differences) where offset cancels.
+    # Sites 2 and 3 use decay_raw (un-normalized) since they need absolute decay
+    # values for correct state interaction (exp(raw_decay) scales against inter-chunk state S).
+    decay_offset = decay[:, 0:1]  # [batch, 1]
+    decay_raw = decay  # save raw cumsum before normalization
+    decay = ttnn.subtract(decay_raw, decay_offset, memory_config=None)  # normalized: starts at 0
+
+    # Site 2: key scaling needs raw (absolute) decay for state correction term.
+    # k_cumdecay = R @ (k_beta * decay_exp) feeds into v_prime = k_cumdecay @ S,
+    # and S carries absolute inter-chunk decay. Using normalized here would be off by exp(offset).
     decay_exp = ttnn.reshape(
-        ttnn.exp(decay, memory_config=None),
+        ttnn.exp(ttnn.clip(decay_raw, min=-20.0, max=0.0), memory_config=None),
         [batch, chunk_size, 1],
         memory_config=None,
     )
@@ -737,11 +923,10 @@ def chunk_gated_delta_rule_ttnn(
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=None)
     L_diff = ttnn.subtract(decay_col, decay_row, memory_config=None)
 
-    tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
-    tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=None)
-
+    # Clamp before exp to prevent overflow/underflow
     L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=None)
-    L_mask = ttnn.multiply(ttnn.exp(L_diff_masked, memory_config=None), tril_mask, memory_config=None)
+    L_diff_clamped = ttnn.clip(L_diff_masked, min=-20.0, max=0.0)
+    L_mask = ttnn.multiply(ttnn.exp(L_diff_clamped, memory_config=None), tril_mask, memory_config=None)
 
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=None)
     prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
@@ -751,12 +936,15 @@ def chunk_gated_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=None)
 
     M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=None), memory_config=None)
-    strict_lower = _create_strict_lower_tril_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
-    strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=None)
+    if cached_masks is not None:
+        strict_lower = cached_masks["strict_lower"]
+        eye = cached_masks["eye"]
+    else:
+        strict_lower = _create_strict_lower_tril_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+        strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=None)
+        eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+        eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=None)
     M = ttnn.multiply(M, strict_lower, memory_config=None)
-
-    eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
-    eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=None)
 
     R = ttnn.add(M, eye, memory_config=None)
     P = ttnn.matmul(M, M, memory_config=None)
@@ -799,14 +987,23 @@ def chunk_gated_delta_rule_ttnn(
     L_mask_4d = ttnn.reshape(L_mask, [BH, num_chunks, chunk_size, chunk_size], memory_config=None)
     L_mask_4d = ttnn.to_layout(L_mask_4d, ttnn.TILE_LAYOUT, memory_config=None)
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size], memory_config=None)
+    decay_raw_3d = ttnn.reshape(decay_raw, [BH, num_chunks, chunk_size], memory_config=None)
 
-    decay_last = ttnn.reshape(
+    decay_last_raw = ttnn.reshape(
         ttnn.sum(g_c, dim=-1, memory_config=None),
         [BH, num_chunks, 1],
         memory_config=None,
     )
+    # decay_last in normalized coordinates = last value of normalized decay per chunk
+    # = sum(g) - offset = decay_last_raw - g[0] per chunk
+    # We compute this from the normalized decay's last element
+    decay_last_normalized = decay_3d[:, :, -1:]  # [BH, num_chunks, 1] - last element per chunk
+    decay_last_normalized = ttnn.reshape(decay_last_normalized, [BH, num_chunks, 1], memory_config=None)
 
-    lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+    if cached_masks is not None:
+        lower_causal = cached_masks["lower_causal"]
+    else:
+        lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
 
     S = ttnn.zeros([BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=None)
     if initial_state is not None:
@@ -845,8 +1042,11 @@ def chunk_gated_delta_rule_ttnn(
             v_prime = ttnn.matmul(k_cum_i, S, memory_config=None)
         v_new = ttnn.subtract(v_i, v_prime, memory_config=None)
 
+        # Site 3: query scaling needs raw (absolute) decay for inter-chunk state query.
+        # q_decay @ S must use absolute decay since S carries absolute inter-chunk decay.
+        decay_i_raw = decay_raw_3d[:, i]
         decay_i_exp = ttnn.reshape(
-            ttnn.exp(decay_i, memory_config=None),
+            ttnn.exp(ttnn.clip(decay_i_raw, min=-20.0, max=0.0), memory_config=None),
             [BH, chunk_size, 1],
             memory_config=None,
         )
@@ -864,20 +1064,24 @@ def chunk_gated_delta_rule_ttnn(
         o_i = ttnn.add(o_inter, intra_v, memory_config=None)
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=None))
 
-        dl_i = decay_last[:, i]
-        dl_i_exp = ttnn.exp(dl_i, memory_config=None)
+        # Site 4: inter-chunk state decay uses raw decay_last (independent of normalization)
+        dl_i_raw = decay_last_raw[:, i]
+        dl_i_exp = ttnn.exp(ttnn.clip(dl_i_raw, min=-20.0, max=0.0), memory_config=None)
         S = ttnn.multiply(
             S,
             ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=None),
             memory_config=None,
         )
 
+        # Site 5: key scaling uses normalized decay_last and normalized decay_i
+        # decay_diff = how much decay from position to end of chunk (in normalized coords)
+        dl_i_norm = decay_last_normalized[:, i]
         decay_diff = ttnn.subtract(
-            ttnn.reshape(dl_i, [BH, 1], memory_config=None),
-            decay_i,
+            ttnn.reshape(dl_i_norm, [BH, 1], memory_config=None),
+            decay_i,  # normalized
             memory_config=None,
         )
-        decay_diff_exp = ttnn.exp(decay_diff, memory_config=None)
+        decay_diff_exp = ttnn.exp(ttnn.clip(decay_diff, min=-20.0, max=0.0), memory_config=None)
         k_decay = ttnn.multiply(
             k_i,
             ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=None),
@@ -891,12 +1095,13 @@ def chunk_gated_delta_rule_ttnn(
         S = ttnn.add(S, state_update, memory_config=None)
 
     o = ttnn.concat(outputs, dim=1, memory_config=None)
+    # o shape: [BH, num_chunks, chunk_size, V]
+    # First merge chunk dims to get [BH, L, V], then trim padding if needed
+    o = ttnn.reshape(o, [BH, L, V], memory_config=None)
 
     if pad_len > 0:
-        o = o[:, :T]
-        o = ttnn.reshape(o, [BH, T, V], memory_config=None)
-    else:
-        o = ttnn.reshape(o, [BH, L, V], memory_config=None)
+        o = o[:, :T, :]
+        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=None)
 
     o = ttnn.reshape(o, [B, H, T, V], memory_config=None)
     o = ttnn.transpose(o, 1, 2, memory_config=None)
