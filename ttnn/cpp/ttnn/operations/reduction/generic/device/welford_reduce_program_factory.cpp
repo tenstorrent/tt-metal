@@ -41,6 +41,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     uint32_t HtWt = Ht * Wt;
 
     const bool reduce_w = (operation_attributes.reduce_dim == ReduceOpDim::W);
+    const bool reduce_hw = (operation_attributes.reduce_dim == ReduceOpDim::HW);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tensor_arg.device()->arch(), operation_attributes.compute_kernel_config);
@@ -79,9 +80,12 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     // - H-reduce: Similar to above, but for the H dimension. Work is split by columns of
     //   the tile grid (NC * Wt work units).
     //   Each core processes one or more complete columns of Ht tiles → 1 output tile per column.
+    //
+    // - HW-reduce: Work is split by NC slices (NC work units).
+    //   Each core processes one or more complete HW slices (Ht * Wt tiles each) → 1 output tile per slice.
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_work_units = reduce_w ? NC * Ht : NC * Wt;
+    auto num_work_units = reduce_w ? NC * Ht : (reduce_hw ? NC : NC * Wt);
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
@@ -155,6 +159,19 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::CreateCircularBuffer(program, all_cores, scaled_cb_config);
     }
 
+    // cb_partial (c_21): HW-reduce only -- holds per-column mean+var tile pairs
+    // from the compute kernel, consumed by the writer kernel.
+    // Uses Float32 format to preserve precision from DST accumulators.
+    if (reduce_hw) {
+        CBIndex partial_cb_index = CBIndex::c_21;
+        tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
+        uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
+        tt_metal::CircularBufferConfig partial_cb_config =
+            tt_metal::CircularBufferConfig(2 * partial_single_tile_size, {{partial_cb_index, partial_cb_data_format}})
+                .set_page_size(partial_cb_index, partial_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, partial_cb_config);
+    }
+
     bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
     uint32_t packed_scalar_value = pack_two_bfloat16_into_uint32({bfloat_scalar_value, bfloat_scalar_value});
 
@@ -177,7 +194,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
     } else {
-        // H-reduce: column-partitioned reader reads tiles column by column
+        // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
+        // For HW-reduce, num_cols = Wt * NC_per_core to read all columns for all assigned NC slices.
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, /*row_chunk=*/1, packed_scalar_value};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
@@ -188,33 +206,65 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // --- Writer kernel (same for both paths) ---
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-
-    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
-
-    // --- Compute kernel ---
+    // --- Compute + Writer kernels ---
     bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
 
-    // W-reduce compile args: {Wt, W, tile_width, do_scale, correction, is_std}
-    // H-reduce compile args: {Ht, H, tile_height, do_scale, correction, is_std}
-    std::vector<uint32_t> compute_compile_args = {
-        reduce_w ? Wt : Ht,
-        reduce_w ? W : H,
-        reduce_w ? tile_width : tile_height,
-        static_cast<uint32_t>(do_scale),
-        static_cast<uint32_t>(operation_attributes.correction),
-        static_cast<uint32_t>(is_std),
-    };
+    tt_metal::KernelHandle writer_kernel_id;
+    if (reduce_hw) {
+        // HW-reduce: custom writer that combines partial stats and constructs output tile.
+        std::vector<uint32_t> writer_compile_time_args = {
+            Wt,
+            W,
+            tile_width,
+            H,
+            static_cast<uint32_t>(operation_attributes.correction),
+            static_cast<uint32_t>(is_std)};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        writer_kernel_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "writer_welford_hw.cpp",
+            all_cores,
+            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    } else {
+        // W-reduce and H-reduce: generic tile writer.
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        writer_kernel_id = tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            all_cores,
+            tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
+    }
 
-    const std::string compute_kernel =
-        reduce_w ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_w.cpp"
-                 : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_h.cpp";
+    std::vector<uint32_t> compute_compile_args;
+    std::string compute_kernel;
+
+    if (reduce_hw) {
+        // HW-reduce compile args: {Ht, H, tile_height, Wt, do_scale}
+        compute_compile_args = {
+            Ht,
+            H,
+            tile_height,
+            Wt,
+            static_cast<uint32_t>(do_scale),
+        };
+        compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
+    } else {
+        // W-reduce compile args: {Wt, W, tile_width, do_scale, correction, is_std}
+        // H-reduce compile args: {Ht, H, tile_height, do_scale, correction, is_std}
+        compute_compile_args = {
+            reduce_w ? Wt : Ht,
+            reduce_w ? W : H,
+            reduce_w ? tile_width : tile_height,
+            static_cast<uint32_t>(do_scale),
+            static_cast<uint32_t>(operation_attributes.correction),
+            static_cast<uint32_t>(is_std),
+        };
+        compute_kernel = reduce_w
+                             ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_w.cpp"
+                             : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_h.cpp";
+    }
 
     tt_metal::KernelHandle compute_kernel_id_group_1 = tt_metal::CreateKernel(
         program,
@@ -286,6 +336,44 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
                 {tensor_return_value.buffer()->address(), num_output_tiles_per_core, output_tiles_offset});
             input_tiles_offset += num_input_tiles_per_core;
             output_tiles_offset += num_output_tiles_per_core;
+        }
+    } else if (reduce_hw) {
+        // HW-reduce: each work unit is one full NC slice (Ht * Wt tiles).
+        // Reader uses the column-partitioned reader with num_cols = Wt * NC_per_core.
+        TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
+        uint32_t nc_offset = 0;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const CoreCoord& core = cores[i];
+            uint32_t nc_per_core = 0;
+            if (core_group_1.contains(core)) {
+                nc_per_core = num_work_units_per_core_group_1;
+            } else if (core_group_2.contains(core)) {
+                nc_per_core = num_work_units_per_core_group_2;
+            } else {
+                TT_THROW("Core not in specified core ranges");
+            }
+            // Reader: read all columns for all NC slices assigned to this core.
+            // Each NC slice has Wt columns, so total columns = Wt * nc_per_core.
+            uint32_t num_cols = Wt * nc_per_core;
+            uint32_t col_start_tile_id = nc_offset * HtWt;
+            tt_metal::SetRuntimeArgs(
+                program,
+                reader_kernel_id,
+                core,
+                {tensor_arg.buffer()->address(),
+                 col_start_tile_id,
+                 /*curr_col_in_batch=*/0u,
+                 num_cols});
+            // Compute: runtime arg is NC_per_core.
+            tt_metal::SetRuntimeArgs(
+                program,
+                core_group_1.contains(core) ? compute_kernel_id_group_1 : compute_kernel_id_group_2,
+                core,
+                {nc_per_core});
+            // Writer: runtime args are {dst_addr, NC_per_core, output_tile_start_id}.
+            tt_metal::SetRuntimeArgs(
+                program, writer_kernel_id, core, {tensor_return_value.buffer()->address(), nc_per_core, nc_offset});
+            nc_offset += nc_per_core;
         }
     } else {
         // H-reduce: each work unit is one column of Ht tiles

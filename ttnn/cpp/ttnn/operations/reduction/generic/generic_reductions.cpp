@@ -302,6 +302,7 @@ static Tensor std_var_impl(
     }
 
     // Validate that the divisor is positive (Bessel's correction subtracts 1).
+    // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
     int divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
@@ -320,8 +321,28 @@ static Tensor std_var_impl(
         if (rank == 1) {
             input_tensor = ttnn::reshape(input_tensor, ttnn::Shape{1, input_shape[0]});
         }
+    } else if (dim.size() == 2) {
+        // Two-dim HW hybrid path: permute the two reduction dims to the last
+        // two positions (H, W) and use the dedicated HW kernel.
+        reduce_dim = tt::tt_metal::ReduceOpDim::HW;
+
+        // Build permutation: kept dims first (in original order), then the two
+        // reduction dims at positions rank-2 and rank-1.
+        ttnn::SmallVector<int64_t> perm;
+        perm.reserve(rank);
+        for (uint32_t i = 0; i < rank; ++i) {
+            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
+                perm.push_back(static_cast<int64_t>(i));
+            }
+        }
+        for (int d : dim) {
+            perm.push_back(static_cast<int64_t>(d));
+        }
+
+        // ttnn::permute checks for identity internally and skips data movement if not needed.
+        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
     } else {
-        // Multi-dim path: permute reduction dims to the end, flatten into W.
+        // 3+ dims path: permute reduction dims to the end, flatten into W.
         reduce_dim = tt::tt_metal::ReduceOpDim::W;
 
         // Build permutation: kept dims first (in original order), reduce dims last.
