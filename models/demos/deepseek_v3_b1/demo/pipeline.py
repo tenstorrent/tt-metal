@@ -291,6 +291,10 @@ class Pipeline:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
 
+    def reset_position_ids(self) -> None:
+        """Reset position IDs to 0 on this stage's device."""
+        self._stage_kind.reset_position_ids()
+
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
 
