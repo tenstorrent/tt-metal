@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -37,16 +38,16 @@ void tti_pool_instr_func()
  * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_reduce_col_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
 {
     // So Face 0 reduce, dest counter += 16, Face 1 reduce, dest counter reset to 0
     // then Face 2 reduce (which includes Face 0 reduce result in dest), dest counter += 16, Face 3 reduce(which includes Face 1 reduce result in dest at index
     // 16)
-    const std::uint32_t MOP_OUTER_LOOP          = 1;
-    const std::uint32_t MOP_INNER_LOOP          = (tile_shape.num_faces >= 2) ? (tile_shape.num_faces >> 1) : tile_shape.num_faces;
+    const std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP = (tensor_shape.total_num_faces() >= 2) ? (tensor_shape.total_num_faces() >> 1) : tensor_shape.total_num_faces();
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS           = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     constexpr std::uint32_t replay_buf_len = 2 + (RUN_FID_LOOPS ? (2 * NUM_FIDELITY_PHASES) : 0);
@@ -96,10 +97,10 @@ inline void _llk_math_reduce_col_mop_config_(const TileShape& tile_shape)
  * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
 {
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
@@ -114,7 +115,7 @@ inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
         false,
         0,
         0,
-        [tile_shape]
+        [tensor_shape]
         {
             // Each face is transposed in the unpacker, and then faces 0 & 1 are pooled together
             if constexpr (RUN_FID_LOOPS)
@@ -211,17 +212,17 @@ inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
  * @tparam POOL_TYPE: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     const std::uint32_t replay_buf_len =
-        6 + tile_shape.num_faces - 1 + (RUN_FID_LOOPS ? ((tile_shape.num_faces - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
+        6 + tensor_shape.total_num_faces() - 1 + (RUN_FID_LOOPS ? ((tensor_shape.total_num_faces() - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
@@ -229,7 +230,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
         false,
         0,
         0,
-        [tile_shape]
+        [tensor_shape]
         {
             // Set up a dest addr to output temp results into, has to be less than 64 (to not write into next tile)
             // but also has to be greater than 0 (where results are expected)
@@ -237,7 +238,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
 
             // Pool all faces together (default 4 faces), this will generate 1x16 row of result at dst index scratch_dst_addr
             // No src/dest counters are incremented
-            for (std::uint32_t face = 0; face < tile_shape.num_faces - 1; face++)
+            for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
             {
                 if constexpr (RUN_FID_LOOPS)
                 {
@@ -326,24 +327,25 @@ inline void _llk_math_reduce_addrmod_()
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types, shows how many loops
  * to use full precision with of Source register datums with multiplies, values = [LoFi, HiFi2, HiFi3, HiFi4]
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_reduce_init_(const TileShape& tile_shape)
+inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 {
+    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>();
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
-        _llk_math_reduce_col_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
+        _llk_math_reduce_col_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
-        _llk_math_reduce_row_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
+        _llk_math_reduce_row_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
-        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
+        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
 
     // Reset all counters
