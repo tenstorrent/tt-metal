@@ -15,45 +15,44 @@
 - Text model now matches HuggingFace reference exactly (PCC > 0.999)
 
 ### tt-inference-server Integration (2026-03-24)
-**Status: In Progress - Some requests work, large multi-crop images cause timeout**
+**Status: WORKING ✓ - Multiple image requests stable with `--disable-trace-capture`**
 
 **Fixed issues:**
 1. Pre-unfolded patch format detection: vLLM's MolmoProcessor outputs pixel_values as `[num_crops, num_patches, 588]` (already patch-extracted), not raw images `[B, C, H, W]`. Added format detection to use `patch_embed_from_patches_ttnn` for pre-unfolded data.
 
 2. Vision trace disabled for vLLM: vLLM uses variable multi-crop image sizes (e.g., 5 crops = 3645 patches), but trace tensors are pre-allocated for fixed sizes. Disabled vision trace in vLLM mode.
 
-3. Trace output deallocation fix: Removed `ttnn.deallocate(logits_ttnn)` which was deallocating trace output tensors that persist across calls.
+3. Prefill/decode trace disabled for vLLM: Disabled tracing in both prefill_forward and decode_forward (set `enable_trace: bool = False`) to fix resource exhaustion issues.
 
-4. Prefill/decode trace disabled for vLLM: Disabled tracing in both prefill_forward and decode_forward (set `enable_trace: bool = False`) to fix resource exhaustion issues.
+4. Memory management fixes:
+   - Added `__del__` destructor to release prefill/decode/vision traces on object destruction
+   - Deallocate `token_id_ttnn` after embedding in decode_forward
+   - Deallocate `logits_ttnn` after torch conversion in decode/prefill forward
 
-**Remaining issue:**
-- Device timeout after multiple requests: After several successful image requests, the text model forward starts taking longer and eventually times out. Even with 30 second timeout (increased from 5s), requests eventually fail.
-- Pattern observed (with 30s timeout):
-  - Request 1: TTFT=22219ms (~22s) ✓
-  - Request 2: TTFT=12726ms (~13s) ✓
-  - Request 3: TTFT=7710ms (~8s) ✓
-  - Request 4: TIMEOUT at 30984ms (~31s) ✗
+5. Background trace capture conflict: vLLM's tt-inference-server runs a background trace capture process that conflicts with Molmo2's internal trace state. **REQUIRED:** Use `--disable-trace-capture` flag when starting the server.
 
-**Root cause identified:**
-- Memory accumulation from tensors not being deallocated
-- Molmo2 was implementing decode_forward from scratch instead of using TTTGenerator pattern like Qwen2.5-VL
-- Missing `__del__` destructor to release traces on cleanup
+**Server startup command:**
+```bash
+cd tt-inference-server
+python3 run.py --model Molmo2-8B --device t3k --workflow server --local-server --dev-mode --disable-trace-capture
+```
 
-**Memory management fixes applied (2026-03-24):**
-1. Added `__del__` destructor to release prefill/decode/vision traces on object destruction
-2. Deallocate `token_id_ttnn` after embedding in decode_forward
-3. Deallocate `logits_ttnn` after torch conversion in decode_forward
-4. Conditionally deallocate `logits_ttnn` in prefill_forward when trace is disabled
+**Performance (tested with 10 sequential image requests):**
+- All 10 requests successful
+- First request: ~22s (includes KV cache warmup)
+- Subsequent requests: ~4s each
+- Consistent, stable performance
 
-**Current state:**
-- Increased TT_METAL_OPERATION_TIMEOUT_SECONDS from 5.0 to 30.0 in `run_vllm_api_server.py`
-- Disabled prefill/decode trace (set `enable_trace: bool = False`)
-- Memory management fixes applied - needs testing
+**Configuration:**
+- TT_METAL_OPERATION_TIMEOUT_SECONDS: 30.0 (in `run_vllm_api_server.py`)
+- Prefill/decode trace: Disabled (enable_trace=False)
+- Vision trace: Disabled for vLLM mode
+- Background trace capture: Disabled (--disable-trace-capture)
 
 **Next steps:**
-1. Test memory management fixes with multiple sequential requests
-2. If fixes work, consider re-enabling trace for better performance
-3. Consider full TTTGenerator refactor for long-term maintainability
+1. Consider adding `has_builtin_warmup=True` to Molmo2's model spec to auto-disable background trace capture
+2. Consider full TTTGenerator refactor for long-term maintainability
+3. Investigate re-enabling traces once stability is confirmed
 
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**
