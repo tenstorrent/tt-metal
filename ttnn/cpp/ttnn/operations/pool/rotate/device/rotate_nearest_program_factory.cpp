@@ -24,7 +24,7 @@ using namespace tt::tt_metal;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
-constexpr uint32_t MAX_BATCH_SIZE = 5;
+constexpr uint32_t MAX_BURST_SIZE = 5;
 
 // Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
 static uint16_t nearest_float_to_bfloat16(float value) {
@@ -137,9 +137,14 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const uint32_t max_sticks_per_core =
         any_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
-    const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
-    // CB total size must be an even multiple of batch_size (required by cb_push_back/cb_pop_front API)
-    num_cb_pages = round_down(num_cb_pages, batch_size);
+    TT_FATAL(
+        num_cb_pages > 0,
+        "Not enough L1 for even a single CB page: aligned_input_stick_nbytes={} exceeds l1_for_cb={}",
+        aligned_input_stick_nbytes,
+        l1_for_cb);
+    const uint32_t burst_size = num_cb_pages < MAX_BURST_SIZE ? num_cb_pages : MAX_BURST_SIZE;
+    // CB total size must be an even multiple of burst_size (required by cb_push_back/cb_pop_front API)
+    num_cb_pages = round_down(num_cb_pages, burst_size);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
@@ -184,7 +189,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         fill_cb_index,
         effective_stick_nbytes,
         static_cast<uint32_t>(fill_is_zero),
-        batch_size,
+        burst_size,
     };
 
     auto* input_buffer = input_tensor.buffer();
@@ -195,7 +200,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         output_cb_index,
         aligned_output_stick_nbytes,
         num_cb_pages,
-        batch_size,
+        burst_size,
     };
 
     auto* output_buffer = output_tensor.buffer();
