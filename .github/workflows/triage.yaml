@@ -75,6 +75,8 @@ jobs:
           auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TT_TRIAGE_OUTPUT_PATH: /work/generated/triage_output.txt
         run: |
             mkdir -p generated/test_reports
             uv pip install -r tools/triage/requirements.txt
