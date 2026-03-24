@@ -442,47 +442,53 @@ def main():
         v_denoised, a_denoised = velocity_to_denoised(v_out, a_out)
 
         # Multi-modal guidance (matching reference MultiModalGuider.calculate)
+        # Each guidance type is independent — CFG, STG, and modality can be used separately.
         # Formula: pred = cond + (cfg-1)*(cond-uncond) + stg*(cond-perturbed) + (mod-1)*(cond-isolated)
+        do_stg = args.video_stg_scale != 0.0 or args.audio_stg_scale != 0.0
+        do_modality = args.video_modality_scale != 1.0 or args.audio_modality_scale != 1.0
+        do_any_guidance = do_cfg or do_stg or do_modality
+
+        # Pass 2: Unconditional (negative prompts) — for CFG
+        v_uncond, a_uncond = 0.0, 0.0
         if do_cfg:
-            # Pass 2: Unconditional (negative prompts) — for CFG
             neg_v_out, neg_a_out = run_model(tt_neg_v_prompt, tt_neg_a_prompt)
             v_uncond, a_uncond = velocity_to_denoised(neg_v_out, neg_a_out)
 
-            # Pass 3: Perturbed (skip self-attention at stg_block) — for STG guidance
-            v_perturbed, a_perturbed = 0.0, 0.0
-            do_stg = args.video_stg_scale != 0.0 or args.audio_stg_scale != 0.0
-            if do_stg:
-                stg_v_out, stg_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_self_attn_blocks=[args.stg_block])
-                v_perturbed, a_perturbed = velocity_to_denoised(stg_v_out, stg_a_out)
+        # Pass 3: Perturbed (skip self-attention at stg_block) — for STG guidance
+        v_perturbed, a_perturbed = 0.0, 0.0
+        if do_stg:
+            stg_v_out, stg_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_self_attn_blocks=[args.stg_block])
+            v_perturbed, a_perturbed = velocity_to_denoised(stg_v_out, stg_a_out)
 
-            # Pass 4: Isolated modality (skip A↔V cross-attention) — for modality guidance
-            v_isolated, a_isolated = 0.0, 0.0
-            do_modality = args.video_modality_scale != 1.0 or args.audio_modality_scale != 1.0
-            if do_modality:
-                mod_v_out, mod_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_cross_attn=True)
-                v_isolated, a_isolated = velocity_to_denoised(mod_v_out, mod_a_out)
+        # Pass 4: Isolated modality (skip A↔V cross-attention) — for modality guidance
+        v_isolated, a_isolated = 0.0, 0.0
+        if do_modality:
+            mod_v_out, mod_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_cross_attn=True)
+            v_isolated, a_isolated = velocity_to_denoised(mod_v_out, mod_a_out)
 
-            # Apply full MultiModalGuider formula per modality
-            # pred = cond + (cfg-1)*(cond-uncond) + stg*(cond-perturbed) + (mod-1)*(cond-isolated)
+        # Apply full MultiModalGuider formula per modality
+        if do_any_guidance:
             v_cond = v_denoised.float()
-            v_pred = (
-                v_cond
-                + (args.video_cfg_scale - 1) * (v_cond - v_uncond.float())
-                + (args.video_stg_scale * (v_cond - v_perturbed.float()) if do_stg else 0.0)
-                + ((args.video_modality_scale - 1) * (v_cond - v_isolated.float()) if do_modality else 0.0)
-            )
+            v_pred = v_cond
+            if do_cfg:
+                v_pred = v_pred + (args.video_cfg_scale - 1) * (v_cond - v_uncond.float())
+            if do_stg:
+                v_pred = v_pred + args.video_stg_scale * (v_cond - v_perturbed.float())
+            if do_modality:
+                v_pred = v_pred + (args.video_modality_scale - 1) * (v_cond - v_isolated.float())
             if args.rescale_scale != 0:
                 v_factor = args.rescale_scale * (v_cond.std() / v_pred.std()) + (1 - args.rescale_scale)
                 v_pred = v_pred * v_factor
             v_denoised = v_pred.bfloat16()
 
             a_cond = a_denoised.float()
-            a_pred = (
-                a_cond
-                + (args.audio_cfg_scale - 1) * (a_cond - a_uncond.float())
-                + (args.audio_stg_scale * (a_cond - a_perturbed.float()) if do_stg else 0.0)
-                + ((args.audio_modality_scale - 1) * (a_cond - a_isolated.float()) if do_modality else 0.0)
-            )
+            a_pred = a_cond
+            if do_cfg:
+                a_pred = a_pred + (args.audio_cfg_scale - 1) * (a_cond - a_uncond.float())
+            if do_stg:
+                a_pred = a_pred + args.audio_stg_scale * (a_cond - a_perturbed.float())
+            if do_modality:
+                a_pred = a_pred + (args.audio_modality_scale - 1) * (a_cond - a_isolated.float())
             if args.rescale_scale != 0:
                 a_factor = args.rescale_scale * (a_cond.std() / a_pred.std()) + (1 - args.rescale_scale)
                 a_pred = a_pred * a_factor
