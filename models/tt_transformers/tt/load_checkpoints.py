@@ -564,7 +564,7 @@ def rename_layers_to_cross_attn(state_dict, config):
     return new_state_dict
 
 
-def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, config=None):
+def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, config=None, name_ffn2=False, name_dense=False, layernorm=False):
     state_dict = reindex_layers(state_dict, config)
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
@@ -572,19 +572,19 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, con
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
 
-    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = map_meta_to_hf_keys(state_dict, name_ffn2, name_dense, layernorm)
     state_dict = rename_layers_to_cross_attn(state_dict, config)
     return state_dict
 
 
-def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None):
+def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None, name_ffn2=False, name_dense=False, layernorm=False):
     state_dict = reindex_layers(state_dict, config)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
 
-    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = map_meta_to_hf_keys(state_dict, name_ffn2, name_dense, layernorm)
     state_dict = rename_layers_to_cross_attn(state_dict, config)
     return state_dict
 
@@ -772,6 +772,7 @@ def map_hf_to_meta_keys(loaded_weights):
     replacements = [
         ("^emb.weight", "weight"),
         ("model.language_model.", ""),
+        ("model.final_layernorm", "norm"),
         ("model.", ""),
         ("embed_tokens", "tok_embeddings"),
         ("lm_head", "output"),
@@ -780,12 +781,15 @@ def map_hf_to_meta_keys(loaded_weights):
         ("self_attn", "attention"),
         ("mlp", "feed_forward"),
         ("gate_proj", "w1"),
+        ("fc1", "w1"),
         ("down_proj", "w2"),
+        ("fc2", "w2"),
         ("up_proj", "w3"),
         ("q_proj", "wq"),
         ("k_proj", "wk"),
         ("v_proj", "wv"),
         ("o_proj", "wo"),
+        ("dense", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
         ("patch_conv.weight", "patch_conv._linear.weight"),  # Minimal addition for Mistral vision
@@ -793,7 +797,7 @@ def map_hf_to_meta_keys(loaded_weights):
     return replace_keys(loaded_weights, replacements)
 
 
-def map_meta_to_hf_keys(state_dict):
+def map_meta_to_hf_keys(state_dict, name_ffn2=False, name_dense=False, layernorm=False):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
     You can use this to support other models by adding more mappings.
@@ -819,16 +823,16 @@ def map_meta_to_hf_keys(state_dict):
         ("wq", "q_proj"),
         ("wk", "k_proj"),
         ("wv", "v_proj"),
-        ("wo", "o_proj"),
+        ("wo", "dense" if name_dense else "o_proj"),
         ("wqkv", "qkv_proj"),
         ("feed_forward", "mlp"),
-        ("w1", "gate_proj"),
-        ("w2", "down_proj"),
+        ("w1", "fc1" if name_ffn2 else "gate_proj"),
+        ("w2", "fc2" if name_ffn2 else "down_proj"),
         ("w3", "up_proj"),
         ("w1_w3", "gate_up_proj"),
         ("emb.weight", "weight"),
         ("tok_embeddings", "model.embed_tokens"),
-        ("norm", "model.norm"),
+        ("norm", "model.final_layernorm" if layernorm else "model.norm"),
         ("output", "lm_head"),
     ]
     return replace_keys(state_dict, replacements)
