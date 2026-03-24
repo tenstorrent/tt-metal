@@ -100,8 +100,8 @@ repos:
   hooks:
     - id: check-push-sanity
       name: Check push sanity (merge pollution / large diff)
-      entry: scripts/check_push_sanity.sh
-      language: script
+      entry: bash scripts/check_push_sanity.sh
+      language: system
       stages: [pre-push]
       always_run: true
       pass_filenames: false
