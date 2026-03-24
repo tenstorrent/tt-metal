@@ -60,7 +60,7 @@ public:
 
     [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
-    [[nodiscard]] Tensor(HostTensor tensor);
+    [[nodiscard]] explicit Tensor(HostTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
