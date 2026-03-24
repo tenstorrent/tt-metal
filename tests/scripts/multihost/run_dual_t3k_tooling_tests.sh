@@ -6,11 +6,12 @@
 # This runs:
 #   1. ttrun env passthrough multihost pytest (validates tt-run launch infrastructure)
 #   2. ULFM fault tolerance tests (MPI fault detection / recovery control plane)
-#   3. Single-node ULFM gap tests (exercise fast-fail, watchdog, terminate handler)
-#   4. Python unit tests: ttrun exit code interpretation
-#   5. Python unit tests: mpi_fault.py failure paths
-#   6. Triage tool unit tests
-#   7. MPI multiprocess rank resolution test (mpirun -np 4)
+#   3. Multihost ULFM annotation smoke tests (remote-host hostname + fast-fail annotation)
+#   4. Single-node ULFM gap tests (exercise fast-fail, watchdog, terminate handler)
+#   5. Python unit tests: ttrun exit code interpretation
+#   6. Python unit tests: mpi_fault.py failure paths
+#   7. Triage tool unit tests
+#   8. MPI multiprocess rank resolution test (mpirun -np 4)
 
 set -euo pipefail
 
@@ -53,7 +54,11 @@ echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated
 echo "LOG_METAL: Running ULFM fault tolerance tests"
 "${repo_root}/tests/tt_metal/multihost/run_fault_tolerance_tests.sh" || fail=$((fail + 1))
 
-# ── 3. Single-node ULFM gap tests (section 7.8) ───────────────────────
+# ── 3. Multihost ULFM annotation smoke tests ──────────────────────────
+echo "LOG_METAL: Running multihost ULFM annotation smoke tests"
+"${repo_root}/tests/tt_metal/multihost/run_multihost_ulfm_annotation_tests.sh" || fail=$((fail + 1))
+
+# ── 4. Single-node ULFM gap tests (section 7.8) ───────────────────────
 #
 # These test the ULFM control-plane paths that don't require actual
 # multi-host hardware: fast-fail exit code 70, MPI_Finalize watchdog,
@@ -61,7 +66,7 @@ echo "LOG_METAL: Running ULFM fault tolerance tests"
 echo "LOG_METAL: Running single-node ULFM gap tests"
 "${repo_root}/tests/tt_metal/multihost/run_single_node_ulfm_tests.sh" || fail=$((fail + 1))
 
-# ── 4. Python unit tests: ttrun exit code interpretation ──────────────
+# ── 5. Python unit tests: ttrun exit code interpretation ──────────────
 #
 # Pure Python tests (no MPI runtime needed) that verify ExitCategory,
 # interpret_exit_code(), PRRTE version detection, and log output quality.
@@ -72,7 +77,7 @@ echo "LOG_METAL: Running ttrun exit code interpretation tests"
   --junitxml="${repo_root}/generated/test_reports/test_ttrun_exit_codes.xml" \
   "${repo_root}/tests/ttnn/distributed/test_ttrun_exit_codes.py") || fail=$((fail + 1))
 
-# ── 5. Python unit tests: mpi_fault.py failure paths ─────────────────
+# ── 6. Python unit tests: mpi_fault.py failure paths ─────────────────
 #
 # Tests the Python ULFM wrapper (install_ulfm_handler, ulfm_guard,
 # MPIRankFailureError) with mocked mpi4py — no real MPI runtime needed.
@@ -83,7 +88,7 @@ echo "LOG_METAL: Running mpi_fault.py Python tests"
   --junitxml="${repo_root}/generated/test_reports/test_mpi_fault_python.xml" \
   "${repo_root}/tests/ttnn/distributed/test_mpi_fault_python.py") || fail=$((fail + 1))
 
-# ── 6. Triage tool unit tests ─────────────────────────────────────────
+# ── 7. Triage tool unit tests ─────────────────────────────────────────
 #
 # test_parse_inspector_logs_paths.py: pure Python, no hardware needed.
 # test_triage.py: requires ttexalens + real hardware; failures are
@@ -130,7 +135,7 @@ if [[ $triage_exit -ne 0 ]]; then
   echo "LOG_METAL: WARNING: test_triage.py exited $triage_exit (needs inspector + hang-app binary; non-blocking)"
 fi
 
-# ── 7. MPI multiprocess rank resolution test ──────────────────────────
+# ── 8. MPI multiprocess rank resolution test ──────────────────────────
 #
 # Spawns 4 MPI ranks via mpirun, each writes a rank-tagged marker file,
 # then rank 0 verifies get_log_directory() resolves correctly for every
