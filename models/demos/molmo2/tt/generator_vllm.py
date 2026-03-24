@@ -23,7 +23,13 @@ from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_gr
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
 from vllm.multimodal.parse import MultiModalDataItems
-from vllm.multimodal.processing import BaseDummyInputsBuilder, BaseMultiModalProcessor, PromptReplacement, PromptUpdate
+from vllm.multimodal.processing import BaseMultiModalProcessor, PromptReplacement, PromptUpdate
+
+# BaseDummyInputsBuilder location varies between vLLM versions
+try:
+    from vllm.multimodal.profiling import BaseDummyInputsBuilder
+except ImportError:
+    from vllm.multimodal.processing import BaseDummyInputsBuilder
 
 # Note: Model registration is handled by tt-vllm-plugin/__init__.py
 # The plugin registers TTMolmo2ForConditionalGeneration with the module path
