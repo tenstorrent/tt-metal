@@ -100,7 +100,7 @@ def test_decoder_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = rot_mats_fn(
-        head_dim=model_args.head_dim,
+        head_dim=int(model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,
@@ -187,7 +187,7 @@ def test_decoder_inference(
         positions = torch.LongTensor(range(max_seq_len))
 
         cos, sin = precompute_freqs(
-            model_args.head_dim,
+            int(model_args.head_dim * model_args.partial_rotary_factor),
             model_args.max_seq_len * 2,
             model_args.rope_theta,
             model_args.rope_scaling.factor if model_args.rope_scaling else None,
