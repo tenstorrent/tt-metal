@@ -606,6 +606,24 @@ _METRIC_RE = re.compile(
 )
 
 
+_STDERR_LEVEL_RE = re.compile(r"\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b")
+
+
+def _level_from_line(line: str, default: str) -> str:
+    """Infer log type from the content of a log line, falling back to default."""
+    m = _STDERR_LEVEL_RE.search(line)
+    if not m:
+        return default
+    level = m.group(1).upper()
+    if level == "DEBUG":
+        return "debug"
+    if level in ("WARNING", "WARN"):
+        return "warning"
+    if level in ("ERROR", "CRITICAL"):
+        return "error"
+    return "info"
+
+
 def _parse_metrics(output_dir: str) -> list:
     path = Path(output_dir) / "output.txt"
     if not path.exists():
@@ -671,7 +689,7 @@ def _parse_logs(output_dir: str) -> list:
                 line = line.strip()
                 if not line:
                     continue
-                _add(now_iso, typ, f"[{source}] {line}")
+                _add(now_iso, _level_from_line(line, typ), f"[{source}] {line}")
 
     # Surface checkpoint lines from output.txt (only when val_loss was computed)
     out_path = Path(output_dir) / "output.txt"
