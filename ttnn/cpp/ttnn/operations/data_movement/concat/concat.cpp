@@ -13,13 +13,11 @@
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 #include <ranges>
 #include <utility>
@@ -40,6 +38,94 @@ using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>
 
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
+
+// WH B0 NOC DMA has a 32-byte minimum transfer size.  Device kernels that
+// write fewer bytes (e.g. untilize_with_unpadding on a tensor whose last dim
+// partial-tile is < 16 bf16 elements) hang.  This handler avoids the problem
+// by keeping everything in TILE layout:
+//   1. Pad each input's concat dim to tile-aligned  (tile-level op, safe)
+//   2. Concat in TILE layout directly                (no untilize, safe)
+//   3. Slice the result back to the original shape   (tile copy, safe)
+MassagedConcat build_noc_safe_pad_concat(
+    const MemoryConfig& output_memory_config, int input_rank, const ttnn::Shape& original_output_shape) {
+    auto state = std::make_shared<std::pair<int, ttnn::Shape>>(input_rank, original_output_shape);
+
+    return MassagedConcat(MassagedConcatParams{
+        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int /*dim*/, unsigned int /*groups*/) -> bool {
+            constexpr uint32_t kTileWidth = 32;
+            constexpr uint32_t kNocMinDmaBytes = 32;
+            bool all_tiled_device = std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& t) {
+                return t.layout() == ttnn::TILE_LAYOUT && tt::tt_metal::is_device_tensor(t);
+            });
+            if (!all_tiled_device) {
+                return false;
+            }
+            bool res = std::any_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& t) {
+                const uint32_t last_dim = t.logical_shape()[-1];
+                const uint32_t partial = last_dim % kTileWidth;
+                return partial > 0 && partial * t.element_size() < kNocMinDmaBytes;
+            });
+            concat_db_print(res, "noc_safe_pad_concat required (sub-32-byte NOC DMA avoidance)");
+            return res;
+        },
+        .pre_transform =
+            [state](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
+            constexpr uint32_t kTileSize = 32;
+            int rank = state->first;
+
+            std::vector<ttnn::Tensor> padded;
+            padded.reserve(tensors.size());
+            for (const auto& t : tensors) {
+                const auto& shape = t.logical_shape();
+                const uint32_t dim_size = shape[dim];
+                const uint32_t aligned = ((dim_size + kTileSize - 1) / kTileSize) * kTileSize;
+                if (dim_size == aligned) {
+                    padded.push_back(t);
+                } else {
+                    ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec(shape.rank(), {0, 0});
+                    pad_spec[dim] = {0, aligned - dim_size};
+                    padded.push_back(ttnn::pad(t, pad_spec, 0.0f));
+                }
+            }
+
+            int adjusted_dim = dim;
+            if (rank < 4) {
+                for (auto& t : padded) {
+                    t = ttnn::unsqueeze_to_4D(t);
+                }
+                adjusted_dim = dim + 4 - rank;
+            }
+            return std::make_tuple(padded, adjusted_dim, groups);
+        },
+        .post_transform = [state, output_memory_config](const ttnn::Tensor& output) -> ttnn::Tensor {
+            ttnn::Tensor result = output;
+            int original_rank = state->first;
+            const auto& original_shape = state->second;
+
+            while (static_cast<int>(result.logical_shape().rank()) > original_rank) {
+                const auto shape = result.logical_shape();
+                const auto full_shape = result.padded_shape();
+                SmallVector<uint32_t> shape_vec{};
+                SmallVector<uint32_t> full_shape_vec{};
+                for (int i = 1; i < shape.rank(); i++) {
+                    shape_vec.push_back(shape[i]);
+                    full_shape_vec.push_back(full_shape[i]);
+                }
+                result =
+                    ttnn::reshape(result, ttnn::Shape(std::move(shape_vec)), ttnn::Shape(std::move(full_shape_vec)));
+            }
+
+            if (result.logical_shape() != original_shape) {
+                ttnn::SmallVector<uint32_t> begins(original_shape.rank(), 0);
+                ttnn::SmallVector<uint32_t> ends(original_shape.cbegin(), original_shape.cend());
+                ttnn::SmallVector<uint32_t> steps(original_shape.rank(), 1);
+                result = ttnn::slice(result, begins, ends, steps, output_memory_config);
+            }
+            return result;
+        },
+        .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups)
+            -> ttnn::Tensor { return concat_impl(tensors, dim, groups, output_memory_config, std::nullopt); }});
+}
 
 // FIXME: this papers over an issue in pad, so we should probably move the
 // fix there.
@@ -102,20 +188,19 @@ MassagedConcat build_untilize_rm_retilize_concat(
             concat_db_print(res, "untilize_rm_retilize required");
             return res;
         },
-        .pre_transform = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups)
-            -> OwnedConcatArgs {
+        .pre_transform = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
             std::vector<ttnn::Tensor> itensors;
             itensors.reserve(tensors.size());
             std::transform(
                 tensors.begin(),
                 tensors.end(),
                 std::back_inserter(itensors),
-                [=](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
+                [](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
                     TT_FATAL(
                         input_tensor.layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    ttnn::SmallVector<uint32_t> ends(
-                        input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
+                    const auto& logical_shape = input_tensor.logical_shape();
+                    ttnn::SmallVector<uint32_t> ends(logical_shape.cbegin(), logical_shape.cend());
                     std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
                     return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(ends), std::nullopt);
                 });
@@ -336,14 +421,16 @@ ttnn::Tensor concat(
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
+    auto noc_safe_concat =
+        ttnn::operations::data_movement::build_noc_safe_pad_concat(mem_config, rank, logical_output_shape);
     auto untilize_rm_retilize_concat =
         ttnn::operations::data_movement::build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat =
         ttnn::operations::data_movement::build_non_aligned_last_dim_concat(input_tensors, mem_config);
     auto unsqueeze_squeeze_1D_concat =
         ttnn::operations::data_movement::build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config);
-    auto massaged_concat =
-        untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat));
+    auto massaged_concat = noc_safe_concat.sequence(
+        untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat)));
 
     const std::vector<ttnn::Tensor>& itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);

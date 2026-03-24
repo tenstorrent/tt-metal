@@ -422,8 +422,25 @@ void ReshapeViewTiledProgramFactory::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 
-    if (operation_attributes.recreate_mapping_tensor) {
-        const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    // Wormhole B0 NOC DMA has a minimum transfer size of 32 bytes.  When the
+    // output's last dimension is not tile-aligned the tiled reshape kernel
+    // produces partial-tile segment copies whose size equals
+    // (outputLastDim % tileWidth) * elementSizeBytes.  If that value is below
+    // the NOC minimum the DMA can corrupt the mapping_tensor's DRAM region.
+    // On a program-cache hit the corrupted data would be reused, causing a hang.
+    // Recreating the mapping_tensor on every cache hit for such shapes ensures
+    // the kernel always reads clean segment data.
+    constexpr uint32_t kNocMinDmaBytes = 32;
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_width = tile_shape[1];
+    const uint32_t output_last_dim = output_tensor.logical_shape()[-1];
+    const uint32_t partial_width = output_last_dim % tile_width;
+    const uint32_t segment_bytes = partial_width * output_tensor.element_size();
+
+    bool refresh_mapping =
+        operation_attributes.recreate_mapping_tensor || (partial_width > 0 && segment_bytes < kNocMinDmaBytes);
+
+    if (refresh_mapping) {
         const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
         const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
         const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
@@ -445,9 +462,7 @@ void ReshapeViewTiledProgramFactory::override_runtime_arguments(
     for (const auto& core : utilized_cores) {
         auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
         reader_runtime_args_core.at(0) = input_buffer_addr;
-        if (operation_attributes.recreate_mapping_tensor) {
-            reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
-        }
+        reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
 
         auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
         writer_runtime_args_core.at(0) = output_buffer_addr;
