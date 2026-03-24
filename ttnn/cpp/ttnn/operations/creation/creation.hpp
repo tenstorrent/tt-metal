@@ -40,7 +40,7 @@ template <typename FillValueType>
     requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
 Tensor full(
     const ttnn::Shape& shape,
-    const FillValueType fill_value,
+    FillValueType fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
@@ -58,7 +58,7 @@ template <typename BufferType>
 Tensor from_buffer(
     std::vector<BufferType>&& buffer,
     const Shape& shape,
-    const DataType dtype,
+    DataType dtype,
     MeshDevice* device,
     const std::optional<Layout>& layout = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
@@ -67,7 +67,7 @@ template <typename BufferType>
 Tensor from_buffer(
     const std::vector<BufferType>& buffer,
     const Shape& shape,
-    const DataType dtype,
+    DataType dtype,
     MeshDevice* device,
     const std::optional<Layout>& layout = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
@@ -76,7 +76,7 @@ template <typename FillValueType>
     requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
 Tensor full_like(
     const Tensor& tensor,
-    const FillValueType fill_value,
+    FillValueType fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
@@ -107,19 +107,19 @@ Tensor empty_like(
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 Tensor arange(
-    const int64_t start,
-    const int64_t stop,
-    const int64_t step = 1,
-    const DataType dtype = ttnn::DataType::BFLOAT16,
+    int64_t start,
+    int64_t stop,
+    int64_t step = 1,
+    DataType dtype = ttnn::DataType::BFLOAT16,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
     const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const Layout layout = Layout::ROW_MAJOR);
+    Layout layout = Layout::ROW_MAJOR);
 
 Tensor arange(
-    const int64_t stop,
-    const DataType dtype = DataType::BFLOAT16,
+    int64_t stop,
+    DataType dtype = DataType::BFLOAT16,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
     const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const Layout layout = Layout::ROW_MAJOR);
+    Layout layout = Layout::ROW_MAJOR);
 
 }  // namespace ttnn
