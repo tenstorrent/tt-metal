@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import ttnn
 from tests.ttnn.unit_tests.operations.reduce.test_topk import run_topk_test
 

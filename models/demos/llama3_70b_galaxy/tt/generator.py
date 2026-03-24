@@ -2,30 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from loguru import logger
-from typing import List
-
 from collections import defaultdict
 from dataclasses import fields, replace
+from typing import List
 
-from models.tt_transformers.tt.common import (
-    copy_host_to_device,
-    num_blocks_in_seq,
-    get_block_size,
-    InterleavedTextMedia,
-)
+import torch
+from loguru import logger
 
-from models.common.llama_models import (
-    StopReason,
-    ChatPrediction,
-    CompletionPrediction,
-)
-
+import ttnn
+from models.common.llama_models import ChatPrediction, CompletionPrediction, StopReason
 from models.common.sampling import SamplingParams, format_sampling_params
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.tt_transformers.tt.common import (
+    InterleavedTextMedia,
+    copy_host_to_device,
+    get_block_size,
+    num_blocks_in_seq,
+)
 
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:

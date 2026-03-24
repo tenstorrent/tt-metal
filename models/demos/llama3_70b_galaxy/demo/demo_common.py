@@ -5,10 +5,11 @@
 Common utility functions for demo scripts.
 """
 
-import json
 import hashlib
-import requests
+import json
 from pathlib import Path
+
+import requests
 from loguru import logger
 
 

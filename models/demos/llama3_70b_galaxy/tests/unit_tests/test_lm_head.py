@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.llama3_70b_galaxy.reference.qwen import ColumnParallelLinear
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.llama3_70b_galaxy.reference.qwen import ColumnParallelLinear
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()

@@ -6,8 +6,8 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn.functional as F
-
 from torch import nn
+
 from .args import ModelArgs
 
 

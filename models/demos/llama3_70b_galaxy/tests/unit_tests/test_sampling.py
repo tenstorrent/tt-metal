@@ -2,23 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
-import ttnn
-from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.common.utility_functions import (
-    comp_allclose,
-)
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-
-from models.common.sampling.tt_sampling import TTSampling
-
-import numpy as np
-from scipy.stats import entropy
-import numpy as np
 from collections import Counter
+
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+from scipy.stats import entropy
+
+import ttnn
+from models.common.sampling.tt_sampling import TTSampling
+from models.common.utility_functions import comp_allclose
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 def counts_to_vector(*samples, return_prob=True, dtype=float):

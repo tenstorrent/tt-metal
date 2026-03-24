@@ -1,24 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig, precompute_freqs
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    precompute_freqs,
-    PagedAttentionConfig,
-)
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
 
 @torch.no_grad()

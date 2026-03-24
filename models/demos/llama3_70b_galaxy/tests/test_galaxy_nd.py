@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
-from loguru import logger
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import List
-from collections import defaultdict
 
-from ttnn import (
-    ShardTensor2dMesh,
-    ConcatMesh2dToTensor,
-)
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 from models.common.utility_functions import nearest_32
+from ttnn import ConcatMesh2dToTensor, ShardTensor2dMesh
 
 # from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 

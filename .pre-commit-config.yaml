@@ -28,7 +28,7 @@ repos:
   hooks:
     - id: isort
       files: ^models/
-      exclude: ^models/(demos/llama3_70b_galaxy|experimental)/
+      exclude: ^models/experimental/
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:

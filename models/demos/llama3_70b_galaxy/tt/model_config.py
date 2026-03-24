@@ -2,35 +2,36 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import os
-import json
-import ttnn
+from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
-from loguru import logger
+from typing import Tuple
+
 import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import nearest_32
+from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
+    convert_hf_to_meta,
+    load_hf_state_dict,
+    load_meta_state_dict,
+    standardize_hf_keys,
+)
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    num_to_core_range_set,
     calculate_hidden_dim,
+    encode_prompt_hf,
+    encode_prompt_instruct,
+    freqs_to_rotation_matrix,
     get_base_model_name,
     get_out_subblock_w,
-    encode_prompt_instruct,
-    encode_prompt_hf,
     nearest_multiple,
-)
-from typing import Tuple
-from models.common.utility_functions import nearest_32
-from pathlib import Path
-from enum import Enum, auto
-from dataclasses import dataclass
-from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
-    load_meta_state_dict,
-    load_hf_state_dict,
-    convert_hf_to_meta,
-    standardize_hf_keys,
+    num_to_core_range_set,
+    precompute_freqs,
 )
 
 # Performance tuning:

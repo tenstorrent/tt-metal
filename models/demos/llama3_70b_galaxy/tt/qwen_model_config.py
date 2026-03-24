@@ -2,44 +2,45 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import os
-import json
-import ttnn
 from pathlib import Path
-from loguru import logger
-import torch
-from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    num_to_core_range_set,
-    calculate_hidden_dim,
-    get_base_model_name,
-    get_out_subblock_w,
-    encode_prompt_instruct,
-    encode_prompt_hf,
-    nearest_multiple,
-)
 from typing import Tuple
+
+import torch
+from loguru import logger
+
+import ttnn
 from models.common.utility_functions import nearest_32
-from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
-    load_hf_state_dict,
     convert_hf_to_meta,
+    load_hf_state_dict,
     standardize_hf_keys,
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import (
-    TtModelArgs,
-    CheckpointType,
-    get_core_ranges,
-    PREFETCHER_NOC1_GRID,
-    LM_HEAD_32_GRID,
     LM_HEAD_16_GRID,
+    LM_HEAD_32_GRID,
     LM_HEAD_INPUT_GRID,
     LM_HEAD_OUTPUT_GRID,
+    PREFETCHER_NOC1_GRID,
+    CheckpointType,
     LlamaOptimizations,
+    TtModelArgs,
+    get_core_ranges,
     num_to_core_range_set,
     num_to_coregrid,
+)
+from models.tt_transformers.tt.common import (
+    calculate_hidden_dim,
+    encode_prompt_hf,
+    encode_prompt_instruct,
+    freqs_to_rotation_matrix,
+    get_base_model_name,
+    get_out_subblock_w,
+    nearest_multiple,
+    num_to_core_range_set,
+    precompute_freqs,
 )
 
 

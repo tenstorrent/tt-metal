@@ -1,38 +1,34 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import ttnn
-import torch
 import pytest
-from models.common.utility_functions import comp_pcc
+import torch
 
-from models.common.utility_functions import skip_for_blackhole
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
-from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded import (
-    create_input_and_weight_tensors,
-    create_tt_tensors,
-    create_output_memory_config,
-    compute_reference_output,
-    compute_pre_allgather_stats,
-    compute_post_allgather_output,
-)
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
-    run_test_sdpa_decode_paged_attention_single_iter,
-)
+import ttnn
+from models.common.utility_functions import comp_pcc, skip_for_blackhole
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
     run_test_create_min_width_shard,
-)
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
-from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
-    run_test_paged_fused_update_cache_decode,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
-
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
+from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded import (
+    compute_post_allgather_output,
+    compute_pre_allgather_stats,
+    compute_reference_output,
+    create_input_and_weight_tensors,
+    create_output_memory_config,
+    create_tt_tensors,
+)
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import run_test_sdpa_decode_paged_attention_single_iter
+from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
+    run_test_paged_fused_update_cache_decode,
+)
 
 
 @pytest.mark.parametrize(

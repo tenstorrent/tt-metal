@@ -2,24 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.llama3_70b_galaxy.reference.qwen import TransformerBlock, precompute_freqs_cis
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
+    PagedAttentionConfig,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
-from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.llama3_70b_galaxy.reference.qwen import TransformerBlock, precompute_freqs_cis
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 
 
 @torch.no_grad()

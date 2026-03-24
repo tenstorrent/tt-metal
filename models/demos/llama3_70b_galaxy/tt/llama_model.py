@@ -2,21 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
-from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
-from models.common.rmsnorm import RMSNorm
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
-from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
-from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
-from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
+from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 class TtTransformer(LightweightModule):

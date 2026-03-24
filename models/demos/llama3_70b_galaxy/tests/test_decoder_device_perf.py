@@ -1,27 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import json
+import math
+import os
+from collections import defaultdict
+
+import pandas as pd
 import pytest
 from loguru import logger
-import os
-import math
+from tracy.process_model_log import get_latest_ops_log_filename
+
 import ttnn
-import json
-import pandas as pd
-from collections import defaultdict
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    PagedAttentionConfig,
-)
+from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations, run_llama3_demo
+from models.demos.llama3_70b_galaxy.demo.demo_qwen_decode import run_qwen_demo
+from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-)
-
-from models.demos.llama3_70b_galaxy.demo.demo_decode import run_llama3_demo
-from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
-from models.demos.llama3_70b_galaxy.demo.demo_qwen_decode import run_qwen_demo
-
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -21

@@ -1,20 +1,19 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 import json
+from pathlib import Path
 
-from loguru import logger
 import pytest
 import torch
-import ttnn
+from loguru import logger
 
+import ttnn
 from models.demos.llama3_70b_galaxy.demo.text_demo import create_tt_model
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
 
 PREFILL_BENCHMARK_OUTPUT = Path(__file__).resolve().parent / "output" / "prefill_prefix_caching_benchmark.json"
 PREFILL_BENCHMARK_TARGETS = Path(__file__).resolve().parent / "prefill_prefix_caching_targets.json"

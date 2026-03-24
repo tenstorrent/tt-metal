@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
+
+import ttnn
 from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs

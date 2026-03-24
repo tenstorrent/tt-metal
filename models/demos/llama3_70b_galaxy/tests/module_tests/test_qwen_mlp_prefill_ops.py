@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import math
+
+import pytest
 import torch
+
 import ttnn
 
 

@@ -1,14 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import ttnn
 import torch
 from loguru import logger
-from models.common.lightweightmodule import LightweightModule
 
-from models.demos.llama3_70b_galaxy.tt.model_config import (
-    get_core_ranges,
-)
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges
 
 global_tt_tensor_address = None
 

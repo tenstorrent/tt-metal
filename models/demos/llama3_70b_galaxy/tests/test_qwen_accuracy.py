@@ -2,22 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import bz2
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+from tqdm import tqdm
+from transformers import AutoTokenizer
+
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    HostEmbedding,
-    PagedAttentionConfig,
-)
-from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.common.sampling.tt_sampling import TTSampling
+from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding, PagedAttentionConfig
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.common.sampling.tt_sampling import TTSampling
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoTokenizer
-from tqdm import tqdm
 
 
 @torch.no_grad()

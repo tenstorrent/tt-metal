@@ -4,25 +4,21 @@
 
 import bz2
 import os
-import torch
+
 import pytest
+import torch
 from loguru import logger
+from transformers import AutoTokenizer
+
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    HostEmbedding,
-    PagedAttentionConfig,
-)
-from models.tt_transformers.tt.rope import get_rot_mats
-from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding, PagedAttentionConfig
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from transformers import AutoTokenizer
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 @torch.no_grad()

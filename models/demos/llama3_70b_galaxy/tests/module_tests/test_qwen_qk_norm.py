@@ -3,21 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
-import ttnn
 import torch
 import torch.nn as nn
 from loguru import logger
-from models.demos.llama3_70b_galaxy.tt.model_config import (
-    get_core_ranges,
-)
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+
+import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.common.utility_functions import (
-    torch_random,
-    comp_pcc,
-    comp_allclose,
-)
+from models.common.utility_functions import comp_allclose, comp_pcc, torch_random
+from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @pytest.mark.parametrize(

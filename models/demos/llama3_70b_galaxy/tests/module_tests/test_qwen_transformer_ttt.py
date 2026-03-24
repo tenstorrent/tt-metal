@@ -2,21 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    PagedAttentionConfig,
-)
-from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 @torch.no_grad()

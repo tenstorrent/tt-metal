@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import os
+
+import torch
+
+import ttnn
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"

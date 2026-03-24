@@ -3,23 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import bz2
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.llama_common import (
-    HostEmbedding,
-    PagedAttentionConfig,
-)
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.llama3_70b_galaxy.reference.qwen import Transformer
+from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding, PagedAttentionConfig
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.llama3_70b_galaxy.reference.qwen import Transformer
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 @torch.no_grad()

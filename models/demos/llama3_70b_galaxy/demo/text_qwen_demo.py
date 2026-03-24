@@ -1,30 +1,25 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-from datetime import datetime
 import json
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
 
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoTokenizer
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from transformers import AutoTokenizer
-from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
-
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common

@@ -1,19 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import json
+import math
+from collections import defaultdict
+
+import pandas as pd
 import pytest
 from loguru import logger
-import math
-import pandas as pd
-from collections import defaultdict
+from termcolor import colored
+from tracy.process_model_log import get_latest_ops_log_filename
+
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-)
-
-from termcolor import colored
-import json
 
 PREFILL_OP_START_INDEX = 0
 PREFILL_OP_END_INDEX = 35

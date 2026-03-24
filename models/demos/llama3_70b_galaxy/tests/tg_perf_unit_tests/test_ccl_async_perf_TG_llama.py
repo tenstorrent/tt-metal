@@ -4,6 +4,7 @@
 
 import pytest
 from loguru import logger
+
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 

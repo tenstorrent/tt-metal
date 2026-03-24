@@ -1,28 +1,24 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
+from pathlib import Path
 
+import pytest
+import requests
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
