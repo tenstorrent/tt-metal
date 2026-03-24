@@ -111,8 +111,8 @@ def dense_mlp_forward(
     if cfg.tp_enabled:
         mlp_out_reduced = ttnn.all_reduce(
             mlp_out,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=cfg.ccl_num_links,
+            topology=cfg.ccl_topology,
             cluster_axis=cfg.tp_axis,
             memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -184,8 +184,8 @@ def moe_mlp_forward(
     if cfg.tp_enabled and not _skip_shared_reduce:
         shared_out_reduced = ttnn.all_reduce(
             shared_out,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=cfg.ccl_num_links,
+            topology=cfg.ccl_topology,
             cluster_axis=cfg.tp_axis,
             memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -275,8 +275,8 @@ def moe_mlp_forward(
     if _skip_shared_reduce:
         mlp_out_reduced = ttnn.all_reduce(
             mlp_out,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=cfg.ccl_num_links,
+            topology=cfg.ccl_topology,
             cluster_axis=cfg.tp_axis,
             memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )

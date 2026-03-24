@@ -649,3 +649,157 @@ TTNN internally generates `FillPadDeviceOperation` calls to zero (or -inf fill) 
 - Post-FFN LayerNorm output padding (10.12 ms) — potentially eliminable
 - MoE expert output zero-init (7.86 ms) — functionally necessary
 - KV concat padding (2.90 ms) — potentially eliminable
+
+---
+
+## Optimizations to Try on Galaxy (TG/BHGLX)
+
+Galaxy configurations (2x4, 4x8, 8x4) provide significantly more devices, Ethernet links, and aggregate DRAM/L1/compute than T3K (1x8). Several optimizations that were blocked, ineffective, or regressed on T3K become viable or beneficial on Galaxy's topology.
+
+### High Priority — Directly Unlocked by Galaxy Hardware
+
+| # | Optimization | Why It Helps on Galaxy | Expected Impact |
+|---|-------------|----------------------|-----------------|
+| G1 | **Multi-link CCL (`num_links=2+`)** | Galaxy TG/BHGLX exposes 2+ Ethernet links per device pair. On T3K all_reduce uses 1 link, making CCL 20-30% of decode time. Doubling link count halves all_reduce latency. | **10-15% decode speedup** (all_reduce goes from ~15 ms to ~7 ms per layer) |
+| G2 | **DRAM weight prefetcher** | Blackhole chips in Galaxy support prefetching next layer's weights into L1 while current layer computes. Overlaps weight load latency with matmul execution. On T3K this was completely blocked by hardware check. | **5-10% decode speedup** (hides ~5 ms DRAM latency per layer at batch=4) |
+| G3 | **Expert parallelism (EP) across devices** | With 32 devices (4x8), each device can host 2 experts (64 total) instead of replicating all 64 on every device. Eliminates redundant weight DRAM reads and all_reduce for MoE layers. Requires expert-parallel dispatch (`a2a` or capacity-factor routing). | **15-25% decode speedup** for MoE layers; significant DRAM savings enabling larger batch |
+| G4 | **Sequence parallelism + distributed RMSNorm** | With more devices, sequence parallelism becomes viable — each device holds a shard of the hidden state. Enables distributed RMSNorm (D3), reduce_scatter CCL (D6), and halves per-device activation memory. Major architectural change from current replicated-activation TP. | **20-30% decode speedup** (eliminates full all_reduce, enables overlapped CCL) |
+
+### Medium Priority — Scaling and Memory Benefits
+
+| # | Optimization | Why It Helps on Galaxy | Expected Impact |
+|---|-------------|----------------------|-----------------|
+| G5 | **Larger batch sizes (batch=16-64)** | Galaxy's 32-device aggregate DRAM (32× per-device DRAM) supports much larger KV caches. At batch=32-64 with bf8 KV cache, compute utilization increases and per-token amortized CCL cost drops. | **2-4x aggregate TPS** (compute-bound regime at large batch) |
+| G6 | **`DRAM_SHARDED_WEIGHTS=1`** (revisit) | Regressed on T3K (+12.5 ms) because 8 devices couldn't saturate DRAM bandwidth with sharded reads at batch=4. With 32 devices and larger batch, sharded weight reads across more DRAM banks may become net positive. | **Potential 5% speedup at batch≥16** (needs profiling) |
+| G7 | **bf4 expert weights (`EXPERTS_TT_DTYPE=bf4`)** | Neutral on T3K because MoE wasn't DRAM-bandwidth-bound at batch=4. At larger batch on Galaxy (more active experts per step, more weight reads), 4x compression saves significant bandwidth. | **5-10% MoE layer speedup at batch≥16** |
+| G8 | **`FUSED_MOE=1` (fused persistent MoE kernel)** | Crashed on T3K due to JIT build issue. If the kernel compiles on Galaxy's Blackhole toolchain, the fused kernel eliminates per-expert dispatch overhead (currently ~46 individual expert matmuls per layer dispatched from Python). | **10-20% MoE layer speedup** (host dispatch → single kernel launch) |
+
+### Lower Priority — Exploratory
+
+| # | Optimization | Why It Helps on Galaxy | Expected Impact |
+|---|-------------|----------------------|-----------------|
+| G9 | **Async CCL with ping-pong semaphores (D6/B5)** | On T3K, `tt_all_reduce` only does `reduce_scatter` (sequence-parallel semantics). Galaxy may expose a full async `all_reduce` with overlapped compute. Combined with G1 (multi-link), could hide CCL entirely behind compute. | **Up to 20% decode speedup** if CCL fully overlapped |
+| G10 | **256K+ ISL with sub-32K chunk sizes** | Galaxy's aggregate memory supports 256K+ context. Smaller prefill chunks (8K-16K) reduce peak activation memory per chunk while leveraging Galaxy's parallelism for faster chunk processing. | **Enables 256K-512K ISL** (new capability) |
+| G11 | **Tensor-parallel head splitting** | With 32 devices, attention heads can be split across more devices (e.g., 4 heads per device instead of 16). Reduces per-device FlashMLA memory and compute. Requires changes to Q/K/V projection sharding. | **Enables larger batch or longer context** at same memory budget |
+| G12 | **Pipeline parallelism** | Split the 47 decoder layers across device groups (e.g., 12 layers per group of 8 devices). Overlaps layer computation across pipeline stages. Adds micro-batching complexity but reduces per-device weight memory. | **2-3x throughput** (batch pipeline, amortized bubble overhead) |
+
+### Recommended Execution Order for Galaxy
+
+1. **G1 (Multi-link CCL)** — Easiest to enable (env var or config change), highest confidence win
+2. **G2 (DRAM prefetcher)** — Also config-gated, should "just work" on Blackhole
+3. **G5 (Larger batch)** — Sweep batch=8,16,32 to find the compute/memory sweet spot
+4. **G7 (bf4 experts)** + **G8 (Fused MoE)** — Stack together to maximize MoE efficiency at larger batch
+5. **G3 (Expert parallelism)** — Requires dispatch refactor but eliminates MoE all_reduce entirely
+6. **G4 (Sequence parallelism)** — Biggest architectural change, biggest potential payoff; do last
+
+---
+
+## Galaxy Optimization Sweep Results (4x8 Mesh, 32 Devices)
+
+Experimental results from systematically testing each optimization one at a time on a Galaxy 4x8 (32-device Wormhole B0) system. All runs use trace mode sampling, `--kv-cache-dtype bf8`, and ROW dispatch (Tensix).
+
+### Baseline Configuration
+
+Env vars: `SKIP_DEFENSIVE_CLONES=1`, `FUSE_QKV_A=1`, `FUSE_SHARED_GATE_UP=1`, `BATCHED_PREFILL=1`, `DECODE_L1_ACT=1`, `EP_L1=1`
+
+| ISL | Decode mean (ms) | Per-user TPS | Agg TPS |
+|-----|------------------|-------------|---------|
+| 128 | 76.5 | 13.07 | 13.07 |
+| 512 | 77.6 | 12.89 | 12.89 |
+| 1024 | 78.6 | 12.72 | 12.72 |
+
+### Phase 1: Env-Var-Only Optimizations
+
+#### G5: Batch Scaling (ISL=128)
+
+| Batch | Decode (ms) | Agg TPS | Per-user TPS | Scaling |
+|-------|-------------|---------|--------------|---------|
+| 1 | 76.7 | 13.04 | 13.04 | 1.0x |
+| 2 | 77.2 | 25.91 | 12.95 | 1.99x |
+| 4 | 78.2 | 51.15 | 12.79 | 3.93x |
+| 8 | 78.7 | 101.65 | 12.71 | 7.80x |
+| 16 | 83.6 | 191.39 | 11.96 | 14.68x |
+| 32 | 89.3 | 358.34 | 11.20 | 27.48x |
+
+Near-linear aggregate TPS scaling up to batch=8. Batch=32 achieves **358 agg TPS** with only 17% per-user TPS degradation.
+
+#### G7: bf4 Expert Weights
+
+| ISL | Decode (ms) | TPS | vs Baseline |
+|-----|-------------|-----|-------------|
+| 128 | 76.5 | 13.07 | +0.0% |
+| 512 | 77.2 | 12.95 | +0.5% |
+| 1024 | 77.7 | 12.87 | +1.2% |
+
+Neutral at batch=1 as expected. Improvement grows with ISL (DRAM bandwidth savings at longer contexts).
+
+#### G8: Fused MOE Kernel
+
+**All runs crashed** (exit code 1). The fused persistent MoE kernel fails on Galaxy, same as T3K.
+
+#### G6: DRAM Sharded Weights
+
+| ISL | Decode (ms) | TPS | vs Baseline |
+|-----|-------------|-----|-------------|
+| 128 | 86.8 | 11.52 | **-11.9%** |
+| 512 | 88.0 | 11.36 | **-11.9%** |
+| 1024 | 89.4 | 11.19 | **-12.0%** |
+
+Consistent **12% regression** at batch=1, mirroring T3K behavior. May help at larger batch (not tested).
+
+### Phase 2: Code Changes
+
+#### G1: Multi-link CCL
+
+Added `GLM4_MOE_LITE_CCL_NUM_LINKS` and `GLM4_MOE_LITE_CCL_TOPOLOGY` env vars. Updated 16 `all_reduce`/`all_gather` call sites across 6 files.
+
+| Config | ISL=128 decode (ms) | ISL=1024 decode (ms) | vs Baseline |
+|--------|---------------------|----------------------|-------------|
+| num_links=2, linear | 76.7 | 77.7 | +0-1.2% |
+| num_links=4, ring | 75.7 | 77.2 | **+1.1-1.8%** |
+
+Best config: `GLM4_MOE_LITE_CCL_NUM_LINKS=4 GLM4_MOE_LITE_CCL_TOPOLOGY=ring`
+
+#### G2: DRAM Weight Prefetcher
+
+**Deferred** — too complex for quick integration. GLM4 has variable weight tensor counts per layer (dense vs MoE layers), but `dram_prefetcher` requires uniform `n_tensors`. Also requires global-CB-aware matmul calls and SubDevice core splitting.
+
+### Combined Winners (bf4 + 4-link ring CCL)
+
+Best-performing configuration: baseline + `EXPERTS_TT_DTYPE=bf4` + `CCL_NUM_LINKS=4` + `CCL_TOPOLOGY=ring`
+
+#### Decode Latency (ms)
+
+| ISL \ batch | 1 | 2 | 4 | 8 | 16 | 32 |
+|-------------|------|------|------|------|------|------|
+| 128 | 74.8 | 75.2 | 76.0 | 77.5 | 82.0 | 87.3 |
+| 512 | 75.4 | 76.6 | 77.8 | 79.1 | 83.4 | 89.4 |
+| 1024 | 77.3 | 77.1 | 78.7 | 80.2 | 84.4 | 91.4 |
+
+#### Aggregate TPS
+
+| ISL \ batch | 1 | 2 | 4 | 8 | 16 | 32 |
+|-------------|-------|-------|-------|--------|--------|--------|
+| 128 | 13.37 | 26.60 | 52.63 | 103.23 | 195.12 | 366.55 |
+| 512 | 13.26 | 26.11 | 51.41 | 101.14 | 191.85 | 357.94 |
+| 1024 | 12.94 | 25.94 | 50.83 | 99.75 | 189.57 | 350.11 |
+
+#### Improvement vs Baseline (batch=1)
+
+| ISL | Baseline | Combined | Improvement |
+|-----|----------|----------|-------------|
+| 128 | 76.5 ms | 74.8 ms | **-2.2%** |
+| 512 | 77.6 ms | 75.4 ms | **-2.8%** |
+| 1024 | 78.6 ms | 77.3 ms | **-1.7%** |
+
+### Summary
+
+| Optimization | Status | Impact |
+|---|---|---|
+| G1 Multi-link CCL (4 links, ring) | Implemented | +1-2% decode speedup |
+| G2 DRAM Prefetcher | Deferred | High complexity |
+| G5 Batch Scaling | Tested | 358 agg TPS at batch=32 |
+| G6 DRAM Sharded Weights | Tested | -12% regression |
+| G7 bf4 Expert Weights | Tested | +0-1.2% at batch=1 |
+| G8 Fused MOE | Tested | Crashed |
+| **Combined (G1+G7)** | **Implemented** | **2-3% decode speedup, 367 agg TPS at batch=32** |

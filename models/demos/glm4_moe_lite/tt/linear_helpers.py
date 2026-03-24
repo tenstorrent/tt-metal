@@ -103,8 +103,8 @@ def tp_row_parallel_linear(
     ttnn.deallocate(a_tp, force=False)
     out_reduced = ttnn.all_reduce(
         out,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
+        num_links=cfg.ccl_num_links,
+        topology=cfg.ccl_topology,
         cluster_axis=cfg.tp_axis,
         memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -294,8 +294,8 @@ def attn_linear(
             ttnn.deallocate(a_tp, force=False)
             out_reduced = ttnn.all_reduce(
                 out,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
+                num_links=cfg.ccl_num_links,
+                topology=cfg.ccl_topology,
                 cluster_axis=cfg.tp_axis,
                 memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
             )

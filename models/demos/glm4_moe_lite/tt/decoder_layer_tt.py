@@ -666,6 +666,9 @@ def run_decoder_layer_prefill_update_cache_tt(
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
+    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
+    ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
@@ -673,8 +676,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(a_tp, force=False)
         out_reduced = ttnn.all_reduce(
             out,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=ccl_num_links,
+            topology=ccl_topology,
             cluster_axis=tp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -973,8 +976,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
+                num_links=ccl_num_links,
+                topology=ccl_topology,
                 cluster_axis=tp_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -1038,8 +1041,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         if tp_enabled:
             shared_out_reduced = ttnn.all_reduce(
                 shared_out,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
+                num_links=ccl_num_links,
+                topology=ccl_topology,
                 cluster_axis=tp_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
