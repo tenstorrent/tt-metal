@@ -800,7 +800,7 @@ class Molmo2Generator:
         )
 
         valid_token_ttnn = ttnn.from_torch(
-            valid_token.flatten(),
+            valid_token.flatten().float(),  # Must convert bool to float before bfloat16
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,

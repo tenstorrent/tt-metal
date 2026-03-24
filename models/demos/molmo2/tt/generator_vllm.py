@@ -1009,16 +1009,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 is_video = pv_tensor.shape[0] == 8 and pooling is not None and pooling.shape[1] > 1000
 
                 # Run prefill with pre-processed image/video
-                # NOTE: Vision trace disabled (Option C) due to accuracy bug
-                # Vision trace causes wrong answers for video (C instead of B)
-                # TODO: Fix vision trace and re-enable for performance
                 logits_ttnn, prefill_timing = self.generator.run_prefill(
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=enable_trace,  # Prefill trace OK
-                    use_vision_trace=False,  # DISABLED - accuracy bug
-                    use_unified_trace=False,  # DISABLED - requires vision trace
+                    use_trace=enable_trace,
+                    use_vision_trace=True,  # Vision trace accuracy bug fixed
+                    use_unified_trace=False,
                 )
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
             else:
@@ -1033,14 +1030,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     image_inputs = preprocess_image_molmo2(image)
 
                     # Run prefill with image
-                    # NOTE: Vision trace disabled (Option C) due to accuracy bug
                     logits_ttnn, prefill_timing = self.generator.run_prefill(
                         input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                         pixel_values=image_inputs["pixel_values"],
                         pooled_patches_idx=image_inputs["image_token_pooling"].unsqueeze(0),
-                        use_trace=enable_trace,  # Prefill trace OK
-                        use_vision_trace=False,  # DISABLED - accuracy bug
-                        use_unified_trace=False,  # DISABLED - requires vision trace
+                        use_trace=enable_trace,
+                        use_vision_trace=True,  # Vision trace accuracy bug fixed
+                        use_unified_trace=False,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
                 else:
