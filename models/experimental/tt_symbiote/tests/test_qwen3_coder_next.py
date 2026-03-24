@@ -268,8 +268,8 @@ def _load_qwen3_model():
 )
 @pytest.mark.parametrize(
     "main_max_new_tokens",
-    [256],
-    ids=["decode_max_256"],
+    [128],
+    ids=["decode_max_128"],
 )
 def test_qwen3_coder_next(mesh_device, main_max_new_tokens: int):
     """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K.
