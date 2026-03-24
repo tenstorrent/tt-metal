@@ -140,10 +140,12 @@ def load_gpt2_from_safetensors(
 
             # GPT-2 Conv1D weights are stored as (in_features, out_features),
             # standard linear expects (out_features, in_features) → transpose.
+            # np.ascontiguousarray is required because .T returns a non-contiguous
+            # Fortran-order view and from_numpy reads the raw buffer linearly.
             if hf_name == f"{pfx}.attn.c_attn.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/attention/qkv_linear/weight"),
-                    _to_bf16_4d(hf_arr.T),
+                    _to_bf16_4d(np.ascontiguousarray(hf_arr.T)),
                 )
                 matched = True
                 break
@@ -154,7 +156,7 @@ def load_gpt2_from_safetensors(
             if hf_name == f"{pfx}.attn.c_proj.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/attention/out_linear/weight"),
-                    _to_bf16_4d(hf_arr.T),
+                    _to_bf16_4d(np.ascontiguousarray(hf_arr.T)),
                 )
                 matched = True
                 break
@@ -165,7 +167,7 @@ def load_gpt2_from_safetensors(
             if hf_name == f"{pfx}.mlp.c_fc.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/mlp/fc1/weight"),
-                    _to_bf16_4d(hf_arr.T),
+                    _to_bf16_4d(np.ascontiguousarray(hf_arr.T)),
                 )
                 matched = True
                 break
@@ -176,7 +178,7 @@ def load_gpt2_from_safetensors(
             if hf_name == f"{pfx}.mlp.c_proj.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/mlp/fc2/weight"),
-                    _to_bf16_4d(hf_arr.T),
+                    _to_bf16_4d(np.ascontiguousarray(hf_arr.T)),
                 )
                 matched = True
                 break
