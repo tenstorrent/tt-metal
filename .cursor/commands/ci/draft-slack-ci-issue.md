@@ -47,5 +47,6 @@ Produce a copy-paste-ready Slack message for pipelines triage, using a CI issue 
    - Add the auto-triage permalink line **only** when step 3 found relevant `HIGH CONFIDENCE` material; otherwise say nothing about auto-triage in the message body.
 
 7. **Output for copy-paste**
-   - Emit the full message in one easy-to-copy block.
+   - Emit the full message in one easy-to-copy block as **plain text** (not wrapped in markdown ` ``` ` code fences—Slack does not hyperlink inside code blocks).
+   - Use **raw https URLs only** for the GitHub issue, Actions job link, any PR, and any auto-triage permalink. **Do not** use Slack `<url|label>` mrkdwn—it often renders as literal angle brackets.
    - Format with an extra blank line between logical lines/sections (double-newline style for Slack readability).

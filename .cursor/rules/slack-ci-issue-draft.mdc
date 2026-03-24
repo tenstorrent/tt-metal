@@ -24,16 +24,23 @@ Use this rule when drafting a Slack message to inform people about a filed CI ma
 
 Auto-triage guidance must be treated as strong only if it explicitly contains `HIGH CONFIDENCE`. Lower-confidence triage is weak signal and should not drive owner selection by itself.
 
+## URLs in the message (required)
+
+- Use **full raw URLs** only (`https://github.com/tenstorrent/tt-metal/issues/…`, job-level Actions `https://github.com/tenstorrent/tt-metal/actions/runs/…/job/…`, PR URLs, Slack archive permalinks). Slack linkifies plain URLs in normal message text.
+- **Do not** use Slack mrkdwn `<https://…|label>` (angle brackets and pipe)—many clients show that literally instead of a link.
+- **Do not** rely on `#12345` alone as the only issue pointer; include the **https** issue URL at least once.
+- When delivering the draft to the user, **do not** wrap the entire message in markdown **code fences** (triple backticks). Slack does not linkify URLs inside code blocks.
+
 ## Structure
 
 1. **Heads-up line**
-   One sentence: deterministic CI failure descriptor + issue number.
-   Example: `Heads up on this deterministic CI failure for a llama3.3-70b test: #39837`
+   One sentence: deterministic CI failure descriptor + raw **https** link to the GitHub issue (you may also say `#39837` for readability if the URL appears nearby).
+   Example: `Heads up on this deterministic CI failure for a llama3.3-70b test — https://github.com/tenstorrent/tt-metal/issues/39837`
 
 2. **Context paragraph(s)**
    - First sentence: workflow and job in plain language (e.g. "(Blackhole) Demo tests → llama3.3-70b batch-1 TP device perf prefill (layers=2) has been failing repeatedly on main.").
    - Next: brief root-cause or area (e.g. device profiler buffer sizing, op_support_count, large seq len). Keep it short and actionable.
-   - Include the latest failing **job** URL on `main` (must be job-level `.../runs/<run_id>/job/<job_id>`, not only workflow run URL).
+   - Include the latest failing **job** as a raw **https** URL (must be job-level `.../runs/<run_id>/job/<job_id>`, not only workflow run URL).
 
 3. **Failure excerpt**
    Single line or short block: the actual error from latest job logs (or issue when logs are unavailable).
@@ -41,7 +48,7 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 
 4. **PR + review ask (optional)**
    If a PR (draft or open) is linked and would close the issue:
-   - "And here's an auto-generated PR trying to address it: #<number>"
+   - Include the raw PR URL, e.g. `And here's an auto-generated PR trying to address it: https://github.com/tenstorrent/tt-metal/pull/12345`
    - "Appreciate an extra set of eyes"
 
 5. **Mentions**
@@ -51,7 +58,7 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 
 6. **Auto-triage reference (optional)**
    If a relevant auto-triage message/reply is found in the exported month of data **and** has `HIGH CONFIDENCE`, add:
-   - `This auto-triage report may be of relevance: <slack permalink>`
+   - `This auto-triage report may be of relevance:` followed by the raw Slack archive **https** permalink (no angle-bracket formatting)
    If nothing relevant with `HIGH CONFIDENCE` exists, **do not mention auto-triage at all** in the Slack message—no line, no footnote, and **never** say things like "no high-confidence triage found" or that you searched Slack. Pipelines readers only need the permalink when it exists.
 
 7. **Disable warning (deadline)**
