@@ -374,6 +374,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
@@ -508,18 +509,18 @@ void kernel_main() {
                     //   Q[1..N-3]: skip — TRID_INNER already cleared at Q[0]
                     // Without this, Q[j+1]'s wB(TRID_INNER) would stall on Q[j]'s
                     // current-ring save (near-zero flight time) for q_per_core >= 5.
-                    const uint32_t next_q = global_q_chunk + 1;
-                    if (next_q < global_q_end) {
-                        const uint32_t next_q_index = next_q - global_q_start;
+                    const uint32_t next_q_index = q_index + 1;
+                    if (next_q_index < q_per_core) {
                         const uint32_t next_trid = q_trid(next_q_index);
                         // First inner Q (next_q_index==1) needs the barrier; subsequent
                         // inner Qs (next_q_index>1 && next_trid==TRID_INNER) don't.
                         if (next_trid != TRID_INNER || next_q_index == 1) {
                             noc_async_write_barrier_with_trid(next_trid);
                         }
-                        const uint32_t nb_next = next_q / (NH * num_q_chunks);
-                        const uint32_t nq_next = (next_q % (NH * num_q_chunks)) / num_q_chunks;
-                        const uint32_t qc_next = next_q % num_q_chunks;
+                        const uint32_t next_q_global = global_q_chunk + 1;
+                        const uint32_t nb_next = next_q_global / (NH * num_q_chunks);
+                        const uint32_t nq_next = (next_q_global % (NH * num_q_chunks)) / num_q_chunks;
+                        const uint32_t qc_next = next_q_global % num_q_chunks;
                         const auto qi_next = get_q_chunk_info(
                             qc_next, nb_next, nq_next, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                         issue_restore_reads(
@@ -572,7 +573,6 @@ void kernel_main() {
                 // === Compute runs K-loop for this Q chunk ===
 
                 // Wait for compute to signal last K-chunk start (multi-Q only).
-                constexpr uint32_t cb_signal = tt::CBIndex::c_12;
                 if (!single_q_chunk) {
                     cb_wait_front(cb_signal, 1);
                     cb_pop_front(cb_signal, 1);
