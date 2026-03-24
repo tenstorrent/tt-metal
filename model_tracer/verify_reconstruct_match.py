@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 """Verify that two reconstructed JSONs have identical configurations.
 
 Compares the 'operations' key only (ignores top-level 'metadata' which
