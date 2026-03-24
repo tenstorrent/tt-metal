@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
+#include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
 #include <cctype>
@@ -91,6 +92,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
     TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
     TT_METAL_FORCE_REINIT,                     // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
@@ -575,6 +577,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->fabric_trimming_override_path = std::string(value);
             break;
 
+        // TT_METAL_ENABLE_FABRIC_VC2
+        // Enables the third virtual channel (VC2) for single-hop neighbour exchange traffic.
+        // Only effective when intermesh VC is also enabled (2D + multi-mesh + Blackhole + no UDM/mux).
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
+
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
@@ -757,15 +766,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //   1  (1 << 0) - FPU counters
         //   2  (1 << 1) - PACK counters
         //   4  (1 << 2) - UNPACK counters
-        //   8  (1 << 3) - L1 counters
-        //   16 (1 << 4) - INSTRN (instruction) counters
-        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //   8  (1 << 3) - L1 bank 0 counters (ring0 NOC, L1 arbitration)
+        //   16 (1 << 4) - L1 bank 1 counters (ring1 NOC, TDMA extended)
+        //   32 (1 << 5) - INSTRN (instruction) counters
+        //   63 (0x3F)   - All counter groups (fpu|pack|unpack|l1_0|l1_1|instrn)
         //
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
-        // Note: Currently, only FPU counters are supported
+        // Note: L1 bank 0 and L1 bank 1 cannot be enabled simultaneously (they share
+        //       the same hardware registers and are selected via MUX_CTRL bit 4).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
+                constexpr uint32_t L1_0_BIT = (1 << 3);
+                constexpr uint32_t L1_1_BIT = (1 << 4);
+                if ((this->profiler_perf_counter_mode & L1_0_BIT) && (this->profiler_perf_counter_mode & L1_1_BIT)) {
+                    TT_THROW(
+                        "L1 bank 0 and L1 bank 1 perf counter groups cannot be enabled simultaneously. "
+                        "They share the same hardware registers (selected via MUX_CTRL bit 4). "
+                        "Please choose one: l1_0 (bit 3) or l1_1 (bit 4).");
+                }
                 this->profiler_enabled = true;
             }
             break;
@@ -1542,6 +1561,12 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     }
 
     fabric_telemetry_settings = parsed_settings;
+}
+
+void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {

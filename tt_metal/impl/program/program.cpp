@@ -45,6 +45,7 @@
 #include "core_coord.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -74,6 +75,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
+#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
@@ -468,7 +470,7 @@ KernelGroup::KernelGroup(
                 kernel->config());
         }
 
-        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dmk/runtime access
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dm/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get())) {
             auto config = std::get<experimental::quasar::QuasarDataMovementConfig>(qk->config());
             const auto& dm_cores = qk->get_dm_processors();
@@ -479,6 +481,56 @@ KernelGroup::KernelGroup(
                     qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
                 kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
+            }
+        }
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
+            const auto& compute_cores = qk->get_compute_processors();
+            // Track which NEOs have been used to ensure we don't use the same NEO multiple times
+
+            // Every trisc core in a single NEO/Tensix engine shares the same num_sw_threads and kernel_thread_id
+            std::set<uint32_t> neo_indices_set;
+            for (auto compute_core : compute_cores) {
+                switch (compute_core) {
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
+                        neo_indices_set.insert(0);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
+                        neo_indices_set.insert(1);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_3:
+                        neo_indices_set.insert(2);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_3:
+                        neo_indices_set.insert(3);
+                        break;
+                }
+            }
+            std::vector<uint32_t> neo_indices_used(neo_indices_set.begin(), neo_indices_set.end());
+            TT_ASSERT(
+                neo_indices_used.size() == config.num_threads_per_cluster,
+                "Number of NEOs used must match number of threads per cluster");
+            // Now that we know which NEOs have been used, we can set the num_sw_threads and kernel_thread_id for each
+            // Tensix engine
+            for (uint32_t thread_idx = 0; thread_idx < config.num_threads_per_cluster; thread_idx++) {
+                uint32_t neo_id = neo_indices_used[thread_idx];
+                // First set of indices are used for DM cores, second set are used for Tensix engines
+                uint32_t config_index = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER + neo_id;
+                kernel_config.num_sw_threads()[config_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[config_index] = thread_idx;
             }
         }
     }
@@ -1170,7 +1222,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
         return;
     }
 
@@ -1504,6 +1557,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    ContextId context_id = extract_context_id(device);
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1525,11 +1579,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
+                   tt::TargetDevice::Mock;
+
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
             validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
-                [kernel, device, this, &build_env] {
+                [kernel, device, this, &build_env, is_mock] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
@@ -1546,13 +1603,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
+                    if (!is_mock) {
                         kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
-
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
 
                     jit_build_once(kernel_hash, [&] {
                         if (!is_mock) {
@@ -1572,8 +1625,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     sync_build_steps(events);
 
     // Mock devices don't have binaries to read
-    bool is_mock =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
@@ -1787,7 +1838,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
 }
@@ -1795,6 +1846,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
 // program data structures in L1. Will be used when assembling dispatch commands for this program
 uint32_t detail::ProgramImpl::finalize_program_offsets(
+    ContextId context_id,
     IDevice* device,
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
@@ -1802,7 +1854,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id).hal();
 
     // Collect dataflow buffers from all programs
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;

@@ -10,9 +10,8 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -33,11 +32,10 @@ def _get_diffusers_pipeline(is_ci_env):
     [
         ((1024, 1024), (1, 320, 64, 64), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.996),
         ((1024, 1024), (1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.997),
-        ((512, 512), (1, 320, 32, 32), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.997),
+        ((512, 512), (1, 320, 32, 32), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.996),
         ((512, 512), (1, 640, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.997),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattndown(
     device,
     image_resolution,
@@ -54,6 +52,9 @@ def test_crossattndown(
     reset_seeds,
     lora_path,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 

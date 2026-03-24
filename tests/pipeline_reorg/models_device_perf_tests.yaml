@@ -1,0 +1,37 @@
+# This file defines the test matrix for the Models Device Perf Tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined). Use placeholders
+#     like {tt_cache_path} to inject per-SKU values; define the key under each sku.
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#     tt_cache_path: (optional) Path for TT_CACHE_PATH; use with export TT_CACHE_PATH={tt_cache_path} in cmd.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Llama 3.1-8B device perf tests
+  cmd: |
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+    export HF_MODEL={hf_model}
+    export TT_CACHE_PATH={tt_cache_path}
+    pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+  model: llama3.1-8b
+  skus:
+    wh_n150:
+      timeout: 10
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
+    bh_p150:
+      timeout: 10
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
+    bh_p300:
+      timeout: 10
+      tt_cache_path: ""
+      hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models

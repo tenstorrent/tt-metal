@@ -14,7 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 namespace tt::tt_metal {
 struct KernelGroup;
@@ -26,7 +26,7 @@ namespace tt::tt_metal::experimental::dfb::detail {
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> base_addr = {0};
     std::array<uint32_t, 4> limit = {0};
-    std::array<::experimental::PackedTileCounter, 4> packed_tile_counter = {0};
+    std::array<::dfb::PackedTileCounter, 4> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
     bool broadcast_tc = false;  // DM-DM BLOCKED producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
@@ -54,10 +54,8 @@ struct DataflowBufferImpl {
     // Shared config fields (written to dfb_initializer_t)
     uint32_t entry_size = 0;
     uint32_t stride_in_entries = 0;
-    std::array<uint8_t, 4> txn_ids = {0};
-    uint8_t num_entries_per_txn_id = 0;
-    uint8_t num_entries_per_txn_id_per_tc = 0;
-    uint8_t num_txn_ids = 0;
+    dfb_txn_id_descriptor_t producer_txn_descriptor = {};
+    dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
 
     // Flag to track if TC/remapper allocation has been finalized
     bool configs_finalized = false;
@@ -73,7 +71,7 @@ struct DataflowBufferImpl {
 
 class TileCounterAllocator {
 public:
-    ::experimental::PackedTileCounter allocate(uint8_t tensix_id);
+    ::dfb::PackedTileCounter allocate(uint8_t tensix_id);
     void reset() { next_tc_id_.fill(0); }
 
 private:
@@ -87,6 +85,16 @@ public:
 
 private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
+};
+
+// Allocates hardware transaction IDs. Valid range: [0, 31]
+class TxnIdAllocator {
+public:
+    std::vector<uint8_t> allocate(uint8_t count);
+    void reset() { next_id_ = 0; }
+
+private:
+    uint8_t next_id_ = 0;
 };
 
 // Allocates Remapper clientTypes for BLOCKED consumer mode.

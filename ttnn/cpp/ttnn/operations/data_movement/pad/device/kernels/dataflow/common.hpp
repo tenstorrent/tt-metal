@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 // Takes in an id_per_dim and dims array, both of size ndims
 // Advances the id_per_dim by one, wrapping and carrying as needed
 static inline int advance_tensor_index(

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 // Sfpu golden functions
 #include <cmath>
 #include <numbers>

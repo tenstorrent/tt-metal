@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <reflect>
+#include <set>
 #include <stack>
 
 #include <enchantum/enchantum.hpp>
@@ -94,14 +95,14 @@ inline auto compute_program_hash(
                       const typename device_operation_t::tensor_args_t& tensor_args) {
                       {
                           device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-                      } -> std::convertible_to<tt::stl::hash::hash_t>;
+                      } -> std::convertible_to<ttsl::hash::hash_t>;
                   }) {
         ZoneScopedN("Op profiler Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
         ZoneScopedN("Op profiler Compute default program hash");
-        return tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
     }
 }
 
@@ -146,7 +147,7 @@ private:
 inline RuntimeIDToOpName runtime_id_to_opname_{};
 
 class ProgramHashToOpName {
-    using KeyType = std::pair<ChipId, tt::stl::hash::hash_t>;
+    using KeyType = std::pair<ChipId, ttsl::hash::hash_t>;
 
 public:
     std::string find_if_exists(const KeyType& key) {
@@ -251,18 +252,31 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
-        json kernelObj;
-        kernelObj["source"] = kernel.source;
-        kernelObj["name"] = kernel.name;
+    // Fused ops (e.g. DeepSeek decoder block) can have hundreds of kernels compiled
+    // from the same source with different compile-time args.  Deduplicate by
+    // (source, math_fidelity) for compute and by source for datamovement to keep the
+    // profiler JSON well within Tracy's 64 KiB message limit.
+    std::set<std::pair<std::string_view, std::string>> seenCompute;
+    std::set<std::string_view> seenDatamovement;
 
+    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
         auto processor_class = kernel.processor_class;
         if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = kernel.math_fidelity.value();
-            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
-            computeKernels.push_back(std::move(kernelObj));
+            auto fidelityStr = enchantum::to_string(kernel.math_fidelity.value());
+            if (seenCompute.emplace(kernel.source, fidelityStr).second) {
+                json kernelObj;
+                kernelObj["source"] = kernel.source;
+                kernelObj["name"] = kernel.name;
+                kernelObj["math_fidelity"] = fidelityStr;
+                computeKernels.push_back(std::move(kernelObj));
+            }
         } else {
-            datamovementKernels.push_back(std::move(kernelObj));
+            if (seenDatamovement.emplace(kernel.source).second) {
+                json kernelObj;
+                kernelObj["source"] = kernel.source;
+                kernelObj["name"] = kernel.name;
+                datamovementKernels.push_back(std::move(kernelObj));
+            }
         }
 
         auto core_type = kernel.programmable_core_type;
@@ -412,7 +426,7 @@ inline json get_base_json(
     j["global_call_count"] = operation_id;
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    std::string opName = as_string(ttsl::get_type_name<device_operation_t>());
     if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
         opName = device_operation_t::get_type_name(operation_attributes);
     }
@@ -421,7 +435,7 @@ inline json get_base_json(
     j["op_code"] = opName;
 
     json attributesObj;
-    for (auto&& [name, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for (auto&& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
         std::string nameStr;
         nameStr = fmt::format("{}", name);
         attributesObj[nameStr] = fmt::format("{}", value);
@@ -429,12 +443,12 @@ inline json get_base_json(
     j["attributes"] = attributesObj;
 
     std::vector<json> input_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](auto&& tensor) { input_tensors.push_back(get_tensor_json(tensor)); }, tensor_args);
     j["input_tensors"] = input_tensors;
 
     std::vector<json> output_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&output_tensors](auto&& tensor) { output_tensors.push_back(get_tensor_json(tensor)); }, tensor_return_value);
     j["output_tensors"] = output_tensors;
 
