@@ -24,6 +24,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.tt_log_probs import LogProbsResult
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
@@ -448,7 +449,7 @@ class Generator(WarmupForwardMixin):
             # Each model expected to run the same model, safe to use 1st vocab size
             output_tensor = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
             output_tokens = torch.zeros(batch_size, 1, dtype=torch.int64)
-            output_log_probs = torch.ones(batch_size, 1, dtype=torch.float32)
+            output_log_probs = [None] * batch_size
         sampling_executed = False
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
@@ -722,6 +723,12 @@ class Generator(WarmupForwardMixin):
                     logits,
                     enable_trace=False,
                 )
+                # process logprobs to call .cpu()
+                host_log_probs = None
+                if isinstance(tt_log_probs, LogProbsResult):
+                    host_log_probs = tt_log_probs.to_cpu(blocking=False)
+                elif tt_log_probs is not None:
+                    host_log_probs = tt_log_probs.cpu(blocking=False)
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -729,7 +736,7 @@ class Generator(WarmupForwardMixin):
                         "last_token_idx": last_token_idx,
                         "logits": [
                             tt_tokens.cpu(blocking=False),
-                            tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
+                            host_log_probs,
                         ],
                         "sampling": sampling_enabled,
                     }
@@ -767,13 +774,26 @@ class Generator(WarmupForwardMixin):
                             last_token_idx % 32
                         )  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
                     ]
-                    log_probs_host = (
-                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
+                    if isinstance(tt_log_probs, LogProbsResult):
+                        # New path: LogProbsResult has host tensors [1,1,B,32]
+                        # Extract user's logprobs from the batch
+                        user_batch_idx = last_token_idx % 32
+                        lp_host = tt_log_probs.topk_logprobs_host
+                        idx_host = tt_log_probs.topk_indices_host
+                        lp_torch = ttnn.to_torch(ttnn.get_device_tensors(lp_host)[0])
+                        idx_torch = ttnn.to_torch(ttnn.get_device_tensors(idx_host)[0])
+                        log_probs_host = LogProbsResult(
+                            topk_logprobs=None,
+                            topk_indices=None,
+                            topk_logprobs_host=lp_torch[0, 0, user_batch_idx, :].unsqueeze(0),
+                            topk_indices_host=idx_torch[0, 0, user_batch_idx, :].unsqueeze(0),
+                        )
+                    elif tt_log_probs is not None:
+                        log_probs_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
                             (last_token_idx % 32)
                         ]  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
-                        if tt_log_probs is not None
-                        else None
-                    )
+                    else:
+                        log_probs_host = None
                     output_tokens[idx] = tokens_host
                     if log_probs_host is not None:
                         output_log_probs[idx] = log_probs_host
@@ -784,7 +804,34 @@ class Generator(WarmupForwardMixin):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
-            return output_tokens, output_log_probs
+            # Convert output_log_probs list to format expected by vLLM:
+            # - New path (LogProbsResult): tuple of (topk_lp[B,32], topk_idx[B,32])
+            # - Old path: flat tensor [B]
+            has_logprobs_result = any(isinstance(lp, LogProbsResult) for lp in output_log_probs)
+            if has_logprobs_result:
+                from models.common.sampling.tt_log_probs import DEVICE_TOP_K
+
+                all_lp = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.float32)
+                all_idx = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.int32)
+                for i, lp in enumerate(output_log_probs):
+                    if isinstance(lp, LogProbsResult) and lp.topk_logprobs_host is not None:
+                        lp_vals = lp.topk_logprobs_host
+                        idx_vals = lp.topk_indices_host
+                        if isinstance(lp_vals, torch.Tensor):
+                            all_lp[i] = lp_vals.reshape(-1)[:DEVICE_TOP_K].float()
+                            all_idx[i] = idx_vals.reshape(-1)[:DEVICE_TOP_K].int()
+                        else:
+                            # ttnn host tensor
+                            all_lp[i] = ttnn.to_torch(lp_vals).reshape(-1)[:DEVICE_TOP_K].float()
+                            all_idx[i] = ttnn.to_torch(idx_vals).reshape(-1)[:DEVICE_TOP_K].int()
+                return output_tokens, (all_lp, all_idx)
+            else:
+                # Old path: build flat tensor from list
+                flat_lp = torch.ones(batch_size, dtype=torch.float32)
+                for i, lp in enumerate(output_log_probs):
+                    if lp is not None and isinstance(lp, (torch.Tensor, float, int)):
+                        flat_lp[i] = float(lp)
+                return output_tokens, flat_lp
         else:
             return output_tensor
 
@@ -1510,12 +1557,7 @@ class Generator(WarmupForwardMixin):
             if lp is None:
                 return None
             if isinstance(lp, LogProbsResult):
-                return LogProbsResult(
-                    topk_logprobs_host=lp.topk_logprobs.cpu(),
-                    topk_indices_host=lp.topk_indices.cpu(),
-                    topk_logprobs=None,
-                    topk_indices=None,
-                )
+                return lp.to_cpu(blocking=True)
             return lp.cpu()
 
         def _read_logprobs_async(lp):
@@ -1523,12 +1565,7 @@ class Generator(WarmupForwardMixin):
             if lp is None:
                 return None
             if isinstance(lp, LogProbsResult):
-                return LogProbsResult(
-                    topk_logprobs_host=lp.topk_logprobs.cpu(blocking=False),
-                    topk_indices_host=lp.topk_indices.cpu(blocking=False),
-                    topk_logprobs=None,
-                    topk_indices=None,
-                )
+                return lp.to_cpu(blocking=False)
             return lp.cpu(blocking=False)
 
         if not async_read:
@@ -1574,16 +1611,52 @@ class Generator(WarmupForwardMixin):
                 )
                 lp = tt_out[i][1]
                 if isinstance(lp, LogProbsResult):
-                    # New path: convert LogProbsResult host tensors to torch [B, 32]
-                    composer = self.model[i].sampling.tt_sampling.log_probs_calculator._build_mesh_composer()
-                    topk_lp = ttnn.to_torch(
-                        lp.topk_logprobs_host if lp.topk_logprobs_host is not None else lp.topk_logprobs,
-                        mesh_composer=composer,
-                    )[0, 0, :max_batch_size_per_model, :].float()
-                    topk_idx = ttnn.to_torch(
-                        lp.topk_indices_host if lp.topk_indices_host is not None else lp.topk_indices,
-                        mesh_composer=composer,
-                    )[0, 0, :max_batch_size_per_model, :].to(torch.int32)
+                    # New path: convert LogProbsResult to torch (topk_lp, topk_idx) tuple.
+                    #
+                    # LogProbsResult contains device tensors of shape (1,1,32,32) — 32 users
+                    # × 32 top-k logprobs — replicated across all devices in the mesh.
+                    # However, for row-sharded sampling (sampling_dp > 1), each mesh row
+                    # independently computes logprobs for its own 32 users, so the content
+                    # differs per row even though the tensor is "replicated."
+                    #
+                    # We cannot use a mesh composer (ConcatMesh2dToTensor) because it would
+                    # concatenate all 32 devices including 8 column replicas per row, giving
+                    # 8× duplicated data. Instead:
+                    #   - Row-sharded (sampling_dp > 1): pick one device per row (first in
+                    #     each row), read its [32, 32] tensor, concatenate rows → [128, 32].
+                    #   - Non-row-sharded (sampling_dp == 1): read from a single device.
+                    lp_tensor = lp.topk_logprobs_host if lp.topk_logprobs_host is not None else lp.topk_logprobs
+                    idx_tensor = lp.topk_indices_host if lp.topk_indices_host is not None else lp.topk_indices
+                    sampling_dp = getattr(self.model[i], "sampling_dp", 1)
+                    if sampling_dp > 1:
+                        # Row-sharded: read one device per row and concatenate
+                        rows, cols = self.mesh_device.shape
+                        device_tensors_lp = ttnn.get_device_tensors(lp_tensor)
+                        device_tensors_idx = ttnn.get_device_tensors(idx_tensor)
+                        row_lps = []
+                        row_idxs = []
+                        for row in range(rows):
+                            dev_idx = row * cols  # first device in this row
+                            row_lp = ttnn.to_torch(device_tensors_lp[dev_idx])
+                            row_lps.append(row_lp.reshape(-1, row_lp.shape[-1])[:max_batch_size_per_model])
+                            row_idx = ttnn.to_torch(device_tensors_idx[dev_idx])
+                            row_idxs.append(row_idx.reshape(-1, row_idx.shape[-1])[:max_batch_size_per_model])
+                        topk_lp = torch.cat(row_lps, dim=0).float()
+                        topk_idx = torch.cat(row_idxs, dim=0).to(torch.int32)
+                    else:
+                        # Non-row-sharded: read from first device only
+                        device_tensors_lp = ttnn.get_device_tensors(lp_tensor)
+                        device_tensors_idx = ttnn.get_device_tensors(idx_tensor)
+                        topk_lp = (
+                            ttnn.to_torch(device_tensors_lp[0])
+                            .reshape(-1, device_tensors_lp[0].shape[-1])[:max_batch_size_per_model]
+                            .float()
+                        )
+                        topk_idx = (
+                            ttnn.to_torch(device_tensors_idx[0])
+                            .reshape(-1, device_tensors_idx[0].shape[-1])[:max_batch_size_per_model]
+                            .to(torch.int32)
+                        )
                     logits.append(logits_i)
                     log_probs.append((topk_lp, topk_idx))
                 elif lp is not None:

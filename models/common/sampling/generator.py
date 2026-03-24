@@ -406,9 +406,9 @@ def format_sampling_params(sampling_params, max_batch_size):
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
 
-    # enable_log_probs / num_logprobs: when scalar was converted to [value],
-    # broadcast to all users (not pad with default). A scalar True means
-    # "all users enabled", not "only user 0".
+    # enable_log_probs / num_logprobs: scalar → broadcast to all users.
+    # Multi-element list → pad with default (False/0) for inactive slots.
+    # Single-element list (from scalar→list conversion) → broadcast to all.
     def _broadcast_pad(lst, name):
         if not isinstance(lst, list):
             return [lst] * target_len
@@ -417,7 +417,10 @@ def format_sampling_params(sampling_params, max_batch_size):
         return _pad(lst, name)
 
     enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
-    num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
+    if getattr(sampling_params, "num_logprobs", None) is not None:
+        num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
+    else:
+        num_logprobs = None
 
     # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):

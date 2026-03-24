@@ -264,6 +264,7 @@ class Model:
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp
+        args.use_topk_logprobs = True
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
