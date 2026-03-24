@@ -87,13 +87,13 @@ void kernel_main() {
     // Get local grid data base address (already in L1)
     const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
 
-    // Compute how many sticks on this core contain valid grid data.
-    // Padding sticks (from height-sharding) may contain garbage L1 data that,
-    // if interpreted as grid coordinates, can cause NOC reads to invalid addresses.
-    constexpr uint32_t total_valid_sticks = input_batch * grid_hw;
-    const uint32_t remaining =
+    // Clamp this core's stick count to exclude height-sharding padding.
+    // Padding sticks contain garbage that would produce invalid NOC addresses.
+    constexpr uint32_t total_valid_sticks = input_batch * grid_hw;  // logical grid sticks across all batches
+    const uint32_t remaining =  // valid sticks from this core's start to end of grid
         (global_grid_stick_start < total_valid_sticks) ? (total_valid_sticks - global_grid_stick_start) : 0;
-    const uint32_t valid_sticks_this_core = (remaining < grid_nsticks_per_core) ? remaining : grid_nsticks_per_core;
+    const uint32_t valid_sticks_this_core =  // min(assigned, remaining) — actual work for this core
+        (remaining < grid_nsticks_per_core) ? remaining : grid_nsticks_per_core;
 
     // Process each grid stick assigned to this core
     uint32_t grid_stick_idx = 0;
