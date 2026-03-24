@@ -16,7 +16,7 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_(sfpi::vFloat val, const uint exp_bas
     if constexpr (SCALE_EN) {
         val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
     }
-    sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en>(val);
+    sfpi::vFloat result = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
     return result;
 }
 
