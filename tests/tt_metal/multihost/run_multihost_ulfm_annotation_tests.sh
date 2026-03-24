@@ -39,7 +39,16 @@ remote_host="${unique_hosts[1]}"
 fail=0
 export TT_METAL_HOME
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$TT_METAL_HOME/build/lib}"
-common_mpi_args=(--with-ft ulfm --hostfile "$HOSTFILE" --map-by ppr:1:node --bind-to none -np 2)
+# Mirror the known-good dual-T3K Open MPI networking setup so the smoke tests
+# don't attempt to form BTL TCP connections over docker0 / loopback.
+common_mpi_args=(
+    --with-ft ulfm
+    --hostfile "$HOSTFILE"
+    --map-by ppr:1:node
+    --bind-to none
+    --mca btl_tcp_if_exclude docker0,lo
+    -np 2
+)
 
 _extract_annotation_line() {
     local tmpout="$1"
