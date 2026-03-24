@@ -89,12 +89,31 @@ def main():
     parser.add_argument("--width", type=int, default=768)
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--guidance_scale", type=float, default=3.0)
+    # Guidance parameters (defaults from LTX_2_3_PARAMS in official pipeline)
+    parser.add_argument("--video-cfg-scale", type=float, default=3.0, help="Video CFG guidance scale")
+    parser.add_argument("--audio-cfg-scale", type=float, default=7.0, help="Audio CFG guidance scale")
+    parser.add_argument("--video-stg-scale", type=float, default=1.0, help="Video STG guidance scale")
+    parser.add_argument("--audio-stg-scale", type=float, default=1.0, help="Audio STG guidance scale")
+    parser.add_argument("--video-modality-scale", type=float, default=3.0, help="Video modality (A→V) guidance scale")
+    parser.add_argument("--audio-modality-scale", type=float, default=3.0, help="Audio modality (V→A) guidance scale")
+    parser.add_argument("--rescale-scale", type=float, default=0.7, help="CFG rescale scale (0=off)")
+    parser.add_argument("--stg-block", type=int, default=28, help="Transformer block index for STG perturbation")
+    parser.add_argument(
+        "--guidance_scale", type=float, default=None, help="(deprecated) Use --video-cfg-scale and --audio-cfg-scale"
+    )
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--gemma_path", type=str, default="google/gemma-3-12b-it")
     parser.add_argument("--num_layers", type=int, default=48)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--audio_tokens", type=int, default=0, help="Audio tokens (0=auto from video shape)")
+    parser.add_argument(
+        "--no-cross-pe",
+        action="store_true",
+        help="Disable cross-modal positional embeddings (workaround for tile alignment)",
+    )
+    parser.add_argument(
+        "--negative-prompt", type=str, default=None, help="Negative prompt (default: official LTX-2 negative prompt)"
+    )
     args = parser.parse_args()
 
     checkpoint = args.checkpoint or os.path.join(CHECKPOINT_DIR, "ltx-2.3-22b-dev.safetensors")
@@ -102,9 +121,17 @@ def main():
     logger.info(f"Generating: '{args.prompt}'")
     logger.info(f"Output: {args.num_frames} frames @ {args.height}x{args.width}, {args.steps} steps")
 
+    # Handle deprecated --guidance_scale
+    if args.guidance_scale is not None:
+        args.video_cfg_scale = args.guidance_scale
+        args.audio_cfg_scale = args.guidance_scale
+
     # 1. Encode text (positive + negative prompts)
+    from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
     from ltx_pipelines.utils.helpers import encode_prompts
     from ltx_pipelines.utils.model_ledger import ModelLedger
+
+    negative_prompt = args.negative_prompt if args.negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
 
     t0 = time.time()
     gemma_local = resolve_gemma_path(args.gemma_path)
@@ -114,7 +141,7 @@ def main():
         checkpoint_path=checkpoint,
         gemma_root_path=gemma_local,
     )
-    results = encode_prompts([args.prompt, ""], ledger)
+    results = encode_prompts([args.prompt, negative_prompt], ledger)
     video_embeds = results[0].video_encoding.float()
     audio_embeds = results[0].audio_encoding.float() if results[0].audio_encoding is not None else None
     neg_video_embeds = results[1].video_encoding.float()
@@ -194,22 +221,21 @@ def main():
             f"Audio latent: {als.frames} frames x {als.mel_bins} mel x {als.channels} ch -> {audio_N} tokens x 128"
         )
 
-    # Pad audio_N to be tile-aligned after SP sharding
+    # Pad audio_N to be tile-aligned after SP sharding.
+    # Track the real (unpadded) count separately — padded positions need masking.
     sp_factor = tuple(mesh.shape)[sp_axis]
+    audio_N_real = audio_N  # Unpadded count from AudioLatentShape
     audio_N_local = audio_N // sp_factor if audio_N % sp_factor == 0 else audio_N
     if audio_N_local % 32 != 0:
         audio_N_padded = ((audio_N_local + 31) // 32 * 32) * sp_factor
-        logger.info(f"Padding audio_N from {audio_N} to {audio_N_padded} for tile alignment")
+        logger.info(f"Padding audio_N from {audio_N} to {audio_N_padded} for tile alignment (real={audio_N_real})")
         audio_N = audio_N_padded
 
-    # Check tile alignment
+    # Check tile alignment (warning only — TTNN handles non-aligned N transparently)
     for name, N in [("video", video_N), ("audio", audio_N)]:
         n_local = N // sp_factor
         if n_local % 32 != 0:
-            logger.error(f"{name} N_local={n_local} not tile-aligned (N={N}, SP={sp_factor})")
-            ttnn.close_mesh_device(mesh)
-            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-            return
+            logger.warning(f"{name} N_local={n_local} not tile-aligned (N={N}, SP={sp_factor}) — TTNN pads internally")
 
     logger.info(f"Video: {latent_frames}x{latent_h}x{latent_w} = {video_N} tokens")
     logger.info(f"Audio: {audio_N} tokens")
@@ -243,9 +269,14 @@ def main():
     tt_v_sin = bf16_tensor_2dshard(v_sin, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
 
     # Audio RoPE (1D temporal, SPLIT format with double-precision)
-    # Audio positions: (1, 1, N, 2) for use_middle_indices_grid
-    a_pos = torch.arange(audio_N).float()
-    a_positions = torch.stack([a_pos, a_pos], dim=-1).unsqueeze(0).unsqueeze(1)  # (1, 1, N, 2)
+    # Use official AudioPatchifier to compute time-in-seconds positions (not integer indices!)
+    from ltx_core.components.patchifiers import AudioPatchifier as _AudioPatchifier
+
+    _a_patchifier = _AudioPatchifier(patch_size=1)
+    _a_latent_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
+    a_positions = _a_patchifier.get_patch_grid_bounds(
+        output_shape=_a_latent_shape, device="cpu"
+    ).float()  # (1, 1, N, 2)
     a_cos, a_sin = ref_precompute(
         a_positions.bfloat16(),
         dim=2048,
@@ -257,24 +288,99 @@ def main():
         rope_type=RefLTXRopeType.SPLIT,
         freq_grid_generator=generate_freq_grid_np,
     )
+    # Pad audio RoPE to audio_N (padded) if needed — model processes padded tokens
+    if audio_N > audio_N_real:
+        a_cos_pad = torch.ones(1, 32, audio_N, a_cos.shape[-1])
+        a_cos_pad[:, :, :audio_N_real, :] = a_cos
+        a_sin_pad = torch.zeros(1, 32, audio_N, a_sin.shape[-1])
+        a_sin_pad[:, :, :audio_N_real, :] = a_sin
+        a_cos, a_sin = a_cos_pad, a_sin_pad
     tt_a_cos = bf16_tensor_2dshard(a_cos, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
     tt_a_sin = bf16_tensor_2dshard(a_sin, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
+
+    # Cross-modal positional embeddings for A↔V cross-attention.
+    # Uses temporal positions only, inner_dim=2048 (audio_cross_attention_dim).
+    # Reference: transformer_args.py MultiModalTransformerArgsPreprocessor.prepare()
+    # NOTE: --no-cross-pe disables this due to TTNN subtile broadcast issue with D_half=32
+    use_cross_pe = not getattr(args, "no_cross_pe", False)
+    tt_v_cross_cos = tt_v_cross_sin = tt_a_cross_cos = tt_a_cross_sin = None
+    tt_v_cross_cos_full = tt_v_cross_sin_full = tt_a_cross_cos_full = tt_a_cross_sin_full = None
+    if use_cross_pe:
+        cross_pe_max_pos = 20  # max(video_max_pos[0], audio_max_pos[0])
+        # Video cross PE: temporal positions only from video coordinates
+        v_cross_positions = v_positions[:, 0:1, :]  # (1, 1, video_N, 2) — temporal only
+        v_cross_cos, v_cross_sin = ref_precompute(
+            v_cross_positions.bfloat16(),
+            dim=2048,
+            out_dtype=torch.float32,
+            theta=10000.0,
+            max_pos=[cross_pe_max_pos],
+            use_middle_indices_grid=True,
+            num_attention_heads=32,
+            rope_type=RefLTXRopeType.SPLIT,
+            freq_grid_generator=generate_freq_grid_np,
+        )
+        # Audio cross PE: temporal positions from audio
+        a_cross_positions = a_positions  # (1, 1, audio_N, 2) — already temporal only
+        a_cross_cos, a_cross_sin = ref_precompute(
+            a_cross_positions.bfloat16(),
+            dim=2048,
+            out_dtype=torch.float32,
+            theta=10000.0,
+            max_pos=[cross_pe_max_pos],
+            use_middle_indices_grid=True,
+            num_attention_heads=32,
+            rope_type=RefLTXRopeType.SPLIT,
+            freq_grid_generator=generate_freq_grid_np,
+        )
+        # SP+TP sharded (for Q in cross-attention — Q is SP-sharded)
+        tt_v_cross_cos = bf16_tensor_2dshard(v_cross_cos, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
+        tt_v_cross_sin = bf16_tensor_2dshard(v_cross_sin, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
+        tt_a_cross_cos = bf16_tensor_2dshard(a_cross_cos, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
+        tt_a_cross_sin = bf16_tensor_2dshard(a_cross_sin, device=mesh, shard_mapping={sp_axis: 2, tp_axis: 1})
+        # TP-only sharded (for K in cross-attention — context is full-sequence replicated)
+        tt_v_cross_cos_full = bf16_tensor(v_cross_cos, device=mesh, mesh_axis=tp_axis, shard_dim=1)
+        tt_v_cross_sin_full = bf16_tensor(v_cross_sin, device=mesh, mesh_axis=tp_axis, shard_dim=1)
+        tt_a_cross_cos_full = bf16_tensor(a_cross_cos, device=mesh, mesh_axis=tp_axis, shard_dim=1)
+        tt_a_cross_sin_full = bf16_tensor(a_cross_sin, device=mesh, mesh_axis=tp_axis, shard_dim=1)
+        logger.info(f"Cross PE: video={v_cross_cos.shape}, audio={a_cross_cos.shape}")
+    else:
+        logger.info("Cross PE: disabled (--no-cross-pe)")
 
     # Push prompts to device
     tt_v_prompt = bf16_tensor(video_embeds.unsqueeze(0), device=mesh)
     tt_a_prompt = bf16_tensor(audio_embeds.unsqueeze(0), device=mesh)
-    do_cfg = args.guidance_scale > 1.0
+    do_cfg = args.video_cfg_scale > 1.0 or args.audio_cfg_scale > 1.0
     if do_cfg:
         tt_neg_v_prompt = bf16_tensor(neg_video_embeds.unsqueeze(0), device=mesh)
         tt_neg_a_prompt = bf16_tensor(neg_audio_embeds.unsqueeze(0), device=mesh)
 
     # Sigma schedule and initial noise
-    sigmas = compute_sigmas(steps=args.steps, num_tokens=video_N)
+    sigmas = compute_sigmas(steps=args.steps)  # Official uses default (no num_tokens)
     logger.info(f"Sigmas: {sigmas[0]:.4f} -> {sigmas[-1]:.4f}")
 
     torch.manual_seed(args.seed)
     video_latent = torch.randn(1, video_N, 128, dtype=torch.bfloat16).float() * sigmas[0]
-    audio_latent = torch.randn(1, audio_N, 128, dtype=torch.bfloat16).float() * sigmas[0]
+    # Audio: only create noise for real tokens, zero-pad the rest
+    audio_noise = torch.randn(1, audio_N_real, 128, dtype=torch.bfloat16).float() * sigmas[0]
+    if audio_N > audio_N_real:
+        audio_latent = torch.zeros(1, audio_N, 128)
+        audio_latent[:, :audio_N_real, :] = audio_noise
+    else:
+        audio_latent = audio_noise
+
+    # Create audio attention mask for SDPA: mask out padded K positions.
+    # Shape: (1, 1, audio_N_local, audio_N_local) — broadcast over batch and heads.
+    # Real positions = 0 (attend), padded positions = -inf (don't attend).
+    tt_audio_attn_mask = None
+    if audio_N > audio_N_real:
+        audio_N_local = audio_N // sp_factor
+        audio_N_real_local = audio_N_real // sp_factor if audio_N_real % sp_factor == 0 else audio_N_real
+        # For SP > 1, each device sees audio_N_local tokens; first audio_N_real_local are real
+        mask = torch.zeros(1, 1, audio_N_local, audio_N_local)
+        mask[:, :, :, audio_N_real_local:] = float("-inf")  # Mask padded K positions
+        tt_audio_attn_mask = bf16_tensor(mask, device=mesh)
+        logger.info(f"Audio attn mask: {mask.shape}, masking K positions [{audio_N_real_local}:{audio_N_local}]")
 
     # 4. Joint denoising loop
     logger.info(f"Starting AV denoising: {args.steps} steps")
@@ -285,64 +391,97 @@ def main():
         sigma_next = sigmas[step_idx + 1].item()
         timestep = torch.tensor([sigma])
 
-        v_out, a_out = model.inner_step(
-            video_1BNI_torch=video_latent.unsqueeze(0),
-            video_prompt_1BLP=tt_v_prompt,
-            video_rope_cos=tt_v_cos,
-            video_rope_sin=tt_v_sin,
-            video_N=video_N,
-            audio_1BNI_torch=audio_latent.unsqueeze(0),
-            audio_prompt_1BLP=tt_a_prompt,
-            audio_rope_cos=tt_a_cos,
-            audio_rope_sin=tt_a_sin,
-            audio_N=audio_N,
-            trans_mat=None,  # Split RoPE uses elementwise rotation, no trans_mat
-            timestep_torch=timestep,
-        )
+        # Helper: run model and convert velocity to denoised (X0)
+        def velocity_to_denoised(v_out_tt, a_out_tt):
+            vv = LTXAudioVideoTransformerModel.device_to_host(v_out_tt).squeeze(0)
+            av = LTXAudioVideoTransformerModel.device_to_host(a_out_tt).squeeze(0)
+            vd = (video_latent.bfloat16().float() - vv.float() * sigma).bfloat16()
+            ad = (audio_latent.bfloat16().float() - av.float() * sigma).bfloat16()
+            return vd, ad
 
-        # Model output is velocity; convert to x0 in bf16 (matching reference X0Model)
-        v_velocity = LTXAudioVideoTransformerModel.device_to_host(v_out).squeeze(0)
-        a_velocity = LTXAudioVideoTransformerModel.device_to_host(a_out).squeeze(0)
-        v_denoised = (video_latent.bfloat16().float() - v_velocity.float() * sigma).bfloat16()
-        a_denoised = (audio_latent.bfloat16().float() - a_velocity.float() * sigma).bfloat16()
-
-        # CFG with variance rescaling (matching video-only pipeline)
-        if do_cfg:
-            uv_out, ua_out = model.inner_step(
+        def run_model(v_prompt, a_prompt, skip_cross_attn=False, skip_self_attn_blocks=None):
+            return model.inner_step(
                 video_1BNI_torch=video_latent.unsqueeze(0),
-                video_prompt_1BLP=tt_neg_v_prompt,
+                video_prompt_1BLP=v_prompt,
                 video_rope_cos=tt_v_cos,
                 video_rope_sin=tt_v_sin,
                 video_N=video_N,
                 audio_1BNI_torch=audio_latent.unsqueeze(0),
-                audio_prompt_1BLP=tt_neg_a_prompt,
+                audio_prompt_1BLP=a_prompt,
                 audio_rope_cos=tt_a_cos,
                 audio_rope_sin=tt_a_sin,
                 audio_N=audio_N,
                 trans_mat=None,
                 timestep_torch=timestep,
+                video_cross_pe_cos=tt_v_cross_cos,
+                video_cross_pe_sin=tt_v_cross_sin,
+                audio_cross_pe_cos=tt_a_cross_cos,
+                audio_cross_pe_sin=tt_a_cross_sin,
+                video_cross_pe_cos_full=tt_v_cross_cos_full,
+                video_cross_pe_sin_full=tt_v_cross_sin_full,
+                audio_cross_pe_cos_full=tt_a_cross_cos_full,
+                audio_cross_pe_sin_full=tt_a_cross_sin_full,
+                skip_cross_attn=skip_cross_attn,
+                skip_self_attn_blocks=skip_self_attn_blocks,
+                audio_attn_mask=tt_audio_attn_mask,
             )
-            uv = (
-                video_latent.bfloat16().float()
-                - LTXAudioVideoTransformerModel.device_to_host(uv_out).squeeze(0).float() * sigma
-            ).bfloat16()
-            ua = (
-                audio_latent.bfloat16().float()
-                - LTXAudioVideoTransformerModel.device_to_host(ua_out).squeeze(0).float() * sigma
-            ).bfloat16()
 
-            rescale = 0.7
-            # Video CFG
-            v_pred = v_denoised.float() + (args.guidance_scale - 1) * (v_denoised.float() - uv.float())
-            v_factor = rescale * (v_denoised.float().std() / v_pred.std()) + (1 - rescale)
-            v_denoised = (v_pred * v_factor).bfloat16()
-            # Audio CFG
-            a_pred = a_denoised.float() + (args.guidance_scale - 1) * (a_denoised.float() - ua.float())
-            a_factor = rescale * (a_denoised.float().std() / a_pred.std()) + (1 - rescale)
-            a_denoised = (a_pred * a_factor).bfloat16()
+        # Pass 1: Conditional (positive prompts)
+        v_out, a_out = run_model(tt_v_prompt, tt_a_prompt)
+        v_denoised, a_denoised = velocity_to_denoised(v_out, a_out)
+
+        # Multi-modal guidance (matching reference MultiModalGuider.calculate)
+        # Formula: pred = cond + (cfg-1)*(cond-uncond) + stg*(cond-perturbed) + (mod-1)*(cond-isolated)
+        if do_cfg:
+            # Pass 2: Unconditional (negative prompts) — for CFG
+            neg_v_out, neg_a_out = run_model(tt_neg_v_prompt, tt_neg_a_prompt)
+            v_uncond, a_uncond = velocity_to_denoised(neg_v_out, neg_a_out)
+
+            # Pass 3: Perturbed (skip self-attention at stg_block) — for STG guidance
+            v_perturbed, a_perturbed = 0.0, 0.0
+            do_stg = args.video_stg_scale != 0.0 or args.audio_stg_scale != 0.0
+            if do_stg:
+                stg_v_out, stg_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_self_attn_blocks=[args.stg_block])
+                v_perturbed, a_perturbed = velocity_to_denoised(stg_v_out, stg_a_out)
+
+            # Pass 4: Isolated modality (skip A↔V cross-attention) — for modality guidance
+            v_isolated, a_isolated = 0.0, 0.0
+            do_modality = args.video_modality_scale != 1.0 or args.audio_modality_scale != 1.0
+            if do_modality:
+                mod_v_out, mod_a_out = run_model(tt_v_prompt, tt_a_prompt, skip_cross_attn=True)
+                v_isolated, a_isolated = velocity_to_denoised(mod_v_out, mod_a_out)
+
+            # Apply full MultiModalGuider formula per modality
+            # pred = cond + (cfg-1)*(cond-uncond) + stg*(cond-perturbed) + (mod-1)*(cond-isolated)
+            v_cond = v_denoised.float()
+            v_pred = (
+                v_cond
+                + (args.video_cfg_scale - 1) * (v_cond - v_uncond.float())
+                + (args.video_stg_scale * (v_cond - v_perturbed.float()) if do_stg else 0.0)
+                + ((args.video_modality_scale - 1) * (v_cond - v_isolated.float()) if do_modality else 0.0)
+            )
+            if args.rescale_scale != 0:
+                v_factor = args.rescale_scale * (v_cond.std() / v_pred.std()) + (1 - args.rescale_scale)
+                v_pred = v_pred * v_factor
+            v_denoised = v_pred.bfloat16()
+
+            a_cond = a_denoised.float()
+            a_pred = (
+                a_cond
+                + (args.audio_cfg_scale - 1) * (a_cond - a_uncond.float())
+                + (args.audio_stg_scale * (a_cond - a_perturbed.float()) if do_stg else 0.0)
+                + ((args.audio_modality_scale - 1) * (a_cond - a_isolated.float()) if do_modality else 0.0)
+            )
+            if args.rescale_scale != 0:
+                a_factor = args.rescale_scale * (a_cond.std() / a_pred.std()) + (1 - args.rescale_scale)
+                a_pred = a_pred * a_factor
+            a_denoised = a_pred.bfloat16()
 
         video_latent = euler_step(video_latent, v_denoised.float(), sigma, sigma_next).bfloat16().float()
         audio_latent = euler_step(audio_latent, a_denoised.float(), sigma, sigma_next).bfloat16().float()
+        # Zero out padded audio tokens to prevent drift
+        if audio_N > audio_N_real:
+            audio_latent[:, audio_N_real:, :] = 0.0
 
         if (step_idx + 1) % 5 == 0 or step_idx == 0 or step_idx == args.steps - 1:
             elapsed = time.time() - denoise_start
@@ -375,38 +514,44 @@ def main():
     logger.info(f"Video decoded: {video_pixels.shape}")
     del vae_decoder
 
-    # 6. Audio VAE decode + vocoder
+    # 6. Audio VAE decode + vocoder (matching reference: ltx_core.model.audio_vae.audio_vae.decode_audio)
     logger.info("Decoding audio...")
+    audio_obj = None
     try:
+        from ltx_core.model.audio_vae.audio_vae import decode_audio as vae_decode_audio
+
         audio_decoder = ledger.audio_decoder()
         vocoder = ledger.vocoder()
 
-        # Unpatchify audio: (1, audio_N, 128) -> (1, 8, audio_N, 16) via AudioPatchifier
-        audio_C = 8
-        audio_mel = 16
-        audio_spatial = audio_latent.reshape(1, audio_N, audio_C, audio_mel).permute(0, 2, 1, 3)  # (1, 8, F, 16)
+        # Unpatchify audio: (1, audio_N, 128) -> (1, 8, audio_N, 16) matching decoder's expected (B, C, F, mel_bins)
+        audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).bfloat16()  # (1, 8, F, 16)
 
         with torch.no_grad():
-            audio_decoded = audio_decoder(audio_spatial.bfloat16())
-            audio_waveform = vocoder(audio_decoded)
-        logger.info(f"Audio decoded: {audio_waveform.shape}")
-        has_audio = True
+            audio_obj = vae_decode_audio(audio_spatial, audio_decoder, vocoder)
+
+        # Trim to video duration if padded audio_N produced extra samples
+        video_duration = args.num_frames / fps
+        target_samples = int(video_duration * audio_obj.sampling_rate)
+        if audio_obj.waveform.shape[-1] > target_samples:
+            from ltx_core.types import Audio
+
+            audio_obj = Audio(waveform=audio_obj.waveform[..., :target_samples], sampling_rate=audio_obj.sampling_rate)
+        logger.info(
+            f"Audio decoded: {audio_obj.waveform.shape} ({audio_obj.waveform.shape[-1]/audio_obj.sampling_rate:.2f}s @ {audio_obj.sampling_rate}Hz)"
+        )
     except Exception as e:
         logger.warning(f"Audio decode failed ({e}), video only")
-        audio_waveform = None
-        has_audio = False
+        audio_obj = None
 
-    # 7. Export video + audio combined using official pipeline's encode_video
+    # 7. Export video + audio combined (matching reference: ltx_pipelines.utils.media_io.encode_video)
     video_pixels = video_pixels.float().clamp(-1, 1)
     video_pixels = (video_pixels + 1) / 2
     video_uint8 = (video_pixels[0].permute(1, 2, 3, 0) * 255).to(torch.uint8)  # (F, H, W, 3)
 
-    if has_audio and audio_waveform is not None:
+    if audio_obj is not None:
         try:
-            from ltx_core.types import Audio
             from ltx_pipelines.utils.media_io import encode_video
 
-            audio_obj = Audio(waveform=audio_waveform.float().cpu(), sampling_rate=16000)
             encode_video(
                 video=video_uint8,
                 fps=fps,
@@ -417,10 +562,9 @@ def main():
             logger.info(f"Video+audio saved to {os.path.abspath(args.output)}")
         except Exception as e:
             logger.warning(f"Combined export failed ({e}), saving separately")
-            has_audio = False
+            audio_obj = None
 
-    if not has_audio or audio_waveform is None:
-        # Fallback: save video only
+    if audio_obj is None:
         import imageio
 
         video_np = video_uint8.numpy()

@@ -310,6 +310,87 @@ class LTXAttention(Module):
         out2 = ttnn.add(ttnn.multiply(x2, cos), ttnn.multiply(x1, sin))
         return ttnn.concat([out1, out2], dim=-1)
 
+    def _apply_split_rope_host(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:
+        """Apply split rope on host — fallback for D_half sizes that cause TTNN subtile issues.
+
+        Reads each device shard, applies rotation on host, reassembles the full
+        tensor, and pushes back with the same sharding as x.
+        """
+        import torch
+
+        device_x = ttnn.get_device_tensors(x)
+        device_cos = ttnn.get_device_tensors(cos)
+        device_sin = ttnn.get_device_tensors(sin)
+
+        # Process each shard on host
+        host_results = []
+        for i, (dx, dc, ds) in enumerate(zip(device_x, device_cos, device_sin)):
+            xh = ttnn.to_torch(dx).float()
+            ch = ttnn.to_torch(dc).float()
+            sh = ttnn.to_torch(ds).float()
+            x1, x2 = xh[..., :d_half], xh[..., d_half:]
+            out = torch.cat([x1 * ch - x2 * sh, x2 * ch + x1 * sh], dim=-1).bfloat16()
+            host_results.append(out)
+
+        if len(host_results) == 1:
+            return ttnn.from_torch(
+                host_results[0],
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+
+        # Multi-device: reassemble full tensor then re-shard.
+        # x is sharded on heads (TP, dim 1) and seq (SP, dim 2).
+        # Detect shard dims by comparing shard shape to expected full shape.
+        shard_shape = host_results[0].shape
+        n_devices = len(host_results)
+        mesh_shape = tuple(self.mesh_device.shape)
+
+        # Reconstruct by concatenating along sharded dims
+        # For 2D mesh: dim 0 of mesh = SP (shards seq, dim 2), dim 1 = TP (shards heads, dim 1)
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+        # Reconstruct full tensor from shards
+        # Shards are ordered row-major by (mesh_dim0, mesh_dim1)
+        shards_2d = []
+        for i in range(mesh_shape[0]):
+            row = []
+            for j in range(mesh_shape[1]):
+                idx = i * mesh_shape[1] + j
+                row.append(host_results[idx])
+            # Concat along TP dim (heads, dim 1) within each row
+            if tp_axis == 1 and tp_factor > 1:
+                shards_2d.append(torch.cat(row, dim=1))
+            else:
+                shards_2d.append(row[0] if len(row) == 1 else torch.cat(row, dim=2))
+
+        # Concat along SP dim (seq, dim 2) across rows
+        if sp_axis == 0 and sp_factor > 1:
+            full = torch.cat(shards_2d, dim=2)
+        else:
+            full = shards_2d[0] if len(shards_2d) == 1 else torch.cat(shards_2d, dim=1)
+
+        # Re-shard with same mapping as x
+        mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            mesh_shape=mesh_shape,
+            dims=[
+                2 if i == sp_axis and sp_factor > 1 else (1 if i == tp_axis and tp_factor > 1 else None)
+                for i in range(2)
+            ],
+        )
+        return ttnn.from_torch(
+            full,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mapper,
+        )
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -320,13 +401,19 @@ class LTXAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        k_rope_cos: ttnn.Tensor | None = None,
+        k_rope_sin: ttnn.Tensor | None = None,
+        attn_mask: ttnn.Tensor | None = None,
+        skip_qk: bool = False,
     ) -> ttnn.Tensor:
         """
         Same interface as WanAttention.forward().
+
+        For cross-attention with positional embeddings (e.g. A↔V cross-attention),
+        pass rope_cos/sin for Q and k_rope_cos/sin for K.
         """
         if rope_cos is not None:
             assert rope_sin is not None
-            assert prompt_1BLP is None
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -360,13 +447,18 @@ class LTXAttention(Module):
         v_BHNE = create_heads(v_1BNF)
 
         if rope_cos is not None:
+            # Determine K RoPE: use separate k_rope if provided (cross-attention),
+            # otherwise use same rope as Q (self-attention).
+            _k_cos = k_rope_cos if k_rope_cos is not None else rope_cos
+            _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+
             if trans_mat is not None:
                 # Interleaved RoPE: rotary_embedding_llama with trans_mat
                 q_BHNE = ttnn.experimental.rotary_embedding_llama(
                     q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
                 )
                 k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                    k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                    k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
                 )
             else:
                 # Split RoPE: manual elementwise rotation
@@ -374,10 +466,28 @@ class LTXAttention(Module):
                 # out[D/2:] = x[D/2:]*cos + x[:D/2]*sin
                 # cos/sin shape: (B, H, N, D/2) — half head_dim
                 D_half = self.head_dim // 2
-                q_BHNE = self._apply_split_rope(q_BHNE, rope_cos, rope_sin, D_half)
-                k_BHNE = self._apply_split_rope(k_BHNE, rope_cos, rope_sin, D_half)
+                # For cross-attention PE, D_half may be small (e.g. 32 for
+                # audio_cross_attention_dim=2048, head_dim=64). TTNN elementwise
+                # ops fail with "Invalid subtile broadcast type" when slicing
+                # to 32 on the last dim. Fall back to host-side split rope
+                # computation when D_half < 64 (minimum reliable tile width).
+                q_d_half = rope_cos.shape[-1]
+                if q_d_half < 64:
+                    q_BHNE = self._apply_split_rope_host(q_BHNE, rope_cos, rope_sin, q_d_half)
+                else:
+                    q_BHNE = self._apply_split_rope(q_BHNE, rope_cos, rope_sin, D_half)
 
-        if prompt_1BLP is None:
+                k_d_half = _k_cos.shape[-1]
+                if k_d_half < 64:
+                    k_BHNE = self._apply_split_rope_host(k_BHNE, _k_cos, _k_sin, k_d_half)
+                else:
+                    k_BHNE = self._apply_split_rope(k_BHNE, _k_cos, _k_sin, D_half)
+
+        if skip_qk:
+            # STG perturbation: skip Q/K attention, use V passthrough.
+            # Reference: out = to_v(context) when all_perturbed=True.
+            spatial_BHNE = v_BHNE
+        elif prompt_1BLP is None:
             if self.parallel_config.sequence_parallel.factor > 1:
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
@@ -413,6 +523,7 @@ class LTXAttention(Module):
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
+                    attn_mask=attn_mask,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
@@ -422,6 +533,7 @@ class LTXAttention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
+                attn_mask=attn_mask,
                 is_causal=False,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
