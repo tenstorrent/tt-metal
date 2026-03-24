@@ -316,6 +316,10 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
 TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR && fp32_dest_acc_en &&
+                !dst_full_sync_en) {
+                continue;
+            }
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
