@@ -3,6 +3,7 @@
 
 
 import math
+import os
 import time
 
 import pytest
@@ -11,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.unoptimized_moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -87,17 +89,20 @@ def generate_reference_io(
     return state_dict_out, torch_input, reference_topk_indices, reference_topk_weights
 
 
-@pytest.mark.timeout(1200)
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
 @pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
-        ("prefill", 1, 32768),
+        ("prefill", 1, _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
     "topk_fallback,use_bitonic_sort",
     [
-        (True, True),
+        (False, True),
     ],
 )
 @pytest.mark.parametrize(
