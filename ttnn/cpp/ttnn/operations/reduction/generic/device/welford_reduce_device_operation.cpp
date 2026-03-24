@@ -38,8 +38,11 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
-    // The reduced dimension always has size of 1.
-    if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H) {
+    // The reduced dimension(s) always have size of 1.
+    if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
+        output_shape[-2] = 1;
+        output_shape[-1] = 1;
+    } else if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         output_shape[-2] = 1;
     } else {
         output_shape[-1] = 1;
