@@ -21,6 +21,7 @@ class InferenceCtx:
     group_size: int = 1
     sample_seed: int = 42
     optimizer: object | None = None
+    _kv_cache: object = None
     _B: int = None
     _N: int = None
 
@@ -60,6 +61,23 @@ def debug_print_prompt_completion(
 
     print(f"prompt_text: {prompt_text!r}")
     print(f"completion_text: {completion_text!r}")
+
+
+def _get_kv_cache(ctx: InferenceCtx, B: int) -> ttml.models.KvCache:
+    head_dim = getattr(ctx.transformer_config, "head_dim", None) or (
+        ctx.transformer_config.embedding_dim // ctx.transformer_config.num_heads
+    )
+    if ctx._kv_cache is None or ctx._kv_cache_B != B:
+        ctx._kv_cache = ttml.models.KvCache(
+            ctx.transformer_config.num_blocks,
+            B,
+            ctx.transformer_config.num_groups,
+            ctx.transformer_config.max_sequence_length,
+            head_dim,
+        )
+        ctx._kv_cache_B = B
+    ctx._kv_cache.reset()
+    return ctx._kv_cache
 
 
 def create_causal_mask(
@@ -136,14 +154,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     head_dim = getattr(ctx.transformer_config, "head_dim", None) or (
         ctx.transformer_config.embedding_dim // ctx.transformer_config.num_heads
     )
-    kv_cache = ttml.models.KvCache(
-        ctx.transformer_config.num_blocks,
-        B,
-        ctx.transformer_config.num_groups,
-        ctx.transformer_config.max_sequence_length,
-        head_dim,
-    )
-    kv_cache.reset()
+    kv_cache = _get_kv_cache(ctx, B)
 
     logits_mask_tensor = build_logits_mask(V, padded_V) if padded_V != V else None
 
@@ -197,7 +208,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         deallocate_tensors([column])
 
     deallocate_tensors([logits_mask_tensor])
-    kv_cache.clear()
+    kv_cache.reset()
 
     stop_ids = get_stop_ids(ctx)
 
