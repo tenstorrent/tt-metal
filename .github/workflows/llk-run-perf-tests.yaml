@@ -2,9 +2,7 @@ name: 🚀 LLK Run Performance Tests
 
 on:
   workflow_dispatch:
-    inputs:
   workflow_call:
-    inputs:
 
 permissions:
   checks: write
