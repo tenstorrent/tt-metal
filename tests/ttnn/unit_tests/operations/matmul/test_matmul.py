@@ -1313,11 +1313,23 @@ def test_padded_2d_matmul(device, side, tile_count):
     dummy_out = torch.zeros([1, 1, M, N])
     dummy_upper = torch.full([1, 1, X, X], 4)
 
-    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # This test measures matmul performance by collecting hardware counter statistics
+    # (see: test_perf_op_report.py::TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]).
+    # To ensure accurate results, we must avoid executing additional operations on the device.
+    # If a device is not passed to ttnn.from_torch(), any layout or typecast transformations
+    # will be performed on the host, as before.
+    act = ttnn.to_device(act, device)
+    weight = ttnn.to_device(weight, device)
+    lower_tt = ttnn.to_device(lower_tt, device)
+    out_tt = ttnn.to_device(out_tt, device)
+    upper_tt = ttnn.to_device(upper_tt, device)
+
     # Free up dummy output tensor so matmul will allocate output there
     ttnn.deallocate(out_tt)
     output_tensor = ttnn.matmul(
