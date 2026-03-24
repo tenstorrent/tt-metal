@@ -452,7 +452,6 @@ jobs:
     uses: ./.github/workflows/llk-run-perf-tests.yaml
     secrets: inherit
     with:
-      artifact_prefix: "run-perf-"
 
   llk-setup-and-test-wh-test:
     name: "🌀 LLK Setup & Test WH (TEST)"
