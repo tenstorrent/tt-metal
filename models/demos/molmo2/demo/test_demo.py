@@ -10,6 +10,7 @@ Runs a basic smoke test to verify the demo works correctly.
 
 import os
 
+import numpy as np
 import pytest
 import torch
 
@@ -111,6 +112,30 @@ def test_processor_tokenization(processor, prompt):
     assert prompt in decoded or decoded in prompt
 
     print(f"Tokenization test passed for: '{prompt}'")
+
+
+def test_hf_video_processor_inputs(processor):
+    """
+    Smoke test: Molmo2 processor accepts synthetic video dict (no TTNN, no full generate).
+    """
+    from models.demos.molmo2.demo.demo import VIDEO_PROMPT
+
+    frames = np.zeros((2, 32, 32, 3), dtype=np.uint8)
+    timestamps = np.array([0.0, 0.5], dtype=np.float64)
+    videos = [{"frames": frames, "timestamps": timestamps, "sampled_fps": 2.0}]
+
+    inputs = processor(
+        text=[f"{VIDEO_PROMPT} Describe briefly."],
+        videos=videos,
+        return_tensors="pt",
+    )
+
+    assert "input_ids" in inputs
+    assert inputs["input_ids"].dim() == 2
+    assert inputs["input_ids"].shape[0] == 1
+    assert inputs["input_ids"].shape[1] > 0
+    video_keys = [k for k in inputs if "video" in k.lower()]
+    assert len(video_keys) > 0, f"Expected video-related keys in processor output, got {list(inputs.keys())}"
 
 
 if __name__ == "__main__":

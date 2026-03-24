@@ -23,6 +23,12 @@ Usage:
 
     # Run with tracing enabled
     python -m models.demos.molmo2.demo.demo --use-trace
+
+    # Video on PyTorch/HuggingFace only (no Tenstorrent device)
+    python -m models.demos.molmo2.demo.demo --video path/to/video.mp4 --torch --max-tokens 64
+
+    # Video: TTNN first, then HuggingFace PyTorch reference (both paths)
+    python -m models.demos.molmo2.demo.demo --video path/to/video.mp4 --also-torch --max-tokens 64
 """
 
 import argparse
@@ -511,6 +517,142 @@ def preprocess_video_molmo2(
         "pooled_h": pooled_h,
         "pooled_w": pooled_w,
     }
+
+
+def get_hf_video_payload(
+    video_path: str,
+    max_frames: int = VIDEO_MAX_FRAMES,
+    max_fps: float = VIDEO_MAX_FPS,
+) -> dict:
+    """
+    Build the videos= entry for HuggingFace Molmo2Processor.
+
+    Uses the same molmo_utils.process_vision_info path as preprocess_video_molmo2.
+    """
+    from molmo_utils import process_vision_info
+
+    if video_path.startswith("http://") or video_path.startswith("https://"):
+        video_src = video_path
+    else:
+        video_src = f"file://{video_path}" if not video_path.startswith("file://") else video_path
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": video_src,
+                    "num_frames": max_frames,
+                    "max_fps": max_fps,
+                    "frame_sampling_mode": "uniform_last_frame",
+                },
+                {"type": "text", "text": ""},
+            ],
+        }
+    ]
+
+    _, videos, _ = process_vision_info(messages)
+    if not videos:
+        raise ValueError(f"Could not extract frames from video: {video_path}")
+
+    frames_array, metadata = videos[0]
+    n_frames = len(frames_array)
+    if hasattr(metadata, "get"):
+        frames_indices = metadata.get("frames_indices", np.arange(n_frames))
+        fps = float(metadata.get("fps", max_fps))
+    else:
+        frames_indices = getattr(metadata, "frames_indices", np.arange(n_frames))
+        fps = float(getattr(metadata, "fps", max_fps))
+
+    timestamps = np.array(frames_indices, dtype=np.float64) / max(fps, 1e-6)
+
+    return {
+        "frames": frames_array,
+        "timestamps": timestamps,
+        "sampled_fps": fps,
+    }
+
+
+def run_video_demo_torch(
+    video_path: str,
+    prompt: str = "<|video|> Describe what happens in this video.",
+    max_new_tokens: int = 64,
+    max_frames: int = VIDEO_MAX_FRAMES,
+    max_fps: float = VIDEO_MAX_FPS,
+) -> Tuple[str, dict]:
+    """
+    Run video QA on PyTorch + HuggingFace Molmo2 (reference path; no TTNN).
+    """
+    from transformers import AutoModelForImageTextToText, AutoProcessor
+
+    logger.info("=" * 60)
+    logger.info("Molmo2-8B Video Demo (PyTorch / HuggingFace)")
+    logger.info("=" * 60)
+
+    if VIDEO_PROMPT not in prompt:
+        logger.warning(f"Prompt missing {VIDEO_PROMPT!r}; prepending it.")
+        prompt = f"{VIDEO_PROMPT} {prompt}"
+
+    logger.info(f"Loading video payload from: {video_path}")
+    video_payload = get_hf_video_payload(video_path, max_frames=max_frames, max_fps=max_fps)
+
+    logger.info(f"Loading HF processor and model: {MODEL_ID}")
+    local_only = os.getenv("CI") == "true"
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID,
+        trust_remote_code=True,
+        local_files_only=local_only,
+    )
+
+    if torch.cuda.is_available():
+        model = AutoModelForImageTextToText.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            trust_remote_code=True,
+            local_files_only=local_only,
+        )
+    else:
+        model = AutoModelForImageTextToText.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            local_files_only=local_only,
+        ).to("cpu")
+    model.eval()
+
+    inputs = processor(
+        text=[prompt],
+        videos=[video_payload],
+        return_tensors="pt",
+    )
+    device = next(model.parameters()).device
+    inputs = inputs.to(device)
+
+    logger.info(f"Generating up to {max_new_tokens} tokens...")
+    start = time.perf_counter()
+    with torch.inference_mode():
+        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    decoded_prompt_len = inputs["input_ids"].shape[1]
+    new_tokens = output_ids[0, decoded_prompt_len:].tolist()
+    response = processor.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+    perf = {
+        "backend": "torch",
+        "video_path": video_path,
+        "generate_ms": elapsed_ms,
+        "max_new_tokens": max_new_tokens,
+        "n_prompt_tokens": int(decoded_prompt_len),
+        "n_output_tokens": int(output_ids.shape[1]),
+        "n_new_tokens": len(new_tokens),
+        "device": str(device),
+    }
+    logger.info(f"Generation finished in {elapsed_ms:.2f} ms ({perf['n_new_tokens']} new tokens)")
+    logger.info(f"Response: {response}")
+    return response, perf
 
 
 def create_model(
@@ -2481,26 +2623,61 @@ def main():
         action="store_true",
         help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
+    parser.add_argument(
+        "--torch",
+        action="store_true",
+        help="With --video: run HuggingFace PyTorch only (skip TTNN; no Tenstorrent device)",
+    )
+    parser.add_argument(
+        "--also-torch",
+        action="store_true",
+        help="With --video: after the TTNN run, also run HuggingFace PyTorch for comparison "
+        "(ignored if --torch is set; needs HF weights + GPU or CPU RAM)",
+    )
 
     args = parser.parse_args()
 
     if args.video is not None:
         prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
-        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
-        run_video_demo(
-            video_path=args.video,
-            prompt=prompt,
-            max_new_tokens=args.max_tokens,
-            device_id=args.device,
-            num_layers=args.num_layers,
-            max_seq_len=max_seq_len,
-            max_frames=args.max_video_frames,
-            max_fps=args.max_video_fps,
-            use_trace=args.use_trace,
-            use_decode_trace=args.use_decode_trace,
-            use_vision_trace=args.use_vision_trace,
-            use_unified_trace=args.use_unified_trace,
-        )
+        if args.torch and args.also_torch:
+            logger.info("--also-torch ignored: --torch selects HuggingFace-only mode (no TTNN run).")
+        # Separate paths: --torch = HF-only; default = TTNN; --also-torch = TTNN then HF
+        if args.torch:
+            run_video_demo_torch(
+                video_path=args.video,
+                prompt=prompt,
+                max_new_tokens=args.max_tokens,
+                max_frames=args.max_video_frames,
+                max_fps=args.max_video_fps,
+            )
+        else:
+            max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
+            run_video_demo(
+                video_path=args.video,
+                prompt=prompt,
+                max_new_tokens=args.max_tokens,
+                device_id=args.device,
+                num_layers=args.num_layers,
+                max_seq_len=max_seq_len,
+                max_frames=args.max_video_frames,
+                max_fps=args.max_video_fps,
+                use_trace=args.use_trace,
+                use_decode_trace=args.use_decode_trace,
+                use_vision_trace=args.use_vision_trace,
+                use_unified_trace=args.use_unified_trace,
+            )
+            if args.also_torch:
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("Second pass: HuggingFace PyTorch reference (same prompt / video)")
+                logger.info("=" * 60)
+                run_video_demo_torch(
+                    video_path=args.video,
+                    prompt=prompt,
+                    max_new_tokens=args.max_tokens,
+                    max_frames=args.max_video_frames,
+                    max_fps=args.max_video_fps,
+                )
     else:
         prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 2048
