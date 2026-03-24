@@ -16,7 +16,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -26,7 +25,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -200,6 +199,60 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     return page_table
 
 
+def submesh_has_local_devices(submesh):
+    """Return True if this submesh has at least one device local to the current host rank."""
+    view = submesh.get_view()
+    return any(
+        view.is_local(ttnn.MeshCoordinate(row, col))
+        for row in range(submesh.shape[0])
+        for col in range(submesh.shape[1])
+    )
+
+
+def get_local_submesh_indices(submesh_devices):
+    """Return indices of submeshes that own at least one local device on this host rank."""
+    return [i for i, submesh in enumerate(submesh_devices) if submesh_has_local_devices(submesh)]
+
+
+def select_local_data_parallel_items(items, batch_size, data_parallel, local_submesh_indices):
+    """Select the per-DP-group slices corresponding to local submeshes."""
+    assert (
+        len(items) >= batch_size * data_parallel
+    ), f"Expected at least {batch_size * data_parallel} items, got {len(items)}"
+    return [item for dp_idx in local_submesh_indices for item in items[dp_idx * batch_size : (dp_idx + 1) * batch_size]]
+
+
+def slice_sampling_params_for_local_submeshes(sampling_params, batch_size, data_parallel, local_submesh_indices):
+    """Slice list-valued sampling params so each host rank keeps only its local DP groups."""
+    result = dict(sampling_params)
+    total_items = batch_size * data_parallel
+
+    for key, value in sampling_params.items():
+        if not isinstance(value, list):
+            continue
+        if len(value) == total_items:
+            result[key] = select_local_data_parallel_items(value, batch_size, data_parallel, local_submesh_indices)
+        elif len(value) == data_parallel:
+            result[key] = [value[i] for i in local_submesh_indices]
+
+    return result
+
+
+def get_default_mesh_device_param():
+    """
+    Select a safe default mesh size for parameterized tests.
+
+    In distributed runs, use the global system mesh size from the mesh graph descriptor
+    instead of len(get_device_ids()), which can reflect host-local visibility.
+    """
+    if ttnn.using_distributed_env():
+        try:
+            return ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        except Exception as e:
+            logger.warning(f"Falling back to local device count for default mesh sizing: {e}")
+    return len(ttnn.get_device_ids())
+
+
 def prepare_generator_args(
     num_devices,
     data_parallel,
@@ -214,7 +267,19 @@ def prepare_generator_args(
     use_prefetcher,
     use_hf_rope,
 ):
-    submesh_devices = create_submeshes(mesh_device, data_parallel)
+    all_submesh_devices = create_submeshes(mesh_device, data_parallel)
+    local_submesh_indices = get_local_submesh_indices(all_submesh_devices)
+    submesh_devices = [all_submesh_devices[i] for i in local_submesh_indices]
+
+    if not submesh_devices:
+        raise RuntimeError("No local submeshes available on this host rank for the requested configuration")
+
+    if len(submesh_devices) != len(all_submesh_devices):
+        logger.info(
+            f"Distributed mode detected: using local submeshes {local_submesh_indices} "
+            f"({len(submesh_devices)}/{len(all_submesh_devices)}) on this host rank"
+        )
+
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -231,11 +296,13 @@ def prepare_generator_args(
         else None
     )
 
+    max_batch_size_per_dp_group = global_batch_size // data_parallel
+
     for submesh in submesh_devices:
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             instruct=instruct,
-            max_batch_size=global_batch_size // data_parallel,
+            max_batch_size=max_batch_size_per_dp_group,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
@@ -249,9 +316,11 @@ def prepare_generator_args(
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
 
+    local_data_parallel = len(submesh_devices)
+    local_batch_size = max_batch_size_per_dp_group * local_data_parallel
     page_table = create_tt_page_table(
-        global_batch_size=global_batch_size,
-        data_parallel=data_parallel,
+        global_batch_size=local_batch_size,
+        data_parallel=local_data_parallel,
         paged_attention_config=paged_attention_config,
     )
     # Host code, safe to reuse tokenizer from the 1st model
@@ -259,7 +328,7 @@ def prepare_generator_args(
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
     processor = model_args[0].processor
-    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor, local_data_parallel, local_submesh_indices
 
 
 # List of supported Parameters for demo.py
@@ -777,7 +846,7 @@ def prepare_generator_args(
             "P150x4": (1, 4),
             "P150x8": (1, 8),
             "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
     ],
     indirect=True,
 )
@@ -813,6 +882,7 @@ def test_demo_text(
     """
     hf_dir = os.getenv("HF_MODEL", "")
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -930,12 +1000,20 @@ def test_demo_text(
     else:  # Inputs from file
         input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
-
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
+    (
+        model_args,
+        model,
+        page_table,
+        tt_kv_cache,
+        tokenizer,
+        processor,
+        local_data_parallel,
+        local_submesh_indices,
+    ) = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -948,6 +1026,12 @@ def test_demo_text(
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
         use_hf_rope=use_hf_rope,
+    )
+
+    global_batch_size = batch_size * local_data_parallel
+    input_prompts = select_local_data_parallel_items(input_prompts, batch_size, data_parallel, local_submesh_indices)
+    sampling_params = slice_sampling_params_for_local_submeshes(
+        sampling_params, batch_size, data_parallel, local_submesh_indices
     )
 
     # Skip ci-eval tests on P100 devices
@@ -974,8 +1058,13 @@ def test_demo_text(
         if token_accuracy:
             repeat_batch_prompts.append(input_prompts)
         else:
+            global_prompts_for_batch = [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][
+                : batch_size * data_parallel
+            ]
             repeat_batch_prompts.append(
-                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:global_batch_size]
+                select_local_data_parallel_items(
+                    global_prompts_for_batch, batch_size, data_parallel, local_submesh_indices
+                )
             )
 
     num_tokens_generated_decode = []
