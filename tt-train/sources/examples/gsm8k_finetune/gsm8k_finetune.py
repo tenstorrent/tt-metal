@@ -49,6 +49,31 @@ class DDPCallback(TrainerCallback):
         ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
 
 
+class MetricsLogger(TrainerCallback):
+    """Write metric lines to output.txt in the format expected by slurm_training_service.
+
+    Format: LR: <lr>, training_loss: <loss>, [val_loss: <val>,] step: <step>, epoch: 1
+    """
+
+    def __init__(self, path: str = "output.txt"):
+        self._path = path
+        self._last_loss: float = 0.0
+        self._last_lr: float = 0.0
+
+    def on_step_end(self, trainer, step, loss, lr):
+        self._last_loss = loss
+        self._last_lr = lr
+        with open(self._path, "a") as f:
+            f.write(f"LR: {lr}, training_loss: {loss:.4f}, step: {step}, epoch: 1\n")
+
+    def on_eval_end(self, trainer, step, eval_loss):
+        with open(self._path, "a") as f:
+            f.write(
+                f"LR: {self._last_lr}, training_loss: {self._last_loss:.4f}, "
+                f"val_loss: {eval_loss:.4f}, step: {step}, epoch: 1\n"
+            )
+
+
 # Configuration
 CONFIG = "training_gsm8k_tinyllama.yaml"
 
@@ -496,7 +521,7 @@ def train():
     mask_np = build_causal_mask(max_sequence_length)
     causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
-    callbacks = []
+    callbacks = [MetricsLogger()]
     if use_ddp:
         callbacks.append(DDPCallback())
 
