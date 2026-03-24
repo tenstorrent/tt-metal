@@ -381,9 +381,10 @@ def train():
     if device_config.total_devices() > 1:
         initialize_device(yaml_config)
 
-    ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
-        ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
-    )
+    if device_config.total_devices() > 1:
+        ttml.autograd.AutoContext.get_instance().initialize_parallelism_context(
+            ttml.autograd.DistributedConfig(enable_ddp=device_config.enable_ddp, enable_tp=device_config.enable_tp)
+        )
 
     use_ddp = device_config.enable_ddp and device_config.total_devices() > 1
     mapper = None
