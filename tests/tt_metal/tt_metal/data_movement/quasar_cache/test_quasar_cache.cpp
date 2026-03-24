@@ -221,6 +221,23 @@ TEST_F(QuasarL2CacheFlush, InvalidateLine) {
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
 
+TEST_F(QuasarL2CacheFlush, InvalidateFreshRead) {
+    if (unit_tests::dm::quasar_cache::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+
+    // Test that invalidation causes fresh read from TL1:
+    // Kernel reads (caches), writes new value via uncached path, invalidates, host verifies new value
+    unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
+        .base_addr = 100 * 1024,
+        .num_words = 16,
+        .value = 0xFE5A0000,
+        .test_mode = 4,  // invalidate fresh read
+        .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
+    };
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+}
+
 // =============================================================================
 // Test Suite: L1 Data Cache Operations
 // =============================================================================
@@ -285,6 +302,23 @@ TEST_F(QuasarL1DCacheOps, InvalidateFull) {
         .value = 0x44440000,
         .test_mode = 3,  // invalidate full
         .expect_new_values = false  // should see old values
+    };
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+}
+
+TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
+    if (unit_tests::dm::quasar_cache::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+
+    // Test that invalidation causes fresh read from TL1:
+    // Kernel reads (caches), writes new value via uncached path, invalidates L1+L2, host verifies new value
+    unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {
+        .base_addr = 100 * 1024,
+        .num_words = 16,
+        .value = 0xFE5B0000,
+        .test_mode = 4,  // invalidate fresh read
+        .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
 }
