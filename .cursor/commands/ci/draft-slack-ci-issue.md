@@ -28,7 +28,7 @@ Produce a copy-paste-ready Slack message for pipelines triage, using a CI issue 
    - Search for messages/replies relevant to the same failure (matching job/workflow/test path/run links/signature).
    - Prefer "FULL REPORT" style replies when present.
    - Treat auto-triage as reliable only when it explicitly includes `HIGH CONFIDENCE`.
-   - If no relevant high-confidence triage is found in that month, continue without triage attribution.
+   - If no relevant high-confidence triage is found in that month, **omit auto-triage entirely from the Slack draft**—do not tell the channel that nothing was found or that triage was searched.
    - If relevant triage is found, capture a Slack permalink to include in the draft.
 
 4. **Suggest mentions**
@@ -43,7 +43,8 @@ Produce a copy-paste-ready Slack message for pipelines triage, using a CI issue 
 
 6. **Draft the message**
    - Follow `.cursor/rules/slack-ci-issue-draft.mdc`.
-   - Include: issue link, failure summary, latest failing job link, likely owners to ping, optional relevant auto-triage Slack permalink, optional linked PR note, message that test will be disabled if not fixed by the end of the next business day (so tomorrow on monday through thursday and monday on friday).
+   - Include: issue link, failure summary, latest failing job link, likely owners to ping, optional linked PR note, and the disable deadline line: **Mon–Thu** → "by the end of **tomorrow**"; **Fri–Sun** → "by the end of **Monday**" (never "next business day" / "end of business the next weekday").
+   - Add the auto-triage permalink line **only** when step 3 found relevant `HIGH CONFIDENCE` material; otherwise say nothing about auto-triage in the message body.
 
 7. **Output for copy-paste**
    - Emit the full message in one easy-to-copy block.

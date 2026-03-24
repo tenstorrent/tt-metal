@@ -52,7 +52,13 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 6. **Auto-triage reference (optional)**
    If a relevant auto-triage message/reply is found in the exported month of data **and** has `HIGH CONFIDENCE`, add:
    - `This auto-triage report may be of relevance: <slack permalink>`
-   If no relevant high-confidence triage exists, omit this line and proceed normally.
+   If nothing relevant with `HIGH CONFIDENCE` exists, **do not mention auto-triage at all** in the Slack message—no line, no footnote, and **never** say things like "no high-confidence triage found" or that you searched Slack. Pipelines readers only need the permalink when it exists.
+
+7. **Disable warning (deadline)**
+   End with a single sentence that the test/job scope may be disabled if unresolved. Use plain calendar language—**do not** say "end of business next weekday" or similar.
+   - **Monday through Thursday:** use **the end of tomorrow** (e.g. "If this isn't fixed by the end of tomorrow, we'll plan to disable this test/job scope…").
+   - **Friday, Saturday, or Sunday:** use **the end of Monday** (e.g. "If this isn't fixed by the end of Monday, …").
+   Prefer **fixed**; **finished** is fine if it reads better. Keep the rest of the sentence short (get the pipeline green, note if a PR is already in flight).
 
 ## Tone
 
@@ -63,4 +69,4 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 
 - User will copy-paste into Slack and may edit. Output should be easy to copy as one block.
 - Use double-newline spacing between logical lines/sections to preserve readability in Slack.
-- If no relevant high-confidence triage is found in the 30-day export, still draft the message using issue/log/ownership evidence.
+- If no relevant high-confidence triage is found in the 30-day export, still draft the message using issue/log/ownership evidence only; the copy-paste block must stay silent on auto-triage (no negative disclaimer).
