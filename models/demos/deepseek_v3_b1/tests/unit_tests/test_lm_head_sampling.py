@@ -25,11 +25,11 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
-    create_single_galaxy_mtp_bypass_pipeline_configuration,
-    create_single_galaxy_mtp_verification_pipeline_configuration,
     create_single_galaxy_pipeline_configuration,
+    create_single_galaxy_spec_decode_pipeline_configuration,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
+    TOKEN_META_PAGE_SIZE_BYTES,
     TOKEN_PAGE_SIZE_BYTES,
     EmbeddingStage,
     LMHeadStage,
@@ -294,47 +294,71 @@ def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor
     return torch_expected_indices
 
 
-def _compute_expected_mtp_output_synthetic(iteration: int) -> torch.Tensor:
-    """Compute expected MTP EH projection output for a single iteration using synthetic weights.
+def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
+    """Compute expected (base_token, spec_token) pairs for the 4-stage MTP pipeline.
 
-    Uses the same deterministic weights as _SyntheticWeightProvider.load_mtp_weights (seed=42).
-    The MTP golden path: argmax → embedding lookup → h_rmsnorm → e_rmsnorm → concat → EH matmul.
+    Full golden chain:
+      1. Embedding lookup (one-hot table, token → activation)
+      2. LM head sampling (base stage) → base_token + MTP logits
+      3. LM head sampling (verify stage on MTP logits) → spec_token
+    Returns list of (base_token, spec_token) tuples.
     """
-    K = 7168
-    n_total = 101 * 160
-    embedding_dim = K
-    mtp_output_dim = K
+    K = _EMBED_HIDDEN
+    n_total = _LM_HEAD_N_SYNTHETIC
+    num_devices = 8
 
+    # Base stage weights (same as _SyntheticWeightProvider)
     torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
-    row_idx = iteration % K
-    torch_input = torch.zeros((1, K), dtype=torch.bfloat16)
-    torch_input[0, row_idx] = 1
     winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
     torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
     torch_b[torch.arange(K), winner_per_row] = 1
     torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
 
-    num_devices = 8
+    # MTP weights (seed=42, same as _SyntheticWeightProvider.load_mtp_weights)
+    embedding_dim = K
+    mtp_output_dim = K
     torch.manual_seed(42)
     torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
     torch_h_gamma = torch.randn((1, K), dtype=torch.bfloat16)
     torch_e_gamma = torch.randn((1, embedding_dim), dtype=torch.bfloat16)
     torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
 
-    _, mtp_output = LMHeadSampling.golden(
-        torch_input.float(),
-        torch_gamma.float(),
-        torch_b.float().unsqueeze(0),
-        indices=torch_indices_flat,
-        k=1,
-        p=1.0,
-        fuse_mtp=True,
-        embedding_tensor=torch_embedding.float(),
-        h_gamma_tensor=torch_h_gamma.float(),
-        e_gamma_tensor=torch_e_gamma.float(),
-        eh_projection_tensor=torch_eh_proj.float(),
-    )
-    return mtp_output
+    results = []
+    for iteration in range(iterations):
+        # Step 1: Embedding lookup (one-hot table: token_id → row with 1.0 at position token_id % K)
+        row_idx = iteration % K
+        torch_input = torch.zeros((1, K), dtype=torch.bfloat16)
+        torch_input[0, row_idx] = 1
+
+        # Step 2: Base stage LM head sampling + MTP fusion → base_token + mtp_logits
+        base_token_tensor, mtp_logits = LMHeadSampling.golden(
+            torch_input.float(),
+            torch_gamma.float(),
+            torch_b.float().unsqueeze(0),
+            indices=torch_indices_flat,
+            k=1,
+            p=1.0,
+            fuse_mtp=True,
+            embedding_tensor=torch_embedding.float(),
+            h_gamma_tensor=torch_h_gamma.float(),
+            e_gamma_tensor=torch_e_gamma.float(),
+            eh_projection_tensor=torch_eh_proj.float(),
+        )
+        base_token = base_token_tensor.to(torch.uint32).item()
+
+        # Step 3: Verify stage LM head sampling on MTP logits → spec_token
+        spec_token_tensor, _ = LMHeadSampling.golden(
+            mtp_logits,
+            torch_gamma.float(),
+            torch_b.float().unsqueeze(0),
+            indices=torch_indices_flat,
+            k=1,
+            p=1.0,
+        )
+        spec_token = spec_token_tensor.to(torch.uint32).item()
+
+        results.append((base_token, spec_token))
+    return results
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -3266,10 +3290,16 @@ def test_persistent_mode(mesh_device, use_fp32):
 )
 def test_persistent_mode_mtp(mesh_device, use_fp32):
     """
-    4-stage 4x2 single-galaxy pipeline with MTP fusion enabled:
-    P1(H2D) -> P2(LMHead+Sampling+MTP) -> P3(forward) -> P4(forward) -> P1(D2H).
+    4-stage 4x2 single-galaxy pipeline with MTP + verification:
+    P1(Embed) -> P2(LMHead+MTP) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Verify) -> P1(D2H TOKEN_META).
 
-    Verifies both the sampled token index (on P1) and the MTP EH projection output (on P2).
+    The verification stage (P4) receives gathered logits + token metadata, runs its
+    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
+
+    TOKEN_META page layout (uint32 words):
+      [0] num_tokens  (0=stale, 1=accept, 2=reject)
+      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
+      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -3280,20 +3310,18 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
-    mtp_output_dim = _EMBED_HIDDEN
-    num_dram_banks = 8
-    mtp_n_per_core = mtp_output_dim // num_dram_banks
-    mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
-    config = create_single_galaxy_pipeline_configuration(
+    golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
+
+    config = create_single_galaxy_spec_decode_pipeline_configuration(
         _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
-        enable_mtp=True,
     )
     pipeline = config.build_pipeline(mesh_device)
     try:
         pipeline.setup_and_run()
+
+        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
             for iteration in range(iterations):
@@ -3302,50 +3330,45 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    torch.zeros(1, token_meta_words, dtype=torch.uint32),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
                 pipeline.write_token(token_tensor)
                 pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                expected_idx = torch_expected_indices[iteration]
-                logger.info(f"[MTP] Iteration {iteration} output token: {got}, expected: {expected_idx}")
-                # assert torch.equal(
-                #     got, expected_idx
-                # ), f"PipelineBlock 4-stage MTP token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
+                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
+
+                num_tokens = raw[0].item()
+                tok0_id = raw[1].item()
+                tok0_type = raw[2].item()
+                tok0_pos = raw[3].item()
+                tok1_id = raw[4].item()
+                tok1_type = raw[5].item()
+                tok1_pos = raw[6].item()
+
+                expected_base, expected_spec = golden[iteration]
+                type_name = {0: "BASE", 1: "SPEC"}
+                logger.info(
+                    f"[MTP] Iteration {iteration} TOKEN_META: "
+                    f"num_tokens={num_tokens} | "
+                    f"tok0(id={tok0_id}, type={type_name.get(tok0_type, tok0_type)}, pos={tok0_pos}) | "
+                    f"tok1(id={tok1_id}, type={type_name.get(tok1_type, tok1_type)}, pos={tok1_pos}) | "
+                    f"golden(base={expected_base}, spec={expected_spec})"
+                )
+                assert num_tokens == 2, f"Iteration {iteration}: expected num_tokens=2, got {num_tokens}"
+                assert (
+                    tok0_id == expected_base
+                ), f"Iteration {iteration}: base token mismatch: got {tok0_id}, expected {expected_base}"
+                assert tok0_type == 0, f"Iteration {iteration}: tok0_type should be BASE(0), got {tok0_type}"
+                assert (
+                    tok1_id == expected_spec
+                ), f"Iteration {iteration}: spec token mismatch: got {tok1_id}, expected {expected_spec}"
+                assert tok1_type == 1, f"Iteration {iteration}: tok1_type should be SPEC(1), got {tok1_type}"
 
         logger.info(f"[MTP] Barrier for P{pipeline.my_mesh_id}")
         pipeline.barrier()
         logger.info(f"[MTP] Barrier completed for P{pipeline.my_mesh_id}")
-
-        # Terminate the persistent kernel before reading L1 tensors —
-        # the MTP output lives in device L1 (tensor-backed CB 17) and
-        # cannot be read while the kernel is still running.
         pipeline.terminate()
-
-        # if pipeline.my_mesh_id == 1:
-        #     logger.info(f"[MTP] Verifying MTP output on P{pipeline.my_mesh_id}")
-        #     last_iteration = iterations - 1
-        #     torch_expected_mtp = _compute_expected_mtp_output_synthetic(last_iteration)
-        #     ttnn_mtp_output = pipeline._stage_kind._lmhead_state["ttnn_mtp_output"]
-        #     pipeline_config = pipeline._pipeline_config
-        #     exit_coord = pipeline_config[pipeline.my_mesh_id].exit_node_coord
-        #     exit_device_idx = exit_coord[0] * mesh_device.shape[1] + exit_coord[1]
-        #     mtp_shards = ttnn.get_device_tensors(ttnn_mtp_output)
-        #     mtp_torch = (
-        #         ttnn.to_torch(mtp_shards[exit_device_idx])
-        #         .to(torch.float32)
-        #         .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
-        #     )
-        #     logger.info(f"[MTP] Verifying MTP output on P1 (LMHead stage), iteration {last_iteration}")
-        #     mtp_passing_pcc, _ = comp_pcc(mtp_torch, torch_expected_mtp.float(), 0.99)
-        #     if not mtp_passing_pcc:
-        #         max_diff = (mtp_torch - torch_expected_mtp.float()).abs().max()
-        #         logger.warning(f"[MTP] MTP output PCC check failed. Max diff: {max_diff}")
-        #     assert mtp_passing_pcc, f"Persistent MTP output PCC check failed for iteration {last_iteration}"
-        #     logger.info(f"[MTP] MTP output PCC check passed for iteration {last_iteration}")
-
         pipeline.barrier()
     finally:
         pass
@@ -3415,193 +3438,3 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
     logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
     pipeline.barrier()
     logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
-
-
-# ============================================================================
-# MTP Speculative Decoding Pipeline Tests
-# ============================================================================
-
-
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
-        }
-    ],
-    indirect=True,
-)
-def test_lm_head_sampling_pipeline_mtp_verification_4stage_single_galaxy(mesh_device, use_fp32):
-    """
-    4-stage MTP speculative decoding pipeline:
-    P1(Embed) -> P2(LMHead+MTP) -> P3(MTP_LMHead+Verify) -> P4(Token fwd) -> P1(D2H).
-
-    The base LM Head (P2) produces T_base and MTP logits. T_base flows through the
-    D2D socket to P3 (MTP verification stage), which runs its own LM head + argmax
-    to produce T_spec, then verifies T_spec against the stored reference token.
-
-    One-shot (no persistent mode); single token; terminate in finally.
-
-    NOTE — Design limitation: In this non-bypass configuration, T_base from Stage 1
-    arrives at Stage 2's entry socket via the normal D2D pipeline, but is never read
-    into reference_token_tensor (input_socket_mode=none).  The verification stage
-    therefore compares T_spec against the sentinel-initialised reference tensor
-    (0xFFFFFFFF), making the actual match/mismatch result meaningless.  This test
-    validates pipeline routing only.  For end-to-end verification correctness, use
-    the bypass variant: test_lm_head_sampling_pipeline_mtp_bypass_4stage_single_galaxy.
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
-    torch_expected_idx = torch_expected_indices[0]
-
-    config = create_single_galaxy_mtp_verification_pipeline_configuration(
-        _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
-    )
-    pipeline = config.build_pipeline(mesh_device)
-    try:
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            logger.info(f"MTP Verify pipeline: got token={got.item()}, expected={torch_expected_idx.item()}")
-            assert torch.equal(
-                got, torch_expected_idx
-            ), f"MTP Verify pipeline token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
-
-        pipeline.barrier()
-    finally:
-        pipeline.terminate()
-
-
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
-        }
-    ],
-    indirect=True,
-)
-def test_lm_head_sampling_pipeline_mtp_bypass_4stage_single_galaxy(mesh_device, use_fp32):
-    """
-    4-stage MTP bypass pipeline with socket fan-out from Stage 1 to Stage 3:
-    P1(Embed) -> P2(LMHead+MTP, bypass->P4) -> P3(Passthrough) -> P4(MTP_LMHead+Verify, bypass<-P2) -> P1(D2H).
-
-    Stage 2 (LMHead+MTP) sends T_base:
-      - Downstream to Stage 3 (normal D2D socket)
-      - Bypass to Stage 4 (dedicated bypass socket fan-out)
-
-    Stage 4 (MTP verification) receives T_base via the bypass socket for verification
-    against T_spec produced by its own LM head + argmax.
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
-    torch_expected_idx = torch_expected_indices[0]
-
-    config = create_single_galaxy_mtp_bypass_pipeline_configuration(
-        _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
-    )
-    pipeline = config.build_pipeline(mesh_device)
-    try:
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            logger.info(f"MTP Bypass pipeline: got token={got.item()}, expected={torch_expected_idx.item()}")
-            assert torch.equal(
-                got, torch_expected_idx
-            ), f"MTP Bypass pipeline token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
-
-        pipeline.barrier()
-
-        # Validate that the bypass socket delivered T_base from Stage 1 to
-        # Stage 3 and that the MTP verification kernel actually ran.
-        _SENTINEL = 0xFFFFFFFF
-        if pipeline.my_mesh_id == 3:
-            ttnn.synchronize_device(mesh_device)
-            stage = pipeline._stage_kind
-
-            ref_devs = ttnn.get_device_tensors(stage._state["reference_token_tensor"])
-            ref_vals = [ttnn.to_torch(d).item() for d in ref_devs]
-
-            spec_devs = ttnn.get_device_tensors(stage._state["speculative_tokens_tensor"])
-            spec_vals = [ttnn.to_torch(d).item() for d in spec_devs]
-
-            verify_devs = ttnn.get_device_tensors(stage._state["verification_result_tensor"])
-            verify_vals = [ttnn.to_torch(d).item() for d in verify_devs]
-
-            logger.info(
-                f"MTP Bypass Stage 3 verification: "
-                f"ref_token={ref_vals}, spec_token={spec_vals}, verify_result={verify_vals}"
-            )
-
-            t_base = int(torch_expected_idx.item())
-            bypass_delivered = any(v == t_base for v in ref_vals)
-            assert bypass_delivered, (
-                f"Bypass socket did not deliver T_base={t_base}. "
-                f"reference_token values: {ref_vals} (sentinel={_SENTINEL:#x})"
-            )
-
-            spec_written = any(v != _SENTINEL for v in spec_vals)
-            assert spec_written, f"Speculative token never written. values: {spec_vals}"
-
-            verify_written = any(v != _SENTINEL for v in verify_vals)
-            assert verify_written, f"Verification result never written. values: {verify_vals}"
-
-        pipeline.barrier()
-    finally:
-        pipeline.terminate()

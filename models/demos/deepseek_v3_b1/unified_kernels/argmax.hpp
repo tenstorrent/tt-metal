@@ -5,6 +5,7 @@
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "socket_send.hpp"
 #include "api/numeric/bfloat16.h"
 #include "api/debug/dprint.h"
 
@@ -330,57 +331,13 @@ struct Sampling {
         }
 
         FORCE_INLINE void send_d2h_token_from_cb_brisc(const WriterArgs& args) {
-            const uint32_t socket_config_addr = args.socket_config_addr;
-            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
-            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
-            const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
-            const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
-
-            socket_reserve_pages(sender_socket, 1);
-            cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-
-            noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-            noc_async_wide_write_any_len_with_state(
-                NOC_INDEX,
-                read_addr,
-                pcie_xy_enc,
-                ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
-                    sender_socket.write_ptr,
-                sizeof(uint32_t));
-            noc_async_writes_flushed();
-
-            cb_pop_front(CTArgs::socket_cb_id, 1);
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            update_socket_config(sender_socket);
-            noc_async_write_barrier();
+            unified_kernels::socket_send_from_cb<1>(
+                args.socket_config_addr, CTArgs::socket_cb_id, 1, CTArgs::socket_page_size_bytes);
         }
 
         FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
-            const uint32_t socket_config_addr = args.socket_config_addr;
-            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
-            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
-
-            socket_reserve_pages(sender_socket, 1);
-            cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-            for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-                sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-                noc_async_write(
-                    read_addr,
-                    get_noc_addr(
-                        downstream_enc.d2d.downstream_noc_x,
-                        downstream_enc.d2d.downstream_noc_y,
-                        sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                    CTArgs::socket_page_size_bytes);
-            }
-            noc_async_write_barrier();
-
-            cb_pop_front(CTArgs::socket_cb_id, 1);
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            update_socket_config(sender_socket);
+            unified_kernels::socket_send_from_cb<2>(
+                args.socket_config_addr, CTArgs::socket_cb_id, 1, CTArgs::socket_page_size_bytes);
         }
 #endif
 

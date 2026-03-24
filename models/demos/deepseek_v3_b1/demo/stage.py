@@ -17,7 +17,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
@@ -42,9 +41,20 @@ num_dram_banks = 8
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-# Bypass fan-out: core used by the d2d_exchange relay for the
-# Stage 1 → Stage 3 bypass socket (must differ from PIPELINE_CORE_COORD).
-BYPASS_D2D_CORE = ttnn.CoreCoord(11, 1)
+# Token metadata payload: just token info (id, type, pos) — same physical size as TOKEN.
+TOKEN_META_PAGE_SIZE_BYTES = TOKEN_PAGE_SIZE_BYTES
+TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
+
+# Activation + token metadata payload: gathered EH logits + 1 metadata tile (token).
+# Tile [1,32] bf16 → tile_size bytes per tile; total = (num_cores * tiles_per_core + 1) * tile_size.
+_ACT_W_META_TILE = ttnn.Tile([1, 32])
+_ACT_W_META_TILE_SIZE = _ACT_W_META_TILE.get_tile_size(ttnn.bfloat16)
+_ACT_W_META_TILES_PER_CORE = mtp_n_per_core // _ACT_W_META_TILE.tile_shape[1]
+_ACT_W_META_TOTAL_TILES = num_dram_banks * _ACT_W_META_TILES_PER_CORE + 1
+ACTIVATION_W_TOKEN_META_TILE_SIZE_BYTES = _ACT_W_META_TILE_SIZE
+ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = _ACT_W_META_TOTAL_TILES * _ACT_W_META_TILE_SIZE
+ACTIVATION_W_TOKEN_META_FIFO_SIZE = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES * 2
+ACTIVATION_W_TOKEN_META_LOGITS_BYTES = (_ACT_W_META_TOTAL_TILES - 1) * _ACT_W_META_TILE_SIZE
 
 
 @dataclass
@@ -79,21 +89,24 @@ class StageKind(ABC):
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
 
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
+    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, *, d2h_page_size: int | None = None) -> None:
         self._weights = weights
+        self._d2h_page_size = d2h_page_size or TOKEN_PAGE_SIZE_BYTES
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
+        d2h_page = self._d2h_page_size
+        d2h_fifo = max(d2h_page * 2, TOKEN_FIFO_SIZE)
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=d2h_fifo,
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_page_size=d2h_page,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            d2h_socket_fifo_size=d2h_fifo,
+            d2h_socket_page_size=d2h_page,
             embedding_tensor=self._weights.embedding,
         )
 
@@ -101,6 +114,8 @@ class EmbeddingStage(StageKind):
 class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
+    TOKEN_META = "token_meta"
+    ACTIVATION_W_TOKEN_META = "activation_w_token_meta"
 
 
 class PassthroughStage(StageKind):
@@ -114,6 +129,12 @@ class PassthroughStage(StageKind):
         if self._payload == PassthroughPayload.ACTIVATION:
             up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
             up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
+        elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META:
+            up_fifo = down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
+            up_page = down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        elif self._payload == PassthroughPayload.TOKEN_META:
+            up_fifo = down_fifo = TOKEN_META_FIFO_SIZE
+            up_page = down_page = TOKEN_META_PAGE_SIZE_BYTES
         else:
             up_fifo = down_fifo = TOKEN_FIFO_SIZE
             up_page = down_page = TOKEN_PAGE_SIZE_BYTES
@@ -175,7 +196,7 @@ class DenseDecoderStage(StageKind):
         pass
 
 
-class MTPVerificationLMHeadStage(StageKind):
+class SpecLMHeadStage(StageKind):
     """MTP LMHead+Sampling+Verification stage: receives base token, runs its own LM head,
     then verifies its speculative token against the base token."""
 
@@ -196,13 +217,10 @@ class MTPVerificationLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        bypass_source_mesh_id: int | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
-        self._bypass_source_mesh_id = bypass_source_mesh_id
-        self._bypass_socket_interface: SocketInterface | None = None
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -220,10 +238,10 @@ class MTPVerificationLMHeadStage(StageKind):
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=TOKEN_META_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=TOKEN_META_PAGE_SIZE_BYTES,
             entry_node_downstream=entry_core,
             exit_node_upstream=exit_core,
         )
@@ -342,32 +360,21 @@ class MTPVerificationLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Verification tensors — all on argmax_final_core.
-        # Initialised to 0xFFFFFFFF so tests can distinguish "kernel wrote 0"
-        # from "kernel never wrote".
+        # Base token tensors — all on argmax_final_core.
+        # base_token_tensor is 64 bytes (TOKEN_META landing buffer for NCRISC NOC write).
         _SENTINEL = 0xFFFFFFFF
-        reference_token_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=output_index_mem_config,
-            mesh_mapper=mesh_mapper,
+        _TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        token_meta_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, (1, _TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        verification_result_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
+        base_token_tensor = ttnn.from_torch(
+            torch.full((num_devices, 1, _TOKEN_META_ELEMS), _SENTINEL, dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=output_index_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-        speculative_tokens_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=output_index_mem_config,
+            memory_config=token_meta_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
@@ -390,9 +397,7 @@ class MTPVerificationLMHeadStage(StageKind):
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
-            "reference_token_tensor": reference_token_tensor,
-            "verification_result_tensor": verification_result_tensor,
-            "speculative_tokens_tensor": speculative_tokens_tensor,
+            "base_token_tensor": base_token_tensor,
             "lmhead_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
             "out_ready_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
@@ -404,33 +409,11 @@ class MTPVerificationLMHeadStage(StageKind):
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
 
-        # [BYPASS] Create bypass receiver socket from a non-adjacent upstream stage.
-        if self._bypass_source_mesh_id is not None:
-            source_id = self._bypass_source_mesh_id
-            bypass_send_core = ttnn.MeshCoreCoord(pipeline_config[source_id].exit_node_coord, BYPASS_D2D_CORE)
-            bypass_recv_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, BYPASS_D2D_CORE)
-            bypass_downstream_core = ttnn.MeshCoreCoord(
-                pipeline_config[my_mesh_id].entry_node_coord, cls.ARGMAX_FINAL_CORE
-            )
-            self._bypass_socket_interface = SocketInterface(
-                page_size=TOKEN_PAGE_SIZE_BYTES,
-                socket_fifo_size=TOKEN_FIFO_SIZE,
-                data_size_per_transfer=TOKEN_PAGE_SIZE_BYTES,
-                send_core_coord=bypass_send_core,
-                recv_core_coord=bypass_recv_core,
-                downstream_core_coord=bypass_downstream_core,
-                sender_mesh=MeshWrapper(mesh_id=source_id),
-                receiver_mesh=MeshWrapper(mesh_device),
-            )
-            self._state["bypass_socket_input"] = self._bypass_socket_interface.get_downstream_socket()
-
     def run_auxiliary_sockets(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.run()
+        pass
 
     def terminate_auxiliary(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.terminate(False)
+        pass
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state
@@ -461,16 +444,13 @@ class MTPVerificationLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
-            enable_mtp=False,
-            enable_mtp_verification=True,
-            reference_token_tensor=d["reference_token_tensor"],
-            verification_result_tensor=d["verification_result_tensor"],
-            speculative_tokens_tensor=d["speculative_tokens_tensor"],
-            bypass_socket_input=d.get("bypass_socket_input"),
+            is_mtp_base_stage=False,
+            is_mtp_verify_stage=True,
+            base_token_tensor=d["base_token_tensor"],
         )
 
 
-class LMHeadStage(StageKind):
+class BaseLMHeadStage(StageKind):
     """LMHead+Sampling stage: receive activation, run op, send token downstream."""
 
     # LMHead-stage-specific constants (tiles, core coords, matmul layout)
@@ -492,15 +472,14 @@ class LMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         mtp_weights: DeepSeekV3MTPWeights | None = None,
-        bypass_target_mesh_id: int | None = None,
+        send_mtp_output_downstream: bool = False,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._mtp_weights = mtp_weights
         self._enable_mtp = mtp_weights is not None
-        self._bypass_target_mesh_id = bypass_target_mesh_id
-        self._bypass_socket_interface: SocketInterface | None = None
+        self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -513,13 +492,19 @@ class LMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
+        if self._send_mtp_output_downstream:
+            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+            down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
+        else:
+            down_page = TOKEN_PAGE_SIZE_BYTES
+            down_fifo = TOKEN_FIFO_SIZE
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
             upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
         )
@@ -714,23 +699,6 @@ class LMHeadStage(StageKind):
         )
 
         mcast_eh_dst_working_buf = None
-        # if self._enable_mtp:
-        #     eh_k = LMHeadStage.K + embedding_dim
-        #     mcast_eh_dst_mem_config = ttnn.MemoryConfig(
-        #         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #         ttnn.BufferType.L1,
-        #         ttnn.ShardSpec(mcast_receiver_grid, (LMHeadStage.M, eh_k), ttnn.ShardOrientation.ROW_MAJOR),
-        #     )
-        #     mcast_eh_dst_working_buf = ttnn.from_torch(
-        #         torch.zeros((num_devices * num_receiver_cores, eh_k), dtype=torch.bfloat16),
-        #         dtype=ttnn.bfloat16,
-        #         layout=ttnn.TILE_LAYOUT,
-        #         tile=LMHeadStage.A_TILE,
-        #         device=mesh_device,
-        #         memory_config=mcast_eh_dst_mem_config,
-        #         mesh_mapper=mesh_mapper,
-        #     )
-
         lmhead_input_socket = pipeline_block.get_downstream_socket()
         lmhead_output_socket = pipeline_block.get_upstream_socket()
 
