@@ -32,8 +32,10 @@ class PipelineStageSync:
         mesh_device: ttnn.MeshDevice,
         stalling_device_mesh_coord: ttnn.MeshCoordinate,
         stalling_core: ttnn.CoreCoord,
+        run_stalling_kernel_on_brisc: bool,
         signalling_device_mesh_coord: ttnn.MeshCoordinate,
         signalling_core: ttnn.CoreCoord,
+        run_signalling_kernel_on_brisc: bool,
         num_iterations: int = 1,
     ) -> None:
         """
@@ -43,8 +45,10 @@ class PipelineStageSync:
             mesh_device: mesh_device micro op operates on
             stalling_device_mesh_coord: mesh coordinate on which the stalling_core stalls
             stalling_core: core that the stalling device stalls on
+            run_stalling_kernel_on_brisc: whether to run the stalling kernel on brisc, if false runs on ncrisc
             signalling_device_mesh_coord: mesh coordinate on which the signalling_core signals
             signalling_core: core that the signalling device signals on
+            run_signalling_kernel_on_brisc: whether to run the signalling kernel on brisc, if false runs on ncrisc
             num_iterations: Number of iterations to run inside the kernel
 
         Returns:
@@ -58,9 +62,15 @@ class PipelineStageSync:
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/pipeline_stage_sync/kernels/pipeline_stage_sync_kernel.cpp"
 
         is_stalling_device_equal_signalling_device = stalling_device_mesh_coord == signalling_device_mesh_coord
+        is_stalling_core_equal_signalling_core = stalling_core == signalling_core
+        is_stalling_kernel_and_signalling_kernel_on_same_risc = (
+            run_stalling_kernel_on_brisc == run_signalling_kernel_on_brisc
+        )
         assert not (
-            is_stalling_device_equal_signalling_device and stalling_core == signalling_core
-        ), f"If the stalling device is the same as the signalling device, then the stalling core must be different than the siganlling core"
+            is_stalling_device_equal_signalling_device
+            and is_stalling_core_equal_signalling_core
+            and is_stalling_kernel_and_signalling_kernel_on_same_risc
+        ), f"If the stalling device is the same as the signalling device, and the stalling core is the same as the signalling core, then the stalling kernel must run on a different risc than the signalling kernel"
 
         global_semaphore = ttnn.create_global_semaphore(
             mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_device_mesh_coord, stalling_device_mesh_coord)]), 0
