@@ -33,22 +33,21 @@ import ttml
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, DeviceConfig
-from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.data import CharTokenizer
 
 # SFT Trainer infrastructure
-from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+from ttml.trainers import SFTConfig, SFTTrainer
 from ttml.datasets import Batch, InMemoryDataloader
 
 # Layout-aware dispatch layer
-import ttml.distributed
 from ttml.distributed import (
     parallelize_module,
     ColwiseParallel,
     RowwiseParallel,
-    sync_gradients,
     init_ops,
+    DistributedDataParallel,
 )
-from ttml.distributed.debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
+from ttml.distributed.debug import DispatchTraceCallback
 
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -129,90 +128,6 @@ def parse_model_config(yaml_config: dict) -> LlamaConfig:
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
     )
-
-
-# ---------------------------------------------------------------------------
-# Data Parallel Model Wrapper
-# ---------------------------------------------------------------------------
-
-
-class _GradSyncFunction(ttml.autograd.Function):
-    """Custom autograd function that syncs gradients in backward pass."""
-
-    @staticmethod
-    def forward(ctx, output, model, sync_axes):
-        """Forward pass - just returns the output unchanged."""
-        ctx.model = model
-        ctx.sync_axes = sync_axes
-        return output.get_value()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        """Backward pass - sync gradients across specified axes, then return grad unchanged."""
-        sync_gradients(ctx.model, cluster_axes=ctx.sync_axes)
-        return grad_output
-
-
-class DistributedModelWrapper:
-    """Wrapper that adds automatic gradient synchronization for distributed training.
-
-    This wrapper is orthogonal to the trainer - it wraps any model and adds
-    automatic gradient synchronization across the specified axes at the end of backward.
-
-    The gradient sync happens automatically when backward() is called on the loss,
-    because the wrapper inserts a custom autograd function that syncs gradients
-    in its backward pass.
-
-    Example::
-
-        model = Llama(config)
-        model = parallelize_module(model, mesh_device, tp_plan)  # TP sharding
-        model = DistributedModelWrapper(model, sync_axes=[0, 1])  # DP + CP sync
-
-        # Use with SFTTrainer - no special hooks needed
-        trainer = SFTTrainer(model, ...)
-    """
-
-    def __init__(self, model: Any, sync_axes: list):
-        """
-        Args:
-            model: The underlying model to wrap.
-            sync_axes: List of mesh axes for gradient synchronization (DP and/or CP).
-        """
-        self._model = model
-        self._sync_axes = sync_axes
-
-    def __call__(self, *args, **kwargs):
-        """Forward pass with automatic gradient sync in backward."""
-        output = self._model(*args, **kwargs)
-        # Insert gradient sync node into the autograd graph
-        return _GradSyncFunction.apply(output, self._model, self._sync_axes)
-
-    def train(self):
-        """Set model to training mode."""
-        self._model.train()
-
-    def eval(self):
-        """Set model to evaluation mode."""
-        self._model.eval()
-
-    def parameters(self):
-        """Return model parameters."""
-        return self._model.parameters()
-
-    @property
-    def config(self):
-        """Return model config (for gradient checkpointing support)."""
-        return self._model.config
-
-    @config.setter
-    def config(self, value):
-        """Set model config."""
-        self._model.config = value
-
-    def __getattr__(self, name: str):
-        """Delegate attribute access to the underlying model."""
-        return getattr(self._model, name)
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +598,7 @@ def main():
         print(
             f"\n   Wrapping model with DistributedModelWrapper (sync_axes={sync_axes})..."
         )
-        model = DistributedModelWrapper(model, sync_axes)
+        model = DistributedDataParallel(model, sync_axes)
 
     # Create dataloader with distributed collate function
     print("\n5. Creating dataloader...")
