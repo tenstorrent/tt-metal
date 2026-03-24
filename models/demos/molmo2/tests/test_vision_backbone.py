@@ -191,40 +191,12 @@ def test_vision_backbone_projector_integration(device):
 
     # Create random inputs
     torch.manual_seed(42)
-    # For reference: create full features tensor [B, T*N, pool_input_dim]
-    # where T*N is the total number of patches
-    total_patches = 729  # 27x27 patches
-    features_torch = torch.randn(1, total_patches, pool_input_dim, dtype=torch.float32)
-
-    # Create pooled_patches_idx: [B, N_out, K_pool] indices into features
-    pooled_patches_idx = torch.randint(0, total_patches, (1, num_queries, pool_size), dtype=torch.long)
-
-    # Reference: run pooling + projector in PyTorch
-    from models.demos.molmo2.reference.functional import image_pooling_forward, image_projector_forward
-
-    ref_pooled = image_pooling_forward(features_torch, pooled_patches_idx, state_dict)
-    ref_output = image_projector_forward(ref_pooled, state_dict)
-
-    # For TTNN: prepare inputs to match what ImagePooling expects
-    # The reference does gathering internally, so we need to simulate that
-    # Gather features using pooled_patches_idx
-    B, N_out, K_pool = pooled_patches_idx.shape
-    idx_expanded = pooled_patches_idx.unsqueeze(-1).expand(B, N_out, K_pool, pool_input_dim)
-    gathered = torch.gather(
-        features_torch.unsqueeze(1).expand(B, N_out, total_patches, pool_input_dim), 2, idx_expanded
-    )
-
-    # Compute query as mean of gathered features (matching reference behavior)
-    query_torch = gathered.mean(dim=2, keepdim=True)  # [B, N_out, 1, pool_input_dim]
-    kv_torch = gathered  # [B, N_out, K_pool, pool_input_dim]
-
-    # Reshape for TTNN: flatten batch*N_out dimension
-    query_torch = query_torch.reshape(B * N_out, 1, pool_input_dim)  # [B*N_out, 1, pool_input_dim]
-    kv_torch = kv_torch.reshape(B * N_out, K_pool, pool_input_dim)  # [B*N_out, K_pool, pool_input_dim]
+    query_torch = torch.randn(1, num_queries, pool_input_dim, dtype=torch.float32)
+    kv_torch = torch.randn(1, pool_size, pool_input_dim, dtype=torch.float32)
 
     # Convert to TTNN
     query_ttnn = ttnn.from_torch(
-        query_torch.unsqueeze(0),  # [1, B*N_out, 1, pool_input_dim]
+        query_torch.unsqueeze(0),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -232,23 +204,27 @@ def test_vision_backbone_projector_integration(device):
     )
 
     kv_ttnn = ttnn.from_torch(
-        kv_torch.unsqueeze(0),  # [1, B*N_out, K_pool, pool_input_dim]
+        kv_torch.unsqueeze(0),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Reference: run pooling + projector in PyTorch
+    from models.demos.molmo2.reference.functional import image_pooling_forward, image_projector_forward
+
+    pooled_patches_idx = torch.randint(0, pool_size, (1, num_queries, 4))
+    ref_pooled = image_pooling_forward(query_torch, pooled_patches_idx, state_dict)
+    ref_output = image_projector_forward(ref_pooled, state_dict)
+
     # TTNN: run pooling + projector
     pooled = pooling(query_ttnn, kv_ttnn)
     output = projector(pooled)
-    output_torch = ttnn.to_torch(output).squeeze(0)  # [B*N_out, 1, output_dim]
-
-    # Reshape to match reference output shape [B, N_out, output_dim]
-    output_torch = output_torch.reshape(B, N_out, output_dim)
+    output_torch = ttnn.to_torch(output).squeeze(0).squeeze(0)
 
     # Check output shape
-    expected_shape = (B, num_queries, output_dim)
+    expected_shape = (num_queries, output_dim)
     assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
 
     # PCC check against PyTorch reference — individual blocks must be >= 0.99
