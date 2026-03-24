@@ -157,7 +157,7 @@
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
   model: qwen3_32b
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -170,7 +170,7 @@
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
   model: qwen3_32b_long_context
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
