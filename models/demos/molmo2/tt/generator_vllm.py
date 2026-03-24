@@ -408,8 +408,10 @@ class Molmo2ProcessorWrapper:
 
         # Handle video input by extracting frames
         # vLLM passes videos as numpy array of shape [num_videos, num_frames, H, W, C]
+        self._is_video_input = False
         if videos is not None and images is None:
             logger.info(f"  Processing video input: type={type(videos)}")
+            self._is_video_input = True
             if isinstance(videos, list) and len(videos) > 0:
                 video_frames = videos[0]  # Take first video
                 if isinstance(video_frames, np.ndarray):
@@ -442,9 +444,37 @@ class Molmo2ProcessorWrapper:
         else:
             image_outputs = {}
 
-        # Tokenize text keeping <|image|> placeholder intact
+        # Tokenize text keeping <|image|> or <|video|> placeholder intact
         # Don't call the full processor - just tokenize and process images separately
         if text is not None:
+            num_images = 0
+            is_video_input = False
+            if images is not None:
+                num_images = len(images) if isinstance(images, list) else 1
+                # If we have more than 1 image and they came from video processing, use <|video|>
+                if num_images > 1 and hasattr(self, "_is_video_input") and self._is_video_input:
+                    is_video_input = True
+
+            # Check for existing placeholders
+            existing_video = text.count("<|video|>")
+            existing_image = text.count("<|image|>")
+
+            if is_video_input:
+                # For video input, use <|video|> token (not multiple <|image|>)
+                if existing_video == 0 and existing_image == 0:
+                    text = "<|video|>" + text
+                    logger.info(f"  Added <|video|> placeholder for video frames ({num_images} frames)")
+            elif num_images > 0 and existing_image == 0 and existing_video == 0:
+                # For regular images, add <|image|> for each
+                image_placeholders = "<|image|>" * num_images
+                text = image_placeholders + text
+                logger.info(f"  Added {num_images} <|image|> placeholders")
+            elif num_images > existing_image and existing_video == 0:
+                # Not enough placeholders, add more
+                additional = num_images - existing_image
+                text = "<|image|>" * additional + text
+                logger.info(f"  Added {additional} additional <|image|> placeholders")
+
             # Tokenize without image token expansion
             text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
         else:
@@ -636,13 +666,72 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             )
             return [hf_processor.image_patch_id] * total_tokens
 
-        return [
+        # Get the <|video|> placeholder token ID
+        video_placeholder = "<|video|>"
+        video_placeholder_id = tokenizer.convert_tokens_to_ids(video_placeholder)
+
+        def get_replacement_video(item_idx: int) -> list:
+            """Generate the replacement tokens for video (all frames combined).
+
+            For video, we replace a single <|video|> token with all frame tokens.
+            """
+            import numpy as np
+
+            # Collect tokens for ALL frames in the video
+            all_tokens = []
+            num_frames = len(out_mm_kwargs["image"])
+            logger.info(f"  get_replacement_video: generating tokens for {num_frames} frames")
+
+            for frame_idx in range(num_frames):
+                out_item = out_mm_kwargs["image"][frame_idx]
+                image_grids = out_item.get("image_grids")
+
+                if image_grids is None:
+                    # Default tokens for this frame
+                    frame_tokens = 392
+                else:
+                    if hasattr(image_grids, "data"):
+                        grid = image_grids.data
+                    else:
+                        grid = image_grids
+
+                    if isinstance(grid, torch.Tensor):
+                        grid = grid.numpy()
+
+                    grid = np.array(grid).flatten()
+                    if len(grid) >= 4:
+                        resized_h, resized_w, h, w = int(grid[0]), int(grid[1]), int(grid[2]), int(grid[3])
+                        frame_tokens = resized_h * resized_w + h * w
+                    else:
+                        frame_tokens = 392
+
+                all_tokens.extend([hf_processor.image_patch_id] * frame_tokens)
+                logger.info(f"  get_replacement_video: frame {frame_idx} = {frame_tokens} tokens")
+
+            logger.info(f"  get_replacement_video: total = {len(all_tokens)} tokens")
+            return all_tokens
+
+        # Return prompt replacements for both image and video
+        prompt_replacements = [
             PromptReplacement(
                 modality="image",
                 target=[image_placeholder_id],
                 replacement=get_replacement_molmo2,
             )
         ]
+
+        # Add video replacement if <|video|> is a valid token
+        if video_placeholder_id != tokenizer.unk_token_id:
+            prompt_replacements.append(
+                PromptReplacement(
+                    modality="image",  # Video uses image modality internally
+                    target=[video_placeholder_id],
+                    replacement=get_replacement_video,
+                )
+            )
+            logger.info(f"  Added video replacement: placeholder_id={video_placeholder_id}")
+
+        return prompt_replacements
 
 
 class Molmo2DummyInputsBuilder(BaseDummyInputsBuilder["TT_MolmoProcessingInfo"]):
