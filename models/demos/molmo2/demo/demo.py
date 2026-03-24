@@ -725,6 +725,9 @@ class Molmo2Generator:
             Fused hidden states [1, 1, seq_len, hidden_dim] on device
         """
         if pixel_values is not None and pooled_patches_idx is not None:
+            # Ensure pixel_values has 4 dimensions [B, C, H, W]
+            if pixel_values.dim() == 3:
+                pixel_values = pixel_values.unsqueeze(0)
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
             ttnn.deallocate(visual_embeddings_ttnn)
@@ -764,6 +767,10 @@ class Molmo2Generator:
         k_pool = pooled_patches_idx.shape[2]
 
         # 1. Patch embedding on TTNN (unfold on CPU, linear+pos_embed on device)
+        # Ensure pixel_values has 4 dimensions [B, C, H, W]
+        if pixel_values.dim() == 3:
+            # vLLM may pass [C, H, W] - add batch dim
+            pixel_values = pixel_values.unsqueeze(0)
         vit = self.model.vision_backbone.image_vit
         embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
