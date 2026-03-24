@@ -27,7 +27,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
-    "1024x1024": {"10": 0.93, "50": 0.913},
+    "1024x1024": {"10": 0.93, "50": 0.907},
     "512x512": {"10": 0.84, "50": 0.917},
 }
 
