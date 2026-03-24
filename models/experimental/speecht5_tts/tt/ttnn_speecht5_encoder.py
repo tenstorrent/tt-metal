@@ -634,32 +634,21 @@ class TTNNSpeechT5Encoder:
             inplace=False,
         )
 
-    def __call__(self, input_ids: ttnn.Tensor, attention_mask: ttnn.Tensor = None) -> Tuple[ttnn.Tensor]:
+    def _run_wrapped_encoder(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor = None) -> Tuple[ttnn.Tensor]:
         """
-        Forward pass with optimized L1 memory management.
+        Run the shared wrapped SpeechT5 encoder stack on precomputed features.
 
         Args:
-            input_ids: [batch, seq_len] - token IDs
-            attention_mask: Optional [1, 1, seq_len] mask with 0 for real positions
-                           and -1e9 for pad positions. Prevents pad tokens from
-                           corrupting real token representations via self-attention.
+            hidden_states: [batch, seq_len, hidden_size] (or [batch, 1, seq_len, hidden_size])
+            attention_mask: Optional [1, 1, seq_len] mask with 0 for real and -1e9 for pad.
 
         Returns:
-            tuple: (hidden_states,) where hidden_states is [batch, seq_len, hidden_size]
+            tuple: (hidden_states,)
         """
-        batch_size = input_ids.shape[0]
-        seq_len = input_ids.shape[1]
-
-        # Op 1: Embedding lookup (L1 output)
-        hidden_states = ttnn.embedding(
-            input_ids,
-            self.parameters["embed_tokens"]["weight"],
-            memory_config=self.L1_MEMCFG,
-        )
-
-        pe_slice = self.parameters["positional_encoding"][:, :seq_len, :]
-
-        hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
+        if len(hidden_states.shape) == 4:
+            seq_len = hidden_states.shape[2]
+        else:
+            seq_len = hidden_states.shape[1]
 
         # Convert to width sharded for pre-encoder layer norm
         hidden_states = l1_width_sharded_memory(hidden_states, self.device)
@@ -667,7 +656,7 @@ class TTNNSpeechT5Encoder:
         # Get LayerNorm program config for sharded execution
         layernorm_program_config = self._get_layernorm_program_config(hidden_states)
 
-        # Op 2: Pre-encoder layer norm with sharding
+        # Pre-encoder layer norm with sharding
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.parameters["layer_norm"]["weight"],
@@ -677,14 +666,61 @@ class TTNNSpeechT5Encoder:
             program_config=layernorm_program_config,
         )
 
-        # Op 4: Pre-encoder dropout is omitted in this TTNN implementation (inference-focused).
-
-        # Op 3: Encoder blocks
+        # Encoder blocks
         position_bias = self._compute_position_bias(seq_len)
         for block in self.layers:
             hidden_states = block(hidden_states, position_bias=position_bias, attention_mask=attention_mask)
 
         return (hidden_states,)
+
+    def __call__(self, input_ids: ttnn.Tensor, attention_mask: ttnn.Tensor = None) -> Tuple[ttnn.Tensor]:
+        """
+        Forward pass for the text-prenet path (token IDs -> encoder features).
+
+        Args:
+            input_ids: [batch, seq_len] token IDs.
+            attention_mask: Optional [1, 1, seq_len] mask with 0 for real and -1e9 for pad.
+
+        Returns:
+            tuple: (hidden_states,) where hidden_states is [batch, seq_len, hidden_size]
+        """
+        seq_len = input_ids.shape[1]
+
+        if "embed_tokens" not in self.parameters:
+            raise ValueError(
+                "This encoder instance was preprocessed without text-prenet weights. "
+                "Use forward_from_hidden_states() for speech-prenet inputs."
+            )
+
+        # Embedding lookup (text prenet path)
+        hidden_states = ttnn.embedding(
+            input_ids,
+            self.parameters["embed_tokens"]["weight"],
+            memory_config=self.L1_MEMCFG,
+        )
+        pe_slice = self.parameters["positional_encoding"][:, :seq_len, :]
+        hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
+
+        return self._run_wrapped_encoder(hidden_states, attention_mask=attention_mask)
+
+    def forward_from_hidden_states(
+        self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor = None
+    ) -> Tuple[ttnn.Tensor]:
+        """
+        Forward pass for speech-prenet path (precomputed features -> encoder features).
+
+        This is used by SpeechT5 voice-conversion bring-up where speech-prenet outputs
+        are produced before the shared wrapped encoder.
+
+        Args:
+            hidden_states: [batch, seq_len, hidden_size] speech-prenet output.
+            attention_mask: Optional [1, 1, seq_len] mask with 0 for real and -1e9 for pad.
+
+        Returns:
+            tuple: (hidden_states,) where hidden_states is [batch, seq_len, hidden_size]
+        """
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        return self._run_wrapped_encoder(hidden_states, attention_mask=attention_mask)
 
     def prepare_encoder_inputs(self, input_ids: ttnn.Tensor):
         """
@@ -1048,40 +1084,59 @@ def get_high_perf_compute_config(device=None):
 
 def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, device):
     """
-    Preprocess PyTorch encoder parameters for TTNN.
+    Preprocess HF SpeechT5 encoder parameters for TTNN.
+
+    Supports both wrapper variants:
+    - SpeechT5EncoderWithTextPrenet
+    - SpeechT5EncoderWithSpeechPrenet
+
+    For speech-prenet wrapper, text-prenet tensors (token embedding and scaled
+    sinusoidal positional encoding) are omitted intentionally.
 
     Args:
-        torch_encoder: PyTorch SpeechT5Encoder
+        torch_encoder: HF SpeechT5 encoder wrapper or core wrapped encoder
         config: Encoder configuration
         device: TTNN device
 
     Returns:
         parameters: Dictionary of TTNN parameters
-
-    Note:
-        - Weights stored in DRAM
-        - Linear weights transposed
-        - Layer norm parameters kept as-is
     """
     parameters = {}
 
     # Memory configs
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
-    L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
-    # 1. Embedding weights (from prenet in composite encoder)
-    parameters["embed_tokens"] = {
-        "weight": ttnn.from_torch(
-            torch_encoder.prenet.embed_tokens.weight.data,
+    # Resolve core shared encoder for both wrapper and non-wrapper inputs.
+    core_encoder = torch_encoder.wrapped_encoder if hasattr(torch_encoder, "wrapped_encoder") else torch_encoder
+
+    # Optional text-prenet tensors.
+    if hasattr(torch_encoder, "prenet") and hasattr(torch_encoder.prenet, "embed_tokens"):
+        parameters["embed_tokens"] = {
+            "weight": ttnn.from_torch(
+                torch_encoder.prenet.embed_tokens.weight.data,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=DRAM_MEMCFG,
+            )
+        }
+
+        pe = create_sinusoidal_positions(config.max_position_embeddings, config.hidden_size)
+        parameters["positional_encoding"] = ttnn.from_torch(
+            pe,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,
         )
-    }
 
-    # Get core encoder for other attributes
-    core_encoder = torch_encoder.wrapped_encoder
+        parameters["encode_positions_alpha"] = ttnn.from_torch(
+            torch_encoder.prenet.encode_positions.alpha.data.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=DRAM_MEMCFG,
+        )
 
     # 2. Relative positional encoding weights (from embed_positions)
     parameters["relative_pe_k"] = {
@@ -1094,26 +1149,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
         )
     }
 
-    # 3. Create positional encoding tensor
-    pe = create_sinusoidal_positions(config.max_position_embeddings, config.hidden_size)
-    parameters["positional_encoding"] = ttnn.from_torch(
-        pe,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=DRAM_MEMCFG,
-    )
-
-    # 4. Positional encoding alpha
-    parameters["encode_positions_alpha"] = ttnn.from_torch(
-        torch_encoder.prenet.encode_positions.alpha.data.unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=DRAM_MEMCFG,
-    )
-
-    # 5. Pre-encoder layer norm (bfloat8_b for optimization)
+    # 3. Pre-encoder layer norm
     parameters["layer_norm"] = {
         "weight": ttnn.from_torch(
             core_encoder.layer_norm.weight.data,
@@ -1131,7 +1167,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
         ),
     }
 
-    # 6. Encoder layers
+    # 4. Encoder layers
     parameters["layers"] = []
     for i, torch_block in enumerate(core_encoder.layers):
         block_params = {}
