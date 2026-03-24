@@ -1514,17 +1514,17 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
+                "N150_Mistral-7B": 35,
                 # N300 targets
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": (205, 1.25),
+                "T3K_Llama-3.1-70B": (73, 1.25),
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 110,  # Issue: Perf regression being tracked on issue #29834
+                "T3K_Qwen3-32B": 43,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1536,10 +1536,10 @@ def test_demo_text(
                 # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
                 "N300_Qwen2.5-7B": 21.0,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 15,
+                "T3K_Llama-3.1-70B": 16,
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 19,
+                "T3K_Qwen3-32B": 24,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
