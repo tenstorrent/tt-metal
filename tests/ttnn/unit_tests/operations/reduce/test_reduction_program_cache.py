@@ -46,7 +46,8 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
     torch_result = ttnn_ops[op](torch_a, dim=dim, keepdim=True)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
+    with device.cache_entries_counter.measure():
+        tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -69,7 +70,7 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
 
 
@@ -88,7 +89,7 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.max, shape, dim=-1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
@@ -103,7 +104,7 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-2, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache):
@@ -116,7 +117,7 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cache):
@@ -133,7 +134,7 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
@@ -145,7 +146,7 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
 
 
 def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
@@ -158,11 +159,12 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out1 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_a)
-    tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_a)
+        tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
 
     torch_ref = torch.sum(torch_a, dim=-1, keepdim=True)
     assert_with_pcc(torch_ref, ttnn.to_torch(tt_out1), 0.999)
     assert_with_pcc(torch_ref, ttnn.to_torch(tt_out2), 0.999)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.cache_entries_counter.total == 2
