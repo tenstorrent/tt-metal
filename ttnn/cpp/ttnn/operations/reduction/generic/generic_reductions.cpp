@@ -273,13 +273,15 @@ static Tensor std_var_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    // If the input tensor is a rank 0 tensor, return NaN
     if (rank == 0) {
+        // If the input tensor is a rank 0 tensor (i.e. scalar), return NaN or 0.0, depending on correction.
+        // This matches PyTorch behavior.
+        float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
         // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
         auto output_tensor = operations::creation::full_impl(
             input_tensor_arg.logical_shape(),
-            std::numeric_limits<float>::quiet_NaN(),
+            fill_value,
             input_tensor_arg.dtype(),
             input_tensor_arg.layout(),
             input_tensor_arg.device(),
