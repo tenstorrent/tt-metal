@@ -893,7 +893,7 @@ def create_job():
             jsonify(
                 {
                     "error": {
-                        "message": "training_params must be { type: sft|lora|grpo, params: {...} }",
+                        "message": f"training_params must be {{ type: {('|'.join(sorted(get_supported_trainers())))}, params: {{...}} }}",
                         "code": "invalid_training_params",
                     }
                 }
