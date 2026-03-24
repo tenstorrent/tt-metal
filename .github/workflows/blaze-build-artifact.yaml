@@ -53,3 +53,4 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       publish-artifact: true
       publish-package: true
+      build-wheel: true
