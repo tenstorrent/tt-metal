@@ -742,6 +742,9 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
 class Molmo2DummyInputsBuilder(BaseDummyInputsBuilder["TT_MolmoProcessingInfo"]):
     """Dummy inputs builder for Molmo2 memory profiling."""
 
+    def __init__(self, info: "TT_MolmoProcessingInfo") -> None:
+        super().__init__(info)
+
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         """
         Build the text input corresponding to mm_counts.
@@ -757,7 +760,7 @@ class Molmo2DummyInputsBuilder(BaseDummyInputsBuilder["TT_MolmoProcessingInfo"])
         self,
         seq_len: int,
         mm_counts: Mapping[str, int],
-        mm_options: object,
+        mm_options: Optional[Mapping[str, object]] = None,
     ) -> Mapping[str, object]:
         """
         Create dummy image data for memory profiling.
