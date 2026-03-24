@@ -137,18 +137,18 @@ void kernel_main() {
             cb_wait_front(cb_id_in0, input_pages_to_read);
             cb_pop_front(cb_id_in0, input_pages_to_read);
 
-            // Write the output page. AL: may move this step to writer kernel
-            cb_wait_front(cb_id_in1, 1);  // AL: may move this step to writer kernel
-            const uint64_t output_page_noc_addr = page_iter->noc_addr();
-            uint32_t output_page_read_addr = get_read_ptr(cb_id_in1);
+            // // Write the output page. AL: may move this step to writer kernel
+            // cb_wait_front(cb_id_in1, 1);  // AL: may move this step to writer kernel
+            // const uint64_t output_page_noc_addr = page_iter->noc_addr();
+            // uint32_t output_page_read_addr = get_read_ptr(cb_id_in1);
 
-            noc_async_write(
-                output_page_read_addr,
-                output_page_noc_addr,
-                output_page_valid_data_bytes);  // AL: for writer kernel, may not bother computing
-                                                // output_page_valid_data
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_in1, 1);
+            // noc_async_write(
+            //     output_page_read_addr,
+            //     output_page_noc_addr,
+            //     output_page_valid_data_bytes);  // AL: for writer kernel, may not bother computing
+            //                                     // output_page_valid_data
+            // noc_async_write_barrier();
+            // cb_pop_front(cb_id_in1, 1);
         }
     }
 }

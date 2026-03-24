@@ -138,6 +138,22 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
         static_cast<uint32_t>(elements_per_tensor_row),
     };
 
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
+
+    // Writer kernel config with compile-time args
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(output_page_cb_index),
+        static_cast<uint32_t>(num_output_shards),
+        static_cast<uint32_t>(num_cores),
+        static_cast<uint32_t>(num_output_pages_in_row),
+        static_cast<uint32_t>(elements_per_output_page),
+        static_cast<uint32_t>(bytes_per_element),
+        static_cast<uint32_t>(elements_per_tensor_row),
+    };
+
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
     // std::cout << "num_output_shards: " << num_output_shards << std::endl;
     // std::cout << "num_input_shards: " << input.buffer()->buffer_distribution_spec().value().num_shards() <<
     // std::endl; std::cout<<"output_padded_shape: " << output.padded_shape() << std::endl;
@@ -151,13 +167,17 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     // std::cout << "num_output_pages_in_row: " << num_output_pages_in_row << std::endl;
     // std::cout << "num_input_pages_in_row: " << num_input_pages_in_row << std::endl;
     // std::cout << "num_cores: " << num_cores << std::endl;
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_reader.cpp",
         ordered_cores_with_data_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_writer.cpp",
+        ordered_cores_with_data_range,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Set runtime args
     uint32_t start_shard_id = 0;
@@ -165,13 +185,15 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
         // Reader run-time args
         std::vector<uint32_t> reader_run_time_args = {
             input.buffer()->address(), output.buffer()->address(), start_shard_id};
+        std::vector<uint32_t> writer_run_time_args = {output.buffer()->address(), start_shard_id};
 
         start_shard_id++;
         // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_run_time_args);
     }
 
-    return {std::move(program), {reader_kernel_id, ordered_cores_with_data}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores_with_data}};
 }
 void ToShardedRowMajorProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
@@ -180,14 +202,18 @@ void ToShardedRowMajorProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
+    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     const auto& cores = cached_program.shared_variables.cores;
     const auto& input_buffer = tensor_args.input_tensor.buffer();
     const auto& output_buffer = output_tensor.buffer();
     for (const auto& core : cores) {
-        auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args[0] = input_buffer->address();
-        runtime_args[1] = output_buffer->address();
+        auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
+        runtime_args_reader[0] = input_buffer->address();
+        runtime_args_reader[1] = output_buffer->address();
+        auto& runtime_args_writer = runtime_args_by_core_writer[core.x][core.y];
+        runtime_args_writer[0] = output_buffer->address();
     }
 }
 
