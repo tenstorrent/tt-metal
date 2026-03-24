@@ -528,6 +528,11 @@ class ModelArgs:
         self.embed_scale = None
         self.use_hf_rope = use_hf_rope
 
+        self.layernorm = False
+        self.parallel_model = ["phi-1", "phi-1_5"]
+        self.ffn2_model = ["phi-1", "phi-1_5"]
+        self.is_ffn_norm = False
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -594,6 +599,9 @@ class ModelArgs:
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
             self.prefill_len_cutoff = 512
+
+        self.is_parallel_model = self.base_model_name in self.parallel_model
+        self.is_ffn2_model = self.base_model_name in self.ffn2_model
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
@@ -2550,6 +2558,7 @@ class ModelArgs:
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
+            "gelu_new": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
         }
 
         hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
@@ -2590,7 +2599,7 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps")))
         self.vocab_size = text_config["vocab_size"]
         if self.is_galaxy:
             self.padded_vocab_size = 128 * 1024
@@ -2599,6 +2608,7 @@ class ModelArgs:
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
+        self.partial_rotary_factor = text_config.get("partial_rotary_factor", 1.0)
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in text_config:
@@ -3043,6 +3053,9 @@ class ModelArgs:
         else:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+            self.name_ffn2 = any(["fc2" in layer_name for layer_name in state_dict.keys()])
+            self.name_dense = any(["dense" in layer_name for layer_name in state_dict.keys()])
+            self.layernorm = any(["final_layernorm" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
@@ -3664,6 +3677,7 @@ class ModelArgs:
         layers = getattr(model, "layers", getattr(model, "model", {}).layers)
         layer = layers[0].input_layernorm
         layer._load_state_dict = layer.load_state_dict
+
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
         else:
@@ -4036,10 +4050,16 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
+        try:
+            name_dense = hasattr(self.model.model.layers[0].self_attn, "dense")
+            name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
+            name_final_layernorm = hasattr(self.model.model, "final_layernorm")
+        except:
+            name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
-            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
+            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm))
         else:
-            return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+            return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm))
 
     @property
     def cache_k(self):
@@ -4124,10 +4144,16 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
+        try:
+            name_dense = hasattr(self.model.model.layers[0].self_attn, "dense")
+            name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
+            name_final_layernorm = hasattr(self.model.model, "final_layernorm")
+        except:
+            name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
-            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
+            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm))
         else:
-            return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+            return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm))
 
     @property
     def cache_k(self):
@@ -4192,13 +4218,19 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
+        try:
+            name_dense = hasattr(self.model.model.layers[0].self_attn, "dense")
+            name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
+            name_final_layernorm = hasattr(self.model.model, "final_layernorm")
+        except:
+            name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
             return self.model.load_state_dict(
-                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config)
+                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm)
             )
         else:
             return self.model.load_state_dict(
-                convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+                convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm)
             )
 
     def eval(self):
