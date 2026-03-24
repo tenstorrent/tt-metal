@@ -176,7 +176,7 @@ def train_grpo():
 
             weighted_surr = surr * weight_tt
             weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
-            loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp))
+            loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / num_micro_batches)
 
             loss.backward(retain_graph=False)
             mb_elapsed = time.perf_counter() - mb_start
