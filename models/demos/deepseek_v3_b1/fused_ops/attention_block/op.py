@@ -1199,7 +1199,7 @@ class AttentionBlock:
         nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
         rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
-        # NCRISC sender compile-time args (QNOPE/QROPE -> SDPA Input) - matching gather pattern: NCRISC sender, BRISC receiver
+        # NCRISC compile-time args: all CreateQHeads data movement (sender + receiver) on NCRISC
         # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         create_q_heads_ncrisc_named_compile_time_args = [
@@ -1225,18 +1225,9 @@ class AttentionBlock:
             ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("cqh_qnope_cols", QNOPE_COLS),
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
-        ]
-
-        # BRISC receiver compile-time args (SDPA Input cores) - matching gather pattern: NCRISC sender, BRISC receiver
-        # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
-        # Prefixed with "cqh_" to avoid name collisions with other BRISC args
-        create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
-            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
-            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
+            # Receiver args (also on NCRISC, for sdpa input cores)
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
-            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
             ("cqh_out_cb", create_q_heads_out_cb),  # Output CB (backed by output tensor)
             ("cqh_nope_tiles", nope_tiles),  # 8 tiles per NOPE phase
             ("cqh_rope_tiles", rope_tiles),  # 2 tiles for ROPE phase
@@ -3084,7 +3075,6 @@ class AttentionBlock:
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
             + qrope_brisc_named_compile_time_args
-            + create_q_heads_brisc_named_compile_time_args
             + dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + kv_cache_brisc_named_compile_time_args
