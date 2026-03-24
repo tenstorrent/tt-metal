@@ -35,7 +35,6 @@ struct PatchedGenericMeshProgramFactory {
     };
 
     struct shared_variables_t {
-        std::uint32_t num_kernel_handles{};
         std::vector<tt::tt_metal::CBHandle> cb_handles;
         std::vector<PerCoreRuntimeArgSlot> per_core_runtime_arg_slots;
         std::vector<CommonRuntimeArgSlot> common_runtime_arg_slots;

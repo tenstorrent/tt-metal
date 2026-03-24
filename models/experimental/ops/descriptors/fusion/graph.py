@@ -823,6 +823,4 @@ __all__ = [
     "CoreGroup",
     "OpGraphBuilder",
     "build_op_graph",
-    "_extract_device_from_tree",
-    "_merge_build_results",
 ]

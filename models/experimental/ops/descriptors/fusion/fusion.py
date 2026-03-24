@@ -54,7 +54,7 @@ from models.experimental.ops.descriptors.fusion.common import (
 # Fusion Build Cache
 # =============================================================================
 
-# Fused ``ProgramDescriptor`` + metadata, keyed by ``_fusion_cache_id`` (stable int).
+# Fused ``ProgramDescriptor`` + metadata, keyed by fusion cache id (stable int per process).
 # No IO tensors are stored — entries are lightweight and never go stale from
 # device buffer deallocation.
 _BUILD_CACHE: Dict[int, "_CacheEntry"] = {}
@@ -154,28 +154,12 @@ def _fusion_hash_from_ops(items, container_prefix: str, ops: List, device_id: in
     return hash((surface, tuple(_branch_program_cache_key(op) for op in ops), device_id))
 
 
-def _fusion_cache_id(items, container_prefix: str, build_device=None) -> int:
-    """Single stable fusion build-cache id (includes device scope)."""
-    ops = _flatten_ops(items)
-    dev_id = _build_cache_device_id(items, build_device)
-    return _fusion_hash_from_ops(items, container_prefix, ops, dev_id)
-
-
 def _fusion_cache_id_and_ops(items, container_prefix: str, build_device=None) -> Tuple[int, List]:
     """Return ``(fusion_cache_id, flattened_ops)`` for ``Sequential``/``Parallel`` ``._items``."""
     ops = _flatten_ops(items)
     dev_id = _build_cache_device_id(items, build_device)
     cache_id = _fusion_hash_from_ops(items, container_prefix, ops, dev_id)
     return cache_id, ops
-
-
-def _item_sort_key(item):
-    """Diagnostic sort key by branch program identity (does not reorder user ``Parallel`` branches)."""
-    if is_op_descriptor(item):
-        return (_branch_program_cache_key(item),)
-    if isinstance(item, (Sequential, Parallel)):
-        return tuple(_branch_program_cache_key(op) for op in _flatten_ops([item]))
-    raise TypeError(f"Unsupported item type: {type(item)}")
 
 
 def _make_rebind_output_sources(ops: List, output_source_map) -> Optional[Tuple[Tuple[int, int], ...]]:
@@ -451,58 +435,6 @@ class FusedOp:
         if not isinstance(sequential, Sequential):
             raise TypeError(f"expected Sequential, got {type(sequential).__name__}")
         self.refresh_merged_io(_flatten_ops(sequential._items))
-
-    def rebind_from_ops(self, ops: List) -> None:
-        """Deprecated alias for :meth:`refresh_merged_io`."""
-        self.refresh_merged_io(ops)
-
-    def rebind_from_parallel(self, parallel: "Parallel") -> None:
-        """Deprecated alias for :meth:`refresh_merged_io_from_parallel`."""
-        self.refresh_merged_io_from_parallel(parallel)
-
-    def rebind_from_sequential(self, sequential: "Sequential") -> None:
-        """Deprecated alias for :meth:`refresh_merged_io_from_sequential`."""
-        self.refresh_merged_io_from_sequential(sequential)
-
-    def dump_kernel_sources(self, output_dir: str) -> None:
-        """Write fused kernel sources to reader.cpp, writer.cpp, compute.cpp.
-
-        If multiple kernels share the same RISC type (e.g. two readers for
-        different core groups), they are written as reader_0.cpp, reader_1.cpp, etc.
-
-        Args:
-            output_dir: Directory to write files into (created if needed).
-        """
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Group kernels by RISC type
-        # riscv_0 = BRISC = writer, riscv_1 = NCRISC = reader
-        by_type: dict[str, list] = {}
-        for kernel in self.op.descriptor.kernels:
-            risc = _get_risc_type(kernel)
-            name = {"riscv_0": "writer", "riscv_1": "reader", "compute": "compute"}.get(risc, "unknown")
-            by_type.setdefault(name, []).append(kernel)
-
-        for name, kernels in by_type.items():
-            for i, kernel in enumerate(kernels):
-                if kernel.source_type == ttnn.KernelDescriptor.SourceType.SOURCE_CODE:
-                    source = kernel.kernel_source
-                else:
-                    path = kernel.kernel_source
-                    source = ""
-                    for base in [os.environ.get("TT_METAL_HOME", ""), ""]:
-                        full = os.path.join(base, path) if base else path
-                        if os.path.exists(full):
-                            with open(full) as f:
-                                source = f.read()
-                            break
-                    if not source:
-                        source = f"// Could not read file: {path}\n"
-
-                filename = f"{name}.cpp" if len(kernels) == 1 else f"{name}_{i}.cpp"
-                filepath = os.path.join(output_dir, filename)
-                with open(filepath, "w") as f:
-                    f.write(source)
 
     def _apply_kernel_dir(self, kernel_dir: str) -> None:
         """Switch kernel sources to file-based, writing files only if they don't exist.

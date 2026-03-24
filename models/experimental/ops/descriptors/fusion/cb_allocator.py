@@ -884,7 +884,6 @@ __all__ = [
     "CBSlot",
     "CBPoolAllocator",
     "extract_cb_info",
-    "CB_ARG_PREFIX",
     "_is_cb_named_arg",
     "extract_cb_names_from_kernel",
     "_save_cb_state",

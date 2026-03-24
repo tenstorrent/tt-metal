@@ -171,15 +171,15 @@ class TestCacheKeyInfra:
 
 
 # ===========================================================================
-# D1b. FusedOp IO rebind (op-agnostic API, device)
+# D1b. FusedOp merged-IO refresh (op-agnostic API, device)
 # ===========================================================================
 
 
-class TestFusedOpRebind:
+class TestFusedOpRefreshMergedIo:
     """``FusedOp.refresh_merged_io_from_parallel`` matches a second ``build()`` (PCC)."""
 
-    def test_rebind_from_parallel_matches_second_build(self, device):
-        """Same PCC after rebind+launch as a fresh Parallel.build from matching tensors."""
+    def test_refresh_merged_io_from_parallel_matches_second_build(self, device):
+        """Same PCC after refresh+launch as a fresh Parallel.build from matching tensors."""
         clear_build_cache()
 
         q_a, kv_a, _ = _make_branches(device, seed=501)
@@ -197,7 +197,7 @@ class TestFusedOpRebind:
         kv_a.input_tensors[:] = list(kv_b.input_tensors)
         kv_a.output_tensors[:] = list(kv_b.output_tensors)
 
-        fused_once.rebind_from_parallel(p)
+        fused_once.refresh_merged_io_from_parallel(p)
         fused_once.launch()
         ttnn.synchronize_device(device)
 
@@ -208,7 +208,7 @@ class TestFusedOpRebind:
 
         for t_new, t_ref in zip(fused_once.output_tensors, outs_fused_fresh):
             ok, pcc = comp_pcc(ttnn.to_torch(t_new), ttnn.to_torch(t_ref))
-            assert ok and pcc >= 0.999, f"rebind vs fresh build PCC {pcc}"
+            assert ok and pcc >= 0.999, f"refresh vs fresh build PCC {pcc}"
 
         # Match fused outputs to goldens by shape (Q vs KV widths differ).
         q_golden = torch_rms_norm(torch_q.float(), torch_qw.float())

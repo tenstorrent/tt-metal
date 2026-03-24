@@ -8,7 +8,6 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -176,7 +175,6 @@ PatchedGenericMeshProgramFactory::cached_program_t PatchedGenericMeshProgramFact
         for (const auto& cb : cbs) {
             shared_vars.cb_handles.push_back(static_cast<CBHandle>(cb->id()));
         }
-        shared_vars.num_kernel_handles = static_cast<std::uint32_t>(program_descriptor.kernels.size());
     }
 
     {
