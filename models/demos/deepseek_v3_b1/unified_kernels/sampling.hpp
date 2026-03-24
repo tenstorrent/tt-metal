@@ -920,20 +920,28 @@ struct TopKSampling {
 
                 DPRINT << "Probabilities: " << ENDL();
                 for (uint32_t i = 0; i < K; ++i) {
-                    DPRINT << "Index " << global_indices[i] << " probability " << BF16(prob_u16[i]) << ENDL();
+                    DPRINT << "Index " << global_indices[i] << " probability " << BF16(prob_u16[i > 16 ? FACE_ELEMS + (i - 16) : i]) << ENDL();
                 }
                 DPRINT << ENDL();
 
                 // Top-P filtering: accumulate probabilities until cum_prob > p
                 uint16_t cum_prob = 0;
                 uint32_t kept_tokens = K;
-                for (uint32_t i = 0; i < K; ++i) {
-                    uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                    cum_prob = bfloat16_add(cum_prob, prob);
-                    if (bfloat16_greater(cum_prob, bf16_p)) {
-                        kept_tokens = i + 1;
-                        break;
+                // skip if p_bf16 is 1.0 (i.e. no top-p filtering)
+                if (bf16_p != 16256) {
+                    DPRINT << "Top-P filtering as p != " << BF16(16256) << ENDL();
+                    for (uint32_t i = 0; i < K; ++i) {
+                        uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                        DPRINT << "Accumulating probability " << BF16(prob) << ENDL();
+                        cum_prob = bfloat16_add(cum_prob, prob);
+                        if (bfloat16_greater(cum_prob, bf16_p)) {
+                            kept_tokens = i + 1;
+                            break;
+                        }
                     }
+                } else {
+                    DPRINT << "No Top-P filtering as p == " << BF16(16256) << ENDL();
+                    cum_prob = 16256;  // 1.0 in bfloat16
                 }
 
                 DPRINT << "Top-P kept=" << kept_tokens
