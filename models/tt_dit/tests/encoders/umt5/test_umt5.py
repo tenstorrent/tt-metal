@@ -97,7 +97,7 @@ def test_umt5_embeddings(
     else:
         model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
         hf_model = UMT5EncoderModel.from_pretrained(
-            model_name_checkpoint, subfolder="text_encoder", local_files_only=True
+            model_name_checkpoint, subfolder="text_encoder", local_files_only=False
         )
 
     hf_model.eval()
