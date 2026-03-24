@@ -129,13 +129,15 @@ void kernel_main() {
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in,
         cb_scaler,
         cb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    reconfig_data_format_srcb(cb_scaler, cb_in);
+    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_in
+    // Next op: mul_tiles(cb_in, cb_in) — need both A and B as cb_in
+    reconfig_data_format(cb_in, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
@@ -180,6 +182,8 @@ void kernel_main() {
             cb_ex_partial2,
             compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
             compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_x2 — restore reduce convention
+    reconfig_data_format(cb_x2, cb_scaler);
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2

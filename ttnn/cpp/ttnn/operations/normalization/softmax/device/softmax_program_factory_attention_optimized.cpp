@@ -56,11 +56,11 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
-    const tt::DataFormat reduce_scaler_cb_data_format =
+    const tt::DataFormat max_scaler_cb_data_format =
         (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
             ? tt::DataFormat::Float32
             : tt::DataFormat::Float16_b;
-    const uint32_t reduce_scaler_tile_size = tt::tile_size(reduce_scaler_cb_data_format);
+    const uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
     const uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     const tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
@@ -73,6 +73,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
+
+    const tt::DataFormat sum_scaler_cb_data_format =
+        (im_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
+    const uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -240,12 +246,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CreateCircularBuffer(program, all_device_cores, c_recip_config);
     }
     auto c_in2_config =
-        CircularBufferConfig(in2_t * reduce_scaler_tile_size, {{tt::CBIndex::c_2, reduce_scaler_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_2, reduce_scaler_tile_size);
+        CircularBufferConfig(in2_t * max_scaler_tile_size, {{tt::CBIndex::c_2, max_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, max_scaler_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
     auto c_sum_scaler_config =
-        CircularBufferConfig(in2_t * reduce_scaler_tile_size, {{tt::CBIndex::c_13, reduce_scaler_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_13, reduce_scaler_tile_size);
+        CircularBufferConfig(in2_t * sum_scaler_tile_size, {{tt::CBIndex::c_13, sum_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_13, sum_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_sum_scaler_config);
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{tt::CBIndex::c_6, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_6, im_tile_size);
@@ -377,7 +383,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     }
 
     return {std::move(program), {reader_kernels_id, writer_kernels_id, softmax_kernels_id,
-                                 grid_size,         fp32_dest_acc_en,  reduce_scaler_tile_size,
+                                 grid_size,         fp32_dest_acc_en,  max_scaler_tile_size,
                                  in0_tile_size,     im_tile_size,      out0_tile_size,
                                  mask_tile_size,    cb_in0_id,         cb_out0_id,
                                  cb_intermed1_id,   cb_in2_id,         cb_intermed0_id,
@@ -480,7 +486,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     UpdateCircularBufferTotalSize(
         cached_program.program,
         cached_program.shared_variables.cb_in2_id,
-        in2_t * cached_program.shared_variables.reduce_scaler_tile_size);
+        in2_t * cached_program.shared_variables.max_scaler_tile_size);
     UpdateCircularBufferTotalSize(
         cached_program.program,
         cached_program.shared_variables.cb_intermed0_id,

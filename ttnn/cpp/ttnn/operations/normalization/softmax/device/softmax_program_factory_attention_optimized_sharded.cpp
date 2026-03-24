@@ -36,8 +36,12 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                                              ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.mask->dtype())
                                              : tt::DataFormat::Float16_b;
     tt::DataFormat fused_attention_scale_cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat reduce_scaler_cb_data_format =
+    tt::DataFormat max_scaler_cb_data_format =
         (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
+    tt::DataFormat sum_scaler_cb_data_format =
+        (im_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
             ? tt::DataFormat::Float32
             : tt::DataFormat::Float16_b;
 
@@ -46,7 +50,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
     log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
     log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "reduce_scaler_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "max_scaler_cb_data_format: {}", max_scaler_cb_data_format);
+    log_debug(tt::LogOp, "sum_scaler_cb_data_format: {}", sum_scaler_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -81,7 +86,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
     uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
     uint32_t fused_attention_scale_tile_size = tt::tile_size(fused_attention_scale_cb_data_format);
-    uint32_t reduce_scaler_tile_size = tt::tile_size(reduce_scaler_cb_data_format);
+    uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
+    uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
     // in out buffer
     auto* src0_buffer = tensor_args.input_tensor.buffer();
     auto* out0_buffer = output_tensor.buffer();
@@ -92,7 +98,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     // block size for in0 (tensor a)
     uint32_t in0_CB_size = program_config.block_w * program_config.block_h * in0_tile_size;
     // scaler for reduce coming from reader
-    uint32_t in1_CB_size = 1 * reduce_scaler_tile_size;
+    uint32_t max_scaler_CB_size = 1 * max_scaler_tile_size;
+    uint32_t sum_scaler_CB_size = 1 * sum_scaler_tile_size;
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * fused_attention_scale_tile_size;
     // attention mask
@@ -215,12 +222,13 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                             .set_globally_allocated_address(*src0_buffer);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
     // in1 max scaler (row-0 fill for reduce LLK)
-    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, reduce_scaler_cb_data_format}})
-                            .set_page_size(tt::CBIndex::c_1, reduce_scaler_tile_size);
+    auto c_in1_config = CircularBufferConfig(max_scaler_CB_size, {{tt::CBIndex::c_1, max_scaler_cb_data_format}})
+                            .set_page_size(tt::CBIndex::c_1, max_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_in1_config);
     // sum scaler (col-0 fill for matmul reduce)
-    auto c_sum_scaler_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_13, reduce_scaler_cb_data_format}})
-                                   .set_page_size(tt::CBIndex::c_13, reduce_scaler_tile_size);
+    auto c_sum_scaler_config =
+        CircularBufferConfig(sum_scaler_CB_size, {{tt::CBIndex::c_13, sum_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_13, sum_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_sum_scaler_config);
     // in2 in3 attn scale mask
     std::optional<CBHandle> cb_intermed2_id;

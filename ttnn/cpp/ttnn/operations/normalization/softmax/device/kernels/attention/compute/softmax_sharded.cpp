@@ -218,7 +218,6 @@ void kernel_main() {
         }
         cb_in0_obj.pop_front(block_w);
 #endif
-        reconfig_data_format(cb_exps, cb_sum_scaler);
 #endif  // FUSED_SCALE_MASK
 
         // SUM reduce with reciprocal operation using PRELOADED mode

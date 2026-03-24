@@ -275,8 +275,6 @@ void kernel_main() {
             }
 #endif
         }
-
-        reconfig_data_format(cb_exps, cb_sum_scaler);
 #endif
 
         // SUM reduce with reciprocal operation using PERSISTENT mode
