@@ -515,22 +515,48 @@ def main():
     torch.save(video_latent, args.output.replace(".mp4", "_video_latent.pt"))
     torch.save(audio_latent, args.output.replace(".mp4", "_audio_latent.pt"))
 
+    # 5. Video VAE decode (on TT device)
+    logger.info("Decoding video with TTNN VAE...")
+    from safetensors.torch import load_file as load_safetensors
+
+    from models.tt_dit.models.vae.ltx.vae_ltx import LTXVideoDecoder
+
+    decoder_blocks_22b = [
+        ("res_x", {"num_layers": 4}),
+        ("compress_space", {"multiplier": 2}),
+        ("res_x", {"num_layers": 6}),
+        ("compress_time", {"multiplier": 2}),
+        ("res_x", {"num_layers": 4}),
+        ("compress_all", {"multiplier": 1}),
+        ("res_x", {"num_layers": 2}),
+        ("compress_all", {"multiplier": 2}),
+        ("res_x", {"num_layers": 2}),
+    ]
+    raw_vae = load_safetensors(checkpoint)
+    vae_state = {}
+    for k, v in raw_vae.items():
+        if k.startswith("vae.decoder."):
+            vae_state[k[len("vae.decoder.") :]] = v
+        elif k.startswith("vae.per_channel_statistics."):
+            vae_state[k[len("vae.") :]] = v
+    del raw_vae
+
+    t0 = time.time()
+    tt_vae = LTXVideoDecoder(decoder_blocks=decoder_blocks_22b, causal=False, mesh_device=mesh)
+    tt_vae.load_torch_state_dict(vae_state)
+    del vae_state
+    logger.info(f"TTNN VAE loaded in {time.time()-t0:.1f}s")
+
+    latent_spatial = video_latent.reshape(1, 128, latent_frames, latent_h, latent_w)
+    t0 = time.time()
+    with torch.no_grad():
+        video_pixels = tt_vae(latent_spatial.bfloat16())
+    logger.info(f"Video decoded: {video_pixels.shape} in {time.time()-t0:.1f}s")
+    del tt_vae
+
     # Close TT
     ttnn.close_mesh_device(mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-    # 5. Video VAE decode (CPU torch — TTNN VAE OOMs on small resolutions)
-    logger.info("Decoding video...")
-    from ltx_pipelines.utils.model_ledger import ModelLedger
-
-    ledger = ModelLedger(dtype=torch.bfloat16, device=torch.device("cpu"), checkpoint_path=checkpoint)
-    vae_decoder = ledger.video_decoder()
-
-    latent_spatial = video_latent.reshape(1, latent_frames, latent_h, latent_w, 128).permute(0, 4, 1, 2, 3)
-    with torch.no_grad():
-        video_pixels = vae_decoder(latent_spatial.bfloat16())
-    logger.info(f"Video decoded: {video_pixels.shape}")
-    del vae_decoder
 
     # 6. Audio VAE decode + vocoder (stays on CPU torch — different architecture)
     logger.info("Decoding audio...")
