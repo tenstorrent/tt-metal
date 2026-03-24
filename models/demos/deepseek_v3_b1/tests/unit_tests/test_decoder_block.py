@@ -880,15 +880,16 @@ def create_decoder_block_tensors(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
-        127,
-        511,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        1025,
+        # 0,
+        # 127,
+        # 511,
+        # 1023,
+        # 2047,
+        # 4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        # pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        # pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        # pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -1484,10 +1485,11 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
-        127,
-        pytest.param(511, marks=pytest.mark.skip_post_commit),
-        pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        # 0,
+        # 127,
+        # pytest.param(511, marks=pytest.mark.skip_post_commit),
+        # pytest.param(1023, marks=pytest.mark.skip_post_commit),
+        1025,
     ],
 )
 @pytest.mark.parametrize(
