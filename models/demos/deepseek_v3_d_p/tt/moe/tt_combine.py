@@ -68,12 +68,12 @@ class TtCombineModule(LightweightModule):
         Combine expert outputs back to original token positions using TTNN operation.
 
         Args:
-            dispatched_buffer: Dispatched tokens (dispatch_group_size, experts_per_chip, max_tokens, hidden_dim)
+            dispatched_buffer: Dispatched tokens (dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
             dispatched_metadata: Metadata tensor with token routing information
             expert_token_counts: Counter tracking tokens per expert (dispatch_group_size, experts_per_chip)
 
         Returns:
-            output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+            output: Combined output tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         """
         output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
