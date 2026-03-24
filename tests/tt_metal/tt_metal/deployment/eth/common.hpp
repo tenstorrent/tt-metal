@@ -144,26 +144,6 @@ static bool eth_data_check(
     return pass;
 }
 
-static bool bandwidth_check(
-    tt::tt_metal::IDevice* const send_device,
-    const CoreCoord& send_core,
-    uint32_t send_delta_addr,
-    uint64_t total_transferred,
-    double threshold) {
-    /* ==================== */
-    uint64_t delta = read_l1_u64(send_device, send_core, send_delta_addr);
-    double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
-    double bandwidth = total_transferred / 1e9 / deltas;
-    log_info(tt::LogTest, "      Bandwidth {:.3f} GB/s, {:.3f} ms", bandwidth, deltas * 1000);
-
-    bool pass = bandwidth >= threshold;
-    if (!pass) {
-        log_critical(tt::LogTest, "      Expected at least: {} GB/s, got {:.2f} GB/s", threshold, bandwidth);
-    }
-
-    return pass;
-}
-
 static bool eth_bandwidth_check(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
@@ -179,42 +159,6 @@ static bool eth_bandwidth_check(
     bool pass = bandwidth >= threshold;
     if (!pass) {
         log_critical(tt::LogTest, "      Expected at least: {} Gbps, got {:.2f} Gbps", threshold, bandwidth);
-    }
-
-    return pass;
-}
-
-static bool dram_data_check(
-    tt::tt_metal::IDevice* const recv_device,
-    uint32_t dram_start_addr,
-    uint32_t dram_end_addr,
-    uint32_t dram_bank_id,
-    std::vector<uint32_t>& inputs) {
-    /* ==================== */
-    uint64_t total_transferred = dram_end_addr - dram_start_addr;
-    std::vector<uint32_t> outputs;
-
-    detail::ReadFromDeviceDRAMChannel(recv_device, dram_bank_id, dram_start_addr, total_transferred, outputs);
-    log_info(tt::LogTest, "      Read {} bytes", outputs.size() * sizeof(uint32_t));
-    TT_FATAL(inputs.size() == outputs.size(), "Input and output vector sizes must match");
-    bool pass = inputs == outputs;
-
-    if (!pass) {
-        uint64_t total_mismatches = 0;
-        for (long i = 0; i < inputs.size(); i++) {
-            if (inputs[i] != outputs[i]) {
-                if (!total_mismatches) {
-                    log_critical(
-                        tt::LogTest,
-                        "      Input and output data don't match starting at: {:x}",
-                        dram_start_addr + i * sizeof(uint32_t));
-                }
-                total_mismatches++;
-                // log_critical(tt::LogTest, "      Input and output data don't match at {:x}: {:x} {:x}", i, inputs[i],
-                // 		outputs[i]);
-            }
-        }
-        log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
     }
 
     return pass;
