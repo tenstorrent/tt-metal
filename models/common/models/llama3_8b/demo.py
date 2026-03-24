@@ -91,17 +91,48 @@ def load_reference_data(model_name: str):
 
 def load_input_prompts(batch_size: int):
     """Load input prompts for performance testing."""
-    prompts_path = Path("models/demos/utils/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
 
     with open(prompts_path) as f:
         data = json.load(f)
 
-    prompts = data if isinstance(data, list) else data.get("prompts", [data.get("prompt", "")])
+    prompts = (
+        [entry["prompt"] for entry in data] if isinstance(data, list) else data.get("prompts", [data.get("prompt", "")])
+    )
     while len(prompts) < batch_size:
         prompts = prompts * 2
     return prompts[:batch_size]
+
+
+def log_generated_text(prompts, generated_token_ids, tokenizer):
+    """Print the final generated continuation for each user."""
+    logger.info("Finished decoding, printing the final outputs...\n")
+    for user, output_ids in enumerate(generated_token_ids):
+        prompt_text = prompts[user] if user < len(prompts) else ""
+        generated_text = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+        short_prompt = (
+            prompt_text[:100] + "\n<long prompt not printed in full>\n" + prompt_text[-100:]
+            if len(prompt_text) > 200
+            else prompt_text
+        )
+        logger.info(f"\n==USER {user} - PROMPT\n{short_prompt}\n==USER {user} - OUTPUT\n{generated_text}\n")
+
+
+def log_teacher_forcing_text(prompt_tokens, predicted_tokens, reference_tokens, tokenizer):
+    """Print prompt, predicted continuation, and reference continuation for teacher forcing."""
+    prompt_text = tokenizer.decode(prompt_tokens.tolist(), skip_special_tokens=True)
+    predicted_text = tokenizer.decode(predicted_tokens, skip_special_tokens=True).strip()
+    reference_text = tokenizer.decode(reference_tokens.tolist(), skip_special_tokens=True).strip()
+    short_prompt = (
+        prompt_text[:100] + "\n<long prompt not printed in full>\n" + prompt_text[-100:]
+        if len(prompt_text) > 200
+        else prompt_text
+    )
+    logger.info(
+        f"\n==USER 0 - PROMPT\n{short_prompt}\n==USER 0 - OUTPUT\n{predicted_text}\n==USER 0 - REFERENCE\n{reference_text}\n"
+    )
 
 
 def create_model_and_args(mesh_device, optimizations="performance"):
@@ -241,6 +272,7 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     top5 = result.top5_accuracy() * 100
 
     logger.info(f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}%")
+    log_teacher_forcing_text(prompt_tokens[0], result.predicted_tokens, reference_tokens[half:], model_args.tokenizer)
 
     if "top1" in expected:
         assert top1 >= expected["top1"] * (
@@ -259,6 +291,8 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
 
 def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
     """Run performance benchmark (TTFT + tok/s/u)."""
+    from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
     traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
 
     block_size = 32
@@ -278,12 +312,16 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
 
     prompts = load_input_prompts(batch_size)
     tokenizer = model_args.tokenizer
-    encoded = [tokenizer.encode(p)[:128] for p in prompts]
-
-    max_prompt_len = max(len(e) for e in encoded)
-    input_tokens = torch.zeros(batch_size, max_prompt_len, dtype=torch.long)
-    for i, enc in enumerate(encoded):
-        input_tokens[i, : len(enc)] = torch.tensor(enc)
+    input_tokens_prefill, _, decoding_pos, _ = preprocess_inputs_prefill(
+        prompts,
+        tokenizer,
+        [model_args],
+        model_args.instruct,
+        128,
+        max_prefill_len=model_args.max_seq_len,
+    )
+    input_tokens = torch.stack(input_tokens_prefill).view(batch_size, -1)
+    prompt_lens = torch.tensor(decoding_pos, dtype=torch.long)
 
     bench = PerfBenchmarkExecutor(traced_executor)
     result = bench.run(
@@ -292,6 +330,7 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
         page_table=page_table,
         num_decode_tokens=128,
         max_batch_size=max_batch_size,
+        prompt_lens=prompt_lens,
         enable_trace=True,
     )
 
@@ -301,6 +340,7 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
         f"tok/s: {result.tok_s:.1f}, "
         f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
     )
+    log_generated_text(prompts, result.generated_token_ids, tokenizer)
 
     if expected:
         targets = result.meets_target(expected, PERF_TOLERANCE)

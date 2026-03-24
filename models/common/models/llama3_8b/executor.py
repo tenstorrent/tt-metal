@@ -527,7 +527,6 @@ class TracedLlamaExecutor:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
 
-        self.prev_page_table = None
         self.mode = None
         self.already_warmed_up_prefill = False
 
@@ -822,17 +821,11 @@ class TracedLlamaExecutor:
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device)
 
-        reset_inputs = self.prev_page_table is None or (
-            page_table is not None and not torch.equal(self.prev_page_table, page_table)
+        host_inputs = self._direct.prepare_decode_inputs_host(tokens, start_pos, page_table)
+        copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=self.trace_inputs_decode[sampling_on_device],
         )
-        if reset_inputs:
-            host_inputs = self._direct.prepare_decode_inputs_host(tokens, start_pos, page_table)
-            copy_host_to_device(
-                host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_decode[sampling_on_device],
-            )
-            if page_table is not None:
-                self.prev_page_table = page_table.clone()
 
         ttnn.execute_trace(
             self.mesh_device,
@@ -1040,6 +1033,7 @@ class PerfBenchmarkResult:
     decode_times_s: list[float]
     batch_size: int
     num_decode_tokens: int
+    generated_token_ids: list[list[int]]
 
     @property
     def ttft_ms(self) -> float:
@@ -1089,6 +1083,7 @@ class PerfBenchmarkExecutor:
         page_table: torch.Tensor | None = None,
         num_decode_tokens: int = 128,
         max_batch_size: int = 1,
+        prompt_lens: torch.Tensor | None = None,
         start_pos: list[int] | None = None,
         enable_trace: bool = True,
         sampling_params=None,
@@ -1102,11 +1097,12 @@ class PerfBenchmarkExecutor:
         batch_size = tokens.shape[0]
         prompt_len = tokens.shape[1]
         max_batch_size = max(max_batch_size, batch_size)
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([prompt_len] * batch_size)
 
         prefill_kwargs = dict(
             page_table=page_table,
             kv_cache=kv_cache,
-            prompt_lens=torch.tensor([prompt_len] * batch_size),
+            prompt_lens=prompt_lens,
             empty_slots=list(range(batch_size)),
             enable_trace=False,
             start_pos=start_pos,
@@ -1129,12 +1125,14 @@ class PerfBenchmarkExecutor:
             first_token = prefill_output[0]
         else:
             first_token = torch.argmax(prefill_output, dim=-1)
+        first_token = first_token.view(-1)[:batch_size].detach().cpu()
+        generated_token_ids = [[int(tok)] for tok in first_token.tolist()]
 
         current_tokens = torch.zeros(max_batch_size, dtype=torch.long)
-        current_tokens[:batch_size] = first_token.view(-1)[:batch_size]
+        current_tokens[:batch_size] = first_token
 
         current_pos = torch.full((max_batch_size,), -1, dtype=torch.long)
-        current_pos[:batch_size] = prompt_len
+        current_pos[:batch_size] = prompt_lens[:batch_size]
 
         compile_time = None
         decode_times = []
@@ -1163,7 +1161,10 @@ class PerfBenchmarkExecutor:
                 next_tok = torch.argmax(logits[:, -1, :], dim=-1)
             else:
                 next_tok = logits
-            current_tokens[:batch_size] = next_tok.view(-1)[:batch_size]
+            next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
+            for user_id, tok in enumerate(next_tok.tolist()):
+                generated_token_ids[user_id].append(int(tok))
+            current_tokens[:batch_size] = next_tok
             current_pos[:batch_size] += 1
 
         return PerfBenchmarkResult(
@@ -1172,4 +1173,5 @@ class PerfBenchmarkExecutor:
             decode_times_s=decode_times,
             batch_size=batch_size,
             num_decode_tokens=num_decode_tokens,
+            generated_token_ids=generated_token_ids,
         )
