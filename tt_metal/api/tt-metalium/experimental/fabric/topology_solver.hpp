@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -365,14 +366,16 @@ public:
     /**
      * @brief Set same-group constraint (for UNSET host rank binding)
      *
-     * Ensures that targets in the same target group can only map to globals in one global group.
-     * The solver picks the assignment; no pre-assignment. Apply required constraints (e.g. rank
-     * must map to specific host) after this for explicit bindings.
+     * Ensures that targets in the same target group map to globals in one physical partition (one
+     * set in global_groups). Each non-empty target group is matched to a distinct non-empty global
+     * group; the solver chooses which group pairs with which (no index alignment). Apply required
+     * constraints (e.g. rank must map to a specific host's ASICs) after this for explicit bindings.
      *
      * @param target_groups Vector of sets; each set is target nodes (e.g. fabric nodes per rank)
      * @param global_groups Vector of sets; each set is global nodes (e.g. ASICs per host)
+     * @return false if this would contradict required, forbidden, or same-rank feasibility (state unchanged)
      */
-    void set_same_rank_groups_constraint(
+    bool set_same_rank_groups_constraint(
         const std::vector<std::set<TargetNode>>& target_groups, const std::vector<std::set<GlobalNode>>& global_groups);
 
     const std::vector<std::set<TargetNode>>& get_same_rank_target_groups() const { return same_rank_target_groups_; }
@@ -391,12 +394,14 @@ public:
     /**
      * @brief Validate constraints - returns false if invalid
      *
-     * If saved_state is provided and validation fails, restores the saved state before returning false
+     * If saved_state is provided and validation fails, restores the saved state before returning false.
+     * Per-target: std::nullopt means the target had no valid_mappings_ entry before the attempted change
+     * (restore erases the key); a set value restores that target's previous allowed globals.
      *
      * @param saved_state Optional pointer to saved state to restore on failure
      * @return true if constraints are valid, false otherwise
      */
-    bool validate(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
+    bool validate(const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* saved_state = nullptr);
 
     /**
      * @brief Set quiet mode for constraint validation messages
@@ -407,6 +412,17 @@ public:
      * @param quiet_mode If true, suppress info-level constraint validation messages
      */
     void set_quiet_mode(bool quiet_mode) const;
+
+    /**
+     * @brief Print mapping constraint maps for debugging
+     *
+     * Prints valid (required), preferred, forbidden, cardinality, and same-rank constraints in a
+     * list form analogous to printing an adjacency map (per-target lines with neighbor-like sets).
+     *
+     * @param label Section title prefix (e.g. "Mesh 0 constraints")
+     * @param quiet_mode If true, detailed lines are logged at debug level instead of info
+     */
+    void print_mapping_constraint_maps(const std::string& label = "Mapping constraints", bool quiet_mode = false) const;
 
 private:
     // Internal representation: intersection of all constraints
@@ -438,6 +454,11 @@ private:
     // Validate that all cardinality constraints are compatible with required constraints
     // and that they are satisfiable together
     bool validate_cardinality_constraints() const;
+
+    // Same-rank: there must exist an injective assignment of non-empty target groups to distinct
+    // non-empty global groups such that each target in a group has some allowed mapping into that
+    // group's assigned global partition (forbidden + valid_mappings / staged rules).
+    bool validate_same_rank_groups_feasible() const;
 };
 
 /**
@@ -681,6 +702,22 @@ struct ConstraintIndexData {
     // Helper: get candidates for target node
     // Returns restricted candidates if available, otherwise returns empty vector (meaning all are valid)
     const std::vector<size_t>& get_candidates(size_t target_idx) const;
+
+    /**
+     * @brief Print resolved constraint maps (indices resolved to node IDs) for debugging
+     *
+     * Prints the indexed restricted, forbidden, preferred, cardinality, and same-rank state using
+     * graph_data to resolve indices to TargetNode / GlobalNode, similar in spirit to
+     * GraphIndexData::print_adjacency_maps().
+     *
+     * @param graph_data Graph index data used when this ConstraintIndexData was built
+     * @param label Section title prefix
+     * @param quiet_mode If true, detailed lines are logged at debug level instead of info
+     */
+    void print_resolved_mapping_constraint_maps(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const std::string& label = "Resolved mapping constraints",
+        bool quiet_mode = false) const;
 };
 
 /**
