@@ -20,17 +20,24 @@ import ttnn
 @pytest.fixture
 def processor():
     """Load the Molmo2 processor."""
+    from models.demos.molmo2.demo.demo import (
+        MODEL_ID,
+        _molmo2_hf_from_pretrained_kwargs,
+        check_transformers_supports_molmo2_hub,
+    )
+
+    try:
+        check_transformers_supports_molmo2_hub()
+    except ImportError as e:
+        pytest.skip(str(e))
+
     from transformers import AutoProcessor
 
-    return AutoProcessor.from_pretrained(
-        "allenai/Molmo2-8B",
-        trust_remote_code=True,
-        local_files_only=os.getenv("CI") == "true",
-    )
+    return AutoProcessor.from_pretrained(MODEL_ID, **_molmo2_hf_from_pretrained_kwargs(os.getenv("CI") == "true"))
 
 
 @pytest.mark.parametrize("num_layers", [1])  # Use 1 layer for fast smoke test
-def test_demo_smoke(device, processor, num_layers):
+def test_demo_smoke(device, num_layers):
     """
     Smoke test for Molmo2 demo.
 
@@ -116,17 +123,26 @@ def test_processor_tokenization(processor, prompt):
 
 def test_hf_video_processor_inputs(processor):
     """
-    Smoke test: Molmo2 processor accepts synthetic video dict (no TTNN, no full generate).
+    Smoke test: Molmo2 processor accepts a THWC frame array plus metadata (no TTNN, no full generate).
+
+    Raw ``{frames, timestamps, ...}`` dicts are not valid `VideoInput` for `make_batched_videos`;
+    pass decoded frames and disable re-sampling when frames are pre-selected.
     """
     from models.demos.molmo2.demo.demo import VIDEO_PROMPT
 
     frames = np.zeros((2, 32, 32, 3), dtype=np.uint8)
-    timestamps = np.array([0.0, 0.5], dtype=np.float64)
-    videos = [{"frames": frames, "timestamps": timestamps, "sampled_fps": 2.0}]
+    video_metadata = [
+        {
+            "total_num_frames": 120,
+            "fps": 30.0,
+            "frames_indices": [0, 15],
+        }
+    ]
 
     inputs = processor(
         text=[f"{VIDEO_PROMPT} Describe briefly."],
-        videos=videos,
+        videos=[frames],
+        videos_kwargs={"do_sample_frames": False, "video_metadata": video_metadata},
         return_tensors="pt",
     )
 
@@ -145,12 +161,11 @@ if __name__ == "__main__":
     try:
         from transformers import AutoProcessor
 
-        processor = AutoProcessor.from_pretrained(
-            "allenai/Molmo2-8B",
-            trust_remote_code=True,
-        )
+        from models.demos.molmo2.demo.demo import MODEL_ID, _molmo2_hf_from_pretrained_kwargs
 
-        test_demo_smoke(device, processor, num_layers=1)
+        processor = AutoProcessor.from_pretrained(MODEL_ID, **_molmo2_hf_from_pretrained_kwargs(local_files_only=False))
+
+        test_demo_smoke(device, num_layers=1)
         test_processor_tokenization(processor, "What is in this image?")
         print("\nAll demo tests passed!")
     finally:

@@ -50,6 +50,32 @@ import ttnn
 DEMO_DIR = Path(__file__).parent
 DEFAULT_IMAGE = DEMO_DIR / "dog.jpg"
 MODEL_ID = "allenai/Molmo2-8B"
+# Pin Hub revision for reproducible PyTorch/HF runs. Set MOLMO2_HF_REVISION="" to use the default branch.
+DEFAULT_MOLMO2_HF_REVISION = "e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b"
+MOLMO2_HF_REVISION = os.environ.get("MOLMO2_HF_REVISION", DEFAULT_MOLMO2_HF_REVISION).strip()
+
+
+def _molmo2_hf_from_pretrained_kwargs(local_files_only: bool) -> dict:
+    kwargs = {"trust_remote_code": True, "local_files_only": local_files_only}
+    if MOLMO2_HF_REVISION:
+        kwargs["revision"] = MOLMO2_HF_REVISION
+    return kwargs
+
+
+def check_transformers_supports_molmo2_hub() -> None:
+    """
+    allenai/Molmo2-8B hub video code imports ``video_utils.make_batched_metadata`` (added in v4.56).
+    """
+    try:
+        from transformers.video_utils import make_batched_metadata  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "Molmo2 Hugging Face hub code requires transformers>=4.56 "
+            "(module transformers.video_utils.make_batched_metadata). "
+            "Install e.g. pip install -U 'transformers>=4.56' or "
+            "pip install -r models/demos/molmo2/requirements.txt"
+        ) from e
+
 
 # Molmo2 image tokens
 IMAGE_PATCH_TOKEN = "<im_patch>"
@@ -561,16 +587,24 @@ def get_hf_video_payload(
     if hasattr(metadata, "get"):
         frames_indices = metadata.get("frames_indices", np.arange(n_frames))
         fps = float(metadata.get("fps", max_fps))
+        total_num_frames = metadata.get("total_num_frames", None)
     else:
         frames_indices = getattr(metadata, "frames_indices", np.arange(n_frames))
         fps = float(getattr(metadata, "fps", max_fps))
+        total_num_frames = getattr(metadata, "total_num_frames", None)
 
-    timestamps = np.array(frames_indices, dtype=np.float64) / max(fps, 1e-6)
+    frames_indices = np.asarray(frames_indices, dtype=np.int64).reshape(-1)
+    if total_num_frames is None:
+        total_num_frames = int(frames_indices.max()) + 1 if len(frames_indices) else n_frames
+
+    timestamps = frames_indices.astype(np.float64) / max(fps, 1e-6)
 
     return {
         "frames": frames_array,
         "timestamps": timestamps,
         "sampled_fps": fps,
+        "frames_indices": frames_indices,
+        "total_num_frames": int(total_num_frames),
     }
 
 
@@ -584,6 +618,7 @@ def run_video_demo_torch(
     """
     Run video QA on PyTorch + HuggingFace Molmo2 (reference path; no TTNN).
     """
+    check_transformers_supports_molmo2_hub()
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     logger.info("=" * 60)
@@ -597,34 +632,42 @@ def run_video_demo_torch(
     logger.info(f"Loading video payload from: {video_path}")
     video_payload = get_hf_video_payload(video_path, max_frames=max_frames, max_fps=max_fps)
 
-    logger.info(f"Loading HF processor and model: {MODEL_ID}")
-    local_only = os.getenv("CI") == "true"
-    processor = AutoProcessor.from_pretrained(
-        MODEL_ID,
-        trust_remote_code=True,
-        local_files_only=local_only,
-    )
+    hf_kw = _molmo2_hf_from_pretrained_kwargs(os.getenv("CI") == "true")
+    rev_note = f" @{hf_kw['revision']}" if "revision" in hf_kw else ""
+    logger.info(f"Loading HF processor and model: {MODEL_ID}{rev_note}")
+    processor = AutoProcessor.from_pretrained(MODEL_ID, **hf_kw)
 
     if torch.cuda.is_available():
         model = AutoModelForImageTextToText.from_pretrained(
             MODEL_ID,
             torch_dtype=torch.bfloat16,
             device_map="auto",
-            trust_remote_code=True,
-            local_files_only=local_only,
+            **hf_kw,
         )
     else:
         model = AutoModelForImageTextToText.from_pretrained(
             MODEL_ID,
             torch_dtype=torch.float32,
-            trust_remote_code=True,
-            local_files_only=local_only,
+            **hf_kw,
         ).to("cpu")
     model.eval()
 
+    # Molmo2Processor forwards `videos` to video_utils.make_batched_videos: pass a T,H,W,C array per
+    # batch item (not a custom dict). Pre-sampled frames from molmo_utils need do_sample_frames=False
+    # and batched VideoMetadata so placeholder expansion gets correct timestamps.
+    frames = video_payload["frames"]
+    fi = video_payload["frames_indices"]
+    video_metadata = [
+        {
+            "total_num_frames": video_payload["total_num_frames"],
+            "fps": float(video_payload["sampled_fps"]),
+            "frames_indices": [int(x) for x in np.asarray(fi).reshape(-1)],
+        }
+    ]
     inputs = processor(
         text=[prompt],
-        videos=[video_payload],
+        videos=[frames],
+        videos_kwargs={"do_sample_frames": False, "video_metadata": video_metadata},
         return_tensors="pt",
     )
     device = next(model.parameters()).device
