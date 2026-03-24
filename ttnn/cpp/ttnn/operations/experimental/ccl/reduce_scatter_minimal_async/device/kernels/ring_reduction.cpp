@@ -27,11 +27,13 @@ void kernel_main() {
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         // Don't reduce on the first slice
         for (uint32_t i = 0; i < ring_size - 1; i++) {
+            const bool full_slice = false;
+
             for (uint32_t c = 0; c < slice_C; c++) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
 
-                if (!direction) {
+                if (!full_slice && !direction) {
                     uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                     tiles_read += backwards_offset;
                 }
@@ -40,10 +42,10 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = 0;
-                    if (direction) {
-                        num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
+                    if (full_slice || !direction) {
                         num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
+                    } else {
+                        num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
                     }
                     cb_wait_front(input_cb_id, tile_granularity);
                     cb_wait_front(intermediate_cb, tile_granularity);
@@ -61,7 +63,7 @@ void kernel_main() {
 
                     // Skip the tiles going the other direction
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    if (tiles_remaining_to_read > 0) {
+                    if (!full_slice && tiles_remaining_to_read > 0) {
                         num_pages_to_read = 0;
                         if (!direction) {
                             num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);

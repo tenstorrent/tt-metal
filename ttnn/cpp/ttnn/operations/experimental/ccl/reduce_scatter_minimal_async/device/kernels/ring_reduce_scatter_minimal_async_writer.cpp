@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "api/debug/dprint.h"
+
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
@@ -249,11 +251,13 @@ void kernel_main() {
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
         for (uint32_t i = 0; i < ring_size; ++i) {
-            uint32_t actual_slice_idx;
+            const bool full_slice = false;
+
+            // slice_idx = slice_idx % ring_size
             if (direction) {
-                actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
             } else {
-                actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
             }
 
             // If not the last slice, write what's on cb_output_id forward
@@ -263,11 +267,11 @@ void kernel_main() {
 
                 uint32_t intermediate_tile_id_start;
                 if constexpr (dim == 3) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                    intermediate_tile_id_start = slice_idx * slice_Wt;
                 } else if constexpr (dim == 2) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
+                    intermediate_tile_id_start = slice_idx * slice_Ht * slice_Wt;
                 } else if constexpr (dim == 1) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
+                    intermediate_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt;
                 } else {
                     ASSERT(false);
                 }
@@ -278,7 +282,7 @@ void kernel_main() {
                     uint32_t tiles_read = start_tiles_read;
                     uint32_t tiles_to_read = start_tiles_to_read;
 
-                    if (!direction) {
+                    if (!full_slice && !direction) {
                         uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                         for (uint32_t k = 0; k < backwards_offset; ++k) {
                             intermediate_pages_read_in_row++;
@@ -295,11 +299,11 @@ void kernel_main() {
 
                         uint32_t tiles_read_in_current_direction = 0;
                         uint32_t tiles_to_read_in_current_direction = 0;
-                        if (direction) {
+                        if (full_slice || !direction) {
+                            tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
+                        } else {
                             tiles_to_read_in_current_direction =
                                 std::min(tiles_remaining_to_read / 2, tile_granularity);
-                        } else {
-                            tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                         }
 
                         cb_wait_front(cb_output_id, tile_granularity);
@@ -312,6 +316,7 @@ void kernel_main() {
 
                             uint32_t intermediate_tile_one_id =
                                 intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                            // DPRINT << "W: interm_tile_id0=" << intermediate_tile_one_id << ENDL();
                             intermediate_pages_read_in_row++;
                             if (intermediate_pages_read_in_row == slice_Wt) {
                                 intermediate_row_offset += input_tensor_Wt;
@@ -364,7 +369,7 @@ void kernel_main() {
 
                         // Skip the tiles going the other direction
                         tiles_remaining_to_read = tiles_to_read - tiles_read;
-                        if (tiles_remaining_to_read > 0) {
+                        if (!full_slice && tiles_remaining_to_read > 0) {
                             uint32_t tiles_to_read_in_other_direction = 0;
                             if (!direction) {
                                 tiles_to_read_in_other_direction =
@@ -414,24 +419,25 @@ void kernel_main() {
                     uint32_t tiles_read = start_tiles_read;
                     uint32_t tiles_to_read = start_tiles_to_read;
 
-                    if (!direction) {
+                    if (!full_slice && !direction) {
                         tiles_read += std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                     }
                     while (tiles_read < tiles_to_read) {
                         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                         uint32_t tiles_to_read_in_current_direction = 0;
-                        if (direction) {
+                        if (full_slice || !direction) {
+                            tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
+                        } else {
                             tiles_to_read_in_current_direction =
                                 std::min(tiles_remaining_to_read / 2, tile_granularity);
-                        } else {
-                            tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                         }
 
                         cb_wait_front(cb_output_id, tile_granularity);
                         size_t l1_read_addr = get_read_ptr(cb_output_id);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                             uint32_t output_tile_id = output_tile_id_start + tiles_read;
+                            // DPRINT << "W: output_tile_id=" << output_tile_id << ENDL();
                             uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
                             noc_async_write(l1_read_addr, local_noc_addr, page_size);
                             l1_read_addr += page_size;
@@ -443,7 +449,7 @@ void kernel_main() {
 
                         // Skip the tiles going the other direction
                         tiles_remaining_to_read = tiles_to_read - tiles_read;
-                        if (tiles_remaining_to_read > 0) {
+                        if (!full_slice && tiles_remaining_to_read > 0) {
                             uint32_t tiles_to_read_in_other_direction = 0;
                             if (!direction) {
                                 tiles_to_read_in_other_direction =
