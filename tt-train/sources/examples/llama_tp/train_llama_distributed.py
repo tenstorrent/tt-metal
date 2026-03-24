@@ -45,12 +45,7 @@ from ttml.distributed import (
     init_ops,
 )
 from ttml.distributed.debug import DispatchTraceCallback
-from ttml.schedulers import (
-    LRSchedulerBase,
-    LinearScheduler,
-    LambdaScheduler,
-    SequentialScheduler,
-)
+
 
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -98,12 +93,12 @@ def parse_training_config(yaml_config: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def create_identity_scheduler(optimizer, total_steps: int) -> LRSchedulerBase:
+def create_identity_scheduler(optimizer, total_steps: int):
     """Constant LR — no change throughout training."""
     return LambdaScheduler(optimizer, lambda step: 1.0)
 
 
-def create_warmup_linear_scheduler(optimizer, total_steps: int) -> LRSchedulerBase:
+def create_warmup_linear_scheduler(optimizer, total_steps: int):
     """10 % linear warmup then linear decay to 1 % of peak lr."""
     warmup_steps = max(1, int(total_steps * 0.1))
     decay_steps = max(1, total_steps - warmup_steps)
@@ -665,13 +660,7 @@ def main():
 
     optimizer = ttml.optimizers.create_optimizer(optimizer_dict, model.parameters())
 
-    if scheduler_type not in _SCHEDULER_FACTORIES:
-        raise ValueError(
-            f"Unknown scheduler_type '{scheduler_type}'. "
-            f"Choose from: {list(_SCHEDULER_FACTORIES)}"
-        )
-    scheduler = _SCHEDULER_FACTORIES[scheduler_type](optimizer, max_steps)
-    print(f"   Scheduler: {scheduler_type}")
+    print(f"   Scheduler: identity")
 
     # Setup callbacks
     callbacks = []
@@ -691,9 +680,6 @@ def main():
         eval_dataloader=None,
         config=sft_config,
         optimizer=optimizer,
-        lr_schedule=lambda step: (scheduler.step(), float(scheduler.get_current_lr()))[
-            1
-        ],
         callbacks=callbacks if callbacks else None,
     )
 
