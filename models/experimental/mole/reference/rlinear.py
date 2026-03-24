@@ -22,11 +22,7 @@ class RLinearExpert(nn.Module):
             else nn.Linear(config.seq_len, config.pred_len)
         )
         self.dropout = nn.Dropout(config.drop)
-<<<<<<< HEAD
         self.rev = RevIN(config.enc_in, eps=config.revin_eps)
-=======
-        self.rev = RevIN(config.enc_in, eps=config.revin_eps) if not config.disable_rev else None
->>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     @property
     def projection(self) -> nn.Module:
@@ -40,17 +36,10 @@ class RLinearExpert(nn.Module):
 
     def _forward_outputs(self, x: torch.Tensor, x_mark: torch.Tensor) -> MoLEForwardOutputs:
         validate_model_inputs(x, x_mark)
-<<<<<<< HEAD
         x = self.rev(x, "norm")
         x = self.dropout(x)
         prediction = self._project(x.transpose(1, 2)).transpose(1, 2)
         prediction = self.rev(prediction, "denorm")
-=======
-        x = self.rev(x, "norm") if self.rev else x
-        x = self.dropout(x)
-        prediction = self._project(x.transpose(1, 2)).transpose(1, 2)
-        prediction = self.rev(prediction, "denorm") if self.rev else prediction
->>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         return MoLEForwardOutputs(
             prediction=prediction,
         )

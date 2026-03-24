@@ -26,11 +26,7 @@ class RMLPExpert(nn.Module):
             nn.ReLU(),
             nn.Linear(config.d_model, config.seq_len),
         )
-<<<<<<< HEAD
         self.rev = RevIN(config.enc_in, eps=config.revin_eps)
-=======
-        self.rev = RevIN(config.enc_in, eps=config.revin_eps) if not config.disable_rev else None
->>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
 
     @property
     def projection(self) -> nn.Module:
@@ -44,17 +40,10 @@ class RMLPExpert(nn.Module):
 
     def _forward_outputs(self, x: torch.Tensor, x_mark: torch.Tensor) -> MoLEForwardOutputs:
         validate_model_inputs(x, x_mark)
-<<<<<<< HEAD
         x = self.rev(x, "norm")
         x = x + self.temporal(x.transpose(1, 2)).transpose(1, 2)
         prediction = self._project(x.transpose(1, 2)).transpose(1, 2)
         prediction = self.rev(prediction, "denorm")
-=======
-        x = self.rev(x, "norm") if self.rev else x
-        x = x + self.temporal(x.transpose(1, 2)).transpose(1, 2)
-        prediction = self._project(x.transpose(1, 2)).transpose(1, 2)
-        prediction = self.rev(prediction, "denorm") if self.rev else prediction
->>>>>>> 832f8d006a67a76ebe4bbdf3ffb366344dc9940f
         return MoLEForwardOutputs(
             prediction=prediction,
         )
