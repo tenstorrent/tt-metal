@@ -582,6 +582,30 @@ def test_rank_environment_respects_explicit_github_actions_annotation_override(m
 
 
 @pytest.mark.unit
+def test_rank_environment_projects_runner_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNNER_NAME", "g14t3k01")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["RUNNER_NAME"] == "g14t3k01"
+
+
+@pytest.mark.unit
+def test_rank_environment_respects_explicit_runner_name_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNNER_NAME", "g14t3k01")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding, global_env={"RUNNER_NAME": "rack-2-node-7"})
+
+    env = get_rank_environment(binding, config)
+
+    assert env["RUNNER_NAME"] == "rack-2-node-7"
+
+
+@pytest.mark.unit
 def test_mpi_export_uses_name_only_for_complex_dispatch_timeout_command(monkeypatch, tmp_path):
     command = "/opt/venv/bin/python3 /work/tools/tt-triage.py --disable-progress 1>&2"
     monkeypatch.setenv("TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE", command)

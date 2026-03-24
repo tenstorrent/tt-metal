@@ -889,6 +889,13 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     if os.environ.get("GITHUB_ACTIONS") == "true":
         env.setdefault(GITHUB_ACTIONS_ANNOTATION_ENV_VAR, "1")
 
+    # Rank-side diagnostics should prefer the GitHub runner name over the
+    # container hostname (which CI may override to a fixed value such as
+    # "mpirun-host"). RUNNER_* vars are blocklisted from auto inheritance, so
+    # explicitly project just RUNNER_NAME when present.
+    if os.environ.get("RUNNER_NAME"):
+        env.setdefault("RUNNER_NAME", os.environ["RUNNER_NAME"])
+
     # Ensure TT_METAL_CACHE has a value so the C++ side doesn't fall back to
     # the HOME-based default.  TT_METAL_CACHE is shared (not rank-scoped)
     # because all JIT build writes go through TT_METAL_JIT_SCRATCH (local disk)

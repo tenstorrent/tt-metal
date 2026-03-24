@@ -118,7 +118,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
@@ -170,7 +169,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
@@ -222,7 +220,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
@@ -275,7 +272,6 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)

@@ -250,6 +250,7 @@ static std::vector<Rank> parse_failed_ranks_string(std::string_view s) {
 
 inline constexpr std::string_view kUnknownRankName = "unknown-world-rank";
 inline constexpr std::string_view kUnknownHostname = "unknown-hostname";
+static constexpr char kRunnerNameEnvVar[] = "RUNNER_NAME";
 static constexpr char kGithubActionsAnnotationEnvVar[] = "TT_METAL_GITHUB_ACTIONS_ANNOTATIONS";
 static constexpr std::string_view kRankFailureAnnotationFile =
     "tt_metal/distributed/multihost/mpi_distributed_context.cpp";
@@ -273,32 +274,46 @@ static constexpr std::string_view kRankFailureAnnotationFile =
     return fmt::format("MPI rank failure {} on {}", failed_rank_name, failed_hostname);
 }
 
+[[nodiscard]] std::string best_effort_local_rank_hostname() {
+    if (const char* value = std::getenv(kRunnerNameEnvVar); value != nullptr && *value != '\0') {
+        return value;
+    }
+
+    std::array<char, MPI_MAX_PROCESSOR_NAME> processor_name{};
+    int processor_name_length = 0;
+    if (MPI_Get_processor_name(processor_name.data(), &processor_name_length) != MPI_SUCCESS ||
+        processor_name_length <= 0) {
+        return std::string{kUnknownHostname};
+    }
+
+    const auto capped_length = std::clamp(processor_name_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
+    processor_name[static_cast<std::size_t>(capped_length)] = '\0';
+    return processor_name.data();
+}
+
 [[nodiscard]] std::vector<std::string> best_effort_gather_rank_hostnames(MPI_Comm comm, int local_rank, int size) {
     if (size <= 0) {
         return {};
     }
 
+    static constexpr int kRankHostnameBufferSize = 256;
     std::vector<std::string> rank_hostnames(static_cast<std::size_t>(size), std::string{kUnknownHostname});
-    std::array<char, MPI_MAX_PROCESSOR_NAME> local_hostname{};
-    int local_hostname_length = 0;
-    if (MPI_Get_processor_name(local_hostname.data(), &local_hostname_length) != MPI_SUCCESS ||
-        local_hostname_length <= 0) {
-        return rank_hostnames;
-    }
-
-    const auto capped_length = std::clamp(local_hostname_length, 0, MPI_MAX_PROCESSOR_NAME - 1);
-    local_hostname[static_cast<std::size_t>(capped_length)] = '\0';
+    std::array<char, kRankHostnameBufferSize> local_hostname{};
+    const std::string local_hostname_value = best_effort_local_rank_hostname();
+    const auto copied_length = std::min(local_hostname_value.size(), local_hostname.size() - 1);
+    std::copy_n(local_hostname_value.data(), copied_length, local_hostname.data());
+    local_hostname[copied_length] = '\0';
     if (local_rank >= 0 && local_rank < size) {
         rank_hostnames[static_cast<std::size_t>(local_rank)] = local_hostname.data();
     }
 
-    std::vector<char> gathered_hostnames(static_cast<std::size_t>(size) * MPI_MAX_PROCESSOR_NAME, '\0');
+    std::vector<char> gathered_hostnames(static_cast<std::size_t>(size) * kRankHostnameBufferSize, '\0');
     if (MPI_Allgather(
             local_hostname.data(),
-            MPI_MAX_PROCESSOR_NAME,
+            kRankHostnameBufferSize,
             MPI_CHAR,
             gathered_hostnames.data(),
-            MPI_MAX_PROCESSOR_NAME,
+            kRankHostnameBufferSize,
             MPI_CHAR,
             comm) != MPI_SUCCESS) {
         return rank_hostnames;
@@ -306,8 +321,8 @@ static constexpr std::string_view kRankFailureAnnotationFile =
 
     for (int rank = 0; rank < size; ++rank) {
         const auto begin = gathered_hostnames.begin() +
-                           static_cast<std::ptrdiff_t>(static_cast<std::size_t>(rank) * MPI_MAX_PROCESSOR_NAME);
-        const auto end = begin + MPI_MAX_PROCESSOR_NAME;
+                           static_cast<std::ptrdiff_t>(static_cast<std::size_t>(rank) * kRankHostnameBufferSize);
+        const auto end = begin + kRankHostnameBufferSize;
         const auto nul = std::find(begin, end, '\0');
         if (begin != nul) {
             rank_hostnames[static_cast<std::size_t>(rank)] = std::string(begin, nul);

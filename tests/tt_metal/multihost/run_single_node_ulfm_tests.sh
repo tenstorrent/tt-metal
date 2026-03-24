@@ -40,6 +40,7 @@ _run_expected_fast_fail_annotation_test() {
 
     local tmpout
     local cmd_status=0
+    local annotation_line=""
     tmpout=$(mktemp)
 
     if "$@" 2>&1 | tee "$tmpout"; then
@@ -69,15 +70,28 @@ _run_expected_fast_fail_annotation_test() {
         return
     fi
 
-    if ! grep -Fq "::error " "$tmpout" || \
-       ! grep -Fq "policy=fast_fail" "$tmpout" || \
-       ! grep -Fq "failed_hostname=" "$tmpout" || \
-       ! grep -Fq "detecting_hostname=" "$tmpout"; then
+    annotation_line="$(
+        awk '
+            {
+                pos = index($0, "::error ");
+                if (pos && index($0, "policy=fast_fail") && index($0, "failed_hostname=") && index($0, "detecting_hostname=")) {
+                    print substr($0, pos);
+                    exit;
+                }
+            }
+        ' "$tmpout"
+    )"
+
+    if [[ -z "$annotation_line" ]]; then
         echo "ERROR: ${expected_test} did not emit the expected FAST_FAIL rank-failure annotation" >&2
         fail=$((fail + 1))
         rm -f "$tmpout"
         return
     fi
+
+    # Re-emit a clean workflow command when mpirun prefixes the rank output.
+    # GitHub only parses commands that begin at column 0.
+    echo "$annotation_line"
 
     echo "INFO: ${expected_test} emitted FAST_FAIL annotation with hostname fields (mpirun exit ${cmd_status})" >&2
     rm -f "$tmpout"
@@ -102,7 +116,7 @@ echo "--- FastFailEmitsGithubAnnotation (-np 2) ---"
 _run_expected_fast_fail_annotation_test \
   "FaultTolerance.FastFailEmitsGithubAnnotation" \
   env TT_METAL_GITHUB_ACTIONS_ANNOTATIONS=1 \
-  "$MPIRUN" --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.FastFailEmitsGithubAnnotation
+  "$MPIRUN" -x TT_METAL_GITHUB_ACTIONS_ANNOTATIONS --with-ft ulfm -np 2 "$TEST_BIN" --gtest_filter=FaultTolerance.FastFailEmitsGithubAnnotation
 
 # ── 4. MPI_Finalize watchdog path verification ────────────────────────
 echo "--- FinalizeWatchdogPath (-np 2) ---"
