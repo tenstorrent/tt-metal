@@ -84,6 +84,7 @@ class DeepSeekV3:
         write_fn: Callable[[ttnn.Tensor], None],
         read_fn: Callable[[ttnn.Tensor], None],
         batch_size: int = 1,
+        prefill_chunk_size: int = 64,
     ) -> None:
         """
         Args:
@@ -91,19 +92,22 @@ class DeepSeekV3:
             read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
             batch_size: Batch size B. Current implementation supports only B=1;
                 payload size is B * TOKEN_ID_BYTES (int32).
+            prefill_chunk_size: Max number of tokens to pipeline during prefill. Writes up to this many
+                tokens before draining the corresponding reads. Must match the socket FIFO capacity.
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
         self._write_fn = write_fn
         self._read_fn = read_fn
         self.batch_size = batch_size
+        self._prefill_chunk_size = prefill_chunk_size
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
-        logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
+        logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}, prefill_chunk_size {prefill_chunk_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
         """
@@ -125,11 +129,15 @@ class DeepSeekV3:
             raise ValueError("Expected at least one prompt token")
 
         last_output: ttnn.Tensor | None = None
-        for token in prompt_tokens:
-            self._write_fn(token)
-            self._read_fn(self._output_buffer)
-            last_output = self._output_buffer
-            self._position += 1
+        n = len(prompt_tokens)
+        for start in range(0, n, self._prefill_chunk_size):
+            end = min(start + self._prefill_chunk_size, n)
+            for i in range(start, end):
+                self._write_fn(prompt_tokens[i])
+            for _ in range(start, end):
+                self._read_fn(self._output_buffer)
+                last_output = self._output_buffer
+                self._position += 1
         assert last_output is not None, "Last output tensor is None"
         return last_output
 

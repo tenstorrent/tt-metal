@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_FIFO_SIZE, TOKEN_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
     StateDictWeightProvider,
@@ -90,6 +91,7 @@ class ModelPipeline:
                 write_fn=self.pipeline.write_token,
                 read_fn=self.pipeline.read_output,
                 batch_size=1,
+                prefill_chunk_size=TOKEN_FIFO_SIZE // TOKEN_PAGE_SIZE_BYTES,
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 

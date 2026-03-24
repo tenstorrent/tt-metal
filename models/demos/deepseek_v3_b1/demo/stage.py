@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
-TOKEN_FIFO_SIZE = 1024
+TOKEN_FIFO_SIZE = 4096
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
