@@ -721,7 +721,6 @@ class TtTransformer(LightweightModule):
         )
 
     def unpack_bitmask(self, bitmask):
-        self.mesh_device.reset_sub_device_stall_group()
         op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
         batch_dim, vocab_dim = bitmask.shape
 
@@ -736,9 +735,6 @@ class TtTransformer(LightweightModule):
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
 
         result = ttnn.where(converted_bitmask, 0, float("-inf"), **op_kwargs)
-
-        if hasattr(self.prefetcher_setup, "prefetcher_sub_device_id"):
-            self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         return result
 
     def start_bitmask_to_device(self, bitmask):
