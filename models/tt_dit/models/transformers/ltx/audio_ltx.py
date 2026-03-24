@@ -251,6 +251,7 @@ class LTXAudioVideoTransformerBlock(Module):
         skip_cross_attn: bool = False,
         skip_self_attn: bool = False,
         audio_attn_mask: ttnn.Tensor | None = None,
+        audio_padding_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Process both video and audio through one transformer block.
 
@@ -378,6 +379,10 @@ class LTXAudioVideoTransformerBlock(Module):
                 audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
                     audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
                 )
+            # Zero out padded audio tokens so they contribute nothing to A→V cross-attention.
+            # audio_padding_mask shape: (1, 1, audio_N, 1) with 1.0 for real, 0.0 for padded.
+            if audio_padding_mask is not None:
+                audio_kv_a2v = ttnn.multiply(audio_kv_a2v, audio_padding_mask)
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
                     audio_kv_a2v, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -656,6 +661,7 @@ class LTXAudioVideoTransformerModel(Module):
         skip_cross_attn: bool = False,
         skip_self_attn_blocks: list[int] | None = None,
         audio_attn_mask: ttnn.Tensor | None = None,
+        audio_padding_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run one denoising step for both video and audio on device."""
         from ....utils.tensor import bf16_tensor, float32_tensor
@@ -765,6 +771,7 @@ class LTXAudioVideoTransformerModel(Module):
                 skip_cross_attn=skip_cross_attn,
                 skip_self_attn=skip_self_attn_blocks is not None and block_idx in skip_self_attn_blocks,
                 audio_attn_mask=audio_attn_mask,
+                audio_padding_mask=audio_padding_mask,
             )
 
         # Output projection — video
