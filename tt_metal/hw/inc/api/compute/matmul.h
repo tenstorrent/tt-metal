@@ -104,8 +104,9 @@ ALWI void mm_init(
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init()));
@@ -185,7 +186,6 @@ ALWI void mm_init_short(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
-
 #endif  // TODO: AM; add Quasar implementation
 }
 
@@ -256,9 +256,9 @@ ALWI void mm_block_init(
     PACK((llk_pack_init<false, false>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(
-        in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));  // transpose not yet implemented
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
     MATH((llk_math_pack_sync_init()));
@@ -351,8 +351,8 @@ ALWI void mm_block_init_short(
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(
-        in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));  // transpose not yet implemented
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
 #endif
 }
