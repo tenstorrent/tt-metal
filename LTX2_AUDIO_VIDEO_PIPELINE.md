@@ -12,6 +12,7 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 | HiFi4 for attention matmuls | Removes TF32 truncation; no perf regression measured | HiFi2 (same PCC, slightly faster) |
 | Use official `encode_prompts` for text encoding | Produces both video (4096-dim) and audio (2048-dim) context correctly | Manual encode_prompt function |
 | Combined MP4 export via `ltx_pipelines.utils.media_io.encode_video` | Official muxing of video frames + audio waveform | Separate video.mp4 + audio.wav files |
+| Cross PE: temporal-only dim=2048, separate Q/K rope tensors | Reference uses `positions[:, 0:1, :]` with `audio_cross_attention_dim=2048`; Q rope SP-sharded, K rope full-seq | Single shared rope for cross-attn (wrong: Q and K have different sequence lengths from different modalities) |
 
 ## Constraints & Workarounds
 - Hardware: WH LB, 2x4 mesh (SP=2, TP=4)
@@ -29,9 +30,10 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 - **A↔V cross-attention context modulation was missing** — reference modulates BOTH Q and KV sides with separate AdaLN params; our code only modulated Q. This caused PSNR 14 dB → 21-24 dB after fix.
 - Per-layer PCC 0.998 is the same for both video-only and AV models — the quality gap was entirely from the missing context modulation bug
 - HiFi4 vs HiFi2 made zero difference to per-layer PCC (0.998449 vs 0.998451)
+- **Per-op PCC investigation**: Largest delta contributors are self-attention (0.28 video, 0.33 audio) and feedforward (0.23 video, 6.59 audio!). A↔V cross-attention has negligible delta (0.001 video, 0.03 audio). Audio FF delta is 30× larger than video FF because audio std grows 4× through the block (0.94→20.9). Error is from bf16 SDPA/matmul precision, not input quantization (bf16 input PCC = 1.0). bf16 quantization of each intermediate only costs PCC ~0.000001–0.000003 (negligible). The ~0.001 PCC gap is from accumulated bf16 matmul errors through SDPA and FF, compounding across the chain of ops.
 
 ## Open Questions
-- [ ] Cross-modal positional embeddings (cross_positional_embeddings) — reference applies RoPE to A↔V cross-attention Q/K, our code skips this. May improve precision further.
+- [x] Cross-modal positional embeddings (cross_positional_embeddings) — implemented: temporal-only RoPE on A↔V cross-attention Q/K matching reference. Separate SP-sharded Q rope and full-seq K rope.
 - [ ] Conv3D blocking sweep integration for faster VAE decode
 - [ ] Performance optimization: host-side gate computation adds latency per layer
 
@@ -46,9 +48,11 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 - [x] **AV video quality matching video-only (PSNR 21-24 dB vs CPU AV ref)**
 - [x] Full 512x768, 121-frame, 30-step video-only generated (224.8s denoise)
 - [x] Full 512x768, 121-frame, 30-step AV generated (166.2s denoise + audio)
-- [ ] Cross-modal positional embeddings for A↔V attention
+- [x] Cross-modal positional embeddings for A↔V attention
+- [x] Audio PCC tests added (vs PyTorch reference with 22B weights)
 - [ ] Conv3D blocking sweep for faster VAE decode
-- [ ] Full-resolution AV with cross-attention fix (need to re-run)
+- [x] Full-resolution AV re-run (512x768, 121 frames, 30 steps, 353.5s denoise)
+- [x] Cross PE tile alignment fix — host-side fallback for D_half < 64, fixed SP sharding for A↔V context (both Q and K are SP-sharded since context comes from the other modality's hidden state)
 
 ## Key Measurements
 | Test | Metric | Value | Notes |
@@ -59,8 +63,12 @@ Get the full LTX-2.3 22B AudioVideo pipeline working on WH LB (2x4 mesh), matchi
 | Video-only e2e (5 steps, 256x256) | PSNR | 23-24 dB | vs CPU video-only ref |
 | AV e2e video (5 steps, 256x256) | PSNR | 21-24 dB | vs CPU AV ref, after xattn fix |
 | AV e2e video BEFORE fix | PSNR | 12-14 dB | missing context modulation |
+| AV 1-layer PCC (with cross PE) video | PCC | 0.999031 | 1x1, split RoPE, cross PE enabled |
+| AV 1-layer PCC (with cross PE) audio | PCC | 0.998776 | 1x1, split RoPE, cross PE enabled |
 | Video-only (30 steps, 512x768) | Latent | [-4.2, 4.1] | 121 frames, 224.8s denoise |
 | AV (30 steps, 512x768) | Latent | [-2.45, 2.62] video | 121 frames, 166.2s denoise |
+| AV (30 steps, 512x768, cross PE) | Denoise | 858.8s | 121 frames, host-side rope fallback adds 2.4× overhead |
+| AV (30 steps, 512x768, no cross PE) | Denoise | 353.5s | 121 frames, post-context-modulation fix |
 
 ## Major Bugs Found & Fixed
 1. **RoPE format** — Used INTERLEAVED (PCC 0.09 vs ref), needed SPLIT. Fixed with manual elementwise rotation.
