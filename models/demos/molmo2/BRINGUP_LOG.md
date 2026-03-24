@@ -10,6 +10,7 @@
 - **Fixed video reshape bug - video understanding now works!**
 - **Fixed decode sharding bug - vLLM trace mode now works!**
 - **Fixed trace tensor padding - multimodal inference now works with any image size!**
+- **Fixed vision trace accuracy bug - vision trace now re-enabled!**
 - **vLLM text and image inference working!** Server starts and responds correctly
 - Text model now matches HuggingFace reference exactly (PCC > 0.999)
 
@@ -35,29 +36,28 @@
 3. Added padding to MAX sizes in `_prepare_unified_inputs` and `_allocate_unified_trace_tensors`
 
 ### Performance (Current - With Traces)
-**Recommended flags:** `--use-trace --use-decode-trace`
+**Recommended flags:** `--use-trace --use-vision-trace`
 
-**Video inference** (8 frames, without vision trace):
-- Vision processing: ~3800ms (not traced - vision trace has accuracy bug)
-- Prefill TTFT: ~453ms
+**Video inference** (8 frames, with vision trace):
+- Vision processing: ~1750ms (traced)
+- Prefill TTFT: ~520ms
 - Decode: **~33 tok/s**
-- Accuracy: ✅ Correct (B for letter-writing question)
+- Accuracy: ✅ Correct (A for letter-writing question)
 
-**Image inference** (without vision trace):
-- Vision processing: ~2200ms
-- Prefill TTFT: ~98ms
+**Image inference** (with vision trace):
+- Vision processing: ~400ms (traced)
+- Prefill TTFT: ~99ms
 - Decode: **~33 tok/s**
 
-⚠️ **Known Issue:** `--use-vision-trace` causes incorrect video answers (C instead of B).
-Vision trace needs debugging before enabling.
+### Vision Trace Fix (2026-03-24)
+Fixed accuracy bug in `_prepare_vision_inputs_for_trace`: missing `.float()` when converting
+`valid_token` (boolean) to bfloat16. The non-traced path had this correctly in `embed_image()`.
 
-### Option C Implementation (Current)
-Vision trace disabled in `generator_vllm.py` for tt-inference-server compatibility:
+Vision trace is now re-enabled in `generator_vllm.py`:
 ```python
 # In prefill_forward:
-use_trace=enable_trace,      # Prefill trace OK - ~33 tok/s decode
-use_vision_trace=False,      # DISABLED - accuracy bug
-use_unified_trace=False,     # DISABLED - requires vision trace
+use_trace=enable_trace,      # Prefill trace OK
+use_vision_trace=True,       # Vision trace accuracy bug fixed
 ```
 
 ### Input Padding for Trace Reuse (2026-03-24)
