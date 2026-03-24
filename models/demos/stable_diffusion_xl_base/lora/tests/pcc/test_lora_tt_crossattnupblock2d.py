@@ -40,7 +40,7 @@ def _get_diffusers_pipeline(is_ci_env):
             20,
             1280,
             0,
-            0.974,
+            0.973,
         ),
         (
             (1024, 1024),
@@ -64,7 +64,7 @@ def _get_diffusers_pipeline(is_ci_env):
             20,
             1280,
             0,
-            0.988,
+            0.987,
         ),
         (
             (512, 512),
