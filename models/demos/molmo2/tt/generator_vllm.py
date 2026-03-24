@@ -1285,21 +1285,46 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         # Deallocate input tensor after embedding
         ttnn.deallocate(token_id_ttnn)
 
-        # Run forward_decode directly to get logits (not argmax like run_decode_step)
-        logits_ttnn = self.generator.model.text_model.forward_decode(
-            hidden_states=hidden_states,
-            kv_caches=self.generator.kv_caches,
-            current_pos=self.generator.current_pos,
-            rot_mat_idxs=self.generator.rot_mat_idxs,
+        # Check if we have a captured decode trace and should use it
+        use_traced_decode = (
+            enable_trace
+            and hasattr(self.generator, "decode_trace_id")
+            and self.generator.decode_trace_id is not None
+            and hasattr(self.generator, "decode_trace_tensors")
+            and self.generator.decode_trace_tensors is not None
         )
 
-        # Increment position counters
+        if use_traced_decode:
+            # Execute captured decode trace
+            # Copy hidden states into trace input tensor
+            ttnn.copy(hidden_states, self.generator.decode_trace_tensors["hidden_states"])
+            ttnn.deallocate(hidden_states)
+
+            # Execute the captured trace
+            ttnn.execute_trace(self.mesh_device, self.generator.decode_trace_id, cq_id=0, blocking=False)
+
+            # Get output from trace output tensor
+            logits_ttnn = self.generator.decode_trace_output
+        else:
+            # Compute rotation matrices for this decode position
+            rot_mats = self.generator.model.text_model.rotary_setup.get_rot_mats_decode_traced(
+                self.generator.rot_mat_idxs
+            )
+
+            # Run forward_decode directly to get logits (not argmax like run_decode_step)
+            logits_ttnn = self.generator.model.text_model.forward_decode(
+                hidden_states=hidden_states,
+                kv_caches=self.generator.kv_caches,
+                current_pos=self.generator.current_pos,
+                rot_mats=rot_mats,
+            )
+            # Deallocate intermediate tensor (only when not using trace)
+            ttnn.deallocate(hidden_states)
+
+        # Increment position counters (must happen OUTSIDE trace for traced decode)
         ttnn.plus_one(self.generator.current_pos)
         ttnn.plus_one(self.generator.rot_mat_idxs)
         self.generator.decode_position += 1
-
-        # Deallocate intermediate tensor
-        ttnn.deallocate(hidden_states)
 
         # During trace capture, we cannot read from device
         # Return dummy output if read_from_device is False
@@ -1316,8 +1341,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0]
 
-        # Deallocate logits_ttnn after conversion (safe when trace is disabled)
-        ttnn.deallocate(logits_ttnn)
+        # Deallocate logits_ttnn after conversion (only safe when trace is disabled)
+        # When trace is enabled, logits_ttnn is decode_trace_output which is reused
+        if not use_traced_decode:
+            ttnn.deallocate(logits_ttnn)
 
         # Logits shape from text_model.forward_decode: [1, 1, padded_seq, vocab_size]
         # Slice to actual sequence length and reshape for vLLM
