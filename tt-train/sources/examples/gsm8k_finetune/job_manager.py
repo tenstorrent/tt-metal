@@ -389,73 +389,19 @@ class JobManager:
 
         return descriptor_path
 
-    def create_training_overrides(self, config: Dict, output_dir: Path) -> Path:
-        """Create training_overrides.yaml for the job.
+    def create_training_overrides(self, training_config, config: Dict, output_dir: Path) -> Path:
+        """Create training_overrides.yaml for the job using pluggable config builders.
 
         Args:
+            training_config: Training type configuration object
             config: Training configuration dictionary
             output_dir: Directory to write the config file
 
         Returns:
             Path to the created config file
         """
-        import yaml
-
-        training_config = {
-            "batch_size": config.get("batch_size", 32),
-            "validation_batch_size": config.get("validation_batch_size", 4),
-            "max_steps": config.get("max_steps", 60),
-            "gradient_accumulation_steps": config.get("gradient_accumulation", 1),
-            "eval_every": config.get("eval_every", 20),
-        }
-
-        # Add model_config if specified
-        if config.get("model_config"):
-            training_config["model_config"] = config["model_config"]
-        # Add dataset (HF name or URL) for training script
-        if config.get("dataset"):
-            training_config["dataset"] = config["dataset"]
-
-        scheduler_config = {
-            "warmup_steps": config.get("warmup_steps", 20),
-            "hold_steps": config.get("hold_steps", 40),
-            "min_lr": config.get("min_lr", 3e-5),
-            "max_lr": config.get("max_lr", 1e-4),
-        }
-
-        device_config = {
-            "enable_ddp": config.get("enable_ddp", False),
-            "mesh_shape": config.get("mesh_shape", [1, 1]),
-        }
-
-        transformer_config = {
-            "max_sequence_length": config.get("max_seq_length", 512),
-        }
-
-        config_path = output_dir / "training_overrides.yaml"
-
-        with open(config_path, "w") as f:
-            f.write("training_config:\n")
-            for key, value in training_config.items():
-                f.write(f"  {key}: {value}\n")
-
-            f.write("\ntransformer_config:\n")
-            for key, value in transformer_config.items():
-                f.write(f"  {key}: {value}\n")
-
-            f.write("\nscheduler_config:\n")
-            for key, value in scheduler_config.items():
-                if isinstance(value, float) and (value < 0.001 or value > 1000):
-                    f.write(f"  {key}: {value:.2e}\n")
-                else:
-                    f.write(f"  {key}: {value}\n")
-
-            f.write("\ndevice_config:\n")
-            f.write(f"  enable_ddp: {str(device_config['enable_ddp']).lower()}\n")
-            mesh_str = yaml.dump(device_config["mesh_shape"], default_flow_style=True).strip()
-            f.write(f"  mesh_shape: {mesh_str}\n")
-
-        return config_path
+        # Delegate to the training type's config builder
+        return training_config.config_builder(config, output_dir)
 
     def submit_job(
         self,
@@ -498,7 +444,7 @@ class JobManager:
 
         try:
             # Create job-specific training overrides
-            self.create_training_overrides(config, job_dir)
+            self.create_training_overrides(training_config, config, job_dir)
 
             # Generate mesh graph descriptor
             self.generate_mesh_graph_descriptor(partition, job_dir)
