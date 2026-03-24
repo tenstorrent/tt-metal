@@ -884,7 +884,6 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range
-    # MAX_COUNT is set to 11000 to account for observed zone counts (~10705) with headroom
     MIN_COUNT = 500
     MAX_COUNT = 11000
 
