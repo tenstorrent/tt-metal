@@ -610,15 +610,19 @@ _STDERR_LEVEL_RE = re.compile(r"\b(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b")
 
 
 def _level_from_line(line: str, default: str) -> str:
-    """Infer log type from the content of a log line, falling back to default."""
+    """Infer log type from the content of a log line, falling back to default.
+
+    Returns only values valid per the LogEntry schema: "info", "error", "checkpoint".
+    "debug" lines are mapped to "info"; "warning"/"warn" lines are mapped to "error".
+    """
     m = _STDERR_LEVEL_RE.search(line)
     if not m:
         return default
     level = m.group(1).upper()
     if level == "DEBUG":
-        return "debug"
+        return "info"
     if level in ("WARNING", "WARN"):
-        return "warning"
+        return "error"
     if level in ("ERROR", "CRITICAL"):
         return "error"
     return "info"
