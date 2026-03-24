@@ -51,15 +51,26 @@ class WanResidualDownBlock(Module):
         else:
             self.downsampler = None
 
-    def forward(self, x, feat_cache=None, feat_idx=[0]):
-        # x is in (B, T, H, W, C) format
+    def forward(self, x, logical_h: int, feat_cache=None, feat_idx=None):
+        """Args:
+            x: (B, T, H, W, C) TILE after upstream resnets.
+            logical_h: content height at this resolution (same convention as WanEncoder3D / WanResample).
+        Returns:
+            (output TILE, updated logical_h). ``logical_h`` is halved when ``downsampler`` runs.
+        """
+        if feat_idx is None:
+            feat_idx = [0]
         x_copy = ttnn.clone(x)
 
         for resnet in self.resnets:
-            x = resnet(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
+            x = resnet(x, logical_h, feat_cache=feat_cache, feat_idx=feat_idx)
         if self.downsampler is not None:
-            x, logical_h = self.downsampler(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
+            # WanResample (conv + stride) expects ROW_MAJOR; resnets use TILE (see WanVAEEncoder).
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x, logical_h = self.downsampler(x, logical_h, feat_cache=feat_cache, feat_idx=feat_idx)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x_copy = ttnn.to_layout(x_copy, ttnn.ROW_MAJOR_LAYOUT)
         avg_shortcut_out = self.avg_shortcut(x_copy)
         avg_shortcut_out = ttnn.to_layout(avg_shortcut_out, ttnn.TILE_LAYOUT)
-        return x + avg_shortcut_out
+        x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        return ttnn.add(x_tile, avg_shortcut_out), logical_h

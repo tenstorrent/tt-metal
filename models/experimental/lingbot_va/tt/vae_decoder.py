@@ -163,6 +163,9 @@ class WanResidualDecoder3d(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        # conv_in is ROW_MAJOR; mid / residual blocks expect TILE (see WanDecoder3d in vae_wan2_1).
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         # mid_block
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
