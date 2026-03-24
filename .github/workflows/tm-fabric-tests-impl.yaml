@@ -181,7 +181,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          auto-triage: false
       - name: Run health tests
         id: cluster-validation
         timeout-minutes: 5
@@ -200,6 +199,9 @@ jobs:
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
+      - name: Disable auto-triage for multi-process tests
+        if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
+        run: echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=0" >> $GITHUB_ENV
       - name: Run Multi-Process tests
         if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
         timeout-minutes: 10
