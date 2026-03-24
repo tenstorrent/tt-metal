@@ -37,7 +37,7 @@ static uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
 }
 
 // Run a pack relu test using the same infrastructure as test_direct.cpp's quasar path:
-// direct_reader_unary.cpp → eltwise_copy_pack_relu.cpp → direct_writer_unary.cpp
+// direct_reader_unary.cpp → eltwise_copy.cpp (with PACK_RELU) → direct_writer_unary.cpp
 static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::function<float(float)>& golden_fn) {
     Program program = CreateProgram();
 
