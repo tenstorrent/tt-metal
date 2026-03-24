@@ -318,6 +318,8 @@ private:
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
+    bool has_tile_counter_registers_{};
+    bool supports_implicit_dfb_sync_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -379,6 +381,8 @@ public:
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
     bool has_stream_registers() const { return has_stream_registers_; }
+    bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
+    bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }
