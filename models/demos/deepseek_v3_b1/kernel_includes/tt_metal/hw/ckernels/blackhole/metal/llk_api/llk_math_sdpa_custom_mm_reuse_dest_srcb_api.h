@@ -49,5 +49,6 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_(src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
+    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<math_fidelity>(
+        src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
 }

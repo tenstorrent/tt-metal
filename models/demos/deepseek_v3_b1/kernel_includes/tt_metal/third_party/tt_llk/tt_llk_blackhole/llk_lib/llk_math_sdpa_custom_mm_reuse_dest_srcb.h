@@ -52,8 +52,17 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_addrmod(
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0, .c_to_cr = 1},  // Update to next tile
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_3);
+
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 1, .cr = 0},
+        .srcb = {.incr = 0, .clr = 1, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 1},  // Update to next tile
+        .fidelity = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_4);
 }
 
 template <MathFidelity math_fidelity>
@@ -74,13 +83,17 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        4,
+        8,
         // Lambda function to load reply buffer
         [] {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
             TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0);     // 16 (48)
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // 16 (48)
         });
 }
 
@@ -106,6 +119,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs for all K tiles + finalization
 //   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
+template <MathFidelity math_fidelity>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     uint src_index,
     uint dst_index,
@@ -113,6 +127,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
+    const std::uint32_t inner_loops = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
     constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     uint32_t dest_buffer_base = get_dest_buffer_base();
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
@@ -129,12 +144,21 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         // TODO: Evaluate if we need to manually unroll the last iter
         if (signal_output && i == kt_dim - 1) {
             for (uint32_t j = 0; j < nt_dim / 2; j++) {
+                for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+                    lltt::replay(ckernel::math::replay_buf_offset + 4, 4);
+                }
                 lltt::replay(ckernel::math::replay_buf_offset, 4);
+                for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+                    lltt::replay(ckernel::math::replay_buf_offset + 4, 4);
+                }
                 lltt::replay(ckernel::math::replay_buf_offset, 4);
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }
         } else {
             for (uint32_t j = 0; j < nt_dim; j++) {
+                for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+                    lltt::replay(ckernel::math::replay_buf_offset + 4, 4);
+                }
                 lltt::replay(ckernel::math::replay_buf_offset, 4);
             }
         }

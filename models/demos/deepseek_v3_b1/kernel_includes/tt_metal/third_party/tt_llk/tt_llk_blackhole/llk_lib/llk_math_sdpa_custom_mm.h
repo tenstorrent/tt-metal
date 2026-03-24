@@ -42,6 +42,7 @@ inline void sdpa_custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = ADDR_MOD_2_DEST_INCR, .clr = 0, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_2);
 
@@ -49,15 +50,24 @@ inline void sdpa_custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 1, .cr = 0},
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_3);
+
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 1, .cr = 0},
+        .srcb = {.incr = 0, .clr = 1, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 1},
+        .fidelity = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_4);
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 1, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_4);
+        .set(ADDR_MOD_5);
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
@@ -67,29 +77,33 @@ inline void sdpa_custom_mm_configure_addrmod() {
         .set(ADDR_MOD_7);
 }
 
+template <MathFidelity math_fidelity>
 inline void sdpa_custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim) {
-    constexpr std::uint32_t replay_buf_len = 3;
+    constexpr std::uint32_t replay_buf_len = 4;
     load_replay_buf(ckernel::math::replay_buf_offset, replay_buf_len, [operandB_face_r_dim] {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
     });
 
-    const std::uint32_t mvmul_base = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, replay_buf_len);
+    const std::uint32_t mvmul_base = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
+    const std::uint32_t mvmul_end_phase = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
     const std::uint32_t mvmul_end_tile = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
 
-    ckernel_template tmp = ckernel_template(1, ct_dim, mvmul_base, mvmul_end_tile);
-    tmp.set_last_inner_loop_instr(mvmul_end_block);
+    const std::uint32_t inner_loops = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
+    ckernel_template tmp = ckernel_template(ct_dim, inner_loops, mvmul_base, mvmul_end_phase);
+    tmp.set_last_inner_loop_instr(mvmul_end_tile);
     tmp.set_last_outer_loop_instr(mvmul_end_block);
 
     tmp.program();
 }
 
-template <bool transpose = false>
+template <MathFidelity math_fidelity, bool transpose = false>
 inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1) {
     sdpa_custom_mm_configure_addrmod<transpose>();
-    sdpa_custom_mm_configure_mop(operandB_face_r_dim, ct_dim);
+    sdpa_custom_mm_configure_mop<math_fidelity>(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -104,7 +118,7 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
         // Zero Dest
         uint32_t dst_face = dst_offset / 16;
         for (uint32_t i = 0; i < ct_dim * 2; i++) {
-            TTI_MOVB2D(0, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_4, p_movb2d::MOV_8_ROW_BRCST, 0);
+            TTI_MOVB2D(0, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_5, p_movb2d::MOV_8_ROW_BRCST, 0);
         }
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     } else {
@@ -118,12 +132,14 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
     }
 }
 
+template <MathFidelity math_fidelity>
 inline void _llk_math_sdpa_custom_mm_(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
+    const std::uint32_t inner_loops = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
     // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
     _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
 
@@ -131,9 +147,15 @@ inline void _llk_math_sdpa_custom_mm_(
         TTI_MOP(1, 0, 0);
     }
     for (uint32_t i = 0; i < ct_dim - 1; i++) {
+        for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        }
         lltt::replay(ckernel::math::replay_buf_offset, 3);
         TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
         t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
+    }
+    for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+        lltt::replay(ckernel::math::replay_buf_offset, 4);
     }
     lltt::replay(ckernel::math::replay_buf_offset, 3);
     TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);

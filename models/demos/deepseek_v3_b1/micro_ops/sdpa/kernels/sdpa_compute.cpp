@@ -24,6 +24,7 @@ void kernel_main() {
 
     constexpr bool transpose_k = true;
     constexpr bool transpose_v = false;
+    constexpr MathFidelity math_fidelity = MathFidelity::LoFi;
 
     // 8 rows per face, 2 faces per tile
     // constexpr uint32_t max_dst_offset = 8 * 2 * chunk_size;
@@ -43,7 +44,7 @@ void kernel_main() {
 
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
     PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
-    sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    sdpa_custom_mm_block_init<transpose_k, math_fidelity>(cb_q, cb_k, cb_out, chunk_size);
 
     // TODO: Init ahead of time
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
@@ -63,7 +64,8 @@ void kernel_main() {
             transpose_k,
             transpose_v,
             packed_tile_size,
-            exp_approx_mode>(
+            exp_approx_mode,
+            math_fidelity>(
             cb_q,
             cb_k,
             0,  // cb_mask

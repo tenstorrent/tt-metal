@@ -107,6 +107,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
  */
 // clang-format on
+template <MathFidelity math_fidelity = MathFidelity::LoFi>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -123,7 +124,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
     MATH(
-        (llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY>(isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
+        (llk_math_sdpa_custom_mm_reuse_dest_srcb<math_fidelity>(isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
 }
 
 }  // namespace ckernel

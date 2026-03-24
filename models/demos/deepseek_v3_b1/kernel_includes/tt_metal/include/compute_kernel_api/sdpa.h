@@ -236,7 +236,8 @@ template <
     bool transpose_k,
     bool transpose_v,
     uint32_t packed_tile_size,
-    bool exp_approx_mode = false>
+    bool exp_approx_mode = false,
+    MathFidelity math_fidelity = MathFidelity::LoFi>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -251,12 +252,13 @@ void compute_sdpa_chunk(
     bool last_chunk,
     bool mask_chunk) {
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
-    sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    sdpa_custom_mm_block_init_short<transpose_k, math_fidelity>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+    sdpa_custom_mm_block<transpose_k, math_fidelity>(
+        cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)
     PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
@@ -298,7 +300,7 @@ void compute_sdpa_chunk(
 
     // MM (FPU)
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block(
+    sdpa_custom_mm_reuse_dest_srcb_block<math_fidelity>(
         cb_q,
         cb_k,
         0,

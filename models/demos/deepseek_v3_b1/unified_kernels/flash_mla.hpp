@@ -603,12 +603,13 @@ struct FlashMLADecode {
 
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
+            constexpr MathFidelity math_fidelity = MathFidelity::LoFi;
 
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
-            sdpa_custom_mm_block_init_short<transpose_k>(cb_q_in, cb_k_in, cb_out_o, Sk_chunk_t);
+            sdpa_custom_mm_block_init_short<transpose_k, math_fidelity>(cb_q_in, cb_k_in, cb_out_o, Sk_chunk_t);
 
             uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
@@ -675,7 +676,8 @@ struct FlashMLADecode {
                     transpose_k,
                     transpose_v,
                     packed_tile_size,
-                    exp_approx_mode>(
+                    exp_approx_mode,
+                    math_fidelity>(
                     cb_q_in,
                     cb_k_in,
                     cb_mask,
