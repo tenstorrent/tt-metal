@@ -63,7 +63,7 @@ inline __attribute__((always_inline)) void dfb_tile_acker_irq_handler() {
     }
 }
 
-inline __attribute__((interrupt, hot)) void dfb_implicit_sync_handler() {
+inline __attribute__((always_inline)) void dfb_implicit_sync_handler() {
     dfb_tile_poster_irq_handler();
     dfb_tile_acker_irq_handler();
 }

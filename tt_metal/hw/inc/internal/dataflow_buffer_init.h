@@ -27,21 +27,6 @@ extern RemapperAPI g_remapper_configurator;
 
 namespace experimental {
 
-FORCE_INLINE void setup_isr_csrs() {
-#ifndef COMPILE_FOR_TRISC
-    // Setup mtvec
-    uint64_t csr_reg = (uint64_t)dfb_implicit_sync_handler;
-
-    asm volatile("csrw mtvec, %0" : : "r"(csr_reg));
-
-    // Enable ROCC interrupt in mie
-    asm volatile("csrrs zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
-
-    // Enable MIE in mstatus
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
-#endif
-}
-
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
 #ifdef COMPILE_FOR_TRISC
@@ -242,7 +227,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         }
 
         if (enable_implicit_sync) {
-            setup_isr_csrs();
+            enable_dfb_tile_isr();
+        } else {
+            disable_dfb_tile_isr();
         }
     }  // end if (hartid == 0)
 #endif

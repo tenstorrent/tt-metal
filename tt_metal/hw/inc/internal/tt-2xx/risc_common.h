@@ -17,6 +17,7 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "tensix_neo_reg.h"
+#include "api/debug/assert.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -193,6 +194,7 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
 // risc_init function isn't required for TRISCS
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
+#include "internal/tt-2xx/quasar/overlay/dataflow_buffer_isr.h"
 
 inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -201,6 +203,55 @@ inline void risc_init() {
         my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     }
 }
+
+inline __attribute__((interrupt, hot)) void handle_interupt() {
+    uint64_t mcause;
+    asm volatile("csrr %0, mcause" : "=r"(mcause));
+    if ((mcause & 0x8000000000000000) == 0) {  // this is HW exception
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+#if !defined(WATCHER_ENABLED)  // hang anyway
+        while (1) {
+            ;
+        }
+#endif
+    } else {  // otherwise it's DFB sync interrupt
+        experimental::dfb_implicit_sync_handler();
+    }
+}
+
+inline __attribute__((always_inline)) void setup_isr_csrs() {
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interupt);
+    asm volatile("csrw mtvec, %0" : : "r"(isr_address));  // set the interrupt handler
+}
+
+inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
+    // Enable ROCC interrupt in mie
+    uint64_t mie_val;
+    asm volatile("csrr %0, mie" : "=r"(mie_val));
+    mie_val |= (1 << 13);
+    asm volatile("csrrs zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
+
+    // Enable MIE in mstatus
+    uint64_t mstatus_val;
+    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
+    mstatus_val |= (1 << 3);
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
+}
+
+inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
+    // Disable ROCC interrupt in mie
+    uint64_t mie_val;
+    asm volatile("csrr %0, mie" : "=r"(mie_val));
+    mie_val &= ~(1 << 13);
+    asm volatile("csrrc zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
+
+    // Disable MIE in mstatus
+    uint64_t mstatus_val;
+    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
+    mstatus_val &= ~(1 << 3);
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
+}
+
 #endif  // !defined(COMPILE_FOR_TRISC)
 
 // Helper function to wait for a specified number of cycles, safe to call in erisc kernels.

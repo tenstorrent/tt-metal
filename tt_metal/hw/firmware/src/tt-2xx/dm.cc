@@ -86,15 +86,6 @@ void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
 }
 
-inline void handle_interupt() {
-    ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
-#if !defined(WATCHER_ENABLED)  // hang anyway
-    while (1) {
-        ;
-    }
-#endif
-}
-
 void invalidate_trisc_instruction_cache() {
     // invalidate TRISCs
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
@@ -122,8 +113,7 @@ void device_setup() {
     // clock gating
     // NOC setup
     set_deassert_addresses();
-    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interupt);
-    asm volatile("csrw mtvec, %0" : : "r"(isr_address));  // set the interrupt handler
+    setup_isr_csrs();
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
