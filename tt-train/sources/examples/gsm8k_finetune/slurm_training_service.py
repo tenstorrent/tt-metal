@@ -93,9 +93,7 @@ PORT = int(os.environ.get("PORT", 8085))
 def _default_jobs_base_dir() -> str:
     if os.environ.get("JOBS_BASE_DIR"):
         return os.environ["JOBS_BASE_DIR"]
-    data_jobs = Path(
-        f"/data/{os.environ.get('USER', '')}/tt-metal/tt-train/sources/examples/gsm8k_finetune/jobs"
-    )
+    data_jobs = Path(f"/data/{os.environ.get('USER', '')}/tt-metal/tt-train/sources/examples/gsm8k_finetune/jobs")
     if (Path("/data") / os.environ.get("USER", "")).exists():
         return str(data_jobs)
     return str(Path(__file__).parent / "jobs")
@@ -334,9 +332,7 @@ def _obs_log_request():
 @app.after_request
 def _obs_log_response(response):
     req_id = getattr(g, "obs_request_id", "?")
-    elapsed_ms = (
-        time.perf_counter() - getattr(g, "obs_start", time.perf_counter())
-    ) * 1000
+    elapsed_ms = (time.perf_counter() - getattr(g, "obs_start", time.perf_counter())) * 1000
     OBS.info(
         "%s request_id=%s status=%s elapsed_ms=%.1f",
         _obs_tag("RESP"),
@@ -373,9 +369,7 @@ def _obs_log_job_queue(reason: str):
     )
 
 
-def _obs_log_status_transition(
-    dash_id: str, old_status: str, new_status: str, meta: dict
-):
+def _obs_log_status_transition(dash_id: str, old_status: str, new_status: str, meta: dict):
     """Log when a job's status changes."""
     slurm_id = meta.get("slurm_job_id")
     model = meta.get("model", "")
@@ -411,9 +405,7 @@ def _validate_jwt(token: str) -> Optional[dict]:
             return None
         header_b64, payload_b64, sig_b64 = parts
         signing_input = f"{header_b64}.{payload_b64}".encode()
-        expected_sig = hmac.new(
-            JWT_SECRET.encode(), signing_input, hashlib.sha256
-        ).digest()
+        expected_sig = hmac.new(JWT_SECRET.encode(), signing_input, hashlib.sha256).digest()
         actual_sig = _b64_decode(sig_b64)
         if not hmac.compare_digest(expected_sig, actual_sig):
             return None
@@ -440,9 +432,7 @@ def require_auth(f):
                     request.path,
                 )
                 return (
-                    jsonify(
-                        {"error": {"message": "Authorization: Bearer <token> required"}}
-                    ),
+                    jsonify({"error": {"message": "Authorization: Bearer <token> required"}}),
                     401,
                 )
             claims = _validate_jwt(auth[7:])
@@ -454,10 +444,7 @@ def require_auth(f):
                 )
                 return jsonify({"error": {"message": "Invalid or expired token"}}), 401
             # Dashboard sends svc == "tt-dashboard-api"; some implementations use service_id
-            allowed_svc = (
-                claims.get("svc") == "tt-dashboard-api"
-                or claims.get("service_id") == "tt-dashboard-api"
-            )
+            allowed_svc = claims.get("svc") == "tt-dashboard-api" or claims.get("service_id") == "tt-dashboard-api"
             if not allowed_svc:
                 OBS.info(
                     "%s rejected path=%s reason=wrong_service claims_svc=%s",
@@ -466,9 +453,7 @@ def require_auth(f):
                     claims.get("svc") or claims.get("service_id"),
                 )
                 return (
-                    jsonify(
-                        {"error": {"message": "Token not issued for this service"}}
-                    ),
+                    jsonify({"error": {"message": "Token not issued for this service"}}),
                     403,
                 )
             g.org_id = claims.get("org_id", "")
@@ -481,13 +466,7 @@ def require_auth(f):
                     request.path,
                 )
                 return (
-                    jsonify(
-                        {
-                            "error": {
-                                "message": "JWT_SECRET not set and X-TT-Organization header missing"
-                            }
-                        }
-                    ),
+                    jsonify({"error": {"message": "JWT_SECRET not set and X-TT-Organization header missing"}}),
                     401,
                 )
             g.org_id = org_id
@@ -585,11 +564,7 @@ def _build_job_response(dash_id: str, meta: dict) -> dict:
     else:
         # When no slurm_info: prefer live status, then last_known_status (often more
         # accurate than status for completed/cancelled jobs), then status
-        status = (
-            live_status_str
-            if live_status_str
-            else meta.get("last_known_status") or meta.get("status", "queued")
-        )
+        status = live_status_str if live_status_str else meta.get("last_known_status") or meta.get("status", "queued")
         started_at = None
         completed_at = None
         output_dir = meta.get("output_dir", "")
@@ -604,9 +579,7 @@ def _build_job_response(dash_id: str, meta: dict) -> dict:
         "dataset_url": meta.get("dataset_url", ""),
         "optimizer": meta.get("optimizer", "adamw"),
         "training_params": meta.get("training_params", {}),
-        "cluster": meta.get("cluster")
-        or meta.get("compute_size")
-        or meta.get("cluster_size", ""),
+        "cluster": meta.get("cluster") or meta.get("compute_size") or meta.get("cluster_size", ""),
         "estimated_cost_cents": meta.get("estimated_cost_cents"),
         "actual_cost_cents": None,
         "error_message": None,
@@ -692,9 +665,7 @@ def _parse_logs(output_dir: str) -> list:
         path = output_path / logfile
         if not path.exists():
             # Fallback: SLURM writes to slurm_<jobid>.out / slurm_<jobid>.err
-            candidates = sorted(
-                output_path.glob("slurm_*.out" if "out" in logfile else "slurm_*.err")
-            )
+            candidates = sorted(output_path.glob("slurm_*.out" if "out" in logfile else "slurm_*.err"))
             path = candidates[-1] if candidates else None
         if path and path.exists():
             for line in path.read_text(errors="replace").splitlines()[-200:]:
@@ -782,9 +753,7 @@ def list_jobs():
         resp.pop("_output_dir", None)
         jobs.append(resp)
     _obs_log_job_queue("list_jobs")
-    OBS.info(
-        "%s org_id=%s count=%d", _obs_tag("LIST"), _truncate(org_id, 12), len(jobs)
-    )
+    OBS.info("%s org_id=%s count=%d", _obs_tag("LIST"), _truncate(org_id, 12), len(jobs))
     return jsonify({"jobs": jobs})
 
 
@@ -800,52 +769,62 @@ def catalog():
     """Return valid model, dataset, cluster values and supported flags for UI (no auth).
     Dashboard should use `supported` to enable/disable options or show 'coming soon'.
     """
-    return jsonify(
-        {
-            "supported": {
-                "trainers": list(SUPPORTED_TRAINERS),
-                "optimizers": list(SUPPORTED_OPTIMIZERS),
+    log.info("=== CATALOG REQUEST ===")
+    log.info("Fetching available models, datasets, trainers, optimizers, and clusters")
+
+    catalog_data = {
+        "supported": {
+            "trainers": list(SUPPORTED_TRAINERS),
+            "optimizers": list(SUPPORTED_OPTIMIZERS),
+        },
+        "models": [
+            {
+                "id": "tinyllama-1.1b",
+                "display_name": "TinyLlama 1.1B",
+                "model_config": "model_configs/tinyllama.yaml",
+                "supported": True,
             },
-            "models": [
-                {
-                    "id": "tinyllama-1.1b",
-                    "display_name": "TinyLlama 1.1B",
-                    "model_config": "model_configs/tinyllama.yaml",
-                    "supported": True,
-                },
-                {
-                    "id": "gpt2",
-                    "display_name": "GPT-2",
-                    "model_config": "model_configs/gpt2s.yaml",
-                    "supported": True,
-                },
-                {
-                    "id": "llama-3.1-8b",
-                    "display_name": "Llama 3.1 8B",
-                    "model_config": "model_configs/llama8b.yaml",
-                    "supported": False,
-                },
-            ],
-            "datasets": [
-                {"id": "gsm8k", "display_name": "GSM8K", "supported": True},
-                {"id": "math_qa", "display_name": "Math QA", "supported": True},
-                {"id": "aqua_rat", "display_name": "AQuA-RAT", "supported": True},
-                {"id": "svamp", "display_name": "SVAMP", "supported": True},
-                {"id": "mawps", "display_name": "MAWPS", "supported": True},
-            ],
-            "trainers": [
-                {"id": "sft", "display_name": "SFT", "supported": True},
-                {"id": "lora", "display_name": "LoRA", "supported": False},
-                {"id": "grpo", "display_name": "GRPO", "supported": False},
-            ],
-            "optimizers": [
-                {"id": "adamw", "display_name": "AdamW", "supported": True},
-                {"id": "sgd", "display_name": "SGD", "supported": False},
-                {"id": "muon", "display_name": "Muon", "supported": False},
-            ],
-            "clusters": [_get_cluster_info(c) for c in CLUSTER_TO_PARTITIONS],
-        }
-    )
+            {
+                "id": "gpt2",
+                "display_name": "GPT-2",
+                "model_config": "model_configs/gpt2s.yaml",
+                "supported": True,
+            },
+            {
+                "id": "llama-3.1-8b",
+                "display_name": "Llama 3.1 8B",
+                "model_config": "model_configs/llama8b.yaml",
+                "supported": False,
+            },
+        ],
+        "datasets": [
+            {"id": "gsm8k", "display_name": "GSM8K", "supported": True},
+            {"id": "math_qa", "display_name": "Math QA", "supported": True},
+            {"id": "aqua_rat", "display_name": "AQuA-RAT", "supported": True},
+            {"id": "svamp", "display_name": "SVAMP", "supported": True},
+            {"id": "mawps", "display_name": "MAWPS", "supported": True},
+        ],
+        "trainers": [
+            {"id": "sft", "display_name": "SFT", "supported": True},
+            {"id": "lora", "display_name": "LoRA", "supported": False},
+            {"id": "grpo", "display_name": "GRPO", "supported": False},
+        ],
+        "optimizers": [
+            {"id": "adamw", "display_name": "AdamW", "supported": True},
+            {"id": "sgd", "display_name": "SGD", "supported": False},
+            {"id": "muon", "display_name": "Muon", "supported": False},
+        ],
+        "clusters": [_get_cluster_info(c) for c in CLUSTER_TO_PARTITIONS],
+    }
+
+    log.info("=== CATALOG RESPONSE ===")
+    log.info("Available models: %s", [m["id"] for m in catalog_data["models"]])
+    log.info("Supported trainers: %s", [t["id"] for t in catalog_data["trainers"] if t["supported"]])
+    log.info("Supported optimizers: %s", [o["id"] for o in catalog_data["optimizers"] if o["supported"]])
+    log.info("Available clusters: %s", [c["id"] for c in catalog_data["clusters"]])
+    log.info("Full catalog: %s", json.dumps(catalog_data, indent=2))
+
+    return jsonify(catalog_data)
 
 
 @app.post("/v1/jobs")
@@ -854,28 +833,23 @@ def create_job():
     org_id = g.org_id
     body = request.get_json(force=True)
 
+    # Log the raw request from frontend
+    log.info("=== RECEIVED TRAINING JOB REQUEST ===")
+    log.info("Request body: %s", json.dumps(body, indent=2))
+    log.info("Organization ID: %s", org_id)
+
     model = body.get("model", "")
     dataset_url = body.get("dataset_url", "")
-    cluster = (
-        body.get("cluster") or body.get("compute_size") or body.get("cluster_size", "")
-    )
+    cluster = body.get("cluster") or body.get("compute_size") or body.get("cluster_size", "")
     if not model or not dataset_url or not cluster:
-        OBS.info(
-            "%s validation_failed missing=model|dataset_url|cluster", _obs_tag("CREATE")
-        )
+        OBS.info("%s validation_failed missing=model|dataset_url|cluster", _obs_tag("CREATE"))
         return (
-            jsonify(
-                {"error": {"message": "model, dataset_url, and cluster are required"}}
-            ),
+            jsonify({"error": {"message": "model, dataset_url, and cluster are required"}}),
             400,
         )
 
     raw_params = body.get("training_params") or {}
-    if (
-        not isinstance(raw_params, dict)
-        or "type" not in raw_params
-        or "params" not in raw_params
-    ):
+    if not isinstance(raw_params, dict) or "type" not in raw_params or "params" not in raw_params:
         return (
             jsonify(
                 {
@@ -890,11 +864,7 @@ def create_job():
     trainer = raw_params["type"]
 
     raw_optimizer = body.get("optimizer_params")
-    if (
-        not isinstance(raw_optimizer, dict)
-        or "type" not in raw_optimizer
-        or "params" not in raw_optimizer
-    ):
+    if not isinstance(raw_optimizer, dict) or "type" not in raw_optimizer or "params" not in raw_optimizer:
         return (
             jsonify(
                 {
@@ -958,7 +928,18 @@ def create_job():
     if "max_steps" not in training_params and "epochs" in training_params:
         training_params["max_steps"] = training_params["epochs"] * 20
 
+    # Log parsed parameters
+    log.info("=== PARSED PARAMETERS ===")
+    log.info("Model: %s -> config: %s", model, model_config)
+    log.info("Dataset URL: %s", dataset_url)
+    log.info("Trainer: %s", trainer)
+    log.info("Optimizer: %s", optimizer)
+    log.info("Cluster requested: %s", cluster)
+    log.info("Training params: %s", json.dumps(training_params, indent=2))
+
     partition = _resolve_partition(cluster)
+    log.info("=== CLUSTER RESOLUTION ===")
+    log.info("Cluster '%s' resolved to partition: %s", cluster, partition)
     batch_size = training_params.get("batch_size", 8)
     if "lb" not in partition.lower() and batch_size % 32 != 0:
         return (
@@ -987,8 +968,7 @@ def create_job():
     sched = training_params.get("scheduler_config") or {}
     slurm_config = {
         "batch_size": training_params.get("batch_size", 8),
-        "max_steps": training_params.get("max_steps")
-        or training_params.get("epochs", 3) * 20,
+        "max_steps": training_params.get("max_steps") or training_params.get("epochs", 3) * 20,
         "max_lr": sched.get("max_lr", 1e-4),
         "min_lr": sched.get("min_lr", 3e-5),
         "eval_every": training_params.get("eval_every", 20),
@@ -1005,12 +985,22 @@ def create_job():
     # Pass dataset for training script (HF name or s3:// URL)
     slurm_config["dataset"] = dataset_url
 
-    job_name = (
-        f"tt_{model.replace('-', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    )
-    OBS.info(
-        "%s slurm_config=%s job_name=%s", _obs_tag("CREATE"), slurm_config, job_name
-    )
+    job_name = f"tt_{model.replace('-', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    # Log the final SLURM configuration that would be submitted
+    log.info("=== SLURM JOB CONFIGURATION ===")
+    log.info("Job name: %s", job_name)
+    log.info("Partition: %s", partition)
+    log.info("Nodes: %d", 1)
+    log.info("SLURM config: %s", json.dumps(slurm_config, indent=2))
+    OBS.info("%s slurm_config=%s job_name=%s", _obs_tag("CREATE"), slurm_config, job_name)
+
+    log.info("=== SUBMITTING TO SLURM ===")
+    log.info("Attempting sbatch submission with:")
+    log.info("  - Config: %s", slurm_config)
+    log.info("  - Partition: %s", partition)
+    log.info("  - Nodes: %d", 1)
+    log.info("  - Job name: %s", job_name)
 
     success, msg, slurm_info = manager.submit_job(
         config=slurm_config,
@@ -1019,12 +1009,23 @@ def create_job():
         job_name=job_name,
     )
 
+    log.info("=== SLURM SUBMISSION RESULT ===")
+    log.info("Success: %s", success)
+    log.info("Message: %s", msg)
+    if slurm_info:
+        log.info("SLURM job ID: %s", slurm_info.job_id)
+        log.info("Output directory: %s", slurm_info.output_dir)
+    else:
+        log.info("No SLURM info returned (submission likely failed)")
+
     # If primary partition failed (node config not available, etc.), try fallback
     if not success and partition != DEFAULT_PARTITION:
         fallback = PARTITION_FALLBACK.get(partition)
         if not fallback and "lb" not in partition.lower():
             fallback = DEFAULT_PARTITION  # try LoudBox as universal fallback
         if fallback and fallback != partition:
+            log.info("=== TRYING FALLBACK PARTITION ===")
+            log.info("Primary partition '%s' failed, trying fallback: %s", partition, fallback)
             OBS.info(
                 "%s retry_fallback partition=%s fallback=%s",
                 _obs_tag("CREATE"),
@@ -1037,11 +1038,21 @@ def create_job():
                 nodes=1,
                 job_name=job_name,
             )
+            log.info("=== FALLBACK SUBMISSION RESULT ===")
+            log.info("Success: %s", success)
+            log.info("Message: %s", msg)
             if success:
                 partition = fallback
+                log.info("Using fallback partition: %s", partition)
+            else:
+                log.info("Fallback partition also failed")
 
     dash_id = str(uuid.uuid4())
     now = _rfc3339_utc()
+
+    log.info("=== CREATING DASHBOARD JOB RECORD ===")
+    log.info("Dashboard job ID: %s", dash_id)
+    log.info("Timestamp: %s", now)
 
     if not success:
         OBS.info(
@@ -1095,15 +1106,19 @@ def create_job():
             slurm_info.job_id,
             slurm_info.output_dir,
         )
-        log.info(
-            "Submitted SLURM job %s for dashboard job %s", slurm_info.job_id, dash_id
-        )
+        log.info("Submitted SLURM job %s for dashboard job %s", slurm_info.job_id, dash_id)
         _state[dash_id] = meta
         _save_state(_state)
         _obs_log_job_queue("create_job")
 
     resp = _build_job_response(dash_id, meta)
     resp.pop("_output_dir", None)
+
+    log.info("=== FINAL RESPONSE TO DASHBOARD ===")
+    log.info("HTTP Status: 201")
+    log.info("Response body: %s", json.dumps(resp, indent=2))
+    log.info("==========================================")
+
     return jsonify(resp), 201
 
 
@@ -1116,9 +1131,7 @@ def get_job(dash_id):
         return jsonify({"error": {"message": "job not found"}}), 404
     resp = _build_job_response(dash_id, meta)
     resp.pop("_output_dir", None)
-    OBS.info(
-        "%s dash_id=%s status=%s", _obs_tag("GET"), dash_id[:8], resp.get("status")
-    )
+    OBS.info("%s dash_id=%s status=%s", _obs_tag("GET"), dash_id[:8], resp.get("status"))
     return jsonify(resp)
 
 
@@ -1201,9 +1214,7 @@ def get_checkpoints(dash_id):
 
     output_dir = _resolve_output_dir(meta)
     checkpoints = _parse_checkpoints(output_dir) if output_dir else []
-    OBS.info(
-        "%s dash_id=%s count=%d", _obs_tag("CHECKPOINTS"), dash_id[:8], len(checkpoints)
-    )
+    OBS.info("%s dash_id=%s count=%d", _obs_tag("CHECKPOINTS"), dash_id[:8], len(checkpoints))
     return jsonify(checkpoints)
 
 
@@ -1226,15 +1237,11 @@ def _resolve_output_dir(meta: dict) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    log.info(
-        "Observability enabled — filter logs with: grep OBS (request_id, QUEUE, STATUS, CREATE, etc.)"
-    )
+    log.info("Observability enabled — filter logs with: grep OBS (request_id, QUEUE, STATUS, CREATE, etc.)")
     if JWT_SECRET:
         log.info("JWT auth enabled")
     else:
-        log.warning(
-            "JWT_SECRET not set — auth disabled, using X-TT-Organization header"
-        )
+        log.warning("JWT_SECRET not set — auth disabled, using X-TT-Organization header")
 
     log.info(
         "Available SLURM partitions: %s",
