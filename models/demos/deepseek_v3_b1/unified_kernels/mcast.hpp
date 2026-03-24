@@ -9,6 +9,8 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
+#include "api/debug/dprint.h"
+
 namespace deepseek_b1_ops {
 
 // ============================================================================
@@ -98,16 +100,46 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t num_packets = (len_bytes > NOC_MAX_BURST_SIZE)
+                                   ? (len_bytes / NOC_MAX_BURST_SIZE + ((len_bytes % NOC_MAX_BURST_SIZE) ? 1 : 0))
+                                   : 1;
         if constexpr (posted) {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, num_packets);
         } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, num_packets);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests * num_packets);
+        }
+    }
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        uint32_t num_pkts = (len_bytes > NOC_MAX_BURST_SIZE)
+                                ? (len_bytes / NOC_MAX_BURST_SIZE + ((len_bytes % NOC_MAX_BURST_SIZE) ? 1 : 0))
+                                : 1;
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += num_pkts;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += num_pkts;
+            noc_nonposted_writes_acked[noc] += num_dests * num_pkts;
+        }
+    }
+
+    if constexpr (set_size && set_addresses) {
+        if (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                while (!noc_cmd_buf_ready(noc, cmd_buf));
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+                src_local_addr += NOC_MAX_BURST_SIZE;
+                dst_local_addr += NOC_MAX_BURST_SIZE;
+                len_bytes -= NOC_MAX_BURST_SIZE;
+            }
         }
     }
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-
     if constexpr (set_size) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     }
@@ -116,15 +148,6 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += 1;
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += num_dests;
-        }
-    }
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>
@@ -319,6 +342,47 @@ struct Mcast {
         }
 
         // ====================================================================
+        // restore_noc_state - Re-apply persistent cmd_buf register config
+        // Call this if anything between iterations clobbers write_cmd_buf
+        // (e.g. noc_write_init_state<write_cmd_buf> in deferred socket send).
+        // Only restores NOC_CTRL / coordinates; does NOT send semaphores.
+        // ====================================================================
+        void restore_noc_state([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (IsSenderCore) {
+                uint64_t mcast_flag_noc_addr = get_noc_multicast_addr<noc_index>(
+                    args.dest_noc_start_x,
+                    args.dest_noc_start_y,
+                    args.dest_noc_end_x,
+                    args.dest_noc_end_y,
+                    (uint64_t)(args.data_receiver_semaphore_addr));
+                mcast_send_set_state<
+                    CTArgsT::mcast_num_cores,
+                    CTArgsT::loopback,
+                    CTArgsT::is_part_of_receiver_grid,
+                    linked,
+                    posted,
+                    true,
+                    false,
+                    false,
+                    write_cmd_buf>(0, mcast_flag_noc_addr, 0);
+                if constexpr (!mcast_is_shared_write_cmd_buf) {
+                    mcast_send_set_state<
+                        CTArgsT::mcast_num_cores,
+                        CTArgsT::loopback,
+                        CTArgsT::is_part_of_receiver_grid,
+                        linked,
+                        posted,
+                        true,
+                        true,
+                        true,
+                        write_reg_cmd_buf>(args.data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
+                }
+            }
+#endif
+        }
+
+        // ====================================================================
         // operator() - Send data via mcast (BRISC sender) / Full receive logic (NCRISC receiver)
         // For BRISC: Must call init() first, waits for src CB, sends data
         // For NCRISC: Reserve CB, wait for semaphore, push CB (complete receive)
@@ -346,10 +410,7 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
-
-                // Send data with state
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -370,8 +431,6 @@ struct Mcast {
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
 
                 noc_async_posted_writes_flushed();
-
-                // Pop the source CB after sending
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
@@ -383,12 +442,9 @@ struct Mcast {
             if constexpr (IsReceiverCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
-                // Reserve space in destination CB before mcast writes to it
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
-
-                // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =

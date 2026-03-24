@@ -23,6 +23,7 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -111,6 +112,7 @@ struct RMSNorm {
             } else {
                 cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);
             }
+            DPRINT << "g" << ENDL();
 
             compute_rmsnorm(args);
 #endif
@@ -119,18 +121,18 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
+            reconfig_data_format<true, true>(CTArgs::input_cb, CTArgs::input_cb);
             pack_reconfig_data_format<true>(CTArgs::output_cb);
             {
-                // Square the input
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
-                add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
+                DPRINT << "i" << ENDL();
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
             }
             {
+                add_rsqrt_tile_init();
                 add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
             }
             {
@@ -144,6 +146,7 @@ struct RMSNorm {
             {
                 // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
+                DPRINT << "o" << ENDL();
                 binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);

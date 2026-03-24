@@ -129,7 +129,8 @@ struct DRAMStreamingMatmul {
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
         bool PopIndex = false,
-        bool WaitForOutput = false>
+        bool WaitForOutput = false,
+        uint32_t NumBuffers = 3>
     class Op {
     public:
         void operator()() {
@@ -191,9 +192,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Triple-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3;
-            constexpr uint32_t extra_blocks_in_flight = 1;
+            constexpr uint32_t num_buffers = NumBuffers;
+            static_assert(num_buffers >= 2, "Need at least double buffering");
+            constexpr uint32_t extra_blocks_in_flight = (num_buffers >= 3) ? 1 : 0;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
@@ -277,7 +278,6 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
-
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
@@ -287,6 +287,7 @@ struct DRAMStreamingMatmul {
                     // Per-tile pipelining with SFPU overlap
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         tile_regs_acquire();
+                        custom_mm_block_zero_dest();
 
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
@@ -331,6 +332,7 @@ struct DRAMStreamingMatmul {
                 } else {
                     // Batch processing
                     tile_regs_acquire();
+                    custom_mm_block_zero_dest();
 
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         // Intermediate subblocks: finalize=false (partial accumulation)
@@ -360,7 +362,7 @@ struct DRAMStreamingMatmul {
                     }
                     tile_regs_release();
                 }
-
+                DPRINT << "TRISC dram streaming matmul push output cb" << ENDL();
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
             custom_mm_block_uninit<dense_packing>();
@@ -372,6 +374,7 @@ struct DRAMStreamingMatmul {
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);
             }
+            DPRINT << "TRISC dram streaming matmul pop in0 done" << ENDL();
 #endif
         }
     };  // class Op

@@ -247,6 +247,8 @@ ALWI void custom_mm_block_math(
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
  */
 // clang-format on
+ALWI void custom_mm_block_zero_dest() { MATH((llk_math_custom_mm_zero_dest())); }
+
 template <bool dense_packing = false>
 ALWI void custom_mm_block_uninit() {
     if constexpr (dense_packing) {
