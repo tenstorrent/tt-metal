@@ -167,6 +167,48 @@ run_cluster_validation() {
     fi
 }
 
+# Function to run reset on hosts and return hosts that failed reset
+# Args: host_list (comma-separated), output_file, message_prefix
+run_board_reset() {
+    local host_list="$1"
+    local output_file="$2"
+    local msg_prefix="$3"
+
+    # Convert host list to array
+    IFS=',' read -ra host_array <<< "$host_list"
+
+    # Run reset
+    mpirun --host "$host_list" \
+        --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+        --tag-output \
+        bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+
+    # Parse and display results, collect failures
+    local rank=0
+    local failed_hosts=()
+    while IFS= read -r line; do
+        if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
+            local job_id="${BASH_REMATCH[1]}"
+            local mpi_rank="${BASH_REMATCH[2]}"
+            local exit_code="${BASH_REMATCH[3]}"
+            local hostname="${host_array[$rank]}"
+            if [[ $exit_code -eq 0 ]]; then
+                echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
+            else
+                echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                failed_hosts+=("$hostname")
+            fi
+            ((rank++))
+        fi
+    done < "$output_file"
+    rm -f "$output_file"
+
+    # Return comma-separated list of failed hosts (to stdout only)
+    local IFS=','
+    echo "${failed_hosts[*]}"
+}
+
+
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
 if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
@@ -195,8 +237,22 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
-        echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+        echo "Running tt-smi -glx_reset (this may take a few minutes)..."
+
+        # Run initial reset and capture failures
+        RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
+        FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
+
+        # Retry only failed hosts if any
+        if [[ -n "$FAILED_HOSTS_STR" ]]; then
+            echo ""
+            echo "Retrying reset for failed hosts: $FAILED_HOSTS_STR"
+
+            RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
+
+            # Run retry (discard return value)
+            run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+        fi
 
         sleep 5
 
