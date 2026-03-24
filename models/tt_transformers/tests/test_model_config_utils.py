@@ -4,10 +4,7 @@
 
 import pytest
 
-from models.tt_transformers.tt.model_config import (
-    compute_padded_vocab_size,
-    should_pad_sampling_logits_to_power_of_2,
-)
+from models.tt_transformers.tt.model_config import compute_padded_vocab_size, should_pad_sampling_logits_to_power_of_2
 
 
 @pytest.mark.parametrize(
