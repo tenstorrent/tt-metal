@@ -644,10 +644,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
         {target_node, std::make_optional(it->second)}};
     it->second.erase(global_node);
-    if (!validate(&saved_state)) {
-        return false;
-    }
-    return true;
+    return validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
