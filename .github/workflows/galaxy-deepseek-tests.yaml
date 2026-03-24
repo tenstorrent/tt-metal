@@ -71,14 +71,14 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      tracy: ${{ inputs.enable-tracy || false }}
+      tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
 
   # ── T3K fast gate ──────────────────────────────────────────────────────
   # Runs the x migrated module tests on T3K (~30-40s). x = # of migrated tests
   # These tests use a 1x8 submesh
   t3k-deepseek-gate:
     needs: build-artifact
-    if: ${{ contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule != '30 3 * * *') && contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
     name: (T3K) DeepSeek module gate
     runs-on:
       - arch-wormhole_b0
@@ -124,7 +124,6 @@ jobs:
           pytest models/demos/deepseek_v3/tests/t3k_compat --timeout 120 --durations=0
 
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
-      tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
@@ -137,14 +136,13 @@ jobs:
       test-type: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && 'final-op-unit') || inputs.test-type || 'all' }}
       recreate_weights_cache: ${{ inputs.recreate_weights_cache || 'No' }}
       new_cache_dir: ${{ inputs.new_cache_dir || '' }}
-<<<<<<< HEAD
-      enable-tracy: ${{ inputs.enable-tracy || false }}
+      enable-tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
 
   # ── Galaxy confirmation (gated behind T3K) ─────────────────────────────
   # Re-runs the same x migrated tests on Galaxy after T3K gate passes.
   Galaxy-DeepSeek-confirmation:
     needs: [build-artifact, t3k-deepseek-gate]
-    if: ${{ contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule != '30 3 * * *') && contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
     name: (Galaxy) DeepSeek module confirmation
     runs-on:
       - arch-wormhole_b0
@@ -189,6 +187,3 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/t3k_compat --timeout 120 --durations=0
-=======
-      enable-tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
->>>>>>> fce1292e3ea (daily perf run)
