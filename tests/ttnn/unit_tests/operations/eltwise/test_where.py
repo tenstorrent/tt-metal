@@ -900,3 +900,176 @@ def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true
         assert_with_pcc(result, golden)
     else:
         assert torch_equal_nan(result, golden)
+
+
+# Tests for INT32/UINT32 predicate with sub_core_grids — exercises the typecast path
+# (INT32/UINT32 predicate is internally typecast to float before the where kernel runs).
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 7, 32, 96]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "scalar_true, scalar_false",
+    [
+        (15.5, 31.2),
+        (0.0, -11.33),
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_where_tss_int32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
+    """TSS variant: INT32 predicate, float scalars, sub_core_grids.
+
+    Exercises the internal typecast path where the INT32 predicate is cast to
+    float before the ternary where kernel, with a sub_core_grid restriction.
+    """
+    torch.manual_seed(0)
+
+    C = make_condition_tensor(shape, torch.int32, condition)
+    golden = torch.where(C.bool(), scalar_true, scalar_false)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, scalar_true, scalar_false, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 7, 32, 96]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "scalar_true, scalar_false",
+    [
+        (15.5, 31.2),
+        (0.0, -11.33),
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_where_tss_uint32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
+    """TSS variant: UINT32 predicate, float scalars, sub_core_grids.
+
+    Exercises the internal typecast path where the UINT32 predicate is cast to
+    float before the ternary where kernel, with a sub_core_grid restriction.
+    """
+    torch.manual_seed(0)
+
+    C = make_condition_tensor(shape, torch.int32, condition).abs()
+    golden = torch.where(C.bool(), scalar_true, scalar_false)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, scalar_true, scalar_false, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            torch.Size([1, 2, 32, 960]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 7, 32, 96]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            torch.Size([1, 1, 32, 128]),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_where_ttt_int32_predicate_sub_core_grid(device, shape, sub_core_grid, condition):
+    """TTT variant: INT32 predicate, float tensors, sub_core_grids.
+
+    Exercises the internal typecast path where the INT32 predicate is cast to
+    float before the ternary where kernel in the tensor-tensor-tensor variant,
+    with a sub_core_grid restriction.
+    """
+    torch.manual_seed(0)
+
+    C = make_condition_tensor(shape, torch.int32, condition)
+    T = torch.randn(shape, dtype=torch.float32)
+    F = torch.ones(shape, dtype=torch.float32) * 10.0
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)
