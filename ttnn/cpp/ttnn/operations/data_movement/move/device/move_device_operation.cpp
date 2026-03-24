@@ -134,6 +134,6 @@ ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
             .output_mem_config = output_mem_config,
             .move_op_parallelization_strategy = move_op_parallelization_strategy,
             .backwards = backwards},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .output_tensor = output_tensor});
+        OperationType::tensor_args_t{.output_tensor = output_tensor, .input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim

@@ -19,9 +19,11 @@ struct MoveOperationAttributes {
 };
 
 // Tensor arguments - tensor parameters
+// Note: output_tensor is listed first so that device_operation framework can get
+// the device from it (input_tensor may be deallocated and have no device).
 struct MoveTensorArgs {
-    Tensor input_tensor;
     Tensor output_tensor;
+    Tensor input_tensor;
 };
 
 // Return types
