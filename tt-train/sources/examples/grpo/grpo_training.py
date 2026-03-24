@@ -58,7 +58,6 @@ def iter_batched_completions(
 
 
 def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
-    print(f"iter_micro_batch, {len(completions)=}")
     for start in range(0, len(completions), micro_batch_size):
         end = min(start + micro_batch_size, len(completions))
 
@@ -90,8 +89,37 @@ def compute_rewards_advantages(ctx: InferenceCtx, answers: List[float], completi
     return rewards_np, advantages_np
 
 
+def compute_grpo_loss(
+    nlog_probs_old: ttml.autograd.Tensor,
+    nlog_probs_new: ttml.autograd.Tensor,
+    mask: ttml.autograd.Tensor,
+    adv_tt: ttml.autograd.Tensor,
+    B: int,
+    Tp: int,
+    completions_batch_len: int,
+) -> Tuple[ttml.autograd.Tensor, list]:
+    ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
+    eps = 0.2
+    clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
+
+    surr1 = ratio * adv_tt
+    surr2 = clipped_ratio * adv_tt
+    surr = Min.apply(surr1, surr2)
+
+    mask_np = mask.to_numpy()
+    tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
+    weight_np = (mask_np / tokens_per_completion).astype(np.float32)
+    weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
+
+    weighted_surr = surr * weight_tt
+    weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
+    loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
+
+    return loss
+
+
 def train_grpo():
-    start_time = time.perf_counter()
+    start_training = time.perf_counter()
     ctx = setup(
         yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
@@ -102,113 +130,70 @@ def train_grpo():
     prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=42)
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
 
-    prompts_to_train = 1536
+    prompts_to_train = 32
     prompts, answers = prompts[:prompts_to_train], answers[:prompts_to_train]
 
     base_lr = 1e-6
     warmup_steps = 20
-    step = 0
+    batch = 0
     micro_batch_size = 16
+    num_mini_epochs = 2
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
         ctx, prompts, answers, batch_size=4
     ):
-        step += 1
-        warmup_factor = min(1.0, step / warmup_steps)
+        start_batch = time.perf_counter()
+        batch += 1
+        warmup_factor = min(1.0, batch / warmup_steps)
         ctx.optimizer.set_lr(base_lr * warmup_factor)
-        step_start = time.perf_counter()
-
-        all_rewards = []
         ctx.optimizer.zero_grad()
-        num_micro_batches = ceil(len(completions_batch) / micro_batch_size)
-        for p, ans, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size):
-            mb_start = time.perf_counter()
-            B = len(c)
 
-            r_np, adv_np = compute_rewards_advantages(ctx, ans, c)
-            nonzero_adv = np.count_nonzero(adv_np)
-            print(
-                f"microbatch:  adv: nonzero={nonzero_adv}/{len(adv_np)}, min={adv_np.min():.4f}, max={adv_np.max():.4f}"
-            )
-            all_rewards.append(r_np)
+        rewards_np, advantages_np = compute_rewards_advantages(ctx, answers_batch, completions_batch)
 
-            adv_tt = ttml.autograd.Tensor.from_numpy(
-                adv_np.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
-            )
-            adv_tt.set_requires_grad(False)
+        # Cache old log probs once
+        probs_old_list = []
+        ctx.tt_model.eval()
+        with no_grad():
+            for p, _, c in iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size):
+                nlog_old, mask, Tp = compute_nlog_probs(ctx, p, c)
+                nlog_old.set_requires_grad(False)
+                mask.set_requires_grad(False)
+                probs_old_list.append((nlog_old, mask, Tp))
 
-            ctx.tt_model.eval()
-            with no_grad():
-                nlog_probs_old, mask, Tp, intermediates_old = compute_nlog_probs(ctx, p, c)
-            deallocate_tensors(intermediates_old)
-
+        # --- Mini epoch loop ---
+        for mini_epoch in range(num_mini_epochs):
+            ctx.optimizer.zero_grad()
             ctx.tt_model.train()
-            nlog_probs_new, mask_new, _, intermediates_new = compute_nlog_probs(ctx, p, c)
 
-            ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
-            eps = 0.2
-            clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
+            for i, (p, ans, c) in enumerate(
+                iter_micro_batch(prompts_batch, answers_batch, completions_batch, micro_batch_size),
+            ):
+                B = len(c)
+                adv_slice = advantages_np[i * micro_batch_size : i * micro_batch_size + B]
 
-            surr1 = ratio * adv_tt
-            surr2 = clipped_ratio * adv_tt
+                adv_tt = ttml.autograd.Tensor.from_numpy(
+                    adv_slice.reshape((B, 1)), ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
+                )
+                adv_tt.set_requires_grad(False)
 
-            surr = Min.apply(surr1, surr2)
+                nlog_old, mask_old, Tp = probs_old_list[i]
+                nlog_probs_new, mask_new, _ = compute_nlog_probs(ctx, p, c)
 
-            # After masked_surr = surr * mask [B, Tp]
-            # Build per-token weight that incorporates 1/|o| normalization
-            # mask is constant (no grad needed), so we can go to numpy
-            mask_np = mask.to_numpy()  # [B, Tp]
-            tokens_per_completion = mask_np.sum(axis=1, keepdims=True)  # [B, 1]
-            tokens_per_completion = np.maximum(tokens_per_completion, 1.0)  # avoid div-by-zero
+                loss = compute_grpo_loss(nlog_old, nlog_probs_new, mask_old, adv_tt, B, Tp, len(prompts_batch))
+                loss.backward(retain_graph=False)
 
-            # weight[b,t] = mask[b,t] / |o_b|
-            # When we sum(surr * weight) over all elements, we get:
-            #   sum_b [ (1/|o_b|) * sum_t surr[b,t]*mask[b,t] ]
-            # Then divide by B (num completions) for the outer average.
-            weight_np = (mask_np / tokens_per_completion).astype(np.float32)
+                deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
-            weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16)
+            ctx.optimizer.step()
 
-            # surr * weight_tt gives per-token values already normalized by 1/|o|
-            # ttml.ops.unary.mean gives sum_all / (B * Tp)
-            # We need sum_all / B, so multiply by Tp to compensate
-            # where B = len(c)
+        # Deallocate cached old log probs after all mini epochs are done
+        for nlog_old, mask_old, _ in probs_old_list:
+            deallocate_tensors([nlog_old, mask_old])
 
-            weighted_surr = surr * weight_tt
-            weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B, Tp])
-            loss = ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / num_micro_batches)
+        print(f"reward_mean={rewards_np.mean():.4f}, reward_std={rewards_np.std():.4f}")
+        print(f"batch={batch} done! elapsed={time.perf_counter() - start_batch:.2f} s")
 
-            loss.backward(retain_graph=False)
-            mb_elapsed = time.perf_counter() - mb_start
-            print(f"microbatch done! elapsed={mb_elapsed:.2f}s")
-
-            deallocate_tensors(
-                [
-                    nlog_probs_old,
-                    nlog_probs_new,
-                    mask,
-                    mask_new,
-                    adv_tt,
-                    ratio,
-                    clipped_ratio,
-                    surr1,
-                    surr2,
-                    surr,
-                    weight_tt,
-                    weighted_surr,
-                    weighted_surr_4d,
-                    loss,
-                    *intermediates_new,
-                ]
-            )
-
-        ctx.optimizer.step()
-        step_elapsed = time.perf_counter() - step_start
-        all_rewards_np = np.concatenate(all_rewards)
-        print(f"reward_mean={all_rewards_np.mean():.4f}, reward_std={all_rewards_np.std():.4f}")
-        print(f"step={step} done! elapsed={step_elapsed:.2f}s")
-
-    print(f"training process done! {time.perf_counter() - start_time} s")
+    print(f"training process done! {time.perf_counter() - start_training} s")
 
 
 if __name__ == "__main__":
