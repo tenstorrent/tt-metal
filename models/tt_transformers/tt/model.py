@@ -9,6 +9,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
@@ -71,6 +72,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            partial_rotary_factor=args.partial_rotary_factor,
             use_qk_fused=args.use_qk_fused,
             prefetcher=prefetcher,
         )
@@ -82,6 +84,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                args.partial_rotary_factor,
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
             )
@@ -105,11 +108,11 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
-                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", None),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
