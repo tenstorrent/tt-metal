@@ -105,6 +105,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "structured-output": true,
               "sampling-tests": true,
+              # Workaround for https://github.com/tenstorrent/tt-metal/issues/40605
               "sampling-test-filter": "not test_min_tokens and not test_bad_words and not test_mixed_params_batch",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
