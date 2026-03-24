@@ -71,7 +71,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, g, send_from_directory
 from ttml.common.utils import get_tt_metal_runtime_root
-from .training_types import get_training_type, get_supported_trainers
+from .training_types import get_training_type, get_supported_trainers, get_supported_models, TRAINING_TYPES
 from job_manager import JobManager, JobStatus, PARTITION_DEVICE_MAPPING
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -771,31 +771,75 @@ def catalog():
     log.info("=== CATALOG REQUEST ===")
     log.info("Fetching available models, datasets, trainers, optimizers, and clusters")
 
+    # Generate models dynamically from training registry
+    all_models = get_supported_models()
+    model_display_names = {
+        "tinyllama-1.1b": "TinyLlama 1.1B",
+        "tinyllama": "TinyLlama 1.1B",
+        "gpt2": "GPT-2",
+        "gpt2s": "GPT-2 Small",
+        "llama-3.1-8b": "Llama 3.1 8B",
+        "llama8b": "Llama 3.1 8B",
+    }
+
+    # Get model configs from registry (they already have proper TT_METAL_RUNTIME_ROOT paths)
+    model_configs = {}
+    for training_config in TRAINING_TYPES.values():
+        model_configs.update(training_config.model_configs)
+
+    models = []
+    for model_id in sorted(all_models):
+        # Convert full path back to relative path for API response
+        full_config_path = model_configs.get(model_id, "")
+        relative_config_path = (
+            full_config_path.split("/configs/")[-1]
+            if "/configs/" in full_config_path
+            else f"model_configs/{model_id}.yaml"
+        )
+
+        models.append(
+            {
+                "id": model_id,
+                "display_name": model_display_names.get(model_id, model_id.title()),
+                "model_config": f"configs/{relative_config_path}",
+                "supported": model_id in SUPPORTED_MODELS,
+            }
+        )
+
+    # Generate trainers dynamically from training registry
+    trainer_display_names = {
+        "sft": "SFT",
+        "lora": "LoRA",
+        "grpo": "GRPO",
+    }
+
+    trainers = []
+    for trainer_id in sorted(TRAINING_TYPES.keys()):
+        trainers.append(
+            {
+                "id": trainer_id,
+                "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
+                "supported": True,  # All registered trainers are supported
+            }
+        )
+
+    # Add known future trainers that aren't implemented yet
+    future_trainers = {"grpo"}
+    for trainer_id in sorted(future_trainers - set(TRAINING_TYPES.keys())):
+        trainers.append(
+            {
+                "id": trainer_id,
+                "display_name": trainer_display_names.get(trainer_id, trainer_id.upper()),
+                "supported": False,
+            }
+        )
+
     catalog_data = {
         "supported": {
             "trainers": list(SUPPORTED_TRAINERS),
             "optimizers": list(SUPPORTED_OPTIMIZERS),
         },
-        "models": [
-            {
-                "id": "tinyllama-1.1b",
-                "display_name": "TinyLlama 1.1B",
-                "model_config": "model_configs/tinyllama.yaml",
-                "supported": True,
-            },
-            {
-                "id": "gpt2",
-                "display_name": "GPT-2",
-                "model_config": "model_configs/gpt2s.yaml",
-                "supported": True,
-            },
-            {
-                "id": "llama-3.1-8b",
-                "display_name": "Llama 3.1 8B",
-                "model_config": "model_configs/llama8b.yaml",
-                "supported": False,
-            },
-        ],
+        "models": models,
         "datasets": [
             {"id": "gsm8k", "display_name": "GSM8K", "supported": True},
             {"id": "math_qa", "display_name": "Math QA", "supported": True},
@@ -803,11 +847,7 @@ def catalog():
             {"id": "svamp", "display_name": "SVAMP", "supported": True},
             {"id": "mawps", "display_name": "MAWPS", "supported": True},
         ],
-        "trainers": [
-            {"id": "sft", "display_name": "SFT", "supported": True},
-            {"id": "lora", "display_name": "LoRA", "supported": False},
-            {"id": "grpo", "display_name": "GRPO", "supported": False},
-        ],
+        "trainers": trainers,
         "optimizers": [
             {"id": "adamw", "display_name": "AdamW", "supported": True},
             {"id": "sgd", "display_name": "SGD", "supported": False},
