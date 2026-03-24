@@ -159,6 +159,76 @@ struct ReduceInputBlockShape {
     static constexpr ReduceInputBlockShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
+// =============================================================================
+// Partial Scaler - handle non-tile-aligned W dimensions without masking
+// =============================================================================
+
+/**
+ * @brief Configuration for handling non-tile-aligned W dimensions via partial scalers
+ *
+ * When the W dimension being reduced is not a multiple of TILE_WIDTH (32), the last
+ * tile contains padded elements that should not participate in the reduction.
+ * The partial scaler pattern handles this at the hardware level with zero extra ops.
+ *
+ * MECHANISM:
+ *   The scaler CB holds TWO tiles instead of one:
+ *     Tile 0: scaler value in ALL 32 columns (for full interior tiles)
+ *     Tile 1: scaler value only in the valid columns, zeros elsewhere (for last W tile)
+ *   Since reduce_tile() multiplies each input column by the corresponding scaler
+ *   column, zeroed scaler columns produce zero — effectively excluding padded
+ *   elements from the reduction with no extra operations or intermediate CBs.
+ *
+ * ADVANTAGES over mask_tile() approach:
+ *   - No extra circular buffer for mask tiles or masked intermediates
+ *   - No pack/unpack round-trip to apply the mask
+ *   - No manual DST register management outside the helper
+ *   - Zero overhead on full (interior) tiles — they still use scaler tile 0
+ *   - The scaler already participates in every reduce_tile — selecting a
+ *     different tile index is free
+ *
+ * SUPPORTED REDUCE DIMENSIONS:
+ *   - REDUCE_ROW:    Yes - last W tile (wt == Wt-1) uses partial scaler
+ *   - REDUCE_COL:    Yes - last H tile (ht == Ht-1) uses partial scaler.
+ *                     The LLK natively reduces columns via scaler @ input (matmul),
+ *                     so scaler positions map to input rows.
+ *   - REDUCE_SCALAR: No  - performs two reductions (H and W) with the same scaler
+ *                     tile. A single partial scaler cannot encode both partial-H
+ *                     and partial-W patterns simultaneously.
+ *
+ * DATAFLOW SETUP (reader kernel):
+ *   The reader must push TWO scaler tiles into the scaler CB:
+ *
+ *     // Convenience: generates both tiles in one call
+ *     dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, partial_cols>(scaler_f);
+ *
+ *     // Or manually:
+ *     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, TILE_WIDTH>(scaler_f);       // tile 0: full
+ *     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, partial_cols>(scaler_f);     // tile 1: partial
+ *
+ *   Where partial_cols = origin_W % TILE_WIDTH (must be in range [1, TILE_WIDTH-1]).
+ *
+ * COMPUTE USAGE:
+ *     compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+ *         cb_in, cb_scaler, cb_out,
+ *         ReduceInputBlockShape::of(Ht, Wt, NC),
+ *         {}, NoAccumulation{}, NoOp{},
+ *         ReducePartialScaler::last_tile_at(1));
+ *
+ * CLEANUP:
+ *   The caller must pop ALL scaler tiles after all reductions complete:
+ *     cb_pop_front(cb_scaler, 2);  // not 1
+ */
+struct ReducePartialScaler {
+    uint32_t last_tile_scaler_idx;  ///< Scaler tile index for the last tile in the reduced dim (0 = uniform)
+
+    /// No partial scaler — all tiles use scaler tile index 0 (default, backward-compatible)
+    static constexpr ReducePartialScaler none() { return {0}; }
+
+    /// Use a different scaler tile for the last tile in the reduced dimension.
+    /// @param idx Index of the partial scaler tile in the scaler CB (typically 1)
+    static constexpr ReducePartialScaler last_tile_at(uint32_t idx = 1) { return {idx}; }
+};
+
 // NoAccumulation is defined in common_types.hpp
 
 /**
@@ -420,6 +490,20 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
  *           recip_tile_init();
  *           recip_tile(dst_idx);
  *       });
+ *
+ * @example
+ *   // Partial scaler: handle non-tile-aligned W dimension without mask_tile().
+ *   // Reader pushes 2 scaler tiles: full (32 cols) + partial (origin_W % 32 cols).
+ *   // The helper selects scaler tile 1 for the last W tile, tile 0 for all others.
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+ *       cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+ *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+ *       NoAccumulation{},
+ *       NoOp{},
+ *       compute_kernel_lib::ReducePartialScaler::last_tile_at(1));
+ *   // Caller pops both scaler tiles after all reduce() calls complete:
+ *   //   cb_pop_front(cb_scaler, 2);
  */
 template <
     PoolType reduce_type,
@@ -435,7 +519,8 @@ ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
-    PostReduceOp post_reduce_op = PostReduceOp{});
+    PostReduceOp post_reduce_op = PostReduceOp{},
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
 
 }  // namespace compute_kernel_lib
 
