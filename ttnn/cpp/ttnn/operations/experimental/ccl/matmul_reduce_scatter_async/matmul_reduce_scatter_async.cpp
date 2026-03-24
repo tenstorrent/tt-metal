@@ -30,8 +30,9 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
-    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::optional<uint32_t> cluster_axis) {
+    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto output_tensors = ttnn::prim::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -54,7 +55,8 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         program_config,
         activation,
         compute_kernel_config,
-        core_grid);
+        core_grid,
+        cluster_axis);
     return {output_tensors.mm, output_tensors.reduce_scatter};
 }
 

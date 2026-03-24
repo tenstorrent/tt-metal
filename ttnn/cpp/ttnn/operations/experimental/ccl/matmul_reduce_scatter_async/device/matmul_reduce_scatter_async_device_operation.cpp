@@ -141,7 +141,8 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
@@ -180,7 +181,11 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     ttnn::experimental::prim::ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
+        .ring_size =
+            cluster_axis.has_value()
+                ? (cluster_axis.value() == 0 ? static_cast<uint32_t>(input_tensor.device()->get_view().num_rows())
+                                             : static_cast<uint32_t>(input_tensor.device()->get_view().num_cols()))
+                : static_cast<uint32_t>(devices.size()),
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,
@@ -188,7 +193,7 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
         .barrier_semaphore = barrier_semaphore,
         .using_persistent_buffers = using_persistent_buffers,
         .sub_device_id = sub_device_id,
-        .cluster_axis = std::nullopt,
+        .cluster_axis = cluster_axis,
         .chunks_per_sync = std::nullopt,
         .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
         .num_buffers_per_channel = std::nullopt,
