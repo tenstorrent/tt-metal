@@ -29,6 +29,7 @@ def test_linear(
     *,
     device,
 ):
+    torch.manual_seed(0)
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -92,6 +93,7 @@ def test_linear_with_core_grid(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
+    torch.manual_seed(0)
     input_shape_a = (batch_size, 1, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -311,6 +313,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
 
 
 def test_bloom_ff2_linear(device):
+    torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
     torch_weight = torch_random((4096, 1024), -0.1, 0.1, dtype=torch.float32)
     torch_bias = torch_random((1024,), -0.01, 0.01, dtype=torch.float32)
@@ -558,6 +561,7 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     tensor shapes.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     """
+    torch.manual_seed(0)
     # Create random tensors with appropriate dimensions
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
@@ -896,6 +900,7 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             test_name=test_name,
             csv_filename="test_linear_numeric_results.csv",
             test_params=None,
+            k=k_size,
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -955,5 +960,6 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output, output, 0.99)

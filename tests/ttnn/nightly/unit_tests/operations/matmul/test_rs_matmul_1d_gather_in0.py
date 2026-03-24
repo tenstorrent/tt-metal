@@ -409,6 +409,7 @@ def run_multi_core_matmul_1d(
         ),
     )
 
+    torch.manual_seed(0)
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
 

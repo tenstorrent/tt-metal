@@ -102,6 +102,7 @@ def test_bert_linear_batch7(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -239,6 +240,7 @@ def run_bert_linear_batch4(
     fp32_acc_mode,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -486,6 +488,7 @@ def test_bert_linear_batch4_fp32_input_output(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]

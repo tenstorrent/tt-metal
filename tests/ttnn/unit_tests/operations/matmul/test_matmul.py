@@ -621,6 +621,8 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
+    torch.manual_seed(0)
+
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_blackhole():
@@ -924,6 +926,8 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     num_out_block_w,
     transpose_mcast,
 ):
+    torch.manual_seed(0)
+
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     required_size = 8  # input tensor sizes are too small to be subdivided on larger grids
     grid_size = [min(required_size, compute_grid_size.x), min(required_size, compute_grid_size.y)]
@@ -1075,6 +1079,7 @@ def run_matmul_2d_tiny_tile(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1107,6 +1112,8 @@ def test_matmul_2d_tiny_tile(
 ):
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+
+    torch.manual_seed(0)
 
     for _ in range(2):
         run_matmul_2d_tiny_tile(
@@ -1245,6 +1252,7 @@ def run_matmul_1d_tiny_tile(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1277,6 +1285,8 @@ def test_matmul_1d_tiny_tile(
 ):
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+
+    torch.manual_seed(0)
 
     for _ in range(2):
         run_matmul_1d_tiny_tile(
@@ -1466,6 +1476,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1496,6 +1507,8 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     mcast_in0,
     uneven_width,
 ):
+    torch.manual_seed(0)
+
     for _ in range(2):
         run_matmul_1d_multiple_output_blocks_per_core(
             device,
@@ -1838,6 +1851,7 @@ def test_matmul_does_dot_product(device, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
@@ -1854,6 +1868,7 @@ def test_matmul_does_dot_product(device, w):
     ])
 # fmt: on
 def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
+    torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n_size, c, w, h), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -1880,6 +1895,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_4D")
@@ -1895,6 +1911,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
     ])
 # fmt: on
 def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
+    torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -1920,6 +1937,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.9997)
@@ -1979,6 +1997,7 @@ def test_tutorial_matmul(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul")
@@ -2013,6 +2032,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul_inputs_and_output_in_l1_memory")
@@ -2050,6 +2070,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(
@@ -2198,6 +2219,7 @@ def test_sharded_matmul(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_sharded_matmul")
@@ -2416,6 +2438,7 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -2622,6 +2645,7 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_and_configs")
@@ -2838,6 +2862,7 @@ def test_matmul_in0_in1_bias_sharded(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
 
     # assert_matmul_accuracy(matmul_output, tt_mm_out, "test_matmul_in0_in1_bias_sharded")
@@ -3010,6 +3035,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
@@ -3023,6 +3049,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         test_name=test_name_opt,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     assert len(output.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
@@ -3482,6 +3509,7 @@ def test_matmul_block_sharded_input_with_padding(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=16,
     )
 
     # assert_matmul_accuracy(torch_output, output, "test_matmul_block_sharded_input_with_padding")
@@ -3623,6 +3651,7 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             test_name=test_name,
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
+            k=k_size,
         )
 
         # assert_matmul_accuracy(torch_output, output, "test_matmul_on_subdevice_1d_mcast")
@@ -3678,6 +3707,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_golden_vs_conv",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
     collect_and_dump_numeric_metrics(
         golden,
@@ -3685,6 +3715,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_golden_vs_col",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
     collect_and_dump_numeric_metrics(
         result_conv,
@@ -3692,6 +3723,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_conv_vs_col",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
 
     # assert_matmul_accuracy(golden, result_conv, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
@@ -3701,6 +3733,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
 
 # N.A.
 def test_from_torch_col_tilize_validation():
+    torch.manual_seed(0)
     torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
     torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
 
@@ -3757,14 +3790,14 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
     ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
 
     # Collect numeric metrics and dump to CSV using reusable function
-    test_name = f"test_from_torch_col_tilize_matches_manual_transpose[weight_dtype={weight_dtype},K={K},N={N}]"
-    collect_and_dump_numeric_metrics(
-        result_manual,
-        result_col,
-        test_name=test_name,
-        csv_filename="test_matmul_numeric_results.csv",
-        test_params=None,
-    )
+    # test_name = f"test_from_torch_col_tilize_matches_manual_transpose[weight_dtype={weight_dtype},K={K},N={N}]"
+    # collect_and_dump_numeric_metrics(
+    #     result_manual,
+    #     result_col,
+    #     test_name=test_name,
+    #     csv_filename="test_matmul_numeric_results.csv",
+    #     test_params=None,
+    # )
 
     # assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
     # assert_matmul_accuracy(result_manual, result_col, "test_from_torch_col_tilize_matches_manual_transpose")
@@ -3798,13 +3831,13 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
     assert result_col.shape == result_manual.shape
 
     # Collect numeric metrics and dump to CSV using reusable function
-    test_name = f"test_from_torch_col_tilize_batched[weight_dtype={weight_dtype},shape={shape}]"
-    collect_and_dump_numeric_metrics(
-        result_manual,
-        result_col,
-        test_name=test_name,
-        csv_filename="test_matmul_numeric_results.csv",
-        test_params=None,
-    )
+    # test_name = f"test_from_torch_col_tilize_batched[weight_dtype={weight_dtype},shape={shape}]"
+    # collect_and_dump_numeric_metrics(
+    #     result_manual,
+    #     result_col,
+    #     test_name=test_name,
+    #     csv_filename="test_matmul_numeric_results.csv",
+    #     test_params=None,
+    # )
 
     # assert_matmul_accuracy(result_manual, result_col, "test_from_torch_col_tilize_batched")

@@ -80,6 +80,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
+    torch.manual_seed(0)
     grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
 
@@ -260,6 +261,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
 @pytest.mark.parametrize("num_slices", [2])
 def test_sharded_partial_op(device, H, num_cores, num_slices):
+    torch.manual_seed(0)
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -314,13 +316,12 @@ def test_sharded_partial_op(device, H, num_cores, num_slices):
     pt_out = in0
 
     tt_out = ttnn.to_torch(out_tt_tensor)
-
-    test_name = f"test_sharded_partial_op[H={H},num_cores={num_cores},num_slices={num_slices}]"
-    collect_and_dump_numeric_metrics(
-        pt_out,
-        tt_out,
-        test_name=test_name,
-        csv_filename="test_experimental_numeric_results.csv",
-        test_params=None,
-    )
+    # test_name = f"test_sharded_partial_op[H={H},num_cores={num_cores},num_slices={num_slices}]"
+    # collect_and_dump_numeric_metrics(
+    #     pt_out,
+    #     tt_out,
+    #     test_name=test_name,
+    #     csv_filename="test_experimental_numeric_results.csv",
+    #     test_params=None,
+    # )
     assert_with_pcc(pt_out, tt_out)

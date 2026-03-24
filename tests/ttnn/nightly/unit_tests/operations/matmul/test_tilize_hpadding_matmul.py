@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_du
 
 
 def run_tilize_matmul_test(M, K, N, device):
+    torch.manual_seed(0)
     a_shape = [1, 1, M, K]
     a_shape_padded = [1, 1, _nearest_32(M), K]
     b_shape = [1, 1, K, N]
