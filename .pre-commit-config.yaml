@@ -96,3 +96,12 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: check-push-sanity
+      name: Check push sanity (merge pollution / large diff)
+      entry: scripts/check_push_sanity.sh
+      language: script
+      stages: [pre-push]
+      always_run: true
+      pass_filenames: false
