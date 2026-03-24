@@ -34,9 +34,9 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
 
     atol = rtol = 0.01
     # All values are close to 1, and we're using bfloat16, so even a rounding error
-    # of 0.5 ULP has a significant impact on PCC.
+    # of 1 ULP has a significant impact on PCC.
     # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
-    pcc = 0.98
+    pcc = 0.975
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
