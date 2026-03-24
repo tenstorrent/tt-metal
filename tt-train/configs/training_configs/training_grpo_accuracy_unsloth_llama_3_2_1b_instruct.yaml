@@ -25,7 +25,7 @@ training_config:
 
 grpo_config:
   max_tokens_to_complete: 512
-  group_size: 8
+  group_size: 4
 
 scheduler_config:
   max_lr: 1e-4

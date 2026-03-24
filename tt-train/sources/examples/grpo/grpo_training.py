@@ -102,7 +102,7 @@ def train_grpo():
     prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split="train", shuffle_seed=42)
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
 
-    prompts_to_train = 256
+    prompts_to_train = 1536
     prompts, answers = prompts[:prompts_to_train], answers[:prompts_to_train]
 
     base_lr = 1e-6
