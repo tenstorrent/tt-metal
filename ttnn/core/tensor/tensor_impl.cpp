@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/experimental/tensor/host_tensor.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -554,8 +555,8 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    HostTensor host_tensor(std::move(distributed_host_buffer), tensor.tensor_spec(), tensor.tensor_topology());
+    return Tensor(std::move(host_tensor));
 }
 
 // ======================================================================================
@@ -708,10 +709,8 @@ void copy_to_host(
 
     mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    host_tensor = Tensor(
-        HostStorage(std::move(dst_distributed_host_buffer)),
-        device_tensor.tensor_spec(),
-        device_tensor.tensor_topology());
+    host_tensor = Tensor(HostTensor(
+        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology()));
 }
 
 void copy_to_host(
@@ -1364,8 +1363,8 @@ struct bfloat4_tag {};
 struct bfloat8_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
-tt::tt_metal::HostStorage preprocess_storage(
-    const tt::tt_metal::HostStorage& input_storage, const DataType input_dtype) {
+tt::tt_metal::DistributedHostBuffer preprocess_buffers(
+    const tt::tt_metal::DistributedHostBuffer& input_storage, const DataType input_dtype) {
     constexpr bool row_major_output = false;
     constexpr bool is_exp_a = false;
 
@@ -1387,10 +1386,10 @@ tt::tt_metal::HostStorage preprocess_storage(
 }
 
 template <typename SrcType, typename DstType>
-tt::tt_metal::HostStorage transform_storage(
-    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::HostStorage& input_storage) {
+tt::tt_metal::DistributedHostBuffer transform_buffers(
+    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
-        return input_storage;
+        return input_buffer;
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
@@ -1415,7 +1414,7 @@ tt::tt_metal::HostStorage transform_storage(
             return tt::tt_metal::HostBuffer(std::move(float_packed_data));
         };
 
-        return input_storage.transform(transform_fn);
+        return input_buffer.transform(transform_fn);
     } else {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             auto data = buffer.view_as<const SrcType>();
@@ -1426,7 +1425,7 @@ tt::tt_metal::HostStorage transform_storage(
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };
 
-        return input_storage.transform(transform_fn);
+        return input_buffer.transform(transform_fn);
     }
 }
 
@@ -1439,11 +1438,11 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     }
     TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
 
-    auto input_storage = detail::preprocess_storage(input_tensor.host_storage(), src_type);
+    auto input_buffer = detail::preprocess_buffers(input_tensor.host_tensor().buffer(), src_type);
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_storage]() {
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
-            return detail::transform_storage<SrcType, DstType>(input_tensor.tensor_spec(), input_storage);
+            return detail::transform_buffers<SrcType, DstType>(input_tensor.tensor_spec(), input_buffer);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
@@ -1487,7 +1486,7 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
+    return Tensor(HostTensor(std::move(output_storage), output_spec, input_tensor.tensor_topology()));
 }
 
 }  // namespace tt::tt_metal::tensor_impl
