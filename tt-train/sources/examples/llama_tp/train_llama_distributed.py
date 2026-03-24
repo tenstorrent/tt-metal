@@ -20,13 +20,11 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import random
 import time
 from functools import partial
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
-import ml_dtypes
 
 import ttnn
 import ttml
@@ -693,7 +691,9 @@ def main():
         eval_dataloader=None,
         config=sft_config,
         optimizer=optimizer,
-        scheduler=scheduler,
+        lr_schedule=lambda step: (scheduler.step(), float(scheduler.get_current_lr()))[
+            1
+        ],
         callbacks=callbacks if callbacks else None,
     )
 

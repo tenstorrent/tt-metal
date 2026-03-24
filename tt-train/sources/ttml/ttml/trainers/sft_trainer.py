@@ -27,7 +27,6 @@ import ttml
 from ttml.common.data import build_causal_mask
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
-from ttml.schedulers import LRSchedulerBase
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -135,7 +134,6 @@ class SFTTrainer:
         config: SFTConfig,
         optimizer: Any = None,
         peft_config: Optional[LoraConfig] = None,
-        scheduler: Optional[Any] = None,
         lr_schedule: Optional[Callable[[int], float]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         compute_loss_func: Optional[Callable] = None,
@@ -192,7 +190,6 @@ class SFTTrainer:
         self._optimizer = self._build_optimizer(optimizer)
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
-        self._scheduler = scheduler
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         )
@@ -282,13 +279,10 @@ class SFTTrainer:
                 )
 
             # Optimizer step
+            # self.step is 0-based so external lr_schedule callables (e.g.
+            # SpeedrunScheduler.lr_at) receive the expected step index.
+            self._optimizer.set_lr(self._lr_schedule(self.step))
             self._optimizer.step()
-            if self._scheduler is not None:
-                self._scheduler.step()
-            else:
-                # self.step is 0-based so external lr_schedule callables (e.g.
-                # SpeedrunScheduler.lr_at) receive the expected step index.
-                self._optimizer.set_lr(self._lr_schedule(self.step))
             lr = float(self._optimizer.get_lr())
             memory_snapshot("OPTIMIZER_STEP")
 
