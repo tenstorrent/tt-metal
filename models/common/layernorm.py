@@ -130,10 +130,14 @@ class LayerNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False, norm_config=None) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
-        program_config = self.sharded_program_config if in_sharded else None
-        memory_config = self.sharded_output_config if out_sharded else None
+
+        sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+        output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+        program_config = sharded_program_config if in_sharded else None
+        memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = self._distributed_rmsnorm if distributed else ttnn.layer_norm
         weight = self.weight_distributed if distributed else self.weight
@@ -157,6 +161,8 @@ class LayerNorm(LightweightModule):
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
         else:
+            if output_mem_config is not None:
+                x = ttnn.to_memory_config(x, output_mem_config)
             return x
 
     def _distributed_rmsnorm(

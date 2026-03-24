@@ -80,6 +80,8 @@ def test_rms_norm_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
+    if isinstance(reference_model, torch.nn.LayerNorm):
+        input = input.to(dtype=next(iter(partial_state_dict.values())).dtype)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
