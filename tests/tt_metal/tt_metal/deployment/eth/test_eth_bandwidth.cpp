@@ -29,6 +29,7 @@ static bool run_test_bandwidth(
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
+    /* ========================= */
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
@@ -77,8 +78,8 @@ static bool run_test_bandwidth(
     wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
 
     bool pass = true;
-    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
+    pass &= eth_data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= eth_bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
     return pass;
 }
 
