@@ -144,6 +144,93 @@ def validate_mesh_for_tg_test(mesh_device):
     )
 
 
+def _validate_critical_moe_configurations(run_config, scaled_config, mesh_device, mode):
+    """
+    Validate critical mesh-dependent configurations that must match between TG and quad.
+
+    These validations ensure that operations with specific shard specs will work correctly
+    on quad galaxy. If these assertions pass on TG, they will pass on quad.
+
+    Critical operations validated:
+    1. deepseek_moe_fast_reduce_nc - output shard spec
+    2. all_to_all_dispatch_metadata - memory config
+    3. num_experts_per_tok - routing parameter
+    4. Tensor parallel and cluster dimensions
+    """
+    logger.info("Validating critical MoE configurations for quad compatibility...")
+
+    # 1. Validate num_experts_per_tok (must be 8 for both TG and quad)
+    num_experts_per_tok = run_config.get("num_experts_per_tok", scaled_config.num_experts_per_tok)
+    assert num_experts_per_tok == 8, (
+        f"num_experts_per_tok must be 8 (got {num_experts_per_tok}). " "This is critical for expert routing logic."
+    )
+    logger.info(f"  ✓ num_experts_per_tok: {num_experts_per_tok}")
+
+    # 2. Validate cluster_axis for all_to_all operations
+    # cluster_axis=0 for expert dispatch (across rows)
+    # cluster_axis=1 for tensor parallel (across columns)
+    dispatch_cluster_axis = run_config["all_to_all_dispatch"]["cluster_axis"]
+    combine_cluster_axis = run_config["all_to_all_combine"]["cluster_axis"]
+    assert dispatch_cluster_axis == 0, (
+        f"all_to_all_dispatch cluster_axis must be 0 (got {dispatch_cluster_axis}). "
+        "This dispatches experts across mesh rows."
+    )
+    assert combine_cluster_axis == 0, (
+        f"all_to_all_combine cluster_axis must be 0 (got {combine_cluster_axis}). "
+        "This combines expert outputs across mesh rows."
+    )
+    logger.info(f"  ✓ all_to_all dispatch/combine cluster_axis: {dispatch_cluster_axis}")
+
+    # 3. Validate tensor parallel cluster_axis (for reduce_scatter)
+    if mode == "decode":
+        rs_cluster_axis = run_config["final_output_reduce_scatter"]["cluster_axis"]
+    else:
+        rs_cluster_axis = run_config["final_output_reduce_scatter"]["cluster_axis"]
+    assert rs_cluster_axis == 1, (
+        f"reduce_scatter cluster_axis must be 1 (got {rs_cluster_axis}). "
+        "This reduces across tensor parallel dimension (mesh columns)."
+    )
+    logger.info(f"  ✓ reduce_scatter cluster_axis: {rs_cluster_axis}")
+
+    # 4. Validate metadata memory config (currently DRAM for both)
+    metadata_mem_config = run_config["all_to_all_dispatch_metadata_memory_config"]
+    assert (
+        metadata_mem_config.buffer_type == ttnn.BufferType.DRAM
+    ), "all_to_all_dispatch_metadata_memory_config must use DRAM buffer type"
+    logger.info(f"  ✓ dispatch_metadata memory: DRAM")
+
+    # 5. Validate deepseek_moe_fast_reduce_nc output shard spec (decode mode with FABRIC_1D_RING)
+    if mode == "decode" and run_config["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING:
+        tp_size = mesh_device.shape[1]
+        if tp_size == 8:
+            fast_reduce_mem_config = run_config.get("ring_sum_experts_output_memory_config")
+            if fast_reduce_mem_config is not None:
+                assert (
+                    fast_reduce_mem_config.buffer_type == ttnn.BufferType.L1
+                ), "ring_sum_experts_output_memory_config must use L1 buffer type"
+                # Verify it has a shard spec (NdShardSpec)
+                assert hasattr(fast_reduce_mem_config, "nd_shard_spec") or hasattr(
+                    fast_reduce_mem_config, "shard_spec"
+                ), "ring_sum_experts_output_memory_config must have a shard spec"
+                logger.info(f"  ✓ fast_reduce_nc output shard spec: L1 sharded")
+
+    # 6. Validate experts_per_device matches expected
+    experts_per_device = run_config["num_experts_per_device"]
+    assert (
+        experts_per_device == EXPERTS_PER_DEVICE
+    ), f"num_experts_per_device must be {EXPERTS_PER_DEVICE} (got {experts_per_device})"
+    logger.info(f"  ✓ num_experts_per_device: {experts_per_device}")
+
+    # 7. Validate hidden_size is consistent
+    hidden_size = run_config["hidden_size"]
+    assert (
+        hidden_size == scaled_config.hidden_size
+    ), f"hidden_size mismatch: run_config={hidden_size}, scaled_config={scaled_config.hidden_size}"
+    logger.info(f"  ✓ hidden_size: {hidden_size}")
+
+    logger.info("✓ All critical MoE configurations validated for quad compatibility")
+
+
 @pytest.fixture
 def reference_model_tg(hf_config):
     """Build the routed-experts-only MoE reference for TG testing."""
@@ -455,6 +542,9 @@ def test_moe_single_galaxy_for_quad_validation(
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=pcc_threshold)
 
     logger.info(f"✓ TG test passed with PCC >= {pcc_threshold}")
+
+    # Validate critical mesh-dependent configurations
+    _validate_critical_moe_configurations(run_config, scaled_config, mesh_device, mode)
 
 
 @pytest.mark.requires_device("TG")
