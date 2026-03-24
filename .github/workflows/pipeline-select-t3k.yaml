@@ -109,6 +109,7 @@ on:
           - mistral
           - wan2.2
           - mochi
+          - deepseek-modules
       t3000-e2e:
         required: false
         type: boolean
