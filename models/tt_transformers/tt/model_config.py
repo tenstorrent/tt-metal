@@ -3881,7 +3881,14 @@ class ModelArgs:
             )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2, layernorm=name_final_layernorm)
+                convert_meta_to_hf(
+                    x,
+                    self.head_dim,
+                    fuse_mlp=self.fuse_mlp,
+                    name_dense=name_dense,
+                    name_ffn2=name_ffn2,
+                    layernorm=name_final_layernorm,
+                )
             )
         return layer
 
@@ -4063,9 +4070,17 @@ class HfAttentionWrapper:
         except:
             name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
-            return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm))
+            return self.attention.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(
+                    state_dict, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm
+                )
+            )
         else:
-            return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm))
+            return self.attention.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict, self.head_dim, fuse_qkv, self.config, name_dense, name_ffn2, name_final_layernorm
+                )
+            )
 
     @property
     def cache_k(self):
@@ -4157,9 +4172,24 @@ class HfDecoderWrapper:
         except:
             name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
-            return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm))
+            return self.decoder.load_state_dict(
+                convert_meta_to_hf_no_qkv_permute(
+                    state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm
+                )
+            )
         else:
-            return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm))
+            return self.decoder.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    self.config,
+                    name_dense,
+                    name_ffn2,
+                    name_final_layernorm,
+                )
+            )
 
     @property
     def cache_k(self):
@@ -4232,11 +4262,22 @@ class HfModelWrapper:
             name_dense, name_ffn2, name_final_layernorm = False, False, False
         if self.use_hf_rope:
             return self.model.load_state_dict(
-                convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm)
+                convert_meta_to_hf_no_qkv_permute(
+                    state_dict, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm
+                )
             )
         else:
             return self.model.load_state_dict(
-                convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config, name_dense, name_ffn2, name_final_layernorm)
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    self.config,
+                    name_dense,
+                    name_ffn2,
+                    name_final_layernorm,
+                )
             )
 
     def eval(self):
