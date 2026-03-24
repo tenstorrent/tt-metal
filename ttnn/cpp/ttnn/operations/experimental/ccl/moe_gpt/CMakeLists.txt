@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_moe_gpt ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::MoEGPT ALIAS ttnn_op_experimental_moe_gpt)
 
-target_precompile_headers(ttnn_op_experimental_moe_gpt REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_moe_gpt TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_moe_gpt)
 
 target_sources(
