@@ -43,6 +43,7 @@ targets:
   lead_models:
     - model:
         - deepseek_v3
+      trace: [35]
 
   model_traced:
     - model:
@@ -65,6 +66,7 @@ targets:
         - vit-base-patch16-224
         - vit_performant_imagenet_inference
         - whisper
+      trace: [1,538,548]
 
 registry:
   - trace_id: 1
