@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <tt_metal/common/filesystem_utils.hpp>
 #include "impl/context/context_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
@@ -45,16 +46,19 @@ void dump_data(
     // than the one we want.
     env_impl.get_rtoptions().set_watcher_enabled(false);
 
-    std::filesystem::path parent_dir(env_impl.get_rtoptions().get_root_dir() + output_dir_name);
-    std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
-    std::filesystem::create_directories(cq_dir);
+    std::filesystem::path parent_dir = std::filesystem::path(env_impl.get_rtoptions().get_root_dir()) / output_dir_name;
+    std::filesystem::path cq_dir = parent_dir / "command_queue_dump";
+    if (!tt::filesystem::safe_create_directories(cq_dir)) {
+        log_warning(tt::LogMetal, "WatcherDump: failed to create output directory {}", cq_dir.string());
+        return;
+    }
 
     // Only look at user-specified devices
     vector<std::unique_ptr<IDevice>> devices;
     for (ChipId id : device_ids) {
-        string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
+        string cq_fname = (cq_dir / fmt::format("device_{}_completion_q.txt", id)).string();
         std::ofstream cq_file = std::ofstream(cq_fname);
-        string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
+        string iq_fname = (cq_dir / fmt::format("device_{}_issue_q.txt", id)).string();
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
         IDevice* device = tt::tt_metal::CreateDeviceMinimal(
@@ -134,13 +138,25 @@ int main(int argc, char* argv[]) {
             std::istringstream iss(list);
             string item;
             while (std::getline(iss, item, ',')) {
-                if (stoi(item) >= num_devices) {
-                    cout << "Error: illegal device (" << stoi(item) << "), allowed range is [0, " << num_devices << ")"
+                int device_id = 0;
+                try {
+                    device_id = std::stoi(item);
+                } catch (const std::invalid_argument&) {
+                    cout << "Error: device ID '" << item << "' is not a valid integer." << endl;
+                    print_usage(argv[0]);
+                    return 1;
+                } catch (const std::out_of_range&) {
+                    cout << "Error: device ID '" << item << "' is out of integer range." << endl;
+                    print_usage(argv[0]);
+                    return 1;
+                }
+                if (device_id < 0 || static_cast<decltype(num_devices)>(device_id) >= num_devices) {
+                    cout << "Error: illegal device (" << device_id << "), allowed range is [0, " << num_devices << ")"
                          << endl;
                     print_usage(argv[0]);
                     return 1;
                 }
-                device_ids.push_back(stoi(item));
+                device_ids.push_back(static_cast<ChipId>(device_id));
             }
         } else if ((s.starts_with("-n=")) || (s.starts_with("--num-hw-cqs=="))) {
             string value_str = s.substr(s.find('=') + 1);

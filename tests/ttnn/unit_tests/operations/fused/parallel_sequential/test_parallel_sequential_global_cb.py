@@ -117,6 +117,7 @@ void kernel_main() {
         local_cb.pop_front(1);
     }
     remote_cb.commit();
+    noc.async_atomic_barrier();
 }
 """
 
@@ -143,6 +144,7 @@ void kernel_main() {
         remote_cb.pop_front(noc, 1);
     }
     remote_cb.commit();
+    noc.async_atomic_barrier();
 }
 """
 

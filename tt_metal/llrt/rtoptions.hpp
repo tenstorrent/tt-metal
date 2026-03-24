@@ -15,26 +15,20 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
+#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — avoids pulling in the full Hal singleton
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
-
-// Forward declarations — full definitions not needed in this header
-namespace tt::tt_metal {
-class Hal;
-enum class KernelBuildOptLevel : uint8_t;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -44,12 +38,13 @@ namespace tt::tt_metal::distributed {
 class SystemMesh;
 }  // namespace tt::tt_metal::distributed
 
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
+
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
-
-inline std::string g_root_dir;
-inline std::once_flag g_root_once;
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
@@ -154,6 +149,9 @@ class RunTimeOptions {
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
 
+    bool is_jit_scratch_dir_set = false;
+    std::string jit_scratch_dir_;
+
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
 
     bool is_kernel_dir_env_var_set = false;
@@ -172,6 +170,11 @@ class RunTimeOptions {
     bool record_noc_transfer_data = false;
 
     InspectorSettings inspector_settings;
+
+    // Cached MPI rank for Inspector RPC port selection.
+    // Computed once during construction and never modified.
+    // -1 means no MPI rank detected, >= 0 is the actual rank.
+    int cached_mpi_rank_{-1};
 
     bool lightweight_kernel_asserts = false;
 
@@ -347,8 +350,13 @@ public:
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
 
+    bool is_jit_scratch_dir_specified() const { return this->is_jit_scratch_dir_set; }
+    const std::string& get_jit_scratch_dir() const;
+
     // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
-    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
+    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to the current working directory.
+    // `tt-run` now sets TT_METAL_LOGS_PATH explicitly to the launch directory so distributed
+    // jobs and post-run triage agree on the same logs root.
     const std::string& get_logs_dir() const;
 
     bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
@@ -389,7 +397,10 @@ public:
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
-    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    uint16_t get_inspector_rpc_server_port() const;
+    /** Rank-aware Inspector RPC port: base_port + MPI rank (or base_port if not running under MPI).
+     *  Use this when connecting to a specific rank's Inspector instance. */
+    uint16_t get_effective_inspector_rpc_server_port() const;
     bool get_serialize_inspector_on_dispatch_timeout() const {
         return inspector_settings.serialize_on_dispatch_timeout;
     }
@@ -430,9 +441,7 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
+    std::string get_inspector_rpc_server_address() const;
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.

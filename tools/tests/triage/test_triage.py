@@ -13,7 +13,6 @@ import pytest
 import subprocess
 import time
 
-
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 triage_script = os.path.join(metal_home, "tools", "tt-triage.py")
 triage_home = os.path.join(metal_home, "tools", "triage")
@@ -25,10 +24,12 @@ sys.path.insert(0, triage_home)
 
 import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
+from metal_device_id_mapping import MetalDeviceIdMapping
+import inspector_data
+from dispatcher_data import DispatcherData
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
-
 
 triage.progress_disabled = True  # Disable progress bars for tests
 
@@ -65,7 +66,7 @@ HANG_APP_EXPECTED_RESULTS = {
 
 
 def print_process_output(proc):
-    stdout, stderr = proc.communicate(input=None, timeout=0)
+    stdout, stderr = proc.communicate(input=None, timeout=5)
     print("\n=== Process stdout ===")
     print(stdout.decode("utf-8") if stdout else "(empty)")
     print("\n=== Process stderr ===")
@@ -85,21 +86,38 @@ def cause_hang_with_app(request):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **app_configuration.get("env", {})},
+        cwd=metal_home,  # C++ runtime requires repo root as CWD to locate its installation
     )
     auto_timeout = app_configuration.get("auto_timeout", False)
     if auto_timeout:
         # Wait for the application to hang itself
+        process_exited_early = False
         try:
             proc.wait(timeout=timeout)
+            process_exited_early = True  # returned normally = process exited within timeout
         except subprocess.TimeoutExpired:
-            pass
+            pass  # process still running = hanging as expected
 
-        # Check if the process has exited
-        if proc.returncode != 0:
-            # Print process output for debugging
-            print("The application did not hang as expected.")
-            print_process_output(proc)
-            raise RuntimeError("The application did not hang as expected.")
+        # Only error if the process actually exited early with a non-zero code
+        if process_exited_early and proc.returncode != 0:
+            stdout_bytes, stderr_bytes = proc.communicate(input=None, timeout=5)
+            stdout_text = stdout_bytes.decode("utf-8") if stdout_bytes else "(empty)"
+            stderr_text = stderr_bytes.decode("utf-8") if stderr_bytes else "(empty)"
+            print("\n=== Process stdout ===")
+            print(stdout_text)
+            print("\n=== Process stderr ===")
+            print(stderr_text)
+            # Ethernet core service timeout during device init — the operation-timeout
+            # handler in TT-Metal tries to read Ethernet core registers while another
+            # process (e.g. MPI) holds the Ethernet cores.  This is a known conflict on
+            # multihost hardware; skip rather than fail with a confusing message.
+            if "Timeout waiting for Ethernet core service" in stderr_text:
+                pytest.skip(
+                    "Hang app crashed during device initialization: Ethernet core service "
+                    "timed out. This occurs when Ethernet cores are occupied by another "
+                    "process (e.g. MPI). Re-run this test in isolation to verify."
+                )
+            raise RuntimeError(f"The application did not hang as expected (exit code {proc.returncode}).")
     else:
         time.sleep(timeout)
 
@@ -498,3 +516,158 @@ class TestTriage:
             ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
         return result
+
+
+def _make_triage_script(
+    name: str,
+    failed: bool = False,
+    failure_message: str | None = None,
+    depends: list[triage.TriageScript] | None = None,
+) -> triage.TriageScript:
+    return triage.TriageScript(
+        name=name,
+        path=name,
+        config=triage.ScriptConfig(),
+        module=sys.modules[__name__],
+        run_method=lambda args, context: None,
+        documentation="Usage:\n    test_script\n\nDescription:\n    test\n\nOwner:\n    test-owner\n",
+        depends=depends or [],
+        failed=failed,
+        failure_message=failure_message,
+    )
+
+
+def test_metal_device_id_mapping_none_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return None
+
+    with pytest.raises(triage.TTTriageError, match="getMetalDeviceIdMappings.*None|returned no data"):
+        MetalDeviceIdMapping(FakeInspectorData(), [])
+
+
+def test_metal_device_id_mapping_malformed_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return object()
+
+    with pytest.raises(triage.TTTriageError, match="malformed result type|missing 'mappings'"):
+        MetalDeviceIdMapping(FakeInspectorData(), [])
+
+
+def test_summarize_failure_message_prefers_root_cause_line():
+    traceback_message = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/foo.py", line 1, in <module>\n'
+        "    run()\n"
+        "AttributeError: 'NoneType' object has no attribute 'mappings'\n"
+    )
+    assert (
+        triage.summarize_failure_message(traceback_message)
+        == "AttributeError: 'NoneType' object has no attribute 'mappings'"
+    )
+
+
+def test_build_dependency_failure_lines_lists_dependency_names_and_summaries():
+    failing_dep = _make_triage_script(
+        "metal_device_id_mapping.py",
+        failed=True,
+        failure_message="Traceback...\nAttributeError: 'NoneType' object has no attribute 'mappings'",
+    )
+    parent = _make_triage_script("run_checks.py", depends=[failing_dep])
+
+    lines = triage.build_dependency_failure_lines(parent)
+    joined = "\n".join(lines)
+
+    assert "Failed dependencies:" in joined
+    assert "metal_device_id_mapping.py" in joined
+    assert "'NoneType' object has no attribute 'mappings'" in joined
+    assert "Action:" in joined
+
+
+def test_serialize_result_prints_summary_before_details(capsys):
+    script = _make_triage_script(
+        "dispatcher_data.py",
+        failed=True,
+        failure_message=(
+            "Traceback (most recent call last):\n"
+            '  File "/tmp/dispatcher_data.py", line 1, in run\n'
+            "    fail()\n"
+            "RuntimeError: Inspector RPC unavailable\n"
+        ),
+    )
+
+    triage.serialize_result(script, None)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert "Summary: RuntimeError: Inspector RPC unavailable" in output
+    assert "Details:" in output
+
+
+@pytest.fixture
+def inspector_run_args():
+    return {
+        "--inspector-rpc-port": "50051",
+        "--inspector-rpc-host": "localhost",
+        "--inspector-log-path": "/tmp/ignored",
+    }
+
+
+def _mock_rpc_unavailable_with_logs_present(monkeypatch, log_directory):
+    monkeypatch.setattr(
+        inspector_data,
+        "InspectorRpcController",
+        lambda host, port: (_ for _ in ()).throw(inspector_data.InspectorException("rpc unavailable")),
+    )
+    # Ensure run() sees an existing log directory by returning a real temp path
+    monkeypatch.setattr(inspector_data, "get_log_directory", lambda directory: str(log_directory))
+
+
+def test_inspector_data_run_falls_back_to_serialized_when_rpc_unavailable(monkeypatch, inspector_run_args, tmp_path):
+    sentinel = object()
+
+    _mock_rpc_unavailable_with_logs_present(monkeypatch, tmp_path)
+    monkeypatch.setattr(inspector_data, "InspectorRpcSerialized", lambda directory: sentinel)
+
+    result = inspector_data.run(inspector_run_args, context=None)
+    assert result is sentinel
+
+
+def test_inspector_data_run_reports_both_rpc_and_serialized_failures(monkeypatch, inspector_run_args, tmp_path):
+    _mock_rpc_unavailable_with_logs_present(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        inspector_data,
+        "InspectorRpcSerialized",
+        lambda directory: (_ for _ in ()).throw(ValueError("missing serialized artifacts")),
+    )
+
+    with pytest.raises(inspector_data.InspectorException) as exc:
+        inspector_data.run(inspector_run_args, context=None)
+    message = str(exc.value)
+    assert "RPC connection failure:" in message
+    assert "Serialized data failure:" in message
+    assert "rpc unavailable" in message
+    assert "missing serialized artifacts" in message
+
+
+def test_dispatcher_data_missing_build_env_includes_last_error_and_env_hint(monkeypatch):
+    dispatcher = DispatcherData.__new__(DispatcherData)
+    dispatcher._build_env_cache = {}
+    dispatcher._populate_build_env_cache = lambda strict: None
+
+    with pytest.raises(triage.TTTriageError) as exc:
+        dispatcher._get_build_env_for_device(99)
+    message = str(exc.value)
+    assert "unique_id=99" in message
+    assert "Inspector build environment missing" in message
+    assert "device-id mapping consistency" in message
+
+
+def test_extract_assert_code_handles_none_gracefully():
+    """Ensure extract_assert_code never passes None to path/stat (graceful during timeout/corrupted device triage)."""
+    from dump_lightweight_asserts import extract_assert_code
+
+    assert extract_assert_code(None, None, None) == "?"
+    assert extract_assert_code(None, 1, 0) == "?"
+    assert extract_assert_code("/nonexistent", None, 0) == "?"

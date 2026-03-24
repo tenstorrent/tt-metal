@@ -2,6 +2,11 @@ name: Multi-Host Deployment (Physical)
 on:
   workflow_dispatch:
     inputs:
+      multihost_tooling:
+        description: 'Run T3K multi-host tooling and MPI job'
+        required: false
+        default: true
+        type: boolean
       t3k_multihost:
         description: 'Run T3K multi-host job'
         required: false
@@ -64,6 +69,61 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
+  tooling-and-mpi-t3k:
+    # NOTE: Intentionally manual-dispatch only (no schedule condition).
+    # Add `|| github.event.schedule == '0 */3 * * *'` here to run this
+    # job on the same T3K schedule as multi-host-t3k if that is desired.
+    if: ${{ github.event.inputs.multihost_tooling == 'true' }}
+    runs-on:
+      # A physical, multi-host WH T3K that's in service
+      - multi-host-t3000
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
+    needs: build-artifact
+    name: Tooling and MPI T3K
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar --zstd -xvf ttm_any.tar.zst
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Capture runner's home directory
+        id: capture-home
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
+      - name: Run tooling and MPI tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 10
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+          install_wheel: true
+          run_args: |
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_dual_t3k_tooling_tests.sh
+
   multi-host-t3k:
     if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
@@ -92,7 +152,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
@@ -104,12 +164,11 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
@@ -144,7 +203,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
@@ -156,12 +215,11 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
@@ -196,7 +254,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: echo "home=${HOME}" >> "$GITHUB_OUTPUT"
       - name: Run quad galaxy unit tests
         if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
@@ -209,12 +267,11 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e GTEST_OUTPUT=xml:${{ github.workspace }}/generated/test_reports/
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --pid=host
-            --hostname=mpirun-host
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)

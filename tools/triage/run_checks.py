@@ -51,6 +51,7 @@ from ttexalens.umd_device import TimeoutDeviceRegisterError
 from ttexalens.hardware.risc_debug import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
+from triage import TTTriageError
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -153,7 +154,12 @@ def get_devices(
     else:
         device_ids = [int(id) for id in devices]
 
-    return [context.devices[id] for id in device_ids]
+    result = [context.devices[id] for id in device_ids]
+    # With --dev=all, only include devices that Inspector knows about (have metal device ID mapping),
+    # so triage does not iterate over devices that cannot be triaged (e.g. other ranks' devices).
+    if len(devices) == 1 and devices[0].lower() == "all":
+        result = [d for d in result if metal_device_id_mapping.has_unique_id(d.unique_id)]
+    return result
 
 
 def _convert_to_on_chip_coordinates(
@@ -403,6 +409,11 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
+    if not devices:
+        raise TTTriageError(
+            "No devices were selected by run_checks. This can happen when in-use device selection "
+            "fails under TT_VISIBLE_DEVICES remapping. Retry with --dev=all (or explicit --dev IDs)."
+        )
     block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
 

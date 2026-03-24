@@ -3,23 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
-#include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
+#include "llrt/hal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <unistd.h>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include "common/filesystem_utils.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>
 
@@ -28,6 +33,10 @@
 using std::vector;
 
 namespace tt::llrt {
+namespace {
+std::string g_root_dir;
+std::once_flag g_root_once;
+}  // namespace
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
@@ -207,6 +216,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
+    TT_METAL_JIT_SCRATCH,             // Local scratch directory for JIT compilation (avoids NFS during build)
 };
 
 // Environment variable name for TT-Metal root directory
@@ -245,6 +255,45 @@ std::string to_upper_copy(std::string value) {
     return value;
 }
 
+bool has_rank_scoped_suffix(const std::filesystem::path& path) {
+    constexpr static std::string_view rank_suffix{"_rank_"};
+
+    const auto leaf = path.lexically_normal().filename().string();
+    const auto pos = leaf.rfind(rank_suffix);
+    if (pos == std::string::npos || pos == 0 || pos + rank_suffix.size() >= leaf.size()) {
+        return false;
+    }
+    return std::all_of(
+        leaf.begin() + static_cast<std::ptrdiff_t>(pos + rank_suffix.size()), leaf.end(), [](unsigned char ch) {
+            return std::isdigit(ch) != 0;
+        });
+}
+
+constexpr size_t kHostNameMax =
+#if defined(HOST_NAME_MAX)
+    HOST_NAME_MAX;
+#elif defined(_POSIX_HOST_NAME_MAX)
+    _POSIX_HOST_NAME_MAX;
+#else
+    255;
+#endif
+
+std::filesystem::path get_rank_scoped_logs_root(const std::string& logs_dir, int rank) {
+    auto logs_root = std::filesystem::path(logs_dir).lexically_normal();
+    if (rank < 0 || logs_root.empty() || has_rank_scoped_suffix(logs_root)) {
+        return logs_root;
+    }
+
+    std::vector<char> hostname(kHostNameMax + 1, '\0');
+    if (gethostname(hostname.data(), kHostNameMax) != 0 || hostname.front() == '\0') {
+        return logs_root;
+    }
+    // POSIX allows truncation without a trailing NUL when the name length == len;
+    // keep the reserved byte at hostname[kHostNameMax] as terminator.
+    hostname[kHostNameMax] = '\0';
+    return logs_root / fmt::format("{}_rank_{}", hostname.data(), rank);
+}
+
 template <typename IntType>
 IntType parse_int_token(const std::string& token, const std::string& context) {
     try {
@@ -259,12 +308,46 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
+/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Precedence (highest to lowest):
+ *   1. OMPI_COMM_WORLD_RANK  — OpenMPI standard
+ *   2. PMI_RANK              — MPICH / Hydra / Slurm PMI
+ *   3. SLURM_PROCID          — Slurm native (without PMI layer)
+ *   4. PMIX_RANK             — PMIx-aware launchers (OpenPMIx, PRRTE)
+ *   5. TT_MESH_HOST_RANK     — TT-specific fallback (may be duplicated across ranks)
+ *
+ * OMPI/PMI variants are checked first so that when multiple processes share
+ * TT_MESH_HOST_RANK=0 (e.g. run_cluster_validation under mpirun) each still
+ * gets a distinct Inspector port.
+ *
+ * Thread Safety Note:
+ * std::getenv() is not thread-safe on all platforms when environment
+ * variables may be modified concurrently. The result is cached in
+ * cached_mpi_rank_ at construction time to avoid repeated unsafe reads.
+ */
+int get_rank_from_env() {
+    for (const char* var : {"OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"}) {
+        const char* rank_str = std::getenv(var);
+        if (rank_str) {
+            try {
+                return std::stoi(rank_str);
+            } catch (const std::invalid_argument&) {
+                continue;
+            } catch (const std::out_of_range&) {
+                continue;
+            }
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+RunTimeOptions::RunTimeOptions() :
+    system_kernel_dir("/usr/share/tenstorrent/kernels/"), cached_mpi_rank_(get_rank_from_env()) {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
-    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+    if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT)).value_or(false)) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
@@ -283,7 +366,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         // treat the current working directory as the repository root.
         std::filesystem::path current_working_directory = std::filesystem::current_path();
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
+        if (tt::filesystem::safe_is_directory(tt_metal_subdirectory).value_or(false)) {
             this->root_dir = current_working_directory.string();
             log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }
@@ -310,6 +393,11 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
+    // cached_mpi_rank_ is set in the ctor initializer list before InitializeFromEnvVars
+    // so rank-scoped helpers (e.g. get_rank_scoped_logs_root for inspector_settings.log_path)
+    // see the correct value. get_rank_from_env() reads only MPI launcher env vars and
+    // does not depend on any Metal env vars parsed inside InitializeFromEnvVars.
+
     InitializeFromEnvVars();
 
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
@@ -335,6 +423,13 @@ const std::string& RunTimeOptions::get_cache_dir() const {
     return this->cache_dir_;
 }
 
+const std::string& RunTimeOptions::get_jit_scratch_dir() const {
+    if (!this->is_jit_scratch_dir_specified()) {
+        TT_THROW("Env var {} is not set.", "TT_METAL_JIT_SCRATCH");
+    }
+    return this->jit_scratch_dir_;
+}
+
 const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
@@ -354,6 +449,29 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
+
+uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
+    int rank = this->cached_mpi_rank_;
+    uint32_t base = inspector_settings.rpc_server_port;
+    if (rank >= 0) {
+        uint32_t port = base + static_cast<uint32_t>(rank);
+        if (port > 65535) {
+            TT_THROW(
+                "Inspector RPC port overflow: base_port={} + rank={} exceeds 65535. "
+                "Set TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS to a lower base port or reduce rank count.",
+                base,
+                rank);
+        }
+        return static_cast<uint16_t>(port);
+    }
+    return static_cast<uint16_t>(base);
+}
+
+uint16_t RunTimeOptions::get_inspector_rpc_server_port() const { return get_effective_inspector_rpc_server_port(); }
+
+std::string RunTimeOptions::get_inspector_rpc_server_address() const {
+    return inspector_settings.rpc_server_host + ":" + std::to_string(get_effective_inspector_rpc_server_port());
+}
 
 // ============================================================================
 // ENVIRONMENT VARIABLE HANDLER
@@ -775,7 +893,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Note: L1 bank 0 and L1 bank 1 cannot be enabled simultaneously (they share
         //       the same hardware registers and are selected via MUX_CTRL bit 4).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
-            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            ::sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
                 constexpr uint32_t L1_0_BIT = (1 << 3);
                 constexpr uint32_t L1_1_BIT = (1 << 4);
@@ -1377,6 +1495,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (legacy DPRINT is used)
         // Usage: export TT_METAL_DEVICE_PRINT=1
         case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+
+        // TT_METAL_JIT_SCRATCH
+        // Local scratch directory for JIT compilation to avoid NFS ESTALE during
+        // SFPI builds.  When set, the compiler and linker write to this local
+        // directory and artifacts are merged back to the NFS cache atomically.
+        // Default: Not set (build directly to cache)
+        // Usage: export TT_METAL_JIT_SCRATCH=/tmp/tt-jit-build
+        case EnvVarID::TT_METAL_JIT_SCRATCH:
+            this->is_jit_scratch_dir_set = true;
+            this->jit_scratch_dir_ = normalize_path(value) + "/";
+            break;
     }
 }
 
@@ -1392,7 +1521,8 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
 
     // Set inspector log path
-    this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
+    this->inspector_settings.log_path =
+        get_rank_scoped_logs_root(this->get_logs_dir(), this->cached_mpi_rank_) / "generated/inspector";
 
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
@@ -1425,12 +1555,12 @@ void RunTimeOptions::ParseWatcherEnv() {
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
-        if (getenv(env_var.c_str()) != nullptr) {
+        if (std::getenv(env_var.c_str()) != nullptr) {
             watcher_disabled_features.insert(feature);
         }
     }
 
-    const char* watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
+    const char* watcher_debug_delay_str = std::getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
@@ -1565,7 +1695,7 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
 
 void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
     for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-        ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+        ParseFeatureEnv(static_cast<RunTimeDebugFeatures>(i), hal);
     }
 }
 
