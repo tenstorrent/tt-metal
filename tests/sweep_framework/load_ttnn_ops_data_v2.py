@@ -1033,7 +1033,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
             )
             source_rows = cur.fetchall()
 
-            # Use full_config_json for arguments (preserves exact original structure)
+            # Use full_config_json as the base config (preserves all original fields)
             # psycopg2 may return JSONB as a string in some environments
             if full_config_json:
                 if isinstance(full_config_json, str):
@@ -1041,11 +1041,14 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
                         full_config_json = json.loads(full_config_json)
                     except (TypeError, ValueError):
                         full_config_json = {}
-                arguments = full_config_json.get("arguments", {})
             else:
-                arguments = {}
+                full_config_json = {}
 
-            config_dict = {"config_hash": config_hash, "arguments": arguments}
+            config_dict = dict(full_config_json)
+            config_dict.pop("executions", None)
+            config_dict.pop("source", None)
+            config_dict.pop("machine_info", None)
+            config_dict["config_hash"] = config_hash
 
             executions = []
             for source_file, hf_model, exec_count in source_rows:
@@ -1222,7 +1225,8 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 full_config_json = json.loads(full_config_json)
             except (TypeError, ValueError):
                 full_config_json = {}
-        arguments = full_config_json.get("arguments", {}) if full_config_json else {}
+        if not full_config_json:
+            full_config_json = {}
 
         exec_machine_info = {}
         if cfg_board_type:
@@ -1240,11 +1244,13 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             ops[op_name] = {}
 
         if config_id not in ops[op_name]:
-            ops[op_name][config_id] = {
-                "config_hash": config_hash,
-                "arguments": arguments,
-                "executions": [],
-            }
+            config_dict = dict(full_config_json)
+            config_dict.pop("executions", None)
+            config_dict.pop("source", None)
+            config_dict.pop("machine_info", None)
+            config_dict["config_hash"] = config_hash
+            config_dict["executions"] = []
+            ops[op_name][config_id] = config_dict
 
         ops[op_name][config_id]["executions"].append(
             {
@@ -1668,8 +1674,14 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
                 full_config_json = json.loads(full_config_json)
             except (TypeError, ValueError):
                 full_config_json = {}
-        arguments = full_config_json.get("arguments", {}) if full_config_json else {}
-        config_dict = {"config_hash": config_hash, "arguments": arguments}
+        if not full_config_json:
+            full_config_json = {}
+
+        config_dict = dict(full_config_json)
+        config_dict.pop("executions", None)
+        config_dict.pop("source", None)
+        config_dict.pop("machine_info", None)
+        config_dict["config_hash"] = config_hash
 
         executions = []
         for source_file, hf_model, exec_count in source_rows:
