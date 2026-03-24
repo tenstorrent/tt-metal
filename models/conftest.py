@@ -12,6 +12,7 @@ from PIL import Image
 
 @pytest.fixture(autouse=True)
 def ensure_gc():
+    yield
     gc.collect()
 
 

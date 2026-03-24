@@ -965,700 +965,720 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
-    if token_accuracy:
-        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
-
-    repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        # For token accuracy, use input_prompts without rotation
+    try:
         if token_accuracy:
-            repeat_batch_prompts.append(input_prompts)
-        else:
-            repeat_batch_prompts.append(
-                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:global_batch_size]
-            )
+            input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
-    num_tokens_generated_decode = []
-
-    logger.info("Starting inference...")
-    for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
-        logger.info(f"Processing batch {batch_idx}")
-        profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
-        # Preprocess initial prompt inputs
-        (
-            input_tokens_prefill_pt,
-            encoded_prompts,
-            decoding_pos,
-            prefill_lens,
-        ) = preprocess_inputs_prefill(
-            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
-        )
-
-        max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
-        assert (
-            max_generated_tokens + max_encoded_prompt_len <= max_seq_len
-        ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
-
-        if paged_attention:
-            paged_cache_max_seq_len = (
-                page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"] / batch_size
-            )
-            assert (
-                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
-            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
-        profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
-
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-
-        if batch_idx != 0:
-            for i in range(len(model)):
-                for layer in model[i].layers:
-                    k_cache, v_cache = layer.attention.layer_past
-                    k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                    v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
-            generator.prev_page_table = None
-
-        input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
-        # Use device sampling for all cases when supported (prefill + decode)
-        device_sampling_params = (
-            SamplingParams(
-                temperature=sampling_params["temperature"],
-                top_k=sampling_params["top_k"],
-                top_p=sampling_params["top_p"],
-                seed=sampling_params["seed"] if "seed" in sampling_params else None,
-                frequency_penalty=sampling_params["frequency_penalty"]
-                if "frequency_penalty" in sampling_params
-                else 0.0,
-                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
-                repetition_penalty=sampling_params["repetition_penalty"]
-                if "repetition_penalty" in sampling_params
-                else 1.0,
-                enable_log_probs=sampling_params["enable_log_probs"]
-                if "enable_log_probs" in sampling_params
-                else False,
-            )
-            if model[0]._supports_on_device_sampling
-            else None
-        )
-
-        # Override the sampling params for some models
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
-            device_sampling_params = None
-
-        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
-            # host sampling only supports single sample param for all users in a batch
-            sampling_params["temperature"] = sampling_params["temperature"][0]
-            sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
-
-        prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
-
-        if mode == "prefill" or mode == "full":
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                sampling_params=prefill_sampling_params,
-                warmup_prefill=not is_device_perf_test,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
-
-            logger.info(f"Starting prefill...")
-            profiler.start(f"inference_prefill", iteration=batch_idx)
-            prefill_out = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                sampling_params=prefill_sampling_params,
-                warmup_prefill=not is_device_perf_test,
-            )
-            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
-                prefilled_token, prefill_log_probs = prefill_out
-            else:
-                logits = prefill_out
-                prefilled_token = torch.argmax(logits, dim=-1)
-            profiler.end(f"inference_prefill", iteration=batch_idx)
-            logger.info(f"Prefill finished")
-        else:
-            # CI expects profiler to have these measurement keys so
-            # they must be inserted regardless of whether we run prefill or not
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            profiler.start(f"inference_prefill", iteration=batch_idx)
-            profiler.end(f"inference_prefill", iteration=batch_idx)
-            logger.info(f"Skipping prefill forward pass when decode mode is enabled")
-
-            prefilled_token = torch.zeros(global_batch_size, 1, 1)
-
-        # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
-        for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
-            all_outputs[user].append(user_tok)
-
-        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
-
-        # Initial positions
-        current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
-
-        # Start decoding
-        iteration = 0
-        users_decoding = True
-
-        out_tok = prefilled_token
-
-        logger.info(f"Starting decode loop...")
-
-        # Log total inference (accounting for compile_decode as well)
-        profiler.start(f"inference_decode", iteration=batch_idx)
-
-        if mode == "prefill":
-            # CI expects profiler to have these measurement keys so
-            # they must be inserted regardless of whether we run decode or not
-            profiler.start(f"compile_decode", iteration=batch_idx)
-            profiler.end(f"compile_decode", iteration=batch_idx)
-            profiler.start(f"inference_decode_time_{1}", iteration=batch_idx)
-            profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
-            logger.info(f"Skipping decode forward pass when prefill mode is enabled")
-
-        while users_decoding and mode != "prefill":
-            if iteration == 0:  # First iteration also accounts for compile time
-                profiler.start(f"compile_decode", iteration=batch_idx)
-            else:
-                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            # below the collect method also applies teacher forcing which is necessary for exact token matching
+        repeat_batch_prompts = []
+        for i in range(repeat_batches):
+            # For token accuracy, use input_prompts without rotation
             if token_accuracy:
-                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+                repeat_batch_prompts.append(input_prompts)
+            else:
+                repeat_batch_prompts.append(
+                    [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:global_batch_size]
+                )
 
-            # Run decode forward
-            logits, log_probs = generator.decode_forward(
-                out_tok,
-                current_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                reset_batch=(iteration == 0),
-                sampling_params=device_sampling_params,
-                prompt_tokens=input_tokens_prefill_pt,
-                output_tokens=out_tok,
+        num_tokens_generated_decode = []
+
+        logger.info("Starting inference...")
+        for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
+            logger.info(f"Processing batch {batch_idx}")
+            profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
+            # Preprocess initial prompt inputs
+            (
+                input_tokens_prefill_pt,
+                encoded_prompts,
+                decoding_pos,
+                prefill_lens,
+            ) = preprocess_inputs_prefill(
+                input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
             )
 
-            # Get the next token
-            if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
+            max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= max_seq_len
+            ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
 
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
+            if paged_attention:
+                paged_cache_max_seq_len = (
+                    page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"] / batch_size
+                )
+                assert (
+                    max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+                ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+            profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
+
+            # when doing repeating batches, set kv-caches to zero, to avoid context leaking
+
+            if batch_idx != 0:
+                for i in range(len(model)):
+                    for layer in model[i].layers:
+                        k_cache, v_cache = layer.attention.layer_past
+                        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                generator.prev_page_table = None
+
+            input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
+            # Use device sampling for all cases when supported (prefill + decode)
+            device_sampling_params = (
+                SamplingParams(
                     temperature=sampling_params["temperature"],
+                    top_k=sampling_params["top_k"],
                     top_p=sampling_params["top_p"],
-                    on_host=True,
+                    seed=sampling_params["seed"] if "seed" in sampling_params else None,
+                    frequency_penalty=sampling_params["frequency_penalty"]
+                    if "frequency_penalty" in sampling_params
+                    else 0.0,
+                    presence_penalty=sampling_params["presence_penalty"]
+                    if "presence_penalty" in sampling_params
+                    else 0.0,
+                    repetition_penalty=sampling_params["repetition_penalty"]
+                    if "repetition_penalty" in sampling_params
+                    else 1.0,
+                    enable_log_probs=sampling_params["enable_log_probs"]
+                    if "enable_log_probs" in sampling_params
+                    else False,
                 )
+                if model[0]._supports_on_device_sampling
+                else None
+            )
 
-            if iteration == 0:  # First iteration will account the compile time
+            # Override the sampling params for some models
+            # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
+            if model_args[0].base_model_name in models_not_supported_for_device_sampling:
+                device_sampling_params = None
+
+            if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+                # host sampling only supports single sample param for all users in a batch
+                sampling_params["temperature"] = sampling_params["temperature"][0]
+                sampling_params["top_p"] = sampling_params["top_p"][0]
+                sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+
+            prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
+
+            if mode == "prefill" or mode == "full":
+                logger.info("Starting prefill warmup...")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                logits = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    sampling_params=prefill_sampling_params,
+                    warmup_prefill=not is_device_perf_test,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                logger.info("Finished prefill warmup")
+
+                logger.info(f"Starting prefill...")
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                prefill_out = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    sampling_params=prefill_sampling_params,
+                    warmup_prefill=not is_device_perf_test,
+                )
+                if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
+                    prefilled_token, prefill_log_probs = prefill_out
+                else:
+                    logits = prefill_out
+                    prefilled_token = torch.argmax(logits, dim=-1)
+                profiler.end(f"inference_prefill", iteration=batch_idx)
+                logger.info(f"Prefill finished")
+            else:
+                # CI expects profiler to have these measurement keys so
+                # they must be inserted regardless of whether we run prefill or not
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                profiler.end(f"inference_prefill", iteration=batch_idx)
+                logger.info(f"Skipping prefill forward pass when decode mode is enabled")
+
+                prefilled_token = torch.zeros(global_batch_size, 1, 1)
+
+            # Keep track of generated outputs to print out every iteration
+            all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
+            for user in range(global_batch_size):
+                user_tok = int(prefilled_token[user].item())
+                all_outputs[user].append(user_tok)
+
+            user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
+
+            # Initial positions
+            current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
+
+            # Start decoding
+            iteration = 0
+            users_decoding = True
+
+            out_tok = prefilled_token
+
+            logger.info(f"Starting decode loop...")
+
+            # Log total inference (accounting for compile_decode as well)
+            profiler.start(f"inference_decode", iteration=batch_idx)
+
+            if mode == "prefill":
+                # CI expects profiler to have these measurement keys so
+                # they must be inserted regardless of whether we run decode or not
+                profiler.start(f"compile_decode", iteration=batch_idx)
                 profiler.end(f"compile_decode", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                profiler.start(f"inference_decode_time_{1}", iteration=batch_idx)
+                profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
+                logger.info(f"Skipping decode forward pass when prefill mode is enabled")
 
-            # Print perf after every iteration (skip in CI to avoid performance overhead)
-            tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.debug(
-                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
-
-            if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
-                current_pos += 1
-            # Save output token to print out later
-            for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                    all_outputs[user].append(user_tok)
+            while users_decoding and mode != "prefill":
+                if iteration == 0:  # First iteration also accounts for compile time
+                    profiler.start(f"compile_decode", iteration=batch_idx)
                 else:
+                    profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                # below the collect method also applies teacher forcing which is necessary for exact token matching
+                if token_accuracy:
+                    out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+
+                # Run decode forward
+                logits, log_probs = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    reset_batch=(iteration == 0),
+                    sampling_params=device_sampling_params,
+                    prompt_tokens=input_tokens_prefill_pt,
+                    output_tokens=out_tok,
+                )
+
+                # Get the next token
+                if device_sampling_params is not None:
+                    out_tok = logits.unsqueeze(1)
+
+                else:
+                    # TODO Fix use case with temperature > 0
+                    _, out_tok = sample_host(
+                        logits,
+                        temperature=sampling_params["temperature"],
+                        top_p=sampling_params["top_p"],
+                        on_host=True,
+                    )
+
+                if iteration == 0:  # First iteration will account the compile time
+                    profiler.end(f"compile_decode", iteration=batch_idx)
+                    decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+                else:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=batch_idx
+                    )
+
+                # Print perf after every iteration (skip in CI to avoid performance overhead)
+                tokens_per_second_per_user = 1 / decode_iteration_time
+                logger.debug(
+                    f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
+                )
+
+                if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
+                    current_pos += 1
+                # Save output token to print out later
+                for user in range(global_batch_size):
+                    user_tok = out_tok[user].item()
                     if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
-                        user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                        if all(user_done):
-                            users_decoding = False
-                    else:
+                        user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                    ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                         all_outputs[user].append(user_tok)
+                    else:
+                        if (
+                            stop_at_eos
+                        ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                            user_done[user] = True
+                            logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                            if all(user_done):
+                                users_decoding = False
+                        else:
+                            all_outputs[user].append(user_tok)
 
-            # Print out generated outputs for each user at the end of every iteration
-            for user in range(global_batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                if len(text) > 100:
-                    text = "..." + text[-97:]
-                text = text.replace("\n", " ")
-                logger.debug("[User {}] {}".format(user, text))
+                # Print out generated outputs for each user at the end of every iteration
+                for user in range(global_batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    if len(text) > 100:
+                        text = "..." + text[-97:]
+                    text = text.replace("\n", " ")
+                    logger.debug("[User {}] {}".format(user, text))
 
-            iteration += 1
+                iteration += 1
 
-            # Upper limit of generated tokens for each user
-            if iteration >= max_generated_tokens:
-                users_decoding = False
+                # Upper limit of generated tokens for each user
+                if iteration >= max_generated_tokens:
+                    users_decoding = False
 
-        # Final print
-        if not users_decoding:
-            profiler.start(f"log_saving_file", iteration=batch_idx)
-            logger.info("Finished decoding, printing the final outputs...\n")
-            for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                text = tokenizer.decode(output)
-                prompt_including_assistant_tags = tokenizer.decode(
-                    model_args[0].encode_prompt(prompt, instruct=instruct)
-                )
-                text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-                if print_to_file:
-                    with open(output_filename, "a") as f:
-                        f.write(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
-                else:
-                    # Strip leading newlines from output when sent to terminal
-                    short_prompt = (
-                        (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
-                        if len(prompt) > 200
-                        else prompt
+            # Final print
+            if not users_decoding:
+                profiler.start(f"log_saving_file", iteration=batch_idx)
+                logger.info("Finished decoding, printing the final outputs...\n")
+                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                    text = tokenizer.decode(output)
+                    prompt_including_assistant_tags = tokenizer.decode(
+                        model_args[0].encode_prompt(prompt, instruct=instruct)
                     )
-                    logger.info(
-                        f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
-                    )
-            profiler.end(f"log_saving_file", iteration=batch_idx)
+                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                    if print_to_file:
+                        with open(output_filename, "a") as f:
+                            f.write(
+                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
+                            )
+                    else:
+                        # Strip leading newlines from output when sent to terminal
+                        short_prompt = (
+                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                            if len(prompt) > 200
+                            else prompt
+                        )
+                        logger.info(
+                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                        )
+                profiler.end(f"log_saving_file", iteration=batch_idx)
 
-        num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+            num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
-        # Store outputs for repeat batch tests
-        if "ci-eval-1" in test_id:
-            if not hasattr(test_demo_text, "batch_outputs"):
-                test_demo_text.batch_outputs = []
-            if batch_idx == 0:
-                test_demo_text.batch_outputs = []
+            # Store outputs for repeat batch tests
+            if "ci-eval-1" in test_id:
+                if not hasattr(test_demo_text, "batch_outputs"):
+                    test_demo_text.batch_outputs = []
+                if batch_idx == 0:
+                    test_demo_text.batch_outputs = []
 
-            if all_outputs and len(all_outputs) > 0:
-                final_output_text = tokenizer.decode(all_outputs[0])
-                test_demo_text.batch_outputs.append(final_output_text)
-                logger.info(f"Stored output for batch {batch_idx}: {final_output_text[:100]}...")
+                if all_outputs and len(all_outputs) > 0:
+                    final_output_text = tokenizer.decode(all_outputs[0])
+                    test_demo_text.batch_outputs.append(final_output_text)
+                    logger.info(f"Stored output for batch {batch_idx}: {final_output_text[:100]}...")
 
-        if "ci-eval-32" in test_id:
-            if not hasattr(test_demo_text, "batch32_outputs"):
-                test_demo_text.batch32_outputs = []
-            if batch_idx == 0:
-                test_demo_text.batch32_outputs = []
+            if "ci-eval-32" in test_id:
+                if not hasattr(test_demo_text, "batch32_outputs"):
+                    test_demo_text.batch32_outputs = []
+                if batch_idx == 0:
+                    test_demo_text.batch32_outputs = []
 
-            batch_outputs = []
-            if all_outputs and len(all_outputs) > 0:
-                for user_idx in range(len(all_outputs)):
-                    final_output_text = tokenizer.decode(all_outputs[user_idx])
-                    batch_outputs.append(final_output_text)
-                test_demo_text.batch32_outputs.append(batch_outputs)
-                logger.info(f"Stored outputs for batch {batch_idx}: {len(batch_outputs)} users")
+                batch_outputs = []
+                if all_outputs and len(all_outputs) > 0:
+                    for user_idx in range(len(all_outputs)):
+                        final_output_text = tokenizer.decode(all_outputs[user_idx])
+                        batch_outputs.append(final_output_text)
+                    test_demo_text.batch32_outputs.append(batch_outputs)
+                    logger.info(f"Stored outputs for batch {batch_idx}: {len(batch_outputs)} users")
 
-        if token_accuracy:
-            acc = token_acc.compute_accuracy()
-            logger.info(f"=== Top1 and Top5 Token Accuracy ===")
-            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
+            if token_accuracy:
+                acc = token_acc.compute_accuracy()
+                logger.info(f"=== Top1 and Top5 Token Accuracy ===")
+                logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
-        profiler.end(f"inference_decode", iteration=batch_idx)
+            profiler.end(f"inference_decode", iteration=batch_idx)
 
-    # Finish profiling at the end of inference for all repeated batches
-    profiler.end("run")
+        # Finish profiling at the end of inference for all repeated batches
+        profiler.end("run")
 
-    # Quick sanity check that the model doesn't produce special tokens=garbage output
-    is_special_tokens_produced = [False] * len(all_outputs)
-    for i, output in enumerate(all_outputs):
-        output = output[len(encoded_prompts[i]) :]
-        is_eos = [token in tokenizer.stop_tokens for token in output]
-        if any(is_eos):
-            output = output[: is_eos.index(True)]
-        is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
-    if any(is_special_tokens_produced):
-        logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
-        if is_ci_env:
-            assert False, "model produced special tokens"
+        # Quick sanity check that the model doesn't produce special tokens=garbage output
+        is_special_tokens_produced = [False] * len(all_outputs)
+        for i, output in enumerate(all_outputs):
+            output = output[len(encoded_prompts[i]) :]
+            is_eos = [token in tokenizer.stop_tokens for token in output]
+            if any(is_eos):
+                output = output[: is_eos.index(True)]
+            is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
+        if any(is_special_tokens_produced):
+            logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
+            if is_ci_env:
+                assert False, "model produced special tokens"
 
-    # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
-    compile_decode_time = profiler.get_duration("compile_decode") if mode != "prefill" else 0
+        # Prepare profile benchmark metrics for the first repeat batch only
+        compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
+        compile_decode_time = profiler.get_duration("compile_decode") if mode != "prefill" else 0
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill") if mode != "decode" else 0
-    total_inference_decode_time = 0
-    for i in range(1, num_tokens_generated_decode[0]):  # Iteration 0 is the compile time
-        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
+        total_inference_prefill_time = profiler.get_duration("inference_prefill") if mode != "decode" else 0
+        total_inference_decode_time = 0
+        for i in range(1, num_tokens_generated_decode[0]):  # Iteration 0 is the compile time
+            total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
-    # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / global_batch_size
+        # Average prefill time for each user
+        avg_time_to_first_token = total_inference_prefill_time / global_batch_size
 
-    # Average decode time per batch iteration
-    avg_decode_iteration_time = (
-        total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
-    )
-
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if mode != "decode" else 0
-    decode_tok_s_user = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time if mode != "prefill" and iteration > 1 else 0
-    )  # Remove the compile time
-    decode_tok_s = (
-        ((num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size)
-        if mode != "prefill" and iteration > 1
-        else 0
-    )  # Remove the compile time
-
-    measurements = {
-        # Required measurements
-        "compile_prefill": compile_prefill_time,
-        "compile_decode": compile_decode_time,
-        "inference_prefill": total_inference_prefill_time,
-        "inference_decode": total_inference_decode_time,
-        "prefill_time_to_token": avg_time_to_first_token,
-        "prefill_t/s": prefill_tok_s,  # tokens/s
-        "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
-        "decode_t/s": decode_tok_s,  # tokens/s
-        # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
-        "Full demo runtime": profiler.get_duration("run"),
-    }
-
-    # Decode performance for some specific tokens
-    tok_1_perf = (
-        profiler.get_duration(f"inference_decode_time_{1}") if 1 < num_tokens_generated_decode[0] else 0
-    )  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < num_tokens_generated_decode[0] else 0
-    tok_1024_perf = (
-        profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < num_tokens_generated_decode[0] else 0
-    )
-    tok_4096_perf = (
-        profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < num_tokens_generated_decode[0] else 0
-    )
-
-    if not stop_at_eos:
-        logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
-
-    logger.info("")
-    logger.info(f"=== Performance metrics ===")
-    if tok_1_perf > 0:
-        logger.info(
-            f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
-        )
-    if tok_128_perf > 0:
-        logger.info(
-            f"128th token decode time: {tok_128_perf * 1000:.2f}ms [{round(1 / tok_128_perf, 2)} t/s/u, {round((1 / tok_128_perf) * global_batch_size, 2)} t/s]"
-        )
-    if tok_1024_perf > 0:
-        logger.info(
-            f"1024th token decode time: {tok_1024_perf * 1000:.2f}ms [{round(1 / tok_1024_perf, 2)} t/s/u, {round((1 / tok_1024_perf) * global_batch_size, 2)} t/s]"
-        )
-    if tok_4096_perf > 0:
-        logger.info(
-            f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
+        # Average decode time per batch iteration
+        avg_decode_iteration_time = (
+            total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
         )
 
-    # Print some of the perf metrics
-    logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
-    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
-    logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
-    logger.info(
-        f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
-    )
+        prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if mode != "decode" else 0
+        decode_tok_s_user = (
+            (num_tokens_generated_decode[0] - 1) / total_inference_decode_time
+            if mode != "prefill" and iteration > 1
+            else 0
+        )  # Remove the compile time
+        decode_tok_s = (
+            ((num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size)
+            if mode != "prefill" and iteration > 1
+            else 0
+        )  # Remove the compile time
 
-    # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "N150x4", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
-
-    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
-    model_name = model_args[0].base_model_name
-    model_device_key = f"{tt_device_name}_{model_name}"
-
-    if model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
-        if model_device_key in dict_target_prefill_tok_s:
-            target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
-        else:
-            target_prefill_tok_s = None
-            logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
-
-        # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_decode_tok_s_u = {
-            "N150_Llama-3.2-1B": 160,
-            "N300_Llama-3.2-1B": 250,  # TODO Update target
-            "T3K_Llama-3.2-1B": 300,  # TODO Update target
-            "TG_Llama-3.2-1B": 300,  # TODO Update target
-            #
-            "N150_Llama-3.2-3B": 60,
-            "N300_Llama-3.2-3B": 100,  # TODO Update target
-            "T3K_Llama-3.2-3B": 150,  # TODO Update target
-            "TG_Llama-3.2-3B": 150,  # TODO Update target
-            #
-            "N150_Llama-3.1-8B": 23,
-            "P150_Llama-3.1-8B": 23,  # TODO Update target
-            "N300_Llama-3.1-8B": 38,
-            "P300_Llama-3.1-8B": 38,
-            "T3K_Llama-3.1-8B": 45,
-            "TG_Llama-3.1-8B": 45,  # TODO Update target
-            #
-            "N150_Llama-3.2-11B": 23,
-            "N300_Llama-3.2-11B": 38,  # TODO Update target
-            "T3K_Llama-3.2-11B": 45,  # TODO Update target
-            "TG_Llama-3.2-11B": 45,  # TODO Update target
-            #
-            "T3K_Llama-3.1-70B": 20,  # TODO Update target
-            "TG_Llama-3.1-70B": 20,  # TODO Update target
-            #
-            "N150_Mistral-7B": 23,
-            "N300_Mistral-7B": 38,  # TODO Update target
-            "T3K_Mistral-7B": 45,  # TODO Update target
-            "TG_Mistral-7B": 45,  # TODO Update target
-        }
-        if model_device_key in dict_target_decode_tok_s_u:
-            target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
-        else:
-            target_decode_tok_s_u = None
-            logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
-
-        target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
+        measurements = {
+            # Required measurements
+            "compile_prefill": compile_prefill_time,
+            "compile_decode": compile_decode_time,
+            "inference_prefill": total_inference_prefill_time,
+            "inference_decode": total_inference_decode_time,
+            "prefill_time_to_token": avg_time_to_first_token,
+            "prefill_t/s": prefill_tok_s,  # tokens/s
+            "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
+            "decode_t/s": decode_tok_s,  # tokens/s
+            # Optional measurements
+            "Total compile time": compile_prefill_time + compile_decode_time,
+            "Full demo runtime": profiler.get_duration("run"),
         }
 
-    else:
-        logger.info(f"Model {model_name} does not have performance targets set")
-        targets = {}
-
-    # Save benchmark data for CI dashboard
-    if is_ci_env:
-        # Instead of running warmup iterations, the demo profiles the initial compile iteration
-        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
-
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, num_tokens_generated_decode[0]):
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+        # Decode performance for some specific tokens
+        tok_1_perf = (
+            profiler.get_duration(f"inference_decode_time_{1}") if 1 < num_tokens_generated_decode[0] else 0
+        )  # Iteration 0 is compile time
+        tok_128_perf = (
+            profiler.get_duration(f"inference_decode_time_{127}") if 127 < num_tokens_generated_decode[0] else 0
         )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
-            step_warm_up_num_iterations=None,
-            target=None,
+        tok_1024_perf = (
+            profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < num_tokens_generated_decode[0] else 0
         )
-        if token_accuracy:
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                "top1_token_accuracy",
-                acc[0] * 100,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                "top5_token_accuracy",
-                acc[1] * 100,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_name,
-            ml_model_type="llm",
-            num_layers=model_args[0].n_layers,
-            batch_size=global_batch_size,
-            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
+        tok_4096_perf = (
+            profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < num_tokens_generated_decode[0] else 0
         )
 
-        # check measurements against CI performance targets -- for batch size 32
-        if "performance" in test_id and "ci-32" in test_id:
+        if not stop_at_eos:
+            logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
+
+        logger.info("")
+        logger.info(f"=== Performance metrics ===")
+        if tok_1_perf > 0:
             logger.info(
-                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+                f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
             )
-            # Targets set to 0.95x observed values for decode rates (higher is better)
-            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
-            ci_target_ttft = {
-                # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 25,
-                "N150_Llama-3.2-3B": 62,
-                "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
-                # N300 targets
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
-                # T3K targets
-                "T3K_Llama-3.1-70B": (205, 1.25),
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
-                # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
-                "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 110,  # Issue: Perf regression being tracked on issue #29834
-            }
-            ci_target_decode_tok_s_u = {
-                # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 66,
-                "N150_Llama-3.2-3B": 35,
-                "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 22,
-                # N300 targets
-                # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
-                "N300_Qwen2.5-7B": 21.0,
-                # T3K targets
-                "T3K_Llama-3.1-70B": 15,
-                "T3K_Qwen2.5-72B": 13.25,
-                "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 19,
-            }
+        if tok_128_perf > 0:
+            logger.info(
+                f"128th token decode time: {tok_128_perf * 1000:.2f}ms [{round(1 / tok_128_perf, 2)} t/s/u, {round((1 / tok_128_perf) * global_batch_size, 2)} t/s]"
+            )
+        if tok_1024_perf > 0:
+            logger.info(
+                f"1024th token decode time: {tok_1024_perf * 1000:.2f}ms [{round(1 / tok_1024_perf, 2)} t/s/u, {round((1 / tok_1024_perf) * global_batch_size, 2)} t/s]"
+            )
+        if tok_4096_perf > 0:
+            logger.info(
+                f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
+            )
 
-            # Only call verify_perf if the model_device_key exists in the targets
-            ci_targets = {}
-            if model_device_key in ci_target_ttft:
-                current_ttft_target = ci_target_ttft[model_device_key]
-                if isinstance(current_ttft_target, tuple):
-                    high_tol_percentage = current_ttft_target[1]
-                    current_ttft_target = current_ttft_target[0]
-                else:
-                    high_tol_percentage = 1.15
-                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
-            if model_device_key in ci_target_decode_tok_s_u:
-                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
-                # calculate from per-user rate
-                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+        # Print some of the perf metrics
+        logger.info("==")
+        logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+        logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
+        logger.info("")
+        logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
+        logger.info(
+            f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
+        )
 
-            if ci_targets:  # Only verify performance if we have targets for this model/device combination
-                verify_perf(
-                    measurements,
-                    ci_targets,
-                    high_tol_percentage=high_tol_percentage,
-                    expected_measurements={k: True for k in ci_targets.keys()},
-                )
+        # Benchmark targets
+        supported_models = [
+            "Llama-3.2-1B",
+            "Llama-3.2-3B",
+            "Llama-3.1-8B",
+            "Llama-3.2-11B",
+            "Llama-3.1-70B",
+            "Mistral-7B",
+        ]
+        supported_devices = ["N150", "P100", "P150", "P300", "N300", "N150x4", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
+
+        tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
+        model_name = model_args[0].base_model_name
+        model_device_key = f"{tt_device_name}_{model_name}"
+
+        if model_name in supported_models:
+            assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+
+            # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
+            dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
+            if model_device_key in dict_target_prefill_tok_s:
+                target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
             else:
-                logger.warning(
-                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                target_prefill_tok_s = None
+                logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
+
+            # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
+            dict_target_decode_tok_s_u = {
+                "N150_Llama-3.2-1B": 160,
+                "N300_Llama-3.2-1B": 250,  # TODO Update target
+                "T3K_Llama-3.2-1B": 300,  # TODO Update target
+                "TG_Llama-3.2-1B": 300,  # TODO Update target
+                #
+                "N150_Llama-3.2-3B": 60,
+                "N300_Llama-3.2-3B": 100,  # TODO Update target
+                "T3K_Llama-3.2-3B": 150,  # TODO Update target
+                "TG_Llama-3.2-3B": 150,  # TODO Update target
+                #
+                "N150_Llama-3.1-8B": 23,
+                "P150_Llama-3.1-8B": 23,  # TODO Update target
+                "N300_Llama-3.1-8B": 38,
+                "P300_Llama-3.1-8B": 38,
+                "T3K_Llama-3.1-8B": 45,
+                "TG_Llama-3.1-8B": 45,  # TODO Update target
+                #
+                "N150_Llama-3.2-11B": 23,
+                "N300_Llama-3.2-11B": 38,  # TODO Update target
+                "T3K_Llama-3.2-11B": 45,  # TODO Update target
+                "TG_Llama-3.2-11B": 45,  # TODO Update target
+                #
+                "T3K_Llama-3.1-70B": 20,  # TODO Update target
+                "TG_Llama-3.1-70B": 20,  # TODO Update target
+                #
+                "N150_Mistral-7B": 23,
+                "N300_Mistral-7B": 38,  # TODO Update target
+                "T3K_Mistral-7B": 45,  # TODO Update target
+                "TG_Mistral-7B": 45,  # TODO Update target
+            }
+            if model_device_key in dict_target_decode_tok_s_u:
+                target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
+            else:
+                target_decode_tok_s_u = None
+                logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
+
+            target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
+            targets = {
+                "prefill_t/s": target_prefill_tok_s,
+                "decode_t/s": target_decode_tok_s,
+                "decode_t/s/u": target_decode_tok_s_u,
+            }
+
+        else:
+            logger.info(f"Model {model_name} does not have performance targets set")
+            targets = {}
+
+        # Save benchmark data for CI dashboard
+        if is_ci_env:
+            # Instead of running warmup iterations, the demo profiles the initial compile iteration
+            bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
+            benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+            # Save the decode performance of every iteration for plotting in superset
+            for i in range(1, num_tokens_generated_decode[0]):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"time_to_token_{i}",
+                    profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
                 )
-    if token_accuracy:
-        total_top1_acc = math.ceil(acc[0] * 100)
-        total_top5_acc = math.ceil(acc[1] * 100)
 
-        if not json_config_file:
-            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
-            assert (
-                total_top1_acc >= min_top1_acc
-            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-            assert (
-                total_top5_acc >= min_top5_acc
-            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
-            logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+            # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+            if token_accuracy:
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    "top1_token_accuracy",
+                    acc[0] * 100,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    "top5_token_accuracy",
+                    acc[1] * 100,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type=f"{tt_device_name}-demo",
+                ml_model_name=model_name,
+                ml_model_type="llm",
+                num_layers=model_args[0].n_layers,
+                batch_size=global_batch_size,
+                config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
+                input_sequence_length=max(prefill_lens),
+                output_sequence_length=num_tokens_generated_decode[0],
+            )
 
-    if (
-        "ci-eval-1" in test_id
-        and hasattr(test_demo_text, "batch_outputs")
-        and len(test_demo_text.batch_outputs) == repeat_batches
-    ):
-        logger.info("=== Repeat Batch Output Comparison ===")
-
-        # Compare paired batches (A<->A, B<->B, C<->C)
-        comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
-        comparison_names = [f"Batch{i // 2 + 1}<->Batch{i // 2 + 1}" for i in range(0, repeat_batches, 2)]
-
-        all_matches = True
-        for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
-            output1 = test_demo_text.batch_outputs[batch1_idx]
-            output2 = test_demo_text.batch_outputs[batch2_idx]
-
-            if output1 == output2:
+            # check measurements against CI performance targets -- for batch size 32
+            if "performance" in test_id and "ci-32" in test_id:
                 logger.info(
-                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs match"
+                    f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
                 )
-            else:
-                logger.warning(
-                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs differ"
-                )
-                logger.info(f"  Batch {batch1_idx + 1} output: {output1[:100]}...")
-                logger.info(f"  Batch {batch2_idx + 1} output: {output2[:100]}...")
-                all_matches = False
+                # Targets set to 0.95x observed values for decode rates (higher is better)
+                # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
+                ci_target_ttft = {
+                    # N150 targets (milliseconds) - lower is better
+                    "N150_Llama-3.2-1B": 25,
+                    "N150_Llama-3.2-3B": 62,
+                    "N150_Llama-3.1-8B": 120,
+                    "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
+                    # N300 targets
+                    # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
+                    "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
+                    # T3K targets
+                    "T3K_Llama-3.1-70B": (205, 1.25),
+                    # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
+                    "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
+                    # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
+                    "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
+                    "T3K_Qwen3-32B": 110,  # Issue: Perf regression being tracked on issue #29834
+                }
+                ci_target_decode_tok_s_u = {
+                    # N150 targets - higher is better
+                    "N150_Llama-3.2-1B": 66,
+                    "N150_Llama-3.2-3B": 35,
+                    "N150_Llama-3.1-8B": 21,
+                    "N150_Mistral-7B": 22,
+                    # N300 targets
+                    # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
+                    "N300_Qwen2.5-7B": 21.0,
+                    # T3K targets
+                    "T3K_Llama-3.1-70B": 15,
+                    "T3K_Qwen2.5-72B": 13.25,
+                    "T3K_Qwen2.5-Coder-32B": 20,
+                    "T3K_Qwen3-32B": 19,
+                }
 
-        assert all_matches, "Repeat batch outputs should be identical"
+                # Only call verify_perf if the model_device_key exists in the targets
+                ci_targets = {}
+                if model_device_key in ci_target_ttft:
+                    current_ttft_target = ci_target_ttft[model_device_key]
+                    if isinstance(current_ttft_target, tuple):
+                        high_tol_percentage = current_ttft_target[1]
+                        current_ttft_target = current_ttft_target[0]
+                    else:
+                        high_tol_percentage = 1.15
+                    ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
+                if model_device_key in ci_target_decode_tok_s_u:
+                    ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+                    # calculate from per-user rate
+                    ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
 
-    if (
-        "ci-eval-32" in test_id
-        and hasattr(test_demo_text, "batch32_outputs")
-        and len(test_demo_text.batch32_outputs) > 1
-    ):
-        logger.info("=== Batch32 Shifting Test Output Comparison ===")
-
-        num_batches = len(test_demo_text.batch32_outputs)
-        num_users = len(test_demo_text.batch32_outputs[0])
-
-        logger.info(f"Comparing {num_batches} batches with {num_users} users each")
-
-        consistency_checks = []
-
-        for batch_idx in range(num_batches - 1):
-            current_batch = test_demo_text.batch32_outputs[batch_idx]
-            next_batch = test_demo_text.batch32_outputs[batch_idx + 1]
-
-            logger.info(f"Comparing batch {batch_idx} vs batch {batch_idx + 1}")
-
-            for user_offset in range(num_users):
-                current_user_idx = (user_offset + 1) % num_users
-                next_user_idx = user_offset
-
-                current_output = current_batch[current_user_idx]
-                next_output = next_batch[next_user_idx]
-
-                expected_prompt_idx = (user_offset + batch_idx + 1) % num_users
-
-                if current_output == next_output:
-                    consistency_checks.append(True)
-                    logger.info(
-                        f"User {current_user_idx} (batch {batch_idx}) matches User {next_user_idx} (batch {batch_idx + 1}) - both used prompt[{expected_prompt_idx}]"
+                if ci_targets:  # Only verify performance if we have targets for this model/device combination
+                    verify_perf(
+                        measurements,
+                        ci_targets,
+                        high_tol_percentage=high_tol_percentage,
+                        expected_measurements={k: True for k in ci_targets.keys()},
                     )
                 else:
-                    consistency_checks.append(False)
                     logger.warning(
-                        f"User {current_user_idx} (batch {batch_idx}) differs from User {next_user_idx} (batch {batch_idx + 1}) - both should use prompt[{expected_prompt_idx}]"
+                        f"No CI performance targets found for {model_device_key}. Skipping performance verification."
                     )
-                    logger.info(f"  Batch {batch_idx} User {current_user_idx}: {current_output[:50]}...")
-                    logger.info(f"  Batch {batch_idx + 1} User {next_user_idx}: {next_output[:50]}...")
+        if token_accuracy:
+            total_top1_acc = math.ceil(acc[0] * 100)
+            total_top5_acc = math.ceil(acc[1] * 100)
 
-        all_consistent = all(consistency_checks)
-        failed_checks = sum(1 for check in consistency_checks if not check)
-        total_checks = len(consistency_checks)
+            if not json_config_file:
+                # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+                min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
+                assert (
+                    total_top1_acc >= min_top1_acc
+                ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+                assert (
+                    total_top5_acc >= min_top5_acc
+                ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+                logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
 
-        assert (
-            all_consistent
-        ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
+        if (
+            "ci-eval-1" in test_id
+            and hasattr(test_demo_text, "batch_outputs")
+            and len(test_demo_text.batch_outputs) == repeat_batches
+        ):
+            logger.info("=== Repeat Batch Output Comparison ===")
+
+            # Compare paired batches (A<->A, B<->B, C<->C)
+            comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
+            comparison_names = [f"Batch{i // 2 + 1}<->Batch{i // 2 + 1}" for i in range(0, repeat_batches, 2)]
+
+            all_matches = True
+            for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
+                output1 = test_demo_text.batch_outputs[batch1_idx]
+                output2 = test_demo_text.batch_outputs[batch2_idx]
+
+                if output1 == output2:
+                    logger.info(
+                        f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs match"
+                    )
+                else:
+                    logger.warning(
+                        f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs differ"
+                    )
+                    logger.info(f"  Batch {batch1_idx + 1} output: {output1[:100]}...")
+                    logger.info(f"  Batch {batch2_idx + 1} output: {output2[:100]}...")
+                    all_matches = False
+
+            assert all_matches, "Repeat batch outputs should be identical"
+
+        if (
+            "ci-eval-32" in test_id
+            and hasattr(test_demo_text, "batch32_outputs")
+            and len(test_demo_text.batch32_outputs) > 1
+        ):
+            logger.info("=== Batch32 Shifting Test Output Comparison ===")
+
+            num_batches = len(test_demo_text.batch32_outputs)
+            num_users = len(test_demo_text.batch32_outputs[0])
+
+            logger.info(f"Comparing {num_batches} batches with {num_users} users each")
+
+            consistency_checks = []
+
+            for batch_idx in range(num_batches - 1):
+                current_batch = test_demo_text.batch32_outputs[batch_idx]
+                next_batch = test_demo_text.batch32_outputs[batch_idx + 1]
+
+                logger.info(f"Comparing batch {batch_idx} vs batch {batch_idx + 1}")
+
+                for user_offset in range(num_users):
+                    current_user_idx = (user_offset + 1) % num_users
+                    next_user_idx = user_offset
+
+                    current_output = current_batch[current_user_idx]
+                    next_output = next_batch[next_user_idx]
+
+                    expected_prompt_idx = (user_offset + batch_idx + 1) % num_users
+
+                    if current_output == next_output:
+                        consistency_checks.append(True)
+                        logger.info(
+                            f"User {current_user_idx} (batch {batch_idx}) matches User {next_user_idx} (batch {batch_idx + 1}) - both used prompt[{expected_prompt_idx}]"
+                        )
+                    else:
+                        consistency_checks.append(False)
+                        logger.warning(
+                            f"User {current_user_idx} (batch {batch_idx}) differs from User {next_user_idx} (batch {batch_idx + 1}) - both should use prompt[{expected_prompt_idx}]"
+                        )
+                        logger.info(f"  Batch {batch_idx} User {current_user_idx}: {current_output[:50]}...")
+                        logger.info(f"  Batch {batch_idx + 1} User {next_user_idx}: {next_output[:50]}...")
+
+            all_consistent = all(consistency_checks)
+            failed_checks = sum(1 for check in consistency_checks if not check)
+            total_checks = len(consistency_checks)
+
+            assert (
+                all_consistent
+            ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
+    finally:
+        generator.close()

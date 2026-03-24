@@ -2212,9 +2212,19 @@ class Generator(WarmupForwardMixin):
                     page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    ## Cleanup
 
-    def __del__(self):
+    def close(self):
+        """Explicitly release device resources (traces, mesh devices).
+
+        Call this in a finally block instead of relying on __del__ via GC,
+        which can segfault if the device is in an inconsistent state after
+        a prior test failure.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
         # Release all captured traces to prevent nanobind memory leaks
         # Traces must be released before closing the mesh device
         try:
@@ -2268,6 +2278,8 @@ class Generator(WarmupForwardMixin):
             for m in self.model:
                 ttnn.close_mesh_device(m.mesh_device)
 
+    def __del__(self):
+        self.close()
         if hasattr(super(Generator, self), "__del__"):
             super().__del__()
 
