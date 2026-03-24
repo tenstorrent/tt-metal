@@ -30,6 +30,7 @@ from typing import Literal, TypeAlias
 import yaml
 from datetime import datetime, timedelta, timezone
 from docopt import docopt
+from rank_env import get_rank_from_env
 import utils
 
 
@@ -453,19 +454,6 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
     if not existing_candidates:
         return None
 
-    def _get_current_rank() -> int | None:
-        for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"):
-            rank_value = os.environ.get(rank_env)
-            if rank_value is None:
-                continue
-            try:
-                rank = int(rank_value)
-                if rank >= 0:
-                    return rank
-            except (ValueError, OverflowError):
-                continue
-        return None
-
     def _extract_rank(path: Path) -> int | None:
         rank_dir = path.parent.parent.name
         match = re.search(r"_rank_(\d+)$", rank_dir)
@@ -473,7 +461,7 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
             return None
         return int(match.group(1))
 
-    current_rank = _get_current_rank()
+    current_rank = get_rank_from_env()
     if current_rank is not None:
         rank_matches = [candidate for candidate in existing_candidates if _extract_rank(candidate) == current_rank]
         if rank_matches:
@@ -496,6 +484,14 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
 
 
 def _resolve_inspector_directory_from_logs_root(logs_root: str | Path, *, require_exists: bool = False) -> str | None:
+    """Resolve an inspector directory under ``logs_root``.
+
+    ``require_exists`` is keyword-only to keep fallback call sites readable.
+    Returns ``None`` only when ``require_exists=True`` and the legacy
+    ``generated/inspector`` path does not exist, so callers can continue to the
+    next fallback.
+    """
+
     logs_root_path = Path(logs_root)
     rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root_path)
     if rank_scoped_directory is not None:

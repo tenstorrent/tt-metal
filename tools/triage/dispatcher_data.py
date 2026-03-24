@@ -46,6 +46,8 @@ script_config = ScriptConfig(
 )
 
 MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
+# Keep the error short on large systems; a few unique IDs are enough to spot mapping mismatches.
+MAX_DEVICE_IDS_IN_ERROR_SUMMARY = 5
 
 
 @dataclass
@@ -63,8 +65,8 @@ class DispatcherCoreData:
     watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
     previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
-    kernel_path: str = triage_field("Kernel Path", verbose=1)
-    firmware_path: str = triage_field("Firmware Path", verbose=1)
+    kernel_path: Path | None = triage_field("Kernel Path", verbose=1)
+    firmware_path: Path = triage_field("Firmware Path", verbose=1)
     # New watcher/mailbox fields (verbose=1)
     dispatch_mode: str | None = triage_field("Dispatch Mode", verbose=1)
     brisc_noc_id: int | None = triage_field("BRISC NOC", verbose=1)
@@ -76,7 +78,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
-    kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
+    kernel_xip_path: Path | None = triage_field("Kernel XIP Path", verbose=2)
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
@@ -128,43 +130,45 @@ class DispatcherData:
                 "TT_VISIBLE_DEVICES remapping. Retry with --dev=all or explicit --dev IDs."
             )
 
+        def _find_device_with_build_env():
+            # This only inspects the selected-device list and the local build-env cache.
+            # No hardware access happens here, so a direct iteration is sufficient.
+            return next(
+                (
+                    selected_device
+                    for selected_device in run_checks.devices
+                    if selected_device.unique_id in self._build_env_cache
+                ),
+                None,
+            )
+
         # Use the first device that has an Inspector build env (e.g. with --dev=all we may have more
         # devices than this process's Inspector has build envs for; with multiprocess we connect to
         # this rank's Inspector so only this rank's devices are in the cache).
-        device = None
-        device_unique_id = None
-        for d in run_checks.devices:
-            if d.unique_id in self._build_env_cache:
-                device = d
-                device_unique_id = d.unique_id
-                break
+        device = _find_device_with_build_env()
         if device is None:
             self._populate_build_env_cache(strict=True)
-            for d in run_checks.devices:
-                if d.unique_id in self._build_env_cache:
-                    device = d
-                    device_unique_id = d.unique_id
-                    break
+            device = _find_device_with_build_env()
         if device is None:
-            unique_ids = [hex(d.unique_id) for d in run_checks.devices[:5]]
-            if len(run_checks.devices) > 5:
+            unique_ids = [hex(d.unique_id) for d in run_checks.devices[:MAX_DEVICE_IDS_IN_ERROR_SUMMARY]]
+            if len(run_checks.devices) > MAX_DEVICE_IDS_IN_ERROR_SUMMARY:
                 unique_ids.append("...")
             raise TTTriageError(
                 "No device in the selected list has an Inspector build environment. "
                 "Check device-id mapping consistency between Inspector and debugger context. "
                 "In multiprocess runs, ensure triage connects to this rank's Inspector (e.g. rank-aware "
-                "--inspector-rpc-port or default port with OMPI_COMM_WORLD_RANK/PMI_RANK set). "
+                "--inspector-rpc-port or default port with a supported rank environment variable set). "
                 "Try --dev=in_use, and ensure TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
                 f"Selected devices (unique_id): {', '.join(unique_ids)}."
             )
 
-        build_env = self._build_env_cache[device_unique_id]
+        build_env = self._build_env_cache[device.unique_id]
         # Use build_env for initial firmware paths
         firmware_base = Path(build_env.firmwarePath)
-        brisc_elf_path = str(firmware_base / "brisc" / "brisc.elf")
-        idle_erisc_elf_path = str(firmware_base / "idle_erisc" / "idle_erisc.elf")
+        brisc_elf_path = firmware_base / "brisc" / "brisc.elf"
+        idle_erisc_elf_path = firmware_base / "idle_erisc" / "idle_erisc.elf"
         active_erisc_elf_name = "erisc" if device.is_wormhole() else "active_erisc"
-        active_erisc_elf_path = str(firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf")
+        active_erisc_elf_path = firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf"
 
         # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
         # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
@@ -571,7 +575,7 @@ class DispatcherData:
                 firmware_path = firmware_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
             else:
                 firmware_path = firmware_base / proc_name.lower() / f"{proc_name.lower()}.elf"
-        firmware_path = str(firmware_path.resolve())
+        firmware_path = firmware_path.resolve()
 
         if kernel:
             kernel_base = Path(kernel.path)
@@ -593,10 +597,12 @@ class DispatcherData:
                     kernel_path = kernel_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
                 else:
                     kernel_path = kernel_base / proc_name.lower() / f"{proc_name.lower()}.elf"
-            kernel_path = str(kernel_path.resolve()) if kernel_path else None
+            kernel_path = kernel_path.resolve() if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+                kernel_path.with_name(f"{kernel_path.name}.xip.elf")
+                if kernel_path is not None and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000

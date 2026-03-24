@@ -26,8 +26,8 @@ from triage import triage_singleton, ScriptConfig, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
 import asyncio
 import capnp
-import os
 from pathlib import Path
+from rank_env import get_rank_from_env
 import threading
 import time
 import inspector_capnp
@@ -179,14 +179,8 @@ def _get_rank_from_env() -> int:
       4. PMIX_RANK             -- PMIx-aware launchers (OpenPMIx, PRRTE)
       5. TT_MESH_HOST_RANK     -- TT-specific fallback (may be duplicated across ranks)
     """
-    for var in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"):
-        val = os.environ.get(var)
-        if val is not None:
-            try:
-                return int(val)
-            except (ValueError, OverflowError):
-                continue
-    return -1
+    rank = get_rank_from_env()
+    return -1 if rank is None else rank
 
 
 @triage_singleton

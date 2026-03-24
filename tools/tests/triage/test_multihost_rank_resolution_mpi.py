@@ -49,6 +49,7 @@ _triage_home = _metal_home / "tools" / "triage"
 sys.path.insert(0, str(_triage_home))
 
 from parse_inspector_logs import get_kernels, get_log_directory  # noqa: E402
+from rank_env import RANK_ENV_VAR_PRECEDENCE  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared temp directory — rank 0 creates it, broadcasts the path
@@ -69,19 +70,6 @@ def _get_shared_tmpdir() -> str:
         _shared_tmpdir = None
     _shared_tmpdir = COMM.bcast(_shared_tmpdir, root=0)
     return _shared_tmpdir
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_ALL_RANK_VARS = (
-    "OMPI_COMM_WORLD_RANK",
-    "PMI_RANK",
-    "SLURM_PROCID",
-    "PMIX_RANK",
-    "TT_MESH_HOST_RANK",
-)
 
 
 def _make_kernels_yaml(rank: int) -> str:
@@ -111,7 +99,7 @@ def _make_marker_file(logs_root: str, rank: int) -> Path:
 def _clear_rank_env() -> dict[str, str | None]:
     """Remove all rank env vars and return their original values for restore."""
     saved = {}
-    for var in _ALL_RANK_VARS:
+    for var in RANK_ENV_VAR_PRECEDENCE:
         saved[var] = os.environ.pop(var, None)
     return saved
 

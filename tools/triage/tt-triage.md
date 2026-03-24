@@ -6,6 +6,58 @@
 
 You can run `tt-triage` by executing `tools/tt-triage.py`.
 
+## Inspector-backed scripts in multihost runs
+
+Several high-value scripts depend on Inspector data to resolve device mappings, firmware ELFs, and kernel ELFs. In practice this includes scripts built on `inspector_data` and `dispatcher_data`, such as `dump_callstacks`, `check_binary_integrity`, and other dispatcher-aware diagnostics.
+
+Inspector-backed triage now behaves as follows:
+1. It tries to connect to live Inspector RPC first.
+2. If RPC is unavailable, it looks for serialized Inspector artifacts under the selected inspector directory.
+
+The inspector directory is resolved automatically in a multihost-friendly way:
+- If `TT_METAL_LOGS_PATH` contains rank-scoped directories such as `<hostname>_rank_<N>/generated/inspector`, triage prefers the directory for the current rank.
+- If no rank is available in the environment, triage falls back to `_rank_0`.
+- If no rank-scoped layout exists, triage falls back to the legacy flat `generated/inspector` layout.
+- `TT_RUN_ORIGINAL_CWD` is checked before `TT_METAL_HOME`, which lets timeout-invoked triage find the original launch directory.
+- `--inspector-log-path` still overrides all automatic resolution.
+
+Rank is inferred from common launcher environment variables: `OMPI_COMM_WORLD_RANK`, `PMI_RANK`, `SLURM_PROCID`, `PMIX_RANK`, and `TT_MESH_HOST_RANK`. The shared precedence list and environment lookup live in `tools/triage/rank_env.py`, and that helper is used by both `tools/triage/parse_inspector_logs.py` and `tools/triage/inspector_data.py`.
+
+If `--inspector-rpc-port` is left at the default `50051`, triage automatically uses `base_port + rank` so a timeout-triggered rank-local triage process connects to the matching Inspector RPC endpoint without requiring a manual per-rank port override.
+
+One important boundary for `dispatcher_data`-based scripts: they need Inspector build-environment data (`getAllBuildEnvs`) in order to resolve firmware and kernel ELF paths. If you are using saved Inspector artifacts, make sure those serialized artifacts include build-env data. If they do not, use a live Inspector RPC connection instead.
+
+### Example: auto-select the current rank's Inspector data
+
+```bash
+export TT_METAL_LOGS_PATH=/tmp/tt-metal/my-multihost-run
+./tools/tt-triage.py --run=dump_callstacks
+```
+
+If `/tmp/tt-metal/my-multihost-run` contains directories like `host-a_rank_0/generated/inspector` and `host-b_rank_1/generated/inspector`, triage will choose the directory that matches the current rank automatically.
+
+## Path and ELF conventions for triage scripts
+
+Inside `tools/triage`, provider objects now treat filesystem paths as `pathlib.Path` objects instead of raw strings where that makes script code simpler and safer.
+
+For new triage scripts:
+- `DispatcherCoreData.firmware_path`, `kernel_path`, and `kernel_xip_path` should be treated as `Path` objects.
+- Pass those `Path` objects directly to `ElfsCache`.
+- Use `path.exists()`, path joins, and other `Path` operations directly rather than wrapping the values again.
+- Convert back to `str` only when crossing into external APIs that still require strings. Current examples include the GDB callstack helper and the low-level `parse_elf(...)` call inside `elfs_cache`.
+
+`ElfsCache` is also the preferred boundary for reading ELFs. In addition to caching parsed ELF objects, it centralizes retry handling for `ESTALE` / stale-file-handle failures by reopening the ELF from a temporary local copy. New scripts should prefer `elfs_cache[path]` over calling `parse_elf(...)` directly.
+
+## CI summary output
+
+`tt-triage` supports `--triage-summary-path=<path>` for CI and hang-reporting workflows. When set, triage writes a compact summary file in addition to the normal console output.
+
+```bash
+./tools/tt-triage.py --triage-summary-path=/tmp/triage-summary.txt
+```
+
+This summary is intended for downstream automation and dashboards, not as a replacement for the full terminal output.
+
 # Script discovery
 
 `tt-triage` will search for scripts in the `tools/triage` directory. It will attempt to load all scripts and look for the following signature:
@@ -23,6 +75,8 @@ Data provider scripts return data from their `run` method. `run` should return a
 If the data object is slow to generate (such as when parsing long log files), it should use the `@triage_singleton` decorator to make it a singleton. If the data being processed is not changing, it is up to the developer to cache their data if needed.
 
 If a data provider script fails, all scripts that depend on it will also fail.
+
+When a dependency fails, `tt-triage` now reports the failed dependency chain with a concise summary and, for Inspector-related failures, an actionable hint about checking Inspector logs or RPC connectivity.
 
 ## State checker scripts
 

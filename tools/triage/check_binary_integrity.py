@@ -14,8 +14,6 @@ Owner:
     tt-vjovanovic
 """
 
-from pathlib import Path
-
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
@@ -33,16 +31,17 @@ def check_binary_integrity(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ):
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    firmware_path = dispatcher_core_data.firmware_path
 
     # Check firmware ELF binary state on the device
     log_check_risc(
         risc_name,
         location,
-        Path(dispatcher_core_data.firmware_path).exists(),
-        f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
+        firmware_path.exists(),
+        f"Firmware ELF file {firmware_path} does not exist.",
     )
-    if Path(dispatcher_core_data.firmware_path).exists():
-        elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
+    if firmware_path.exists():
+        elf_file = elfs_cache[firmware_path].elf
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
             section = elf_file.get_section_by_name(section_name)
@@ -51,7 +50,7 @@ def check_binary_integrity(
                     risc_name,
                     location,
                     False,
-                    f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
+                    f"Section {section_name} not found in ELF file {firmware_path}.",
                 )
             else:
                 address: int = section["sh_addr"]
@@ -61,20 +60,21 @@ def check_binary_integrity(
                     risc_name,
                     location,
                     read_data == data,
-                    f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
+                    f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {firmware_path}.",
                 )
 
     # Check kernel ELF binary state on the device
     if dispatcher_core_data.kernel_xip_path is not None:
+        kernel_xip_path = dispatcher_core_data.kernel_xip_path
         log_check_risc(
             risc_name,
             location,
-            Path(dispatcher_core_data.kernel_xip_path).exists(),
-            f"Kernel ELF file {dispatcher_core_data.kernel_xip_path} does not exist.",
+            kernel_xip_path.exists(),
+            f"Kernel ELF file {kernel_xip_path} does not exist.",
         )
 
-        if Path(dispatcher_core_data.kernel_xip_path).exists():
-            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
+        if kernel_xip_path.exists():
+            elf_file = elfs_cache[kernel_xip_path].elf
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
                 section = elf_file.get_section_by_name(section_name)
@@ -83,7 +83,7 @@ def check_binary_integrity(
                         risc_name,
                         location,
                         False,
-                        f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
+                        f"Section {section_name} not found in ELF file {kernel_xip_path}.",
                     )
                 else:
                     data: bytes = section.data()
@@ -93,7 +93,7 @@ def check_binary_integrity(
                         risc_name,
                         location,
                         read_data == data,
-                        f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
+                        f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {kernel_xip_path}.",
                     )
 
 

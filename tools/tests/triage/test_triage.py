@@ -90,7 +90,9 @@ def cause_hang_with_app(request):
     )
     auto_timeout = app_configuration.get("auto_timeout", False)
     if auto_timeout:
-        # Wait for the application to hang itself
+        # Some hang fixtures rely on TT_METAL_OPERATION_TIMEOUT_SECONDS inside the app
+        # rather than an external sleep. In that mode, wait for an early exit so we
+        # can fail fast on startup errors instead of blindly sleeping.
         process_exited_early = False
         try:
             proc.wait(timeout=timeout)

@@ -12,9 +12,7 @@ triage_home = metal_home / "tools" / "triage"
 sys.path.insert(0, str(triage_home))
 
 from parse_inspector_logs import get_log_directory
-
-# All rank environment variables supported by _get_current_rank() in order of precedence.
-_ALL_RANK_VARS = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK")
+from rank_env import RANK_ENV_VAR_PRECEDENCE
 
 
 def test_get_log_directory_prefers_rank_scoped_path_over_legacy_default(monkeypatch, tmp_path: Path):
@@ -71,9 +69,8 @@ def test_get_log_directory_falls_back_to_rank_zero_without_rank_env(monkeypatch,
     rank_zero_dir.mkdir(parents=True)
 
     monkeypatch.setenv("TT_METAL_LOGS_PATH", str(logs_root))
-    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
-    monkeypatch.delenv("PMI_RANK", raising=False)
-    monkeypatch.delenv("TT_MESH_HOST_RANK", raising=False)
+    for var in RANK_ENV_VAR_PRECEDENCE:
+        monkeypatch.delenv(var, raising=False)
 
     assert get_log_directory() == str(rank_zero_dir)
 
@@ -122,7 +119,7 @@ def test_get_log_directory_uses_rank_var_as_primary_source(monkeypatch, tmp_path
 
     monkeypatch.setenv("TT_METAL_LOGS_PATH", str(logs_root))
     # Clear all higher-precedence vars so the target var is primary
-    for var in _ALL_RANK_VARS:
+    for var in RANK_ENV_VAR_PRECEDENCE:
         if var != rank_var:
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv(rank_var, "5")

@@ -52,8 +52,12 @@ class ElfsCache:
             context: ttexalens Context object for parsing ELF files
         """
         self.context = context
-        self._cache: dict[str, ParsedElfFile] = {}
+        self._cache: dict[Path, ParsedElfFile] = {}
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _normalize_path(elf_path: str | Path) -> Path:
+        return elf_path if isinstance(elf_path, Path) else Path(elf_path)
 
     @staticmethod
     def _is_estale_error(exc: Exception) -> bool:
@@ -61,14 +65,14 @@ class ElfsCache:
             return True
         return "stale file handle" in str(exc).lower()
 
-    def _parse_elf_with_estale_retry(self, elf_path: str) -> ParsedElfFile | None:
+    def _parse_elf_with_estale_retry(self, elf_path: Path) -> ParsedElfFile | None:
         """Parse ELF, retrying with backoff (up to 10s) when ESTALE is encountered."""
         last_exc = None
         max_retries = 4
         backoff_delays = [1.0, 2.0, 3.0, 4.0]
 
         try:
-            return parse_elf(elf_path, self.context)
+            return parse_elf(str(elf_path), self.context)
         except Exception as exc:
             if not self._is_estale_error(exc):
                 raise
@@ -86,7 +90,7 @@ class ElfsCache:
             time.sleep(delay)
             try:
                 with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
-                    local_elf_path = Path(tmp_dir) / Path(elf_path).name
+                    local_elf_path = Path(tmp_dir) / elf_path.name
                     shutil.copy2(elf_path, local_elf_path)
                     return parse_elf(str(local_elf_path), self.context)
             except Exception as exc:
@@ -96,7 +100,7 @@ class ElfsCache:
 
         raise last_exc
 
-    def __getitem__(self, elf_path: str) -> ParsedElfFile:
+    def __getitem__(self, elf_path: str | Path) -> ParsedElfFile:
         """
         Get a ParsedElfFile from cache or parse and cache it if not present.
 
@@ -115,34 +119,35 @@ class ElfsCache:
         Raises:
             TTTriageError: If the ELF file does not exist or cannot be parsed.
         """
+        normalized_path = self._normalize_path(elf_path)
         with self._lock:
-            if elf_path in self._cache:
-                return self._cache[elf_path]
+            if normalized_path in self._cache:
+                return self._cache[normalized_path]
 
         # Parse outside the lock so ESTALE retries (up to ~10s) don't block other threads.
         # This is intentional double-lock: the cache is checked again under the lock below
         # to ensure only one result is stored (first writer wins).
         try:
-            parsed_elf = self._parse_elf_with_estale_retry(elf_path)
+            parsed_elf = self._parse_elf_with_estale_retry(normalized_path)
         except FileNotFoundError as exc:
-            raise TTTriageError(f"ELF file {elf_path} does not exist.") from exc
+            raise TTTriageError(f"ELF file {normalized_path} does not exist.") from exc
         except Exception as exc:
             if self._is_estale_error(exc):
                 raise TTTriageError(
-                    f"Failed to parse ELF file {elf_path} due to stale file handle on filesystem: {exc}"
+                    f"Failed to parse ELF file {normalized_path} due to stale file handle on filesystem: {exc}"
                 ) from exc
             raise
         if not parsed_elf:
             raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+                f"Failed to extract DWARF info from ELF file {normalized_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
         with self._lock:
-            if elf_path not in self._cache:
-                self._cache[elf_path] = parsed_elf
-            return self._cache[elf_path]
+            if normalized_path not in self._cache:
+                self._cache[normalized_path] = parsed_elf
+            return self._cache[normalized_path]
 
-    def has_elf(self, elf_path: str) -> bool:
+    def has_elf(self, elf_path: str | Path) -> bool:
         """
         Check if an ELF file is already cached.
 
@@ -152,8 +157,9 @@ class ElfsCache:
         Returns:
             True if the ELF file is cached, False otherwise
         """
+        normalized_path = self._normalize_path(elf_path)
         with self._lock:
-            return elf_path in self._cache
+            return normalized_path in self._cache
 
     def clear_cache(self) -> None:
         """
@@ -164,7 +170,7 @@ class ElfsCache:
         with self._lock:
             self._cache.clear()
 
-    def get_cached_paths(self) -> list[str]:
+    def get_cached_paths(self) -> list[Path]:
         """
         Get list of all cached ELF file paths.
 

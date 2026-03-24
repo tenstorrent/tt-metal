@@ -25,12 +25,7 @@ triage_home = metal_home / "tools" / "triage"
 sys.path.insert(0, str(triage_home))
 
 from parse_inspector_logs import get_kernels, get_log_directory
-
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
-
-_ALL_RANK_VARS = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK")
+from rank_env import RANK_ENV_VAR_PRECEDENCE
 
 # Three simulated hosts matching the <hostname>_rank_<N> naming convention.
 _HOSTS = ["node-0", "node-1", "node-2"]
@@ -80,7 +75,7 @@ def multihost_tree(tmp_path: Path) -> dict:
 
 
 def _clear_rank_vars(monkeypatch) -> None:
-    for var in _ALL_RANK_VARS:
+    for var in RANK_ENV_VAR_PRECEDENCE:
         monkeypatch.delenv(var, raising=False)
 
 
