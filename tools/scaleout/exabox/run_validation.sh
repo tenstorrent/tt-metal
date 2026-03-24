@@ -182,23 +182,35 @@ run_board_reset() {
         --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
         --tag-output \
         bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+    mpirun_exit_code=$?
+
+   # Check if mpirun failed
+    if [[ $mpirun_exit_code -ne 0 ]]; then
+        echo "ERROR: mpirun failed with exit code $mpirun_exit_code" >&2
+        rm -f "$output_file"
+        return 1  # Signal mpirun infrastructure failure
+    fi
 
     # Parse and display results, collect failures
-    local rank=0
     local failed_hosts=()
     while IFS= read -r line; do
         if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
             local job_id="${BASH_REMATCH[1]}"
             local mpi_rank="${BASH_REMATCH[2]}"
             local exit_code="${BASH_REMATCH[3]}"
-            local hostname="${host_array[$rank]}"
-            if [[ $exit_code -eq 0 ]]; then
-                echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
+
+            # Use mpi_rank to index host_array
+            if [[ $mpi_rank -lt ${#host_array[@]} ]]; then
+                local hostname="${host_array[$mpi_rank]}"
+                if [[ $exit_code -eq 0 ]]; then
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
+                else
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                    failed_hosts+=("$hostname")
+                fi
             else
-                echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
-                failed_hosts+=("$hostname")
+                echo "Warning: MPI rank $mpi_rank exceeds host array size ${#host_array[@]}" >&2
             fi
-            ((rank++))
         fi
     done < "$output_file"
     rm -f "$output_file"
@@ -206,6 +218,7 @@ run_board_reset() {
     # Return comma-separated list of failed hosts (to stdout only)
     local IFS=','
     echo "${failed_hosts[*]}"
+    return 0  # Success
 }
 
 
@@ -242,6 +255,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
         # Run initial reset and capture failures
         RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
         FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
+        MPI_EXIT_CODE=$?
 
         # Retry only failed hosts if any
         if [[ -n "$FAILED_HOSTS_STR" ]]; then
@@ -250,15 +264,22 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
             RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
 
-            # Run retry (discard return value)
+            # Run retry and capture exit code (discard stdout)
             run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+            MPI_EXIT_CODE=$?
         fi
 
-        sleep 5
+        # Only run validation if retry was successful (or no retry needed)
+        if [[ $MPI_EXIT_CODE -eq 0 ]]; then
+            sleep 5
 
-        echo ""
-        echo "Running cluster validation..."
-        run_cluster_validation
+            echo ""
+            echo "Running cluster validation..."
+            run_cluster_validation
+        else
+            echo "Skipping validation due to mpirun failure"
+        fi
+
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
