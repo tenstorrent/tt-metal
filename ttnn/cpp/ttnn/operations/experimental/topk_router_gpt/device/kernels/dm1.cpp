@@ -129,6 +129,7 @@ void kernel_main() {
         // Signal worker that this sender's partial is ready
         uint64_t worker_sem_noc = get_noc_addr(worker_phys_x, worker_phys_y, get_semaphore(sem_partial_ready));
         noc_semaphore_inc(worker_sem_noc, 1);
+        noc_async_atomic_barrier();
 
         cb_pop_front(cb_local_out, 1);
         return;
@@ -217,6 +218,7 @@ void kernel_main() {
         // Signal collector
         uint64_t coll_sem_noc = get_noc_addr(collector_phys_x, collector_phys_y, get_semaphore(sem_topk_ready));
         noc_semaphore_inc(coll_sem_noc, 1);
+        noc_async_atomic_barrier();
 
         cb_pop_front(cb_topk_val, 1);
         cb_pop_front(cb_index, 1);
