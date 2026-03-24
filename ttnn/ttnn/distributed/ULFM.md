@@ -188,11 +188,13 @@ File: `ttnn/ttnn/distributed/mpi_fault.py`
 
 For Python-level MPI usage:
 
-- `install_ulfm_handler(comm)` sets `MPI.ERRORS_RETURN` whenever `mpi4py` is
-  available, so MPI errors are returned to Python instead of immediately
-  aborting the process.
-- `ulfm_guard(comm, operation_name, policy)` catches ULFM error codes when the
-  linked `mpi4py` build exposes them.
+- `install_ulfm_handler(comm=None)` sets `MPI.ERRORS_RETURN` on the provided
+  communicator, defaulting to `MPI.COMM_WORLD`, whenever `mpi4py` is available
+  so MPI errors are returned to Python instead of immediately aborting the
+  process.
+- `ulfm_guard(comm, operation_name="collective", policy=UlfmFailurePolicy.FAST_FAIL)`
+  catches ULFM error codes when the linked `mpi4py` build exposes them. The
+  `policy` argument is a `UlfmFailurePolicy` enum value, not a string.
 - `UlfmFailurePolicy.FAST_FAIL` prints a structured diagnostic, best-effort revokes the
   communicator if `Revoke()` exists, and `os._exit(70)`.
 - `UlfmFailurePolicy.FAULT_TOLERANT` raises `MPIRankFailureError` and leaves revoke /
@@ -203,8 +205,10 @@ Degradation behavior is intentionally narrow:
 - If `mpi4py` is missing, `install_ulfm_handler()` is a no-op and
   `ulfm_guard()` simply yields.
 - If `mpi4py` is present but ULFM-specific methods or error constants are
-  missing, `install_ulfm_handler()` still sets `ERRORS_RETURN`, but ULFM-
-  specific failed-rank discovery and revoke behavior are unavailable.
+  missing, `install_ulfm_handler()` still sets `ERRORS_RETURN`, but
+  `ulfm_guard()` re-raises the raw `MPI.Exception` instead of translating it to
+  `MPIRankFailureError`; ULFM-specific failed-rank discovery and revoke
+  behavior are unavailable.
 
 ## Exit Codes
 
@@ -279,7 +283,7 @@ try {
 ### Python
 
 The example below assumes a ULFM-enabled `mpi4py` build that exposes
-`Shrink()`, and optionally `Revoke()`:
+`Shrink()`, and ideally `Revoke()` / `Get_failed()`:
 
 ```python
 from mpi4py import MPI
@@ -308,8 +312,10 @@ except MPIRankFailureError as e:
 
 ### Key points
 
-- `set_failure_policy(FAULT_TOLERANT)` or `UlfmFailurePolicy.FAULT_TOLERANT` must be
-  selected before the collective that may fail.
+- `set_failure_policy(FAULT_TOLERANT)` or
+  `policy=UlfmFailurePolicy.FAULT_TOLERANT` must be selected before the
+  collective that may fail. In Python, `policy` is an enum value, not
+  `"fault_tolerant"`.
 - In C++, `handle_rank_failure()` revokes before it throws. After catching
   `MPIRankFailureException`, you must call `revoke_and_shrink()` before using
   that communicator again.
