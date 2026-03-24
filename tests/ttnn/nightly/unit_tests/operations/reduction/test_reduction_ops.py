@@ -176,13 +176,14 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
-@pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
+@pytest.mark.parametrize("tensor_shape", [(), (2,), (1, 1), (32, 1), (3, 6, 40, 63, 20), (6, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
-def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
+def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -190,8 +191,11 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
-    torch.manual_seed(0)
+    if op not in ("var", "std") and correction:
+        # PyTorch supports the correction argument only for var and std.
+        return
 
+    torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
@@ -205,25 +209,37 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
         # so we need to handle it separately.
         # See https://github.com/pytorch/pytorch/issues/127882
         if dim is None:
-            torch_result = torch_op(torch_tensor)
+            # PyTorch supports the correction argument only for var and std.
+            # ttnn supports it for all except prod, but it is ignored for all except var and std.
+            if op in ("var", "std"):
+                torch_result = torch_op(torch_tensor, correction=correction)
+            else:
+                torch_result = torch_op(torch_tensor)
             if keepdim:
                 # Various torch ops don't support keepdim=True for dim=None,
                 # so we need to reshape to match the input tensor.
                 new_shape = [1] * torch_tensor.dim()
                 torch_result = torch_result.reshape(new_shape)
         else:
-            torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim)
+            if op in ("var", "std"):
+                torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim, correction=correction)
+            else:
+                torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim)
     except (IndexError, TypeError, RuntimeError) as e:
         logger.info(f"torch {op} raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+        # ttnn.prod doesn't support the correction argument.
+        if op != "prod":
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
+        else:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
         if not torch_errored:
-            logger.error(f"torch passed, but ttnn raised exception: {e}")
+            logger.error(f"torch passed and produced result: {torch_result}, but ttnn raised exception: {e}")
 
     assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
 

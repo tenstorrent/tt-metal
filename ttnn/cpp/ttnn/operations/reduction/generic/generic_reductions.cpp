@@ -273,9 +273,16 @@ static Tensor std_var_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    if (rank == 0) {
-        // If the input tensor is a rank 0 tensor (i.e. scalar), return NaN or 0.0, depending on correction.
-        // This matches PyTorch behavior.
+    int reduced_volume = 1;
+    if (rank != 0) {
+        for (int axis : dim) {
+            reduced_volume *= input_shape[axis];
+        }
+    }
+
+    if (rank == 0 || reduced_volume == 1) {
+        // If the input tensor is a rank 0 tensor (i.e. scalar), or reduction would produce a scalar,
+        // return NaN or 0.0, depending on correction. This matches PyTorch behavior.
         float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
         // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
@@ -297,11 +304,6 @@ static Tensor std_var_impl(
 
     // For now support only interleaved tensors.
     TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
-
-    int reduced_volume = 1;
-    for (int axis : dim) {
-        reduced_volume *= input_shape[axis];
-    }
 
     // Validate that the divisor is positive (Bessel's correction subtracts 1).
     // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
