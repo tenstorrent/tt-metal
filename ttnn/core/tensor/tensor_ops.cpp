@@ -152,8 +152,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
 Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
-    TT_FATAL(
-        input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
     Tensor output = tensor_impl::to_layout(input_tensor, target_layout);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -167,7 +166,7 @@ Tensor pad(
     float pad_value) {
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         log_warning(
@@ -190,7 +189,7 @@ Tensor unpad(
     const tt::tt_metal::Shape& output_tensor_end) {
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
-    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_FATAL(is_device_tensor(input_tensor), "Tensor must be on host for unpadding");
     auto output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);

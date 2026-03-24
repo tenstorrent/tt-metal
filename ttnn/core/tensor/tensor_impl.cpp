@@ -203,7 +203,7 @@ HostTensor pad_bfloat4_b(
 }
 
 HostTensor unpad_bfloat4_b(
-    const Tensor& tensor,
+    const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     auto tile = tensor.tensor_spec().tile();
@@ -1234,6 +1234,7 @@ HostTensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
+    TT_FATAL(tensor.layout() != Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
     return dispatch(tensor.dtype(), [&]<typename T>() {
         return pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -1270,8 +1271,6 @@ HostTensor unpad_impl(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
-    TT_FATAL(!is_device_tensor(tensor), "unpad only supports host tensors");
-
     const auto& input_shape = tensor.padded_shape();
     const auto input_strides = compute_strides(input_shape);
 
