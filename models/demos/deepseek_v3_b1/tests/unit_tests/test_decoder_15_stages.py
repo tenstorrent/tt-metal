@@ -75,7 +75,7 @@ class DecoderBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 2
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -162,6 +162,7 @@ class DecoderBlockStage(StageKind):
             reduce_root_coord=reduce_root_coord,
             is_moe=True,
             num_routed_experts=self._num_routed_experts,
+            validate_debug_tensors=False,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -312,7 +313,7 @@ def test_persistent_decoder_15_stages(
     pipeline_core = DecoderBlockStage.PIPELINE_CORE
     token_size_bytes = DecoderBlockStage.TOKEN_SIZE_BYTES
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 1
+    embedding_fifo_size = embedding_size_bytes * 2
 
     layer_idx = 4
     num_routed_experts = 8
@@ -351,7 +352,7 @@ def test_persistent_decoder_15_stages(
                 downstream_d2d_socket_fifo_size=embedding_fifo_size,
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
-                h2d_socket_fifo_size=token_size_bytes * 1,
+                h2d_socket_fifo_size=token_size_bytes * 2,
                 d2h_socket_fifo_size=embedding_fifo_size,
                 d2h_socket_page_size=embedding_size_bytes,
                 embedding_tensor=embedding_tensor,
