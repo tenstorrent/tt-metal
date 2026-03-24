@@ -43,7 +43,7 @@ struct MoEGPTMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& args,
+        const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,

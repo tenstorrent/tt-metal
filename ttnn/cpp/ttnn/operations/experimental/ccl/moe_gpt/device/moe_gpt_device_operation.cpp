@@ -93,8 +93,8 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(indices_shape.rank() >= 2, "expert_indices must be at least rank 2, got {}", indices_shape.rank());
 
     // --- Memory config validation ---
-    // moe_gpt uses CB aliasing for indices/scores: the drain tilize core is set to the dispatch
-    // drain core, and the CBs are backed directly by the HEIGHT_SHARDED L1 buffers.
+    // Indices/scores are HEIGHT_SHARDED L1 tensors produced by all_to_all_dispatch_metadata.
+    // The tilize reader bulk-copies them from the dispatch drain core via NOC at kernel start.
     TT_FATAL(
         tensor_args.expert_indices.memory_config().memory_layout() ==
                 tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -129,7 +129,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     // Output 1: Expert activation (token_id + k_indices + scores per row)
     uint32_t activation_row_elements = (2 * experts_per_device) + 1;
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
-    uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
+    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 for sentinel row
     auto activation_spec = TensorSpec(
         Shape({1, activation_total_bytes / sizeof(uint32_t)}),
         tt::tt_metal::TensorLayout(

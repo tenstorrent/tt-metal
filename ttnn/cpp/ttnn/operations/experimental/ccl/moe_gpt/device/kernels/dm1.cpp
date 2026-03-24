@@ -127,6 +127,7 @@ void kernel_main() {
     // Transfer per-expert token counts + chunk_ready semaphore address to compute via cb_w2c_md:
     //   [0..num_experts-1] = raw token counts per expert
     //   [num_experts]      = matmul_chunk_ready_semaphore address
+    cb_reserve_back(cb_w2c_md, 2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
     for (uint32_t e = 0; e < num_experts; ++e) {
@@ -135,7 +136,6 @@ void kernel_main() {
         cb_w2c_md_write_ptr[e] = *count_sem_ptr;
     }
     cb_w2c_md_write_ptr[num_experts] = get_semaphore(matmul_chunk_ready_semaphore_id);
-    cb_reserve_back(cb_w2c_md, 2);
     cb_push_back(cb_w2c_md, 2);
 
     // NOC address to signal tilize drain that matmul has consumed a chunk

@@ -158,7 +158,6 @@ void kernel_main() {
     //   [0..num_experts-1] = raw token counts per expert
     //   [num_experts]      = matmul_chunk_ready_semaphore address
     cb_wait_front(cb_w2c_md, 2);
-    cb_pop_front(cb_w2c_md, 2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
 
@@ -168,6 +167,7 @@ void kernel_main() {
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
     uint32_t chunk_ready_sem_addr = cb_w2c_md_read_ptr[num_experts];
+    cb_pop_front(cb_w2c_md, 2);
 
     // Unified chunk loop: SwiGLU → A2A (via dm1) → W2 matmul → untilize
     // Full pipeline completes per chunk, matching the deepseek moe_compute pattern.

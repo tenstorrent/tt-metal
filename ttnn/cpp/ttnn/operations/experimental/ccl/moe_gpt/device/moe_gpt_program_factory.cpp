@@ -69,7 +69,7 @@ MoEGPTMeshWorkloadFactory::create_at(
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet&) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
 
     // =========================================================================
     // Matmul cores (existing)
@@ -149,7 +149,7 @@ MoEGPTMeshWorkloadFactory::create_at(
                 bool valid = true;
                 for (uint32_t dy = 0; dy < COMBINE_H && valid; dy++) {
                     for (uint32_t dx = 0; dx < COMBINE_W && valid; dx++) {
-                        if (matmul_core_set_for_combine.count({sx + dx, sy + dy})) {
+                        if (matmul_core_set_for_combine.contains({sx + dx, sy + dy})) {
                             valid = false;
                         }
                     }
@@ -255,11 +255,15 @@ MoEGPTMeshWorkloadFactory::create_at(
         for (int y = (int)early_worker_grid.y - 1; y >= 0 && early_tilize_cores.size() < EARLY_TILIZE_NUM_CORES; y--) {
             for (int x = (int)early_worker_grid.x - 1; x >= 0 && early_tilize_cores.size() < EARLY_TILIZE_NUM_CORES;
                  x--) {
-                if (early_matmul_core_set.count({(uint32_t)x, (uint32_t)y}) == 0) {
+                if (!early_matmul_core_set.contains({(uint32_t)x, (uint32_t)y})) {
                     early_tilize_cores.push_back(CoreCoord(x, y));
                 }
             }
         }
+        TT_FATAL(
+            early_tilize_cores.size() >= EARLY_TILIZE_NUM_CORES,
+            "Could not find {} non-matmul worker cores for early tilize precomputation",
+            EARLY_TILIZE_NUM_CORES);
         CoreCoord early_drain_physical = device->worker_core_from_logical_core(early_tilize_cores.at(0));
 
         // Create fused-mode semaphores on merged tilize+matmul range
@@ -332,8 +336,8 @@ MoEGPTMeshWorkloadFactory::create_at(
 
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
-    // Create combine semaphore AFTER ring semaphore to avoid slot 0
-    // (slot 0 conflicts with dispatch infrastructure on combine cores)
+    // Create combine semaphore after ring semaphore so it gets a higher
+    // semaphore ID, avoiding conflicts with dispatch infrastructure on combine cores
     combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, combine_core_range_set, 0);
 
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
@@ -496,7 +500,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         tilize_cores.reserve(TILIZE_NUM_CORES);
         for (int y = (int)worker_grid.y - 1; y >= 0 && tilize_cores.size() < TILIZE_NUM_CORES; y--) {
             for (int x = (int)worker_grid.x - 1; x >= 0 && tilize_cores.size() < TILIZE_NUM_CORES; x--) {
-                if (matmul_core_set.count({(uint32_t)x, (uint32_t)y}) == 0) {
+                if (!matmul_core_set.contains({(uint32_t)x, (uint32_t)y})) {
                     tilize_cores.push_back(CoreCoord(x, y));
                 }
             }
@@ -510,10 +514,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         // Verify no tilize core is also a matmul core
         for (const auto& tc : tilize_cores) {
             TT_FATAL(
-                matmul_core_set.count({tc.x, tc.y}) == 0,
-                "Tilize core ({},{}) overlaps with a matmul core",
-                tc.x,
-                tc.y);
+                !matmul_core_set.contains({tc.x, tc.y}), "Tilize core ({},{}) overlaps with a matmul core", tc.x, tc.y);
         }
 
         const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
@@ -1050,7 +1051,7 @@ void MoEGPTMeshWorkloadFactory::override_runtime_arguments(
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
         // Update combine output CB
-        if (shared_variables.cb_handles_sharded.count("cb_combine_out")) {
+        if (shared_variables.cb_handles_sharded.contains("cb_combine_out")) {
             tt::tt_metal::UpdateDynamicCircularBufferAddress(
                 program, shared_variables.cb_handles_sharded.at("cb_combine_out"), *output_tensor.buffer());
         }
