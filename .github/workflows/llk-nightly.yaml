@@ -41,7 +41,6 @@ jobs:
       timeout_minutes: 360
       coverage: true
       use_durations: false
-      artifact_prefix: "nightly-"
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -57,7 +56,6 @@ jobs:
       timeout_minutes: 360
       coverage: true
       use_durations: false
-      artifact_prefix: "nightly-"
 
   nightly-summary:
     name: "📊 Nightly Summary"
