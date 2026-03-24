@@ -1072,15 +1072,6 @@ class MLA1D(AbstractModule):
             out_dim=1,
         )
 
-        wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, num_heads, kv_lora_rank + qk_rope_head_dim),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-        )
-        wq_a2a_reshard_config = ReshardConfig(
-            memory_config=wq_a2a_reshard_out_mem_config,
-        )  # 1,4,128,576, height sharded 8x8 [32,576]
-
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
         # Q and KV nope use non-overlapping core grids, but keep this decode path
         # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
@@ -1168,7 +1159,6 @@ class MLA1D(AbstractModule):
             "kv_nope_slice_decode": kv_nope_slice_config,
             "kv_rope_slice_decode": kv_rope_slice_config,
             "wq_a2a_decode": wq_a2a_config,
-            "wq_a2a_reshard_decode": wq_a2a_reshard_config,
             "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
