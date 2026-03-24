@@ -155,7 +155,6 @@ jobs:
       pytest_markers: "perf"
       timeout_minutes: 240
       use_durations: false
-      artifact_prefix: "on-pr-perf-"
 
   check-all-green:
     name: "✅ Check all green"
