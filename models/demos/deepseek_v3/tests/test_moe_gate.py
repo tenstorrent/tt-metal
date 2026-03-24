@@ -175,46 +175,33 @@ def test_forward_pass(
     # Compare outputs
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
 
-    reference_topk_weights = torch.sort(reference_topk_weights.to(torch.bfloat16), dim=-1, stable=True)[0]
-    tt_topk_weights_torch = torch.sort(tt_topk_weights_torch.to(torch.bfloat16), dim=-1, stable=True)[0]
+    # sort reference
+    ref_weights = reference_topk_weights.to(torch.bfloat16)
+    ref_indices = reference_topk_indices.to(torch.int32)
 
-    def count_indices_diff_fast(indices_a: torch.Tensor, indices_b: torch.Tensor):
-        indices_a = torch.sort(indices_a.to(torch.int32), dim=-1).values
-        indices_b = torch.sort(indices_b.to(torch.int32), dim=-1).values
+    ref_sorted_weights, ref_sort_idx = torch.sort(ref_weights, dim=-1, stable=True)
+    ref_sorted_indices = torch.gather(ref_indices, -1, ref_sort_idx)
 
-        total_diff = 0
+    # sort tt
+    tt_weights = tt_topk_weights_torch.to(torch.bfloat16)
+    tt_indices = tt_topk_indices_torch.to(torch.int32)
 
-        for a, b in zip(indices_a, indices_b):
-            i = j = common = 0
-            while i < len(a) and j < len(b):
-                if a[i] == b[j]:
-                    common += 1
-                    i += 1
-                    j += 1
-                elif a[i] < b[j]:
-                    i += 1
-                else:
-                    j += 1
+    tt_sorted_weights, tt_sort_idx = torch.sort(tt_weights, dim=-1, stable=True)
+    tt_sorted_indices = torch.gather(tt_indices, -1, tt_sort_idx)
 
-            diff = len(a) - common
-            total_diff += diff
-
-        return total_diff
-
-    total_diff = count_indices_diff_fast(reference_topk_indices, tt_topk_indices_torch)
-
-    topk_weights_pcc_required = 0.98
-    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
+    # compare
+    topk_weights_pcc_required = 0.99
+    passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
+    matches = ref_sorted_indices == tt_sorted_indices
+    accuracy = matches.float().mean().item()
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
-
+    logger.info(f"TopK experts indices accuracy: {accuracy}")
     assert (
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    assert (
-        total_diff <= 184 if mode == "decode" else total_diff <= 1000
-    ), f"TopK experts indices output does not match: {total_diff}"
+    assert accuracy >= 0.56, f"TopK experts indices output does not match: {accuracy}"
     # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
