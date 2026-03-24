@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,7 +74,7 @@ static bool run_test(
     wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
 
     bool pass = true;
-    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= eth_data_check(recv_device, recv_core, recv_l1_address, inputs);
     return pass;
 }
 

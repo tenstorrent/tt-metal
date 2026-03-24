@@ -188,11 +188,11 @@ static bool run_test_integrity_dram(
     wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
 
     bool pass = true;
-    pass &=
-        bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_DATA_INTEGRITY);
+    pass &= eth_bandwidth_check(
+        send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_DATA_INTEGRITY);
 
     // Reading from chip too slow, use tensix to compare?
-    pass &= data_dram_check(recv_device, dram_start_addr, dram_end_addr, recv_bank_id, inputs);
+    pass &= dram_data_check(recv_device, dram_start_addr, dram_end_addr, recv_bank_id, inputs);
     return pass;
 }
 

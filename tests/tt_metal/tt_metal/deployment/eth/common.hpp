@@ -119,7 +119,7 @@ static void wait_to_finish(
     }
 }
 
-static bool data_check(
+static bool eth_data_check(
     tt::tt_metal::IDevice* const recv_device,
     const CoreCoord& recv_core,
     uint32_t recv_l1_address,
@@ -153,6 +153,26 @@ static bool bandwidth_check(
     /* ==================== */
     uint64_t delta = read_l1_u64(send_device, send_core, send_delta_addr);
     double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
+    double bandwidth = total_transferred / 1e9 / deltas;
+    log_info(tt::LogTest, "      Bandwidth {:.3f} GB/s, {:.3f} ms", bandwidth, deltas * 1000);
+
+    bool pass = bandwidth >= threshold;
+    if (!pass) {
+        log_critical(tt::LogTest, "      Expected at least: {} GB/s, got {:.2f} GB/s", threshold, bandwidth);
+    }
+
+    return pass;
+}
+
+static bool eth_bandwidth_check(
+    tt::tt_metal::IDevice* const send_device,
+    const CoreCoord& send_core,
+    uint32_t send_delta_addr,
+    uint64_t total_transferred,
+    double threshold) {
+    /* ==================== */
+    uint64_t delta = read_eth_l1_u64(send_device, send_core, send_delta_addr);
+    double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
     double bandwidth = 8 * total_transferred / 1e9 / deltas;
     log_info(tt::LogTest, "      Bandwidth {:.3f} Gbps, {:.3f} ms", bandwidth, deltas * 1000);
 
@@ -164,7 +184,7 @@ static bool bandwidth_check(
     return pass;
 }
 
-static bool data_dram_check(
+static bool dram_data_check(
     tt::tt_metal::IDevice* const recv_device,
     uint32_t dram_start_addr,
     uint32_t dram_end_addr,
@@ -190,8 +210,8 @@ static bool data_dram_check(
                         dram_start_addr + i * sizeof(uint32_t));
                 }
                 total_mismatches++;
-                // log_critical(tt::LogTest, "      Input and output data don't match at {}: {} {}", i, inputs[i],
-                // outputs[i]);
+                // log_critical(tt::LogTest, "      Input and output data don't match at {:x}: {:x} {:x}", i, inputs[i],
+                // 		outputs[i]);
             }
         }
         log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);

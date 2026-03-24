@@ -32,6 +32,7 @@ static void prepare_receiver_bidir(
     uint32_t recv_l1_address,
     uint32_t barrier_address,
     tt_metal::Program* recv_program) {
+    /* ================= */
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, recv_l1_address);
 
@@ -69,6 +70,7 @@ static void prepare_sender_bidir(
     uint32_t recv_l1_address,
     uint32_t barrier_address,
     tt_metal::Program* send_program) {
+    /* ================= */
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
 
@@ -104,6 +106,7 @@ static bool run_test_bandwidth_bidir(
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
     const CoreCoord& recv_core) {
+    /* ================= */
     bool same_device = send_mesh_device == recv_mesh_device;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
@@ -184,11 +187,11 @@ static bool run_test_bandwidth_bidir(
     wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
 
     bool pass = true;
-    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
-    pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
+    pass &= eth_bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
+    pass &= eth_bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
 
-    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= data_check(send_device, send_core, recv_l1_address, inputs);
+    pass &= eth_data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= eth_data_check(send_device, send_core, recv_l1_address, inputs);
 
     return pass;
 }
