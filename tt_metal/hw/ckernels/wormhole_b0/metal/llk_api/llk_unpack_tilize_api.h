@@ -95,7 +95,7 @@ inline void llk_unpack_tilizeA_B_init(
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     LLK_ASSERT(
-        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        (are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[get_operand_id(operandB)],
@@ -140,7 +140,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     LLK_ASSERT(
-        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        (are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[operandB_id],
