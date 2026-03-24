@@ -19,6 +19,18 @@ import yaml
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+TT_RUN_PREFIX = "[tt-run]"
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
+PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
+MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+
+# Store the original working directory at module load time to preserve it
+# across mpirun process launches (critical for SLURM/sbatch environments)
+ORIGINAL_CWD = Path.cwd().resolve()
+
 
 def get_local_network_interfaces() -> List[str]:
     """Get list of network interface names on the local host.
