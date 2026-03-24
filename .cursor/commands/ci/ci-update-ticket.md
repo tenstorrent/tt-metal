@@ -11,7 +11,7 @@ Review one CI ticket and decide whether to close it, update it, or leave it unch
 1. **Load ticket context**
    - Run `gh issue view` for the provided ticket.
    - Capture labels, current body quality, and referenced workflow/job/run links.
-   - Follow `.cursor/rules/update-ticket.mdc`.
+   - Follow `.cursor/rules/ci-update-ticket.mdc`.
 
 2. **Resolve target CI job**
    - Identify the job from the issue body/comments (prefer the "Most recent failing job URL" link).

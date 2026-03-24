@@ -10,7 +10,7 @@ Print the newest message from Slack public channel `C08SJ7MGESY` using Slack Web
 - `jq` is available.
 
 ## Steps
-1. Follow `.cursor/rules/slack-read-latest-message.mdc`.
+1. Follow `.cursor/rules/ci-slack-read-latest-message.mdc`.
 2. Validate token is present:
    - `test -n "$SLACK_BOT_TOKEN"`
 3. Fetch latest message:
