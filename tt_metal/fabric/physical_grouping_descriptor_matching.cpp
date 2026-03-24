@@ -1089,6 +1089,7 @@ static bool add_forbidden_for_used_asics_to_all_groupings(
 }
 
 // TODO: Optimize constraints for maximum usage
+// https://github.com/tenstorrent/tt-metal/issues/40639
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1141,6 +1142,7 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 // Returns map from each GroupingInfo to its vector of mapping results.
 // Uses the same constraint pattern as homogeneous: add forbidden constraints after each success.
 // TODO: Look into changing this algoirthm to use simulated annealing
+// https://github.com/tenstorrent/tt-metal/issues/40639
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
