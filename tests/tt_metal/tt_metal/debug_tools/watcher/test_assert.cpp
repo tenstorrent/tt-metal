@@ -314,11 +314,11 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"DM6", {TENSIX, DM, 6}, dev_msgs::DebugAssertRtaOutOfBounds},
         WatcherTestParams{"DM7", {TENSIX, DM, 7}, dev_msgs::DebugAssertCrtaOutOfBounds},
         WatcherTestParams{
-            "HWFault2", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 2},  //  using DM7 to run only on Quasaar
+            "HWFault2", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 2},  //  using DM7 to run only on Quasar
         // WatcherTestParams{"HWFault5", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 5}, //  using DM7 to run only on
-        // Quasaar
+        // Quasar
         WatcherTestParams{
-            "HWFault7", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 7},  //  using DM7 to run only on Quasaar
+            "HWFault7", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 7},  //  using DM7 to run only on Quasar
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
