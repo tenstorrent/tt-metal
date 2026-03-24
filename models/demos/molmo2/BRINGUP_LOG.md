@@ -15,15 +15,40 @@
 - Text model now matches HuggingFace reference exactly (PCC > 0.999)
 
 ### tt-inference-server Integration (2026-03-24)
-**Status: In Progress - First image request works, subsequent requests fail**
+**Status: In Progress - Some requests work, large multi-crop images cause timeout**
 
 **Fixed issues:**
 1. Pre-unfolded patch format detection: vLLM's MolmoProcessor outputs pixel_values as `[num_crops, num_patches, 588]` (already patch-extracted), not raw images `[B, C, H, W]`. Added format detection to use `patch_embed_from_patches_ttnn` for pre-unfolded data.
 
 2. Vision trace disabled for vLLM: vLLM uses variable multi-crop image sizes (e.g., 5 crops = 3645 patches), but trace tensors are pre-allocated for fixed sizes. Disabled vision trace in vLLM mode.
 
+3. Trace output deallocation fix: Removed `ttnn.deallocate(logits_ttnn)` which was deallocating trace output tensors that persist across calls.
+
+4. Prefill/decode trace disabled for vLLM: Disabled tracing in both prefill_forward and decode_forward (set `enable_trace: bool = False`) to fix resource exhaustion issues.
+
 **Remaining issue:**
-- Tensor lifecycle: After first successful prefill, subsequent requests fail with "Buffer must be allocated on device" error. The `logits_ttnn` tensor gets deallocated before `ttnn.to_torch()`. Likely state management issue between requests.
+- Device timeout after multiple requests: After several successful image requests, the text model forward starts taking longer and eventually times out. Even with 30 second timeout (increased from 5s), requests eventually fail.
+- Pattern observed (with 30s timeout):
+  - Request 1: TTFT=22219ms (~22s) ✓
+  - Request 2: TTFT=12726ms (~13s) ✓
+  - Request 3: TTFT=7710ms (~8s) ✓
+  - Request 4: TIMEOUT at 30984ms (~31s) ✗
+- Root cause investigation needed:
+  - Memory fragmentation from repeated tensor allocations
+  - Resource accumulation (trace buffers, KV cache)
+  - Without trace, text model forward is slower (~10s vs ~2s with trace)
+  - Trace was disabled due to earlier hang issues, but non-traced path has performance degradation
+
+**Workaround in progress:**
+- Increased TT_METAL_OPERATION_TIMEOUT_SECONDS from 5.0 to 30.0 in `run_vllm_api_server.py`
+- Disabled prefill/decode trace (set `enable_trace: bool = False`)
+- Works for first few requests, then degrades
+
+**Next steps:**
+1. Investigate trace hang root cause (was working, then started hanging)
+2. Consider re-enabling trace once hang is fixed
+3. Profile memory usage over multiple requests
+4. Check if KV cache reset is needed between requests
 
 ### vLLM Integration Status (2026-03-24)
 **Text-only inference: WORKING ✓**

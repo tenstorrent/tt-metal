@@ -893,7 +893,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         kv_cache=None,
         prompt_lens=None,
         cross_page_table: Optional[torch.Tensor] = None,
-        enable_trace: bool = True,
+        enable_trace: bool = False,  # Disabled for vLLM: trace causes hang after multiple runs
         sampling_params=None,
         pixel_values: Optional[List] = None,
         image_token_pooling: Optional[List] = None,
@@ -1062,7 +1062,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Take [0] to get single device output, squeeze to remove batch dim if present
             mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
             logits_torch = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0].squeeze()
-            ttnn.deallocate(logits_ttnn)
+            # NOTE: Do NOT deallocate logits_ttnn - it may be a trace output tensor that's
+            # reused across multiple calls. Deallocating would cause "Buffer must be allocated"
+            # errors on subsequent requests.
 
             # Extract last token's logits - shape: [vocab_size]
             # Use original_seq_len - 1 to index correctly (accounting for padding)
@@ -1093,7 +1095,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         start_pos: torch.Tensor,
         page_table: Optional[torch.Tensor] = None,
         kv_cache=None,
-        enable_trace: bool = True,
+        enable_trace: bool = False,  # Disabled for vLLM: trace causes hang after multiple runs
         read_from_device: bool = True,
         sampling_params=None,
     ):
