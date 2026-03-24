@@ -27,9 +27,8 @@ def get_num_links(mesh_device, cluster_axis=None):
         >>> num_links = get_num_links(mesh_device)
         >>> num_links_axis0 = get_num_links(mesh_device, cluster_axis=0)
     """
-    # Store per-axis link counts as (axis0_links, axis1_links) tuples.
-    # For devices where the number of links does not depend on axis, both entries
-    # in the tuple are the same to preserve existing behavior.
+    # Per-axis link counts as (axis0_links, axis1_links) tuples.
+    # All current WH Galaxies are 6U units with 4 links on both axes.
     device_name = determine_device_name(mesh_device)
     link_dict = {
         "P100": (0, 0),
@@ -40,8 +39,8 @@ def get_num_links(mesh_device, cluster_axis=None):
         "P150x4": (2, 2),
         "P150x8": (2, 2),
         "P300": (2, 2),
-        "BHGLX": (4, 3),
-        "TG": (4, 3),
+        "BHGLX": (2, 2),
+        "TG": (4, 4),
         "N150x4": (1, 1),
     }
     device_links = link_dict[device_name]
