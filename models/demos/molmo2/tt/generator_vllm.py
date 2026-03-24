@@ -1009,12 +1009,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 is_video = pv_tensor.shape[0] == 8 and pooling is not None and pooling.shape[1] > 1000
 
                 # Run prefill with pre-processed image/video
+                # NOTE: Vision trace disabled for vLLM mode because vLLM uses multi-crop
+                # images with variable patch counts, but trace requires fixed tensor sizes.
+                # The pre-allocated vision trace tensors assume single-crop (729 patches),
+                # but vLLM may send 5+ crops (3645+ patches).
                 logits_ttnn, prefill_timing = self.generator.run_prefill(
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
                     use_trace=enable_trace,
-                    use_vision_trace=True,  # Vision trace accuracy bug fixed
+                    use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                 )
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])

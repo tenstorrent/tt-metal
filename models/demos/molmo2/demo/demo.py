@@ -725,8 +725,13 @@ class Molmo2Generator:
             Fused hidden states [1, 1, seq_len, hidden_dim] on device
         """
         if pixel_values is not None and pooled_patches_idx is not None:
-            # Ensure pixel_values has 4 dimensions [B, C, H, W]
-            if pixel_values.dim() == 3:
+            # pixel_values can be:
+            # 1. Pre-unfolded from vLLM: [num_crops, num_patches, 588] - 3D with last dim == 588
+            # 2. Raw image: [C, H, W] or [B, C, H, W]
+            # Only add batch dim for raw image format, not pre-unfolded
+            patch_features = 14 * 14 * 3  # 588
+            if pixel_values.dim() == 3 and pixel_values.shape[-1] != patch_features:
+                # Raw image [C, H, W] -> [1, C, H, W]
                 pixel_values = pixel_values.unsqueeze(0)
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
@@ -767,12 +772,21 @@ class Molmo2Generator:
         k_pool = pooled_patches_idx.shape[2]
 
         # 1. Patch embedding on TTNN (unfold on CPU, linear+pos_embed on device)
-        # Ensure pixel_values has 4 dimensions [B, C, H, W]
-        if pixel_values.dim() == 3:
-            # vLLM may pass [C, H, W] - add batch dim
-            pixel_values = pixel_values.unsqueeze(0)
         vit = self.model.vision_backbone.image_vit
-        embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
+        patch_features = vit.patch_size * vit.patch_size * 3  # 14*14*3 = 588
+
+        # Detect input format:
+        # - Pre-unfolded from vLLM: [num_crops, num_patches, 588] - 3D with last dim == 588
+        # - Raw image format: [B, C, H, W] - 4D or 3D [C, H, W]
+        if pixel_values.dim() == 3 and pixel_values.shape[-1] == patch_features:
+            # Pre-unfolded patch format from vLLM [num_crops, num_patches, 588]
+            embedded_ttnn = vit.patch_embed_from_patches_ttnn(pixel_values)
+        else:
+            # Raw image format [B, C, H, W] or [C, H, W]
+            if pixel_values.dim() == 3:
+                # [C, H, W] -> [1, C, H, W]
+                pixel_values = pixel_values.unsqueeze(0)
+            embedded_ttnn = vit.patch_embed_ttnn(pixel_values)  # [1, 1, B*N, hidden_dim] on device
 
         # 2. Prepare indices for TTNN gather
         # Identify valid indices (>= 0) and clip negative to 0
