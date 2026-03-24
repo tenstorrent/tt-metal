@@ -80,6 +80,11 @@ public:
 
     ~PhysicalGroupingDescriptor();
 
+    PhysicalGroupingDescriptor(const PhysicalGroupingDescriptor&) = delete;
+    PhysicalGroupingDescriptor& operator=(const PhysicalGroupingDescriptor&) = delete;
+    PhysicalGroupingDescriptor(PhysicalGroupingDescriptor&&) = default;
+    PhysicalGroupingDescriptor& operator=(PhysicalGroupingDescriptor&&) = default;
+
     // Check if a grouping exists
     bool has_grouping(const std::string& grouping_name) const;
 
