@@ -159,10 +159,11 @@ ttnn::Shape compute_matmul_output_shape(
         output_shape = ttnn::Shape(new_shape);
     }
 
-    // For standard batched matmul BxHxMxK / BxHxKxN, allow broadcasting of H when
-    // input A has H == 1 and input B has H > 1. Restrict to rank-4 tensors to avoid
-    // incorrectly treating dim 1 as a batch dimension for other rank patterns, and
-    // to ensure we do not index out of bounds for lower-rank shapes.
+    // Optimization: Reuse input A (in0) across batches when A's batch dimension is 1
+    // and B's batch dimension is > 1. For matmul shapes BxHaxMxK / BxHbxKxN where Ha=1 and Hb>1,
+    // the same A tensor can be reused for each batch element of B rather than reading A repeatedly.
+    // Restrict to rank-4 tensors to ensure dim 1 is correctly identified as the batch dimension
+    // and to prevent out-of-bounds indexing with lower-rank shapes.
     if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
         output_shape[1] = input_shape_b[1];
     }
