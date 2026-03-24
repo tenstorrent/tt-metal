@@ -162,6 +162,8 @@ class LTXPipeline:
         out_channels: int = 128,
         num_layers: int = 48,
         cross_attention_dim: int = 4096,
+        # Mode: "video" or "av"
+        mode: str = "video",
         # RoPE config
         positional_embedding_theta: float = 10000.0,
         positional_embedding_max_pos: list[int] | None = None,
@@ -170,6 +172,7 @@ class LTXPipeline:
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.mode = mode
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -205,9 +208,10 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
+            has_audio=self.mode == "av",
         )
         self.transformer.load_torch_state_dict(state_dict)
-        logger.info(f"Loaded LTX transformer with {self.num_layers} layers")
+        logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
 
     def load_text_encoder(
         self,
