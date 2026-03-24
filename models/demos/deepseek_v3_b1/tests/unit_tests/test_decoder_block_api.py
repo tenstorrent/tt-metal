@@ -183,20 +183,16 @@ class DecoderBlockStage(StageKind):
 
         grid_size = mesh_device.compute_with_storage_grid_size()
         total_cores = grid_size.x * grid_size.y
-        pos_core_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
-        )
-        pos_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+        zero_position_ids_host = ttnn.from_torch(
+            torch.zeros((total_cores, 1), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         self._state = {
             "d": d,
-            "mesh_device": mesh_device,
-            "zero_position_torch": torch.zeros((total_cores, 1), dtype=torch.int32),
-            "pos_mem": pos_mem,
+            "zero_position_ids_host": zero_position_ids_host,
             "attn_semaphores": attn_semaphores,
             "moe_semaphores": moe_semaphores,
             "reduce_semaphores": reduce_semaphores,
@@ -211,15 +207,7 @@ class DecoderBlockStage(StageKind):
         logger.info(f"[rank={my_mesh_id}] DecoderBlockStage setup complete")
 
     def reset_position_ids(self) -> None:
-        mesh_device = self._state["mesh_device"]
-        self._state["d"]["ttnn_position_ids"] = ttnn.from_torch(
-            self._state["zero_position_torch"],
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=self._state["pos_mem"],
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        ttnn.copy_host_to_device_tensor(self._state["zero_position_ids_host"], self._state["d"]["ttnn_position_ids"])
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state["d"]
@@ -399,20 +387,16 @@ class DenseBlockStage(StageKind):
 
         grid_size = mesh_device.compute_with_storage_grid_size()
         total_cores = grid_size.x * grid_size.y
-        pos_core_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
-        )
-        pos_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+        zero_position_ids_host = ttnn.from_torch(
+            torch.zeros((total_cores, 1), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         self._state = {
             "d": d,
-            "mesh_device": mesh_device,
-            "zero_position_torch": torch.zeros((total_cores, 1), dtype=torch.int32),
-            "pos_mem": pos_mem,
+            "zero_position_ids_host": zero_position_ids_host,
             "attn_semaphores": attn_semaphores,
             "moe_semaphores": moe_semaphores,
             "reduce_semaphores": reduce_semaphores,
@@ -427,15 +411,7 @@ class DenseBlockStage(StageKind):
         logger.info(f"[rank={my_mesh_id}] DenseBlockStage setup complete")
 
     def reset_position_ids(self) -> None:
-        mesh_device = self._state["mesh_device"]
-        self._state["d"]["ttnn_position_ids"] = ttnn.from_torch(
-            self._state["zero_position_torch"],
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=self._state["pos_mem"],
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        ttnn.copy_host_to_device_tensor(self._state["zero_position_ids_host"], self._state["d"]["ttnn_position_ids"])
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state["d"]
