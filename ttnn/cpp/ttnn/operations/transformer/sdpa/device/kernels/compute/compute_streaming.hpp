@@ -12,6 +12,7 @@
 
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
+#include "api/compute/experimental/pack_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 // BH has ample code size headroom; allow normal inlining and GCC IPA-CP cloning (no noinline/noclone).
 #define SDPA_NOINLINE
@@ -283,7 +284,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         // Reduce to reduce_cb: first tile of first kt_subblock overwrites, rest accumulate
 #ifdef ARCH_BLACKHOLE
         if constexpr (blocked_pack) {
-            PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
+            PACK((llk_pack_mop_config_minimal_custom(reduce_cb, 1)));
         }
 #endif
         dst_index = 0;
@@ -310,7 +311,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #ifdef ARCH_BLACKHOLE
     if constexpr (blocked_pack) {
-        PACK((llk_pack_mop_config<false, false, false>(reduce_cb, tiles_per_column)));
+        PACK((llk_pack_mop_config_minimal_custom(reduce_cb, tiles_per_column)));
     }
 #endif
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -410,12 +411,13 @@ void salad_correct_fused(
         tile_regs_wait();
         dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_mop_config<false, false, false>(out_out_cb, cur_cols)));
+        PACK((llk_pack_mop_config_minimal_custom(out_out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
             pack_tile<true>(dst_index, out_out_cb, out_tile_index);
             dst_index += cur_cols;
         }
+        PACK((llk_pack_mop_config_minimal_custom(out_out_cb, 1)));
 #else
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < cur_cols; j++) {
@@ -693,7 +695,7 @@ static void sdpa_inner_loop_step(
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
+    PACK((llk_pack_mop_config_minimal_custom(cb_qkt_im, actual_sbw)));
 #endif
     cb_wait_front(cb_kt_in, DHt * KT_stride);
 
@@ -797,7 +799,7 @@ static void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
             cb_reserve_back(cur.max, qkt_subblock_h);
 #ifdef ARCH_BLACKHOLE
-            PACK((llk_pack_mop_config<false, false, false>(cur.max, 1)));
+            PACK((llk_pack_mop_config_minimal_custom(cur.max, 1)));
 #endif
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
@@ -811,7 +813,7 @@ static void sdpa_inner_loop_step(
                 reduce_trigger);
             cb_push_back(cur.max, qkt_subblock_h);
 #ifdef ARCH_BLACKHOLE
-            PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
+            PACK((llk_pack_mop_config_minimal_custom(cur.max, actual_sbw)));
 #endif
         }
 
@@ -862,7 +864,7 @@ static void sdpa_inner_loop_step(
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
 #ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
+        PACK((llk_pack_mop_config_minimal_custom(cb_qkt_im, 1)));
 #endif
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
