@@ -447,6 +447,7 @@ class RotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
+        partial_rotary_factor: float = 1.0,  # use 1.0 for full rotary, < 1.0 for partial rotary
     ) -> None:
         super().__init__()
 
@@ -459,6 +460,7 @@ class RotarySetup(LightweightModule):
         self.doubled_batch_size = self.original_batch_size * 2 if use_qk_fused else self.original_batch_size
         self.head_dim = head_dim
         self.device = device
+        self.partial_rotary_factor = partial_rotary_factor
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
@@ -475,7 +477,7 @@ class RotarySetup(LightweightModule):
         self.start_core = ttnn.CoreCoord(1, 0)
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
-            head_dim=head_dim,
+            head_dim=int(head_dim * partial_rotary_factor),
             device=device,
             seq_len=max_seq_len,
             theta=rope_theta,
@@ -485,7 +487,7 @@ class RotarySetup(LightweightModule):
         )
 
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
-            head_dim=head_dim,
+            head_dim=int(head_dim * partial_rotary_factor),
             device=device,
             seq_len=max_seq_len,
             theta=rope_theta,
@@ -658,7 +660,7 @@ class RotarySetup(LightweightModule):
                 row_wise=True,
             )
             mem_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
+                shape=(ttnn.TILE_SIZE, int(self.head_dim * self.partial_rotary_factor)),
                 core_grid=trans_mat_core_grids,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -687,7 +689,7 @@ class RotarySetup(LightweightModule):
             sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
             mem_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
+                shape=(ttnn.TILE_SIZE, int(self.head_dim * self.partial_rotary_factor)),
                 core_grid=self.batch_grid,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -728,6 +730,7 @@ class HfRotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,  # Those are kept for API compatibility with RotarySetup
         prefetcher: Optional[Prefetcher] = None,
+        partial_rotary_factor: float = 1.0,  # use 1.0 for full rotary, < 1.0 for partial rotary
     ) -> None:
         super().__init__()
         if use_qk_fused:
@@ -735,12 +738,13 @@ class HfRotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
+        self.partial_rotary_factor = partial_rotary_factor
 
         self.device = device
         # Generate the cos/sin matrices in HF format (no Meta permutation)
         # Generate for max_seq_len to allow slicing in prepare_inputs_prefill
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
-            head_dim=head_dim,
+            head_dim=int(head_dim * partial_rotary_factor),
             device=device,
             seq_len=max_seq_len,
             theta=rope_theta,
@@ -749,7 +753,7 @@ class HfRotarySetup(LightweightModule):
         )
 
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats_hf(
-            head_dim=head_dim,
+            head_dim=int(head_dim * partial_rotary_factor),
             device=device,
             seq_len=max_seq_len,
             theta=rope_theta,
