@@ -134,14 +134,16 @@ class Attention:
 
             # 2D multicast program config for the o_proj matmul
             # Input: [1, 1, batch, local_qkv_out] -> Output: [1, 1, batch, padded_hidden]
-            grid_x, grid_y = 4, 4
+            # Optimized 2D mcast config for o_proj MM+RS fusion
+            # M=4t, K=28t, N=224t (GPT-OSS 120B, TP=8)
+            grid_x, grid_y = 8, 2
             per_core_M = max(1, batch // 32 // grid_y)
             per_core_N = max(1, padded_hidden // 32 // grid_x)
             self.mm_rs_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
-                in0_block_w=2,  # K tiles per block (conservative)
+                in0_block_w=14,  # Half of K=28 tiles per block (2 passes)
                 out_subblock_h=1,
-                out_subblock_w=1,
+                out_subblock_w=7,  # 28/7=4 subblock iterations
                 per_core_M=per_core_M,
                 per_core_N=per_core_N,
                 transpose_mcast=False,
