@@ -58,6 +58,7 @@ def get_prefill_matmul_program_config(
     N: int,
     grid_size: tuple[int, int] = GRID_SIZE,
     optimal_config: Optional[tuple[int, int, int]] = None,
+    fused_activation: Optional[ttnn.UnaryOpType] = None,
 ):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for a prefill matmul.
 
@@ -86,7 +87,7 @@ def get_prefill_matmul_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=False,
     )
 
