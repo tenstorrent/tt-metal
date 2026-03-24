@@ -313,6 +313,7 @@ class TransformerEncoder:
 
     def __call__(self, x: ttnn.Tensor, tgt_layer: int) -> ttnn.Tensor:
         x = ttnn.add(x, self.pos_conv(x))
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         if not self.layer_norm_first:
             x = self.layer_norm(x)
@@ -388,11 +389,13 @@ class HubertModel:
 
     def __call__(self, source: ttnn.Tensor, output_layer: int) -> ttnn.Tensor:
         x = self.feature_extractor(source)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         x = self.layer_norm(x)
 
         if self.post_extract_proj is not None:
             x = self.post_extract_proj(x)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         out = self.encoder(x, tgt_layer=output_layer - 1)
         return out
 
