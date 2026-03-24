@@ -418,8 +418,9 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     """Extract mesh configuration from machine_info.
 
     Reads mesh_device_shape and device_count directly from the execution's
-    machine_info block.  Falls back to computing device_count as the product
-    of mesh_shape dimensions when machine_info.device_count is absent.
+    machine_info block. Callers such as load_data() may require that
+    machine_info.device_count be explicitly present and consistent with the
+    mesh shape.
 
     Returns: (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
     """
