@@ -51,6 +51,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FRAC: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::SOFTSIGN: return "SFPU_OP_ACTIVATIONS_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     }
@@ -176,6 +177,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::FRAC: return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::HARDSWISH: return {};
+        case UnaryOpType::LGAMMA: return {};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         default: TT_FATAL(false, "Undefined unary_ng op type {}", op_type);
@@ -201,7 +203,12 @@ std::map<std::string, std::string> get_defines_impl(
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::LGAMMA: return "lgamma_kernel.cpp";
+        case UnaryOpType::LGAMMA:
+            TT_FATAL(input_dtype.has_value(), "UnaryNg lgamma: missing input dtype for kernel selection.");
+            if (input_dtype.value() == DataType::BFLOAT16) {
+                return "lgamma_fast_kernel.cpp";
+            }
+            return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
@@ -216,11 +223,7 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
                 return "hardshrink_kernel_sfpu.cpp";
             }
             return "hardshrink_kernel.cpp";
-        case UnaryOpType::HARDSWISH:
-            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
-                return "hardswish_kernel_sfpu.cpp";
-            }
-            return "hardswish_kernel.cpp";
+        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }

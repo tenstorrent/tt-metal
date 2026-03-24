@@ -27,12 +27,19 @@ void kernel_main() {
 
         copy_tile_to_dst_init_short(cb_input);
         copy_tile(cb_input, 0, 0);
+        copy_tile(cb_input, 0, 1);
 
         hardsigmoid_tile_init();
         hardsigmoid_tile(0);
 
+#ifdef INP_FLOAT32
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+#endif
+#ifdef INP_FLOAT
         binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
+#endif
 
         tile_regs_commit();
         tile_regs_wait();

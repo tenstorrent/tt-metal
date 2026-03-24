@@ -1793,8 +1793,8 @@ void py_module(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -2231,8 +2231,9 @@ void py_module(nb::module_& mod) {
     bind_sigmoid(mod);
 
     bind_unary_chain(mod);
-    bind_unary_operation<"lgamma", &ttnn::lgamma>(
+    bind_unary_operation_subcoregrids<"lgamma">(
         mod,
+        &ttnn::lgamma,
         R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, FLOAT32)doc");

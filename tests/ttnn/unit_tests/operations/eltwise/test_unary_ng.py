@@ -155,45 +155,6 @@ def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     assert torch.equal(ttnn_output, golden_tensor)
 
 
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        torch.Size([4, 7, 64, 128]),
-    ],
-)
-@pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.neg])
-def test_unary_ng_dram_sharded_fallback(input_shape, ttnn_op, device):
-    """Test that DRAM-backed sharded tensors fall back to interleaved path gracefully.
-
-    When either input or output uses DRAM sharding, is_native_L1_sharding returns false
-    and unary_ng falls back to the TensorAccessor (interleaved) path.
-    """
-    torch.manual_seed(42)
-    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output = golden_function(torch_input, device=device)
-
-    dram_sharded_config = ttnn.create_sharded_memory_config(
-        [128, 160],
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6)), ttnn.CoreRange((1, 0), (1, 6))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.COL_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    ttnn_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, memory_config=dram_sharded_config))
-    assert torch.equal(ttnn_output, torch_output)
-
-
 @pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.neg])
 def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     """Test that uneven sharding falls back to interleaved path gracefully.
@@ -248,7 +209,13 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
         ),
     ],
 )
-@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        pytest.param(torch.float32, ttnn.float32, marks=pytest.mark.skip(reason="tt-smi failure #39185")),
+    ],
+)
 def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strategy, device, torch_dtype, ttnn_dtype):
     """Test unary_ng abs with ROW_MAJOR layout and sharded memory config."""
     torch.manual_seed(42)

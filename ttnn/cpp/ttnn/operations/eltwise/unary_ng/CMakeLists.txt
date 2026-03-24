@@ -38,16 +38,19 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
-        TTNN::Ops::Eltwise::Unary
+        TTNN::Ops::Eltwise::Binary
 )
 
 install(
     TARGETS
         ttnn_op_eltwise_unary_ng
     FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/unary_ng
         COMPONENT ttnn-runtime
-    LIBRARY
-        COMPONENT tar
 )
+
+install(TARGETS ttnn_op_eltwise_unary_ng LIBRARY COMPONENT tar)
