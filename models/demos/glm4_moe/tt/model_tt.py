@@ -2213,7 +2213,12 @@ class Glm4MoeTT:
         # In-trace argmax for main model sampling (ALL devices including TG mesh).
         # The "TG mesh sampling broken" belief was stale — argmax works correctly
         # inside trace on TG (proven by MTP in-trace argmax match=True results).
-        if sampling_params is not None:
+        # Widened gate: also produce top1_indices_tt when MTP needs it for in-trace embedding
+        # (Bug 3 fix: reuse main argmax for MTP instead of running a second all_gather chain).
+        _need_intrace_argmax = sampling_params is not None or (
+            self.mtp_enabled and mtp_traced and mtp_use_intrace_embed and mtp_hidden_tt is not None
+        )
+        if _need_intrace_argmax:
             tp_axis, tp_size = _tp_axis_and_size(self.device)
             vocab = int(self.hparams.vocab_size)
             if self.lm_head_sharded_vocab and is_mesh and tp_size > 1:
@@ -2251,24 +2256,30 @@ class Glm4MoeTT:
         if self.mtp_enabled and mtp_traced and mtp_hidden_tt is not None:
             mtp_current_embed_trace = None
             if mtp_use_intrace_embed:
-                # In-trace embedding: all_gather → argmax → embedding (INSIDE trace)
-                tp_axis, tp_size = _tp_axis_and_size(self.device)
-                vocab = int(self.hparams.vocab_size)
-                if self.lm_head_sharded_vocab and is_mesh and tp_size > 1:
-                    logits_gathered = _simple_all_gather(
-                        logits_tt, self.device, cluster_axis=tp_axis, dim=3,
-                        subdevice_id=_sdid,
-                    )
+                # Bug 3 fix: reuse top1_indices_tt from main sampling chain instead of
+                # running a second all_gather+argmax. Eliminates redundant CCL op and
+                # prevents potential TG mesh divergence between the two chains.
+                if top1_indices_tt is not None:
+                    mtp_token_ids_2d = ttnn.reshape(top1_indices_tt, (active, 1))
                 else:
-                    logits_gathered = logits_tt
-                logits_rm_mtp = ttnn.to_layout(logits_gathered, ttnn.ROW_MAJOR_LAYOUT)
-                logits_rm_mtp_view = ttnn.slice(logits_rm_mtp, [0, 0, 0, 0], [1, 1, active, vocab])
-                mtp_token_ids_tt = ttnn.argmax(logits_rm_mtp_view, dim=3, keepdim=False, use_multicore=True)
-                ttnn.deallocate(logits_rm_mtp, force=False)
-                if logits_gathered is not logits_tt:
-                    ttnn.deallocate(logits_gathered, force=False)
-                # Reshape argmax output for embedding: [1,1,B,1] → [B,1]
-                mtp_token_ids_2d = ttnn.reshape(mtp_token_ids_tt, (active, 1))
+                    # Fallback: run argmax if main chain didn't produce top1_indices_tt
+                    # (shouldn't happen — gate was widened above)
+                    tp_axis, tp_size = _tp_axis_and_size(self.device)
+                    vocab = int(self.hparams.vocab_size)
+                    if self.lm_head_sharded_vocab and is_mesh and tp_size > 1:
+                        logits_gathered = _simple_all_gather(
+                            logits_tt, self.device, cluster_axis=tp_axis, dim=3,
+                            subdevice_id=_sdid,
+                        )
+                    else:
+                        logits_gathered = logits_tt
+                    logits_rm_mtp = ttnn.to_layout(logits_gathered, ttnn.ROW_MAJOR_LAYOUT)
+                    logits_rm_mtp_view = ttnn.slice(logits_rm_mtp, [0, 0, 0, 0], [1, 1, active, vocab])
+                    mtp_token_ids_2d = ttnn.argmax(logits_rm_mtp_view, dim=3, keepdim=False, use_multicore=True)
+                    mtp_token_ids_2d = ttnn.reshape(mtp_token_ids_2d, (active, 1))
+                    ttnn.deallocate(logits_rm_mtp, force=False)
+                    if logits_gathered is not logits_tt:
+                        ttnn.deallocate(logits_gathered, force=False)
                 mtp_current_embed_trace = ttnn.embedding(
                     mtp_token_ids_2d, self.embed_w,
                     layout=ttnn.TILE_LAYOUT,
@@ -2276,8 +2287,8 @@ class Glm4MoeTT:
                 )
                 # Reshape to [1,1,B,hidden] for MTP forward
                 mtp_current_embed_trace = ttnn.reshape(mtp_current_embed_trace, (1, 1, active, hidden))
-                ttnn.deallocate(mtp_token_ids_tt, force=False)
-                ttnn.deallocate(mtp_token_ids_2d, force=False)
+                # Don't deallocate mtp_token_ids_2d if it's a reshape of top1_indices_tt
+                # (shared with main sampling chain — will be deallocated there)
 
             mtp_state_for_trace = _DecodeTraceState(
                 batch=active,
