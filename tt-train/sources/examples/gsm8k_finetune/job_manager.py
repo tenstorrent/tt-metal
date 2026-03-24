@@ -9,6 +9,7 @@ Handles job submission, monitoring, and management via SLURM.
 
 import json
 import os
+import re
 import subprocess
 import shutil
 from dataclasses import dataclass, field, asdict
@@ -575,15 +576,78 @@ class JobManager:
 
                 # sacct unavailable or returned nothing: the job is no longer in
                 # squeue but we can't confirm its terminal state.  If our cache
-                # shows it was RUNNING, it must have exited — treat as failed
-                # rather than regressing to UNKNOWN (which maps to "queued").
+                # shows it was RUNNING, inspect the job's output files to
+                # distinguish COMPLETED from FAILED before giving up.
                 cached = self._jobs_cache.get(job_id)
                 if cached and cached.status == JobStatus.RUNNING.value:
-                    return JobStatus.FAILED
+                    return self._infer_terminal_status_from_files(job_id)
                 return JobStatus.UNKNOWN
 
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return JobStatus.UNKNOWN
+
+    def _infer_terminal_status_from_files(self, job_id: str) -> JobStatus:
+        """Distinguish COMPLETED from FAILED by inspecting job output files.
+
+        Called when the job has left squeue and sacct is unavailable.
+        Decision logic (in order):
+          1. slurm_*.err contains slurmstepd "JOB ... FAILED" epilog  → FAILED
+          2. slurm_*.err contains a Python Traceback                   → FAILED
+          3. output.txt exists and is non-empty (training wrote output) → COMPLETED
+          4. .err/.out files exist but no training output (failed early) → FAILED
+          5. No output files at all                                      → UNKNOWN
+        """
+        cached = self._jobs_cache.get(job_id)
+        if not cached or not cached.output_dir:
+            return JobStatus.FAILED
+
+        output_dir = Path(cached.output_dir)
+        if not output_dir.exists():
+            return JobStatus.FAILED
+
+        # Check slurm_*.err for SLURM epilog failure markers and Python tracebacks
+        err_files = sorted(output_dir.glob("slurm_*.err"))
+        if err_files:
+            try:
+                err_content = err_files[-1].read_text(errors="replace")
+                # slurmstepd appends this line when the batch script exits non-zero
+                if re.search(r"slurmstepd.*error.*JOB.*FAILED", err_content, re.IGNORECASE):
+                    return JobStatus.FAILED
+                # slurmstepd on OOM / node failure / signal kill
+                if re.search(
+                    r"slurmstepd.*error.*(KILLED|OUT_OF_MEMORY|TIMEOUT|NODE_FAIL)", err_content, re.IGNORECASE
+                ):
+                    return JobStatus.FAILED
+                # Python script crashed
+                if "Traceback (most recent call last)" in err_content:
+                    return JobStatus.FAILED
+            except OSError:
+                pass
+
+        # Some SLURM configurations append an exit-code line to the .out file
+        out_files = sorted(output_dir.glob("slurm_*.out"))
+        if out_files:
+            try:
+                out_content = out_files[-1].read_text(errors="replace")
+                tail = out_content[-2000:] if len(out_content) > 2000 else out_content
+                m = re.search(r"exit\s+code[:\s]+(\d+)", tail, re.IGNORECASE)
+                if m and m.group(1) != "0":
+                    return JobStatus.FAILED
+            except OSError:
+                pass
+
+        # No failure indicators found.  If the training script wrote output,
+        # the process ran to completion and exited cleanly.
+        output_txt = output_dir / "output.txt"
+        if output_txt.exists() and output_txt.stat().st_size > 0:
+            return JobStatus.COMPLETED
+
+        # Output files exist but no training output — job likely failed before
+        # the training script could write anything (bad environment, import error, etc.)
+        if err_files or out_files:
+            return JobStatus.FAILED
+
+        return JobStatus.UNKNOWN
 
     def cancel_job(self, job_id: str) -> tuple[bool, str]:
         """Cancel a running or pending job.
