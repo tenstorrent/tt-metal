@@ -189,7 +189,7 @@ Tensor unpad(
     const tt::tt_metal::Shape& output_tensor_end) {
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
-    TT_FATAL(is_device_tensor(input_tensor), "Tensor must be on host for unpadding");
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for unpadding");
     auto output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -198,7 +198,7 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    TT_FATAL(is_device_tensor(input_tensor), "Tensor must be on host for pad_to_tile conversion");
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for pad_to_tile conversion");
     auto output = Tensor(tensor_impl::pad_to_tile(input_tensor.host_tensor(), pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -207,7 +207,7 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
-    TT_FATAL(is_device_tensor(input_tensor), "Tensor must be on host for unpad_from_tile conversion");
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for unpad_from_tile conversion");
     auto output = Tensor(tensor_impl::unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -268,41 +268,39 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         return Tensor(std::move(device_storage), new_spec, input_tensor.tensor_topology());
     }
 
-                tt::tt_metal::ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
-                std::array<uint32_t, 2> shard_page_shape = {1, new_shard_spec.shape[1]};
-                std::array<uint32_t, 2> tensor2d_shape_in_pages = {
-                    new_spec.physical_shape().height() / shard_page_shape[0],
-                    new_spec.physical_shape().width() / shard_page_shape[1]};
-                tt::tt_metal::ShardSpecBuffer new_shard_spec_buffer =
-                    tt::tt_metal::ShardSpecBuffer(new_shard_spec, shard_page_shape, tensor2d_shape_in_pages);
+    tt::tt_metal::ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
+    std::array<uint32_t, 2> shard_page_shape = {1, new_shard_spec.shape[1]};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
+        new_spec.physical_shape().height() / shard_page_shape[0],
+        new_spec.physical_shape().width() / shard_page_shape[1]};
+    tt::tt_metal::ShardSpecBuffer new_shard_spec_buffer =
+        tt::tt_metal::ShardSpecBuffer(new_shard_spec, shard_page_shape, tensor2d_shape_in_pages);
 
-                tt::tt_metal::Shape tensor_shape_pages(tensor2d_shape_in_pages);
-                tt::tt_metal::Shape shard_shape_pages(new_shard_spec_buffer.shape_in_pages());
-                tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
-                    tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
+    tt::tt_metal::Shape tensor_shape_pages(tensor2d_shape_in_pages);
+    tt::tt_metal::Shape shard_shape_pages(new_shard_spec_buffer.shape_in_pages());
+    tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
+        tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
 
-                auto device_local_config = input_tensor.mesh_buffer().device_local_config();
-                auto& sharding_args = device_local_config.sharding_args;
-                tt::tt_metal::BufferShardingArgs new_sharding_args(
-                    new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
+    auto device_local_config = input_tensor.mesh_buffer().device_local_config();
+    auto& sharding_args = device_local_config.sharding_args;
+    tt::tt_metal::BufferShardingArgs new_sharding_args(
+        new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
 
-                tt::tt_metal::distributed::DeviceLocalBufferConfig new_device_config = {
-                    .page_size = new_spec.compute_page_size_bytes(),
-                    .buffer_type = device_local_config.buffer_type,
-                    .sharding_args = new_sharding_args,
-                    .bottom_up = device_local_config.bottom_up};
+    tt::tt_metal::distributed::DeviceLocalBufferConfig new_device_config = {
+        .page_size = new_spec.compute_page_size_bytes(),
+        .buffer_type = device_local_config.buffer_type,
+        .sharding_args = new_sharding_args,
+        .bottom_up = device_local_config.bottom_up};
 
-                auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-                    input_tensor.mesh_buffer().global_config(),
-                    new_device_config,
-                    input_tensor.device(),
-                    input_tensor.mesh_buffer().address());
-                tt::tt_metal::DeviceStorage view_storage(
-                    view_mesh_buffer,
-                    input_tensor.device_storage().coords,
-                    input_tensor.device_storage().get_root_mesh_buffer());
+    auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+        input_tensor.mesh_buffer().global_config(),
+        new_device_config,
+        input_tensor.device(),
+        input_tensor.mesh_buffer().address());
+    tt::tt_metal::DeviceStorage view_storage(
+        view_mesh_buffer, input_tensor.device_storage().coords, input_tensor.device_storage().get_root_mesh_buffer());
 
-                return Tensor(view_storage, new_spec, input_tensor.tensor_topology());
+    return Tensor(view_storage, new_spec, input_tensor.tensor_topology());
 }
 
 Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
