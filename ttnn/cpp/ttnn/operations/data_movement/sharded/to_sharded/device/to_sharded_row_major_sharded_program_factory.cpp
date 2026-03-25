@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "to_sharded_program_factory.hpp"
+#include "to_sharded_row_major_sharded_program_factory.hpp"
 
 #include <cmath>
 

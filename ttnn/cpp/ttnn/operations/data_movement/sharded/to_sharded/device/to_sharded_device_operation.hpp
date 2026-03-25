@@ -10,7 +10,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "to_sharded_device_operation_types.hpp"
-#include "to_sharded_program_factory.hpp"
+#include "to_sharded_row_major_sharded_program_factory.hpp"
 
 namespace ttnn::prim {
 
