@@ -759,6 +759,7 @@ class LTXPipeline:
         rescale_scale: float = 0.7,
         stg_block: int = 28,
         seed: int | None = None,
+        ge_gamma: float = 2.0,
         profiler=None,
         profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -802,6 +803,10 @@ class LTXPipeline:
         do_cfg = video_cfg_scale > 1.0 or audio_cfg_scale > 1.0
         do_stg = video_stg_scale != 0.0 or audio_stg_scale != 0.0
         do_mod = video_modality_scale != 1.0 or audio_modality_scale != 1.0
+
+        # Gradient estimation state (tracks velocity for velocity correction)
+        prev_v_vel = None
+        prev_a_vel = None
 
         for step_idx in range(num_inference_steps):
             sigma = sigmas[step_idx].item()
@@ -862,10 +867,26 @@ class LTXPipeline:
                     else:
                         a_den = pred.bfloat16()
 
-            video_lat = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
-            a_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
+            # Gradient estimation: correct velocity using previous step's velocity
+            if ge_gamma != 0.0 and sigma_next != 0.0:
+                v_velocity = (video_lat.float() - v_den.float()) / sigma
+                a_velocity = (audio_lat.float() - a_den.float()) / sigma
+                if prev_v_vel is not None:
+                    v_total = ge_gamma * (v_velocity - prev_v_vel) + prev_v_vel
+                    a_total = ge_gamma * (a_velocity - prev_a_vel) + prev_a_vel
+                    v_den = (video_lat.float() - v_total * sigma).bfloat16()
+                    a_den = (audio_lat.float() - a_total * sigma).bfloat16()
+                prev_v_vel, prev_a_vel = v_velocity, a_velocity
+
+            # Last step: return denoised directly (sigma_next == 0)
+            if sigma_next == 0.0:
+                video_lat = v_den.float()
+                audio_lat_new = a_den.float()
+            else:
+                video_lat = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
+                audio_lat_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
             audio_lat = torch.zeros_like(audio_lat)
-            audio_lat[:, :audio_N_real, :] = a_new[:, :audio_N_real, :]
+            audio_lat[:, :audio_N_real, :] = audio_lat_new[:, :audio_N_real, :]
 
             if (step_idx + 1) % 5 == 0 or step_idx == 0:
                 logger.info(f"Step {step_idx+1}/{num_inference_steps}: σ {sigma:.4f}→{sigma_next:.4f}")
