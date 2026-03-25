@@ -300,13 +300,16 @@ def test_mac_output_tensor(device):
     preallocated = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.mac(input_tensor1, input_tensor2, input_tensor3, output_tensor=preallocated)
 
-    # Result must be the same object as the preallocated tensor
-    assert result.data_ptr() == preallocated.data_ptr()
-
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
+
+    # Verify result is numerically correct
     output_torch = result.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+
+    # Verify the preallocated buffer was written to (should now hold the same values as result)
+    preallocated_torch = preallocated.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, preallocated_torch, ulp_threshold=1)
 
 
 def test_mac_sub_core_grids(device):
