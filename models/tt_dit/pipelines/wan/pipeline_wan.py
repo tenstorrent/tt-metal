@@ -32,7 +32,7 @@ from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
@@ -418,10 +418,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_vae(self):
+        blocking_key = conv3d_blocking_hash(self.tt_vae)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae",
+            subfolder=subfolder,
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
