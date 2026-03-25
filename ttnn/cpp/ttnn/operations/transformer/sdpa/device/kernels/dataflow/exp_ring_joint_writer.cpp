@@ -300,24 +300,23 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
-    constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t L = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(17);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(18);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(19);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(20);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(21);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t Lt = get_compile_time_arg_val(9);
+    constexpr uint32_t L = get_compile_time_arg_val(10);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(16);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(17);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(18);
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -337,11 +336,7 @@ void kernel_main() {
     constexpr uint32_t ag_page_size = get_compile_time_arg_val(ag_ct_base + 2);
     constexpr uint32_t ag_pkt_hdr_cb_id = get_compile_time_arg_val(ag_ct_base + 3);
     constexpr uint32_t ag_kv_scratch_cb_id = get_compile_time_arg_val(ag_ct_base + 4);
-    constexpr uint32_t ag_num_targets_forward = get_compile_time_arg_val(ag_ct_base + 5);
-    constexpr uint32_t ag_num_targets_backward = get_compile_time_arg_val(ag_ct_base + 6);
-    constexpr ttnn::ccl::Topology ag_topology =
-        static_cast<ttnn::ccl::Topology>(get_compile_time_arg_val(ag_ct_base + 7));
-    constexpr auto ag_input_k_args = TensorAccessorArgs<ag_ct_base + 8>();
+    constexpr auto ag_input_k_args = TensorAccessorArgs<ag_ct_base + 5>();
     constexpr auto ag_input_v_args = TensorAccessorArgs<ag_input_k_args.next_compile_time_args_offset()>();
     constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_input_v_args.next_compile_time_args_offset()>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
