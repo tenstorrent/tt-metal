@@ -334,7 +334,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t cat_Sq = N_local + L;
     const uint32_t cat_Sk = N_global + L;
 
-    // Single attention pass over concatenated dimensions, non-causal
+    // Single attention pass over concatenated dimensions
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
 
@@ -375,7 +375,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "Launching RingJointSDPA with core_allocation_strategy {}",
         enchantum::to_string(core_allocation_strategy));
