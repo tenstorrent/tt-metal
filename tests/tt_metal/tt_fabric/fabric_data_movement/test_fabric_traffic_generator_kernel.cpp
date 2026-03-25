@@ -124,16 +124,14 @@ protected:
         memory_layout_ = allocate_worker_memory();
 
         // Create destination node (second device)
-        FabricNodeId dest_node(MeshId{0}, 1);  // mesh_id=0, device_id=1
+        // Grab the (Mesh, LogicalId) pair from the physical chip
+        auto* dest_physical_device = devices[1]->get_devices()[0];
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        FabricNodeId dest_node = control_plane.get_fabric_node_id_from_physical_chip_id(dest_physical_device->id());
 
         // Create and launch program (note: correct argument order)
-        program_ = create_traffic_generator_program(
-            mesh_device_, worker_core, dest_node, memory_layout_);
-
+        program_ = create_traffic_generator_program(mesh_device_, worker_core, dest_node, memory_layout_);
         this->RunProgramNonblocking(mesh_device_, *program_);
-
-        log_info(LogTest, "Traffic generator kernel launched on device {}, core ({},{})",
-                 mesh_device_->id(), worker_core.x, worker_core.y);
     }
 
     WorkerMemoryLayout memory_layout_{};
