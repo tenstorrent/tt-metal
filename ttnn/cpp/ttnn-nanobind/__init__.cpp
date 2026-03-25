@@ -52,6 +52,7 @@
 #include "ttnn/operations/embedding_backward/embedding_backward_nanobind.hpp"
 #include "ttnn/operations/examples/examples_nanobind.hpp"
 #include "ttnn/operations/experimental/experimental_nanobind.hpp"
+#include "ttnn/operations/forward_substitution/forward_substitution_nanobind.hpp"
 #include "ttnn/operations/full/full_nanobind.hpp"
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
@@ -138,6 +139,9 @@ void py_module(nb::module_& mod) {
 
     auto m_embedding_backward = mod.def_submodule("embedding_backward", "embedding backward operations");
     embedding_backward::bind_embedding_backward(m_embedding_backward);
+
+    auto m_forward_substitution = mod.def_submodule("forward_substitution", "forward_substitution operation");
+    forward_substitution::bind_forward_substitution_operation(m_forward_substitution);
 
     auto m_full = mod.def_submodule("full", "full operation");
     full::bind_full_operation(m_full);

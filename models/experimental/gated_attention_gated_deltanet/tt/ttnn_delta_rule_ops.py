@@ -16,22 +16,15 @@ Tensor layout convention (FLA style):
 """
 
 import math
-import torch
 import ttnn
 
 # Tile size used by TTNN matmul (wormhole)
 _TILE_H = 32
 _TILE_W = 32
 
-# Cached identity matrices for forward substitution (avoids per-call allocation)
-_EYE_CACHE = {}
-
-
-def _chunk_eye(size):
-    """Return a cached [size, size] float32 identity matrix on CPU."""
-    if size not in _EYE_CACHE:
-        _EYE_CACHE[size] = torch.eye(size, dtype=torch.float32)
-    return _EYE_CACHE[size]
+# Module-level profiling flag. Set to True to enable timing in chunk_gated_delta_rule_ttnn.
+# Usage: import ttnn_delta_rule_ops; ttnn_delta_rule_ops.PROFILE_CHUNK_DELTA = True
+PROFILE_CHUNK_DELTA = False
 
 
 def _recurrent_outer_product_program_config(device, K, V):
@@ -767,6 +760,7 @@ def chunk_gated_delta_rule_ttnn(
     initial_state=None,
     device=None,
     cached_masks=None,
+    _profile=None,
 ):
     """
     Chunked gated delta rule using TTNN ops. Used for prefill.
@@ -794,6 +788,21 @@ def chunk_gated_delta_rule_ttnn(
         output: [B, T, H, V]
         final_state: [B, H, K, V]
     """
+    import time as _time
+    import os as _os
+
+    _prof = {}
+    # Check both the parameter and the env var (env var is more reliable across import boundaries)
+    if _profile is None:
+        _profile = PROFILE_CHUNK_DELTA or _os.environ.get("PROFILE_CHUNK_DELTA", "") == "1"
+
+    def _sync():
+        if _profile:
+            ttnn.synchronize_device(device)
+        return _time.time()
+
+    _t0 = _sync()
+
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
 
@@ -1000,22 +1009,24 @@ def chunk_gated_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_t)
 
+    _t1 = _sync()
+    _prof["1_prep_decay_mask"] = _t1 - _t0
+
     # Compute -(kk * L_mask) = lower-triangular correction matrix including diagonal.
     attn_raw = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
     ttnn.deallocate(kk)
 
-    # Forward substitution: exact solve of (I + A)^{-1} row by row.
-    # Matches the FLA Triton kernel and PyTorch reference.
-    # The loop reads A[:i, :i] (including diagonal = -beta), so identity
-    # must be added AFTER the loop, not before.
-
-    A = ttnn.to_torch(attn_raw).float()  # [batch, chunk_size, chunk_size]
+    # Fused forward substitution on device: computes (I + A)^{-1} without CPU roundtrip.
+    # Requires ROW_MAJOR float32 input; converts back to TILE_LAYOUT after.
+    attn_raw_rm = ttnn.to_layout(attn_raw, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(attn_raw)
-    for i in range(1, chunk_size):
-        A[..., i, :i] = A[..., i, :i] + (A[..., i, :i, None] * A[..., :i, :i]).sum(-2)
-    A += _chunk_eye(chunk_size)  # cached identity, no per-call allocation
-    attn = ttnn.from_torch(A, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_cmc)
-    del A
+    attn_rm = ttnn.forward_substitution(attn_raw_rm, memory_config=_cmc)
+    ttnn.deallocate(attn_raw_rm)
+    attn = ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT, memory_config=_cmc)
+    ttnn.deallocate(attn_rm)
+
+    _t2 = _sync()
+    _prof["2_forward_sub"] = _t2 - _t1
 
     prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     if prog_config_vcorr:
@@ -1076,6 +1087,9 @@ def chunk_gated_delta_rule_ttnn(
     prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None)
+
+    _t3 = _sync()
+    _prof["3_reshape_prep"] = _t3 - _t2
 
     outputs = []
     for i in range(num_chunks):
@@ -1162,6 +1176,9 @@ def chunk_gated_delta_rule_ttnn(
             state_update = ttnn.matmul(k_decay_t, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
         S = ttnn.add(S, state_update, memory_config=_cmc)
 
+    _t4 = _sync()
+    _prof["4_inter_chunk_loop"] = _t4 - _t3
+
     o = ttnn.concat(outputs, dim=1, memory_config=None)
     # o shape: [BH, num_chunks, chunk_size, V]
     # First merge chunk dims to get [BH, L, V], then trim padding if needed
@@ -1174,6 +1191,16 @@ def chunk_gated_delta_rule_ttnn(
     o = ttnn.reshape(o, [B, H, T, V], memory_config=None)
     o = ttnn.transpose(o, 1, 2, memory_config=None)
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=None)
+
+    _t5 = _sync()
+    _prof["5_output_reshape"] = _t5 - _t4
+
+    if _profile:
+        total = _t5 - _t0
+        from loguru import logger
+
+        parts = " | ".join(f"{k}: {v*1000:.1f}ms" for k, v in _prof.items())
+        logger.info(f"chunk_delta_rule T={T} C={chunk_size} chunks={num_chunks} total={total*1000:.1f}ms | {parts}")
 
     final_state = ttnn.reshape(S, [B, H, K, V], memory_config=None)
     return o, final_state
