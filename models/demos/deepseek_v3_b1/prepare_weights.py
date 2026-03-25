@@ -749,50 +749,95 @@ def prepare_routed_expert_weights(
     is_moe: bool,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
-    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts)."""
+    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
+
+    When ``cache_config`` is provided:
+    * **MoE** — routed through :meth:`TensorCache.get_or_create_routed_experts`
+      (768 individual ``.tensorbin`` files with a ``_complete`` sentinel).
+    * **Dense** — each of the three projections is routed through
+      :meth:`TensorCache.get_or_create_tensor`.
+    """
+    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
+
     if is_moe:
-        logger.info(
-            "Loading and converting {} routed experts for layer {} (this may be slow)...",
-            num_routed_experts,
-            layer_idx,
-        )
-        t0 = time.perf_counter()
-        gate_list = []
-        up_list = []
-        down_list = []
-        for e in range(num_routed_experts):
-            if e > 0 and e % 64 == 0:
-                logger.debug("  loaded experts 0..{} from state dict", e - 1)
-            gate_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")].T.contiguous())
-            up_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.up_proj.weight")].T.contiguous())
-            down_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
-        load_elapsed = time.perf_counter() - t0
-        logger.info("  loaded {} experts from state dict in {:.3f}s", num_routed_experts, load_elapsed)
-        logger.debug("Converting routed experts to device format (blitz)...")
-        t0 = time.perf_counter()
-        gate_stacked = torch.stack(gate_list, dim=0)
-        up_stacked = torch.stack(up_list, dim=0)
-        down_stacked = torch.stack(down_list, dim=0)
-        routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
-            gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
-        )
-        logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
-        routed = MoERoutedExpertWeights(
-            routed_gate_proj=routed_gate_proj,
-            routed_up_proj=routed_up_proj,
-            routed_down_proj=routed_down_proj,
-        )
-        if move_to_device:
-            routed.validate_contiguous_dram()
-        return routed
+
+        def _create_moe() -> MoERoutedExpertWeights:
+            logger.info(
+                "Loading and converting {} routed experts for layer {} (this may be slow)...",
+                num_routed_experts,
+                layer_idx,
+            )
+            t0 = time.perf_counter()
+            gate_list = []
+            up_list = []
+            down_list = []
+            for e in range(num_routed_experts):
+                if e > 0 and e % 64 == 0:
+                    logger.debug("  loaded experts 0..{} from state dict", e - 1)
+                gate_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")].T.contiguous())
+                up_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.up_proj.weight")].T.contiguous())
+                down_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
+            load_elapsed = time.perf_counter() - t0
+            logger.info("  loaded {} experts from state dict in {:.3f}s", num_routed_experts, load_elapsed)
+            logger.debug("Converting routed experts to device format (blitz)...")
+            t0 = time.perf_counter()
+            gate_stacked = torch.stack(gate_list, dim=0)
+            up_stacked = torch.stack(up_list, dim=0)
+            down_stacked = torch.stack(down_list, dim=0)
+            routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
+                gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
+            )
+            logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
+            routed = MoERoutedExpertWeights(
+                routed_gate_proj=routed_gate_proj,
+                routed_up_proj=routed_up_proj,
+                routed_down_proj=routed_down_proj,
+            )
+            if move_to_device:
+                routed.validate_contiguous_dram()
+            return routed
+
+        if cache_config is not None:
+            fp = _make_fp(cache_config, mesh_shape, "routed_experts", layer_idx, ())
+            return cache_config.cache.get_or_create_routed_experts(
+                fp, create=_create_moe, device=bdw._device, num_experts=num_routed_experts
+            )
+        return _create_moe()
     else:
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
-        routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
-            mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
-        )
+
+        if cache_config is not None:
+            _dense_cache: dict[str, ttnn.Tensor] = {}
+
+            def _ensure_dense_converted():
+                if not _dense_cache:
+                    g, u, d = bdw.get_tt_mlp_routed_expert_weights(
+                        mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
+                    )
+                    _dense_cache["gate"] = g
+                    _dense_cache["up"] = u
+                    _dense_cache["down"] = d
+
+            def _cached_or_create(tensor_name, key):
+                fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
+
+                def _create():
+                    _ensure_dense_converted()
+                    return _dense_cache[key]
+
+                return cache_config.cache.get_or_create_tensor(fp, create=_create, device=bdw._device)
+
+            routed_gate_proj = _cached_or_create("routed_gate_proj", "gate")
+            routed_up_proj = _cached_or_create("routed_up_proj", "up")
+            routed_down_proj = _cached_or_create("routed_down_proj", "down")
+        else:
+            routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
+                mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
+            )
         return DenseRoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
             routed_up_proj=routed_up_proj,
@@ -806,13 +851,20 @@ def prepare_dense_layer_weights(
     layer_idx: int,
     *,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3DenseLayerWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
-    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    attn = prepare_attention_weights(
+        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+    )
+    shared = prepare_shared_expert_weights(
+        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+    )
+    routed = prepare_routed_expert_weights(
+        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+    )
     assert isinstance(routed, DenseRoutedExpertWeights)
     return DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
@@ -842,14 +894,25 @@ def prepare_moe_layer_weights(
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
+    cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
+    attn = prepare_attention_weights(
+        bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
+    )
+    shared = prepare_shared_expert_weights(
+        bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
+    )
     routed = prepare_routed_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts, move_to_device=move_to_device
+        bdw,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_routed_experts,
+        move_to_device=move_to_device,
+        cache_config=cache_config,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None

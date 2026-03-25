@@ -9,7 +9,7 @@ creation callback, and a device reference.  On a hit the cached artifact
 is loaded directly; on a miss the callback is invoked, the result is
 stored, and then returned.
 
-Two storage formats are supported:
+Three storage formats are supported:
 
 * **Overlapped tensors** (``get_or_create``) — fusion groups serialized
   via the C++ FlatBuffer path (``dump_overlapped_tensors`` /
@@ -17,6 +17,9 @@ Two storage formats are supported:
 * **Standalone tensors** (``get_or_create_tensor``) — single
   ``ttnn.Tensor`` objects serialized via ``ttnn.dump_tensor`` /
   ``ttnn.load_tensor``.
+* **Routed expert lists** (``get_or_create_routed_experts``) — per-expert
+  ``ttnn.Tensor`` files (768 per MoE layer) loaded in projection-first
+  order to guarantee contiguous DRAM allocation.
 
 Storage uses content-addressed directories keyed by
 ``sha256(fingerprint)`` under a configurable root.
@@ -79,12 +82,14 @@ _TRANSFORM_VERSION = 1
 
 
 class TensorCache:
-    """Content-addressed cache for weight tensors (overlapped and standalone).
+    """Content-addressed cache for weight tensors (overlapped, standalone, and routed experts).
 
     Storage layout::
 
         <root>/objects/<prefix>/<artifact_id>/data.overlappedtensorbin
         <root>/objects/<prefix>/<artifact_id>/data.tensorbin
+        <root>/objects/<prefix>/<artifact_id>/experts/e_NNN/{gate,up,down}_proj.tensorbin
+        <root>/objects/<prefix>/<artifact_id>/_complete   (sentinel for routed experts)
     """
 
     def __init__(self, root: Path | str) -> None:
@@ -155,6 +160,76 @@ class TensorCache:
         path.parent.mkdir(parents=True, exist_ok=True)
         ttnn.dump_tensor(str(path), tensor)
         return tensor
+
+    _COMPLETE_MARKER = "_complete"
+
+    def get_or_create_routed_experts(
+        self,
+        fingerprint: Fingerprint,
+        *,
+        create: Callable,
+        device,
+        num_experts: int,
+    ):
+        """Return cached MoE routed expert weights on hit, or create + store on miss.
+
+        Stores 768 files (``num_experts`` x 3 projections) under
+        ``experts/e_NNN/{gate,up,down}_proj.tensorbin``.  A ``_complete``
+        sentinel file is written after all expert files to guard against
+        partial writes.
+
+        On load, experts are read in projection-first order (all gates,
+        then all ups, then all downs) to guarantee contiguous DRAM
+        allocation required by ``DRAMStreamingMatmul``.
+
+        Args:
+            fingerprint: Cache key for this layer's routed experts.
+            create: Callable returning a ``MoERoutedExpertWeights`` on miss.
+            device: Device to load onto (hit path).
+            num_experts: Expected number of experts (e.g. 256).
+        """
+        from models.demos.deepseek_v3_b1.prepare_weights import MoERoutedExpertWeights
+
+        artifact_id = fingerprint.artifact_id()
+        artifact_dir = self._artifact_dir(artifact_id)
+        marker = artifact_dir / self._COMPLETE_MARKER
+
+        if marker.exists():
+            logger.debug(
+                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
+            )
+            experts_dir = artifact_dir / "experts"
+            routed_gate_proj = []
+            routed_up_proj = []
+            routed_down_proj = []
+            for e in range(num_experts):
+                expert_dir = experts_dir / f"e_{e:03d}"
+                routed_gate_proj.append(ttnn.load_tensor(str(expert_dir / "gate_proj.tensorbin"), device=device))
+            for e in range(num_experts):
+                expert_dir = experts_dir / f"e_{e:03d}"
+                routed_up_proj.append(ttnn.load_tensor(str(expert_dir / "up_proj.tensorbin"), device=device))
+            for e in range(num_experts):
+                expert_dir = experts_dir / f"e_{e:03d}"
+                routed_down_proj.append(ttnn.load_tensor(str(expert_dir / "down_proj.tensorbin"), device=device))
+            result = MoERoutedExpertWeights(
+                routed_gate_proj=routed_gate_proj,
+                routed_up_proj=routed_up_proj,
+                routed_down_proj=routed_down_proj,
+            )
+            result.validate_contiguous_dram()
+            return result
+
+        logger.debug("Cache miss for {} layer {} — creating", fingerprint.group_name, fingerprint.layer_idx)
+        result = create()
+        experts_dir = artifact_dir / "experts"
+        for e in range(num_experts):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            expert_dir.mkdir(parents=True, exist_ok=True)
+            ttnn.dump_tensor(str(expert_dir / "gate_proj.tensorbin"), result.routed_gate_proj[e])
+            ttnn.dump_tensor(str(expert_dir / "up_proj.tensorbin"), result.routed_up_proj[e])
+            ttnn.dump_tensor(str(expert_dir / "down_proj.tensorbin"), result.routed_down_proj[e])
+        marker.touch()
+        return result
 
 
 @dataclass(frozen=True)

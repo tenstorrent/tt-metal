@@ -1100,3 +1100,70 @@ def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
     assert loaded[3].shared_down_proj is not None
     for i in range(num_layers):
         _assert_layer_on_device_with_topology(loaded[i])
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_cache_routed_experts_miss_and_hit_4x2(bh_2d_mesh_device, tmp_path):
+    """Test TensorCache.get_or_create_routed_experts: miss creates and dumps experts, hit loads from sentinel-guarded dir."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, Fingerprint, TensorCache
+
+    cache = TensorCache(tmp_path / "tensor_cache")
+    cache_config = CacheConfig(cache=cache, hf_model_id="test-model", hf_revision="test-rev")
+    mesh_shape = (submesh.shape[0], submesh.shape[1])
+    fp = Fingerprint(
+        schema_version=1,
+        hf_model_id=cache_config.hf_model_id,
+        hf_revision=cache_config.hf_revision,
+        transform_version=1,
+        mesh_shape=mesh_shape,
+        group_name="routed_experts",
+        layer_idx=0,
+        spec_fingerprints=(),
+    )
+
+    gate_stacked, up_stacked, down_stacked = _moe_routed_expert_stacked_tensors(seed=44)
+    bdw = BlitzDecodeWeights(submesh)
+    create_called = [0]
+
+    def _create():
+        create_called[0] += 1
+        g, u, d = bdw.get_tt_moe_routed_expert_weights(gate_stacked, up_stacked, down_stacked)
+        return MoERoutedExpertWeights(routed_gate_proj=g, routed_up_proj=u, routed_down_proj=d)
+
+    result1 = cache.get_or_create_routed_experts(fp, create=_create, device=submesh, num_experts=NUM_ROUTED_EXPERTS)
+    assert create_called[0] == 1, "Expected create callback on cache miss"
+    assert isinstance(result1, MoERoutedExpertWeights)
+    assert len(result1.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    result1.validate_contiguous_dram()
+    shapes_gate = [result1.routed_gate_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
+    shapes_up = [result1.routed_up_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
+    shapes_down = [result1.routed_down_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
+
+    artifact_dir = cache._artifact_dir(fp.artifact_id())
+    assert (artifact_dir / "_complete").exists(), "Sentinel marker must exist after miss"
+    for e in range(NUM_ROUTED_EXPERTS):
+        assert (artifact_dir / "experts" / f"e_{e:03d}" / "gate_proj.tensorbin").exists()
+
+    for t in result1.routed_gate_proj + result1.routed_up_proj + result1.routed_down_proj:
+        ttnn.deallocate(t, force=True)
+    del result1
+
+    result2 = cache.get_or_create_routed_experts(fp, create=_create, device=submesh, num_experts=NUM_ROUTED_EXPERTS)
+    assert create_called[0] == 1, "create callback must NOT be called on cache hit"
+    assert isinstance(result2, MoERoutedExpertWeights)
+    assert len(result2.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    result2.validate_contiguous_dram()
+    for e in range(NUM_ROUTED_EXPERTS):
+        assert result2.routed_gate_proj[e].shape == shapes_gate[e]
+        assert result2.routed_up_proj[e].shape == shapes_up[e]
+        assert result2.routed_down_proj[e].shape == shapes_down[e]
+        _assert_on_device(result2.routed_gate_proj[e])
+        _assert_on_device(result2.routed_up_proj[e])
+        _assert_on_device(result2.routed_down_proj[e])
