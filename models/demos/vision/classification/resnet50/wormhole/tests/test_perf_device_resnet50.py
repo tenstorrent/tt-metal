@@ -4,11 +4,10 @@
 
 import pytest
 
-from models.common.utility_functions import run_for_wormhole_b0, skip_with_llk_assert
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39469")
 @run_for_wormhole_b0()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(

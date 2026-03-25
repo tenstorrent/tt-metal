@@ -1876,6 +1876,11 @@ void py_module(nb::module_& mod) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
+    bind_unary_operation<"lgamma", &ttnn::lgamma>(
+        mod,
+        R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
+        "",
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_operation<"i0", &ttnn::i0>(
         mod,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
@@ -2176,11 +2181,6 @@ void py_module(nb::module_& mod) {
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(TILE)doc");
-    bind_unary_composite_2param<"lgamma", &ttnn::lgamma>(
-        mod,
-        R"doc(Performs lgamma function on :attr:`input_tensor`.)doc",
-        "[supported for value greater than 0].",
-        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
