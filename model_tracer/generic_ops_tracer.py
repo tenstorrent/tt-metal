@@ -163,14 +163,9 @@ def get_machine_info():
         pass
 
     # --- Step 3: pyluwen-only fallback (tt-smi unavailable) ------------------
-    if board_type and pyluwen_device_count:
-        return {
-            "board_type": board_type,
-            "device_series": board_type.lower(),
-            "card_count": None,
-            "device_count": pyluwen_device_count,
-        }
-
+    # If tt-smi is unavailable and we cannot reliably determine card_count,
+    # avoid returning a partially-populated machine_info. Callers rely on
+    # card_count being non-None for correct filtering, so we return None.
     return None
 
 
