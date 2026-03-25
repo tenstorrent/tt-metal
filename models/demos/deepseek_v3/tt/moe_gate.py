@@ -40,6 +40,7 @@ class MoEGate(AbstractModule):
     @classmethod
     def convert_weights(
         cls,
+        hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
