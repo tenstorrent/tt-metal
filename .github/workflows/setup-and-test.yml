@@ -50,6 +50,11 @@ on:
         required: false
         default: "WARNING"
         type: string
+      multi_core_execution:
+        description: "Convert every runtime argument into compile time argument and compile all variants like that"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -151,8 +156,13 @@ jobs:
                 --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
 
+          MULTI_CORE_EXEC=""
+          if [[ "${{ inputs.multi_core_execution }}" == "true" ]]; then
+            MULTI_CORE_EXEC="-n 15"
+          fi
+
           echo "Running tests"
-          pytest $SPEED_OF_LIGHT_FLAG $COVERAGE_FLAG --compile-consumer -x \
+          pytest $SPEED_OF_LIGHT_FLAG $COVERAGE_FLAG --compile-consumer $MULTI_CORE_EXEC -x \
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \

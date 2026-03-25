@@ -290,11 +290,11 @@ def passed_test(
     tolerance = get_tolerance(output_data_format)
 
     if custom_atol is not None and custom_atol >= 0:
-        logger.info("Overriding atol from {} to {}", tolerance.atol, custom_atol)
+        logger.debug("Overriding atol from {} to {}", tolerance.atol, custom_atol)
         tolerance = tolerance._replace(atol=custom_atol)
 
     if custom_rtol is not None and custom_rtol >= 0:
-        logger.info("Overriding rtol from {} to {}", tolerance.rtol, custom_rtol)
+        logger.debug("Overriding rtol from {} to {}", tolerance.rtol, custom_rtol)
         tolerance = tolerance._replace(rtol=custom_rtol)
 
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
