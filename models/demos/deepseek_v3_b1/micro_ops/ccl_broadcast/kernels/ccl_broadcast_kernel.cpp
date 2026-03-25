@@ -14,46 +14,38 @@ void kernel_main() {
     using Broadcast = deepseek_b1_ops::Broadcast;
 
 #if defined(COMPILE_FOR_NCRISC)
+    uint32_t per_core_rta_arg_idx = 0;
     // Writer CTArgs
     using BcastCTArgs = Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("cb0_id"),
-        get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("tensor0_page_size"),
-        get_named_compile_time_arg_val("num_targets_forward_direction"),
-        get_named_compile_time_arg_val("num_targets_backward_direction"),
-        get_named_compile_time_arg_val("is_sender"),
-        get_named_compile_time_arg_val("core_noc_x"),
-        get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender"),
-        get_named_compile_time_arg_val("has_secondary_target"),
-        get_named_compile_time_arg_val("start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("range_hops_forward"),
-        get_named_compile_time_arg_val("start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("range_hops_backward")>;
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_neighbors"),
+        get_named_compile_time_arg_val("bcast_num_links"),
+        get_named_compile_time_arg_val("bcast_is_root"),
+        get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_num_chunks")>;
 
     // Writer runtime args
+    const uint32_t bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+    const uint32_t bcast_rta_offset = per_core_rta_arg_idx;
+    per_core_rta_arg_idx += bcast_rta_num_args;
     Broadcast::WriterArgs bcast_args{
-        get_common_arg_val<uint32_t>(0),   // tensor_address0
-        get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-        get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
-        get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
-        get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
-        get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
-        get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
-        get_common_arg_val<uint32_t>(7),   // barrier_sem
-        get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
-        get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
-        get_common_arg_val<uint32_t>(10),  // ring_index
-        get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
-        get_common_arg_val<uint32_t>(12),  // num_connections
+        get_common_arg_val<uint32_t>(0),                                     // tensor_address0
+        get_common_arg_val<uint32_t>(1),                                     // my_noc_x
+        get_common_arg_val<uint32_t>(2),                                     // my_noc_y
+        {get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4)},  // sem_bank_addrs[0..1]
+        bcast_rta_offset,                                                    // per_core_rta_arg_idx_offset
+        bcast_rta_num_args,                                                  // per_core_rta_num_args
     };
 
 #elif defined(COMPILE_FOR_BRISC)
     // Reader CTArgs
     using BcastCTArgs = Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("cb0_id"),
-        get_named_compile_time_arg_val("num_pages_to_read"),
-        get_named_compile_time_arg_val("is_sender")>;
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
+        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("bcast_is_root")>;
 
     // Runtime args:
     Broadcast::ReaderArgs bcast_args{};
@@ -61,18 +53,21 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC: Compute args unused for broadcast
     Broadcast::ComputeArgs bcast_args{};
-    Broadcast::ComputeCTArgs BcastCTArgs = {};
+    using BcastCTArgs = Broadcast::ComputeCTArgs;
 #endif
 
     // Execute ccl broadcast op
-    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
+    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("bcast_num_iterations");
 
     auto body = [&]() {
         Broadcast::Op<BcastCTArgs, true> bcast;
         bcast(bcast_args);
     };
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
-        body();
+    {
+        DeviceZoneScopedN("CCL_BROADCAST_LOOP");
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            body();
+        }
     }
 }

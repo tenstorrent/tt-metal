@@ -6,9 +6,7 @@
 CCL TP/SP Broadcast Test
 
 Tests the deepseek_minimal_broadcast operation implemented using the generic op infrastructure.
-This test validates dual-axis broadcast on a 2D mesh where:
-1. Sender broadcasts across secondary axis to create a secondary sender
-2. Both sender and secondary sender broadcast along primary axis to their columns
+This test validates neighbor-exchange broadcast correctness on a 2D mesh.
 """
 
 import pytest
@@ -17,15 +15,35 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration_idx):
+    """
+    Build a sender tensor where each chunk has a distinct value.
+    This catches stale-iteration forwarding when host launches multiple iterations.
+    """
+    total_elems = output_shape[0] * output_shape[1]
+    elems_per_chunk = chunk_size_bytes // 2  # bf16 = 2 bytes
+    sender = torch.zeros(output_shape, dtype=torch.bfloat16)
+
+    offset = 0
+    chunk_idx = 0
+    # Keep values small enough to stay well-behaved in bf16.
+    base = (iteration_idx % 8) * 16
+    while offset < total_elems:
+        chunk_elems = min(elems_per_chunk, total_elems - offset)
+        sender.view(-1)[offset : offset + chunk_elems] = float(base + chunk_idx)
+        offset += chunk_elems
+        chunk_idx += 1
+
+    return sender
 
 
 @pytest.mark.parametrize(
@@ -44,10 +62,8 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -59,8 +75,8 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
-def test_ccl_broadcast_dual_axis(
-    mesh_device,
+def test_ccl_broadcast(
+    bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,
     sender_row,
@@ -70,75 +86,40 @@ def test_ccl_broadcast_dual_axis(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
     num_warmup_iter,
+    num_links,
 ):
+    if is_slow_dispatch():
+        pytest.skip("Skipping trace mode in slow dispatch")
+
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    # Set up sub-device
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    # Set up sharded memory config
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-    output_mem_config = input_mem_config
-
-    # Create sender tensor (the data to broadcast)
-    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-
-    # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere
-    device_tensors = []
-    for row in range(mesh_rows):
-        if row == sender_row:
-            device_tensors.append(sender_tensor)
-        else:
-            device_tensors.append(torch.zeros_like(sender_tensor))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    bcast_core = ttnn.CoreCoord(0, 0)
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=ttnn.MeshCoordinate(sender_row, sender_col),
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
     )
-
-    # Create output tensor
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=output_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # semaphores
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
 
     # Compute expected output using golden function
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -155,9 +136,8 @@ def test_ccl_broadcast_dual_axis(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
         semaphores=semaphores,
+        num_links=num_links,
     )
     ttnn.synchronize_device(submesh)
 
@@ -169,9 +149,8 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
             semaphores=semaphores,
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -184,9 +163,8 @@ def test_ccl_broadcast_dual_axis(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
             semaphores=semaphores,
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -233,10 +211,8 @@ def test_ccl_broadcast_dual_axis(
         else:
             logger.info(f"Device {device_idx}: PASSED")
 
-    assert all_passed, f"Not all devices received the correct broadcast data)"
-
     assert all_passed, "Not all devices received the correct broadcast data"
-    logger.info("CCL broadcast dual-axis test passed!")
+    logger.info("CCL broadcast neighbor-exchange test passed!")
 
 
 @pytest.mark.parametrize(
@@ -247,9 +223,8 @@ def test_ccl_broadcast_dual_axis(
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
@@ -266,9 +241,8 @@ def test_ccl_broadcast_loop(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
+    num_links,
 ):
     """
     Test CCL broadcast called multiple times without trace.
@@ -279,40 +253,24 @@ def test_ccl_broadcast_loop(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-
-    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-    device_tensors = []
-    for row in range(mesh_rows):
-        device_tensors.append(sender_tensor if row == sender_row else torch.zeros_like(sender_tensor))
-
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        torch.cat(device_tensors, dim=0),
-        device=submesh,
+    bcast_core = ttnn.CoreCoord(0, 0)
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=ttnn.MeshCoordinate(sender_row, sender_col),
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
     )
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(3)]
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -322,9 +280,8 @@ def test_ccl_broadcast_loop(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
         semaphores=semaphores,
+        num_links=num_links,
         num_iterations=num_iters,
     )
     ttnn.synchronize_device(submesh)
@@ -341,3 +298,404 @@ def test_ccl_broadcast_loop(
         logger.info(f"Device {device_idx}: PASSED")
 
     logger.info(f"CCL broadcast loop test PASSED! ({num_iters} iterations)")
+
+
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_host_iters", [8])
+@pytest.mark.parametrize("chunk_size_bytes", [1024])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
+    indirect=True,
+)
+def test_ccl_broadcast_host_iter_stamped_chunks(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_host_iters,
+    chunk_size_bytes,
+    num_links,
+):
+    """
+    Host-driven iteration correctness test.
+    Launches num_host_iters times with num_iterations=1 and iteration-stamped chunk payloads.
+    Detects stale-iteration forwarding that output-value-only random tests can miss.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    slice_size = output_shape[0]
+    bcast_core = ttnn.CoreCoord(0, 0)
+
+    for host_iter in range(num_host_iters):
+        sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)
+        iter_inputs = build_broadcast_test_inputs(
+            mesh_device=submesh,
+            mesh_rows=mesh_rows,
+            mesh_cols=mesh_cols,
+            sender_coord=sender_coord,
+            output_shape=output_shape,
+            input_shard_shape=input_shard_shape,
+            tensor_mem_layout=tensor_mem_layout,
+            layout=layout,
+            input_dtype=input_dtype,
+            bcast_core=bcast_core,
+            num_links=num_links,
+            input_tensor_torch=sender_tensor,
+        )
+        input_tensor_mesh = iter_inputs.input_tensor_mesh
+        output_tensor = iter_inputs.output_tensor_mesh
+        semaphores = iter_inputs.semaphores
+
+        ttnn_result = DeepseekMinimalBroadcast.op(
+            input_tensor_mesh,
+            output_tensor,
+            sender_coord,
+            semaphores=semaphores,
+            chunk_size_bytes=chunk_size_bytes,
+            num_links=num_links,
+            num_iterations=1,
+        )
+        ttnn.synchronize_device(submesh)
+
+        output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        for device_idx in range(num_devices):
+            start = device_idx * slice_size
+            end = start + slice_size
+            received = output_tensor_torch[start:end, :]
+            assert torch.allclose(
+                received, sender_tensor, rtol=1e-3, atol=1e-3
+            ), f"Host-iter {host_iter}: device {device_idx} received stale/incorrect chunked broadcast data"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("chunk_size_bytes", [4352])
+def test_ccl_broadcast_remainder_chunk(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_links,
+    chunk_size_bytes,
+):
+    """
+    Explicit chunk-size remainder-path smoke test.
+    Uses num_iterations=1 intentionally; multi-iteration behavior is already covered elsewhere.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    bcast_core = ttnn.CoreCoord(0, 0)
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        chunk_size_bytes=chunk_size_bytes,
+        num_links=num_links,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(
+            received, torch_expected, rtol=1e-3, atol=1e-3
+        ), f"Explicit remainder-path mismatch at device {device_idx}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(7168)}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_links", [1])
+def test_ccl_broadcast_auto_chunk(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_links,
+):
+    """
+    Auto-chunk resolver smoke test on standard 4x2 submesh with FABRIC_2D.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    bcast_core = ttnn.CoreCoord(0, 0)
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        num_links=num_links,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(
+            received, torch_expected, rtol=1e-3, atol=1e-3
+        ), f"Auto-chunk mismatch at device {device_idx}"
+
+
+def _run_ccl_broadcast_torus_8x4_functional_case(
+    mesh_device,
+    sender_row,
+    sender_col,
+    fabric_config,
+):
+    mesh_rows, mesh_cols = 8, 4
+    num_links = 2
+    output_shape = [1, 7168]
+    input_shard_shape = (1, 7168)
+    tensor_mem_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    layout = ttnn.TILE_LAYOUT
+    input_dtype = ttnn.bfloat16
+    bcast_core = ttnn.CoreCoord(0, 0)
+
+    num_devices = mesh_rows * mesh_cols
+    submesh = mesh_device
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        num_links=num_links,
+        fabric_config=fabric_config,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3), (
+            f"fabric={fabric_config}, sender=({sender_row},{sender_col}), " f"device={device_idx} mismatch"
+        )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )

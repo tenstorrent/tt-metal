@@ -6,6 +6,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
@@ -45,26 +46,27 @@ class BroadcastRMSNorm:
         sender_coord,
         output_tensor,
         semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=None,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
         skip_ccl=False,
         socket=None,
-        is_torus=False,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute fused Broadcast+RMSNorm operation.
+
+        Multi-device broadcast topology is configured via ``fabric_config`` and optional
+        ``broadcast_topology_override`` (see ``DeepseekMinimalBroadcast.configure``), not
+        mesh cluster axes.
 
         Args:
             skip_ccl: If True, skip CCL broadcast and run RMSNorm only (single-device mode).
                       In this mode, semaphores and sender_coord are ignored.
         """
-
-        sender_row = sender_coord[0]
-        sender_col = sender_coord[1]
 
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
@@ -74,20 +76,6 @@ class BroadcastRMSNorm:
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
-        intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
-        output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-
-        # Semaphore addresses (only needed for CCL mode)
-        out_ready_sem_addr = 0
-        barrier_sem_addr = 0
-        secondary_sync_sem_addr = 0
-        if not skip_ccl and semaphores is not None:
-            out_ready_semaphore = semaphores[0]
-            barrier_semaphore = semaphores[1]
-            secondary_sync_semaphore = semaphores[2]
-            out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
-            barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
-            secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
@@ -116,11 +104,27 @@ class BroadcastRMSNorm:
             f"{input_num_pages} * {page_size_bytes}"
         )
 
-        # CB indices for rms norm
+        # CB indices:
+        #   0..2 are owned by RMSNorm in this fused op.
+        #   broadcast-private CB id is explicit via bcast_cb_id.
         input_cb = 0
-        pkt_cb = 1
-        gamma_cb = 2
-        output_cb = 3
+        gamma_cb = 1
+        output_cb = 2
+        bcast_cb_id = 3
+
+        bcast_config = DeepseekMinimalBroadcast.configure(
+            mesh_device=mesh_device,
+            input_tensor_mesh=input_tensor_mesh,
+            output_tensor=intermediate_tensor_mesh,
+            sender_coord=sender_coord,
+            semaphores=semaphores,
+            socket=socket,
+            skip_ccl=skip_ccl,
+            bcast_cb_id=bcast_cb_id,
+            num_links=num_links,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
+        )
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -152,63 +156,29 @@ class BroadcastRMSNorm:
         # Define circular buffer page size
         cb_page_size = tile_size
 
+        # Socket mode is an op-level setting
+        use_socket = socket is not None
+
         # For each device in the mesh, create appropriate program
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
 
-                # CCL role calculation
-                is_sender = (row == sender_row) and (col == sender_col)
-                if skip_ccl:
-                    is_secondary_sender = False
-                    is_receiver = False
-                else:
-                    is_secondary_sender = (
-                        secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
-                    )
-                    is_receiver = not is_sender and not is_secondary_sender
-
                 # Get the device's input and output tensors
                 device_idx = row * mesh_cols + col
                 input_tensor_device = input_tensors_per_device[device_idx]
-                intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
 
-                # Worker core is the data core (from shard grid)
-                input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
-                shard_grid_start = input_shard_grid.bounding_box().start
-                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
-                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
+                # Broadcast and RMSNorm currently share the same worker core.
+                # Keep the roles explicit so we can separate them cleanly in future fused ops.
+                bcast_worker_core = bcast_config.get_worker_core(coord)
+                bcast_worker_core_set = bcast_config.get_worker_core_set(coord)
 
-                # Get physical core for NOC addressing
-                device = input_tensor_device.device()
-                data_core_physical = device.worker_core_from_logical_core(worker_core)
-                core_noc_x = data_core_physical.x
-                core_noc_y = data_core_physical.y
+                # rmsnorm_worker_core same as bcast_worker_core
+                # rmsnorm_worker_core_set same as bcast_worker_core_set
 
-                # Calculate ring index and targets for primary axis (column)
-                ring_size = mesh_rows
-                ring_index = row
-
-                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1 and is_torus
-                if enable_torus:
-                    num_targets_forward = (ring_size - 1) // 2
-                    num_targets_backward = ring_size - 1 - num_targets_forward
-                else:
-                    # Linear topology
-                    num_targets_forward = ring_size - ring_index - 1
-                    num_targets_backward = ring_index
-
-                # Determine if this device has secondary axis connections
-                has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-
-                # Calculate mcast distances
-                start_distance_forward = 1 if num_targets_forward > 0 else 0
-                range_hops_forward = num_targets_forward
-                start_distance_backward = 1 if num_targets_backward > 0 else 0
-                range_hops_backward = num_targets_backward
-
-                use_socket = socket is not None and is_sender
-                num_pages_to_read = input_num_pages
+                fused_worker_core_set = (
+                    bcast_worker_core_set  # Currently the same core(s) run both broadcast and RMSNorm
+                )
 
                 # CB roles:
                 #   input_cb (0): RMSNorm input — always read by TRISC; has explicit page_size=2048 override.
@@ -219,57 +189,28 @@ class BroadcastRMSNorm:
                 #   local       (skip_ccl=True, no socket): NCRISC signals it directly
                 #   socket recv (skip_ccl=True, socket):    BRISC writes received payload here
                 #
-                # BRISC's broadcast CB:
-                #   CCL mode:    pkt_cb   (dummy-signal to NCRISC that source data is ready to broadcast)
-                #   socket mode: input_cb (BRISC writes received payload here; TRISC reads via page_size=2048)
-                #   local mode:  idle     (BRISC does nothing; value unused)
-                if not skip_ccl:
-                    brisc_bcast_cb = pkt_cb
-                elif use_socket:
-                    brisc_bcast_cb = input_cb
-                else:
-                    brisc_bcast_cb = 0  # BRISC idle in local skip_ccl mode
-
-                brisc_is_active = not skip_ccl or use_socket
-
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("use_socket", 1 if use_socket else 0),
-                    # CCL broadcast writer args (dummy values when skip_ccl)
-                    ("cb0_id", pkt_cb if not skip_ccl else 0),
-                    ("num_pages_to_read", num_pages_to_read if not skip_ccl else 0),
-                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
-                    ("num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
-                    ("num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
-                    ("is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
-                    ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
-                    ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
-                    ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
                     ("rmsnorm_input_cb", input_cb),
                     ("rmsnorm_num_tiles", num_tiles),
-                    ("intermediate_cb", input_cb if not skip_ccl else pkt_cb),
+                    # Only read in active CCL path in the kernel; value is ignored when skip_ccl=True.
+                    ("intermediate_cb", input_cb),
                     ("gamma_cb", gamma_cb),
                 ]
+                ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
-                brisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
-                    ("cb0_id", brisc_bcast_cb),
-                    ("num_pages_to_read", num_pages_to_read if brisc_is_active else 0),
-                    ("is_sender", int(is_sender) if brisc_is_active else 0),
-                    ("use_socket", 1 if use_socket else 0),
-                ]
-
-                # Socket runtime args for BRISC (zeros when not using socket)
-                brisc_common_runtime_args = [
-                    int(socket.get_config_buffer_address()) if use_socket else 0,  # socket_config_addr
-                    int(socket_page_size) if use_socket else 0,  # socket_page_size
-                    1 if use_socket else 0,  # socket_num_pages (single-shot)
-                ]
+                brisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
+                if bcast_config.has_bypass_socket_reader:
+                    # Skip-CCL socket path reads directly into input_cb, which uses RMSNorm pages (num_tiles).
+                    brisc_named_compile_time_args.extend(
+                        bcast_config.get_socket_reader_ct_args(coord, input_cb, target_num_pages=num_tiles)
+                    )
+                    brisc_common_runtime_args = bcast_config.get_socket_reader_rt_args(coord)
+                else:
+                    brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
+                    # Socket runtime args for BRISC (zeros when not using socket)
+                    brisc_common_runtime_args = bcast_config.get_brisc_common_rt_args(coord)
 
                 # Named compile-time args for TRISC (rmsnorm compute)
                 trisc_named_compile_time_args = [
@@ -282,61 +223,8 @@ class BroadcastRMSNorm:
                     ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
                 ]
 
-                fabric_node_id = None
-                dst_nodes = []
-                num_connections = 0
-                if not skip_ccl:
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
-
-                    # Primary axis connections (forward and backward in column)
-                    if num_targets_forward > 0:
-                        if enable_torus and sender_row == mesh_rows - 1 and row == sender_row:
-                            # Sender at row 3: forward wraps to row 0
-                            forward_coord = ttnn.MeshCoordinate(0, col)
-                        else:
-                            forward_coord = ttnn.MeshCoordinate((row + 1) % mesh_rows, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-
-                    if num_targets_backward > 0:
-                        if enable_torus and sender_row == 0 and row == sender_row:
-                            # Sender at row 0: backward wraps to row 3
-                            backward_coord = ttnn.MeshCoordinate(mesh_rows - 1, col)
-                        else:
-                            backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-
-                    # Secondary axis connection (for sender to secondary sender)
-                    if has_secondary_target:
-                        secondary_col = (
-                            1 if sender_col == 0 else 0
-                        )  # If sender is in col 0, secondary target is col 1, and vice versa
-                        secondary_coord = ttnn.MeshCoordinate(row, secondary_col)  # Other column
-                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-                    num_connections = len(dst_nodes)
-
                 # Common runtime args for writer (broadcast args shared across cores)
-                writer_common_rt_args = []
-                if not skip_ccl:
-                    # Multi-device mode: CCL writer args
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    writer_common_rt_args = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        int(wait_output_semaphore),  # wait_output_semaphore
-                        int(reset_global_semaphore),  # reset_global_semaphore
-                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                        int(barrier_sem_addr),  # barrier_sem
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),  # secondary_sync_sem
-                        int(num_connections),  # num_connections
-                    ]
+                writer_common_rt_args = bcast_config.get_ncrisc_common_rt_args(coord)
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -349,28 +237,26 @@ class BroadcastRMSNorm:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB 2: ccl buffer
-                pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(pkt_cb, input_tensor_mesh)
-
-                # CB 3: Gamma (created from sharded gamma tensor)
+                # CB 1: Gamma (created from sharded gamma tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
                 gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB 4: Output (created from sharded tensor)
+                # CB 2: Output (created from sharded tensor)
                 out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-                kernel_defines = []
-                if skip_ccl:
-                    kernel_defines.append(("SKIP_CCL", "1"))
-                if use_socket:
-                    kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
+
+                bcast_cb_descriptor = bcast_config.get_cb_descriptor(coord)
+
+                # Broadcast contributes the current define set. If this fused op
+                # adds extra defines later, merge/de-dupe at the op layer.
+                kernel_defines = bcast_config.get_kernel_defines(coord)
 
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/broadcast_rms/kernels/broadcast_rms_kernel.cpp",
-                    core_ranges=worker_core_set,
+                    core_ranges=fused_worker_core_set,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
@@ -387,31 +273,21 @@ class BroadcastRMSNorm:
                     defines=kernel_defines,
                     # Per-core runtime args: empty for BRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ncrisc_args=[(bcast_worker_core, [])],  # Fabric args appended after program creation
                     ),
                 )
 
                 # Program descriptor
+                # Keep descriptor order aligned with buffer indices: RMSNorm CBs first (0..2),
+                # followed by any broadcast-private descriptors (starting at bcast_cb_id).
                 program = ttnn.ProgramDescriptor(
                     kernels=unified_kernel.get_kernel_descriptors().kernels,
-                    cbs=[
-                        in_cb_descriptor,
-                        pkt_cb_descriptor,
-                        gamma_cb_descriptor,
-                        out_cb_descriptor,
-                    ],
+                    cbs=[in_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor]
+                    + ([] if bcast_cb_descriptor is None else [bcast_cb_descriptor]),
                     semaphores=[],
                 )
-
-                # Append fabric connection args to NCRISC kernel if needed (CCL mode only)
-                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
-                if not skip_ccl and num_connections > 0:
-                    # NCRISC writer kernel is index 0 in the unified kernel descriptor list
-                    writer_rt_args_ref = program.kernels[0].runtime_args[worker_core.x][worker_core.y]
-                    fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, 0, worker_core
-                    )
-                    writer_rt_args_ref.extend(fabric_args)
+                writer_rt_args_ref = program.kernels[0].runtime_args[bcast_worker_core.x][bcast_worker_core.y]
+                writer_rt_args_ref.extend(bcast_config.get_ncrisc_per_core_rt_args(coord, program, bcast_worker_core))
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

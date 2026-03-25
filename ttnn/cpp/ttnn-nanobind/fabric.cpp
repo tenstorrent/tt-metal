@@ -130,6 +130,13 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
 
     mod.def(
+        "get_fabric_config",
+        &tt::tt_fabric::GetFabricConfig,
+        R"(
+            Returns the currently active global fabric configuration.
+        )");
+
+    mod.def(
         "setup_fabric_connection",
         [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
