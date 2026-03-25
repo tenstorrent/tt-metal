@@ -5,9 +5,14 @@
 """
 TTNN PreSDPA Test
 Tests pre-SDPA fused operation with full pipeline:
-- CCL Broadcast -> RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
+- CCL Broadcast -> Mcast(raw input) -> Matmul(raw) -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
+- KV path (rows 8-9): Mcast(raw input) -> RMSNorm(local on dkv_matmul_cores) -> DKV Matmul -> KV RMSNorm -> K RoPE -> KV Cache Update
 - Qnope output: [64, 1, 512] after matmul3
 - Qrope output: [64, 1, 64] after RoPE
+
+Note: the first RMSNorm no longer runs on the input core.
+  Q path uses the raw mcast'd input directly.
+  KV path applies RMSNorm locally on each dkv_matmul_core before its DKV matmul slice.
 """
 
 import pytest
@@ -724,6 +729,12 @@ def test_pre_sdpa(
 
     # ========================================================================
     # Compute golden reference per SP device
+    #
+    # Pipeline (matches updated kernel):
+    #   Q path:  raw input → Matmul → GatherReduce → RMSNorm2 → Matmul2
+    #              → Matmul3(Qnope) + RoPE(Qrope) → CreateQHeads
+    #   KV path: RMSNorm(raw input, local) → DKV Matmul → Gather → KV RMSNorm
+    #              → K RoPE → KV Cache Update
     #
     # KV cache positions are distributed across SP devices in interleaved
     # device_chunk_size blocks:
