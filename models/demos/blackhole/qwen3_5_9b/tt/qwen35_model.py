@@ -75,6 +75,7 @@ class Qwen35Model:
         )
 
         self.vocab_size = args.vocab_size
+        self._use_paged_cache = False
 
     @classmethod
     def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048):
@@ -397,12 +398,12 @@ class Qwen35Model:
             if profile:
                 ttnn.synchronize_device(self.device)
                 _tl0 = _time.time()
-            x = layer.forward(x, cos=cos, sin=sin, mode="decode")
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode", profile=profile)
             if profile:
                 ttnn.synchronize_device(self.device)
                 _tl1 = _time.time()
                 key = "attention" if layer.is_full_attention else "deltanet"
-                _layer_times[key].append(_tl1 - _tl0)
+                _layer_times[key].append((_tl1 - _tl0, i))
 
         if profile:
             ttnn.synchronize_device(self.device)
@@ -415,15 +416,30 @@ class Qwen35Model:
         if profile:
             ttnn.synchronize_device(self.device)
             _t3 = _time.time()
-            dn_avg = sum(_layer_times["deltanet"]) / len(_layer_times["deltanet"]) * 1000
-            att_avg = sum(_layer_times["attention"]) / len(_layer_times["attention"]) * 1000
+            dn_times = [t for t, _ in _layer_times["deltanet"]]
+            att_times = [t for t, _ in _layer_times["attention"]]
+            dn_avg = sum(dn_times) / len(dn_times) * 1000 if dn_times else 0
+            att_avg = sum(att_times) / len(att_times) * 1000 if att_times else 0
             logger.info(
-                f"  [PROFILE] embed+rope: {(_t1-_t0)*1000:.1f}ms | "
-                f"deltanet(24): {sum(_layer_times['deltanet'])*1000:.1f}ms (avg {dn_avg:.1f}ms) | "
-                f"attention(8): {sum(_layer_times['attention'])*1000:.1f}ms (avg {att_avg:.1f}ms) | "
+                f"  [DECODE LAYER PROFILE] embed+rope: {(_t1-_t0)*1000:.1f}ms | "
+                f"deltanet(24): {sum(dn_times)*1000:.1f}ms (avg {dn_avg:.1f}ms) | "
+                f"attention(8): {sum(att_times)*1000:.1f}ms (avg {att_avg:.1f}ms) | "
                 f"norm+lmhead: {(_t3-_t2)*1000:.1f}ms | "
                 f"total: {(_t3-_t0)*1000:.1f}ms"
             )
+            # Per-layer component breakdown
+            for i, layer in enumerate(self.layers):
+                if hasattr(layer, "_last_profile"):
+                    p = layer._last_profile
+                    logger.info(
+                        f"    Layer {i:2d} ({p['kind']:9s}) "
+                        f"{p['total_ms']:6.1f}ms | "
+                        f"norm={p['attn_norm_ms']:.1f} "
+                        f"{'attn' if p['kind']=='attention' else 'delta'}={p['attn_ms']:.1f} "
+                        f"resid+ffnorm={p['resid_ffnorm_ms']:.1f} "
+                        f"mlp={p['mlp_ms']:.1f} "
+                        f"resid_out={p['resid_out_ms']:.1f}"
+                    )
 
         return logits
 
@@ -436,13 +452,47 @@ class Qwen35Model:
         ttnn.deallocate(x)
         return logits
 
-    def enable_trace(self, batch_size=1):
-        """Prepare all layers for trace-compatible decode."""
-        logger.info("Enabling trace mode for all layers...")
+    def forward_decode_traced(self, token_ids_buf, cos, sin, position_tensor=None):
+        """Trace-compatible decode starting from token IDs (embedding inside trace).
+
+        All ops are device-to-device. No host interaction.
+        Unlike forward_decode which takes pre-computed embeddings, this takes a
+        uint32 token ID buffer and runs embedding as the first traced op.
+
+        Args:
+            token_ids_buf: ttnn.Tensor [1, 1] uint32 on device — token ID buffer
+            cos: ttnn.Tensor [1, 1, rope_head_dim] bfloat16 TILE on device
+            sin: ttnn.Tensor [1, 1, rope_head_dim] bfloat16 TILE on device
+            position_tensor: ttnn.Tensor [1] int32 ROW_MAJOR on device (Phase 2, optional)
+        """
+        x = ttnn.embedding(token_ids_buf, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        for layer in self.layers:
+            if layer.is_full_attention and position_tensor is not None:
+                x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=position_tensor)
+            else:
+                x = layer.forward(x, cos=cos, sin=sin, mode="decode")
+        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        logits = ttnn.linear(x, self.lm_head_weight)
+        ttnn.deallocate(x)
+        return logits
+
+    def enable_trace(self, batch_size=1, use_paged_cache=False):
+        """Prepare all layers for trace-compatible decode.
+
+        Args:
+            use_paged_cache: If True, use paged_update_cache for in-trace KV writes (Phase 2).
+                             If False, use staging approach with post-trace cache update (Phase 1).
+        """
+        logger.info(f"Enabling trace mode (use_paged_cache={use_paged_cache})...")
+        self._use_paged_cache = use_paged_cache
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.enable_preallocated_cache(batch_size)
-                layer.attention.enable_trace_mode()
+                if use_paged_cache:
+                    layer.attention.use_paged_cache_trace = True
+                    layer.attention.use_trace_mode = True
+                else:
+                    layer.attention.enable_trace_mode()
             else:
                 layer.attention.enable_inplace_state()
 
@@ -569,12 +619,17 @@ class Qwen35Model:
         return logits
 
     def capture_decode_trace(self, device):
-        """Capture a trace for the decode path after prefill + warmup."""
-        # Pre-allocate fixed buffers for trace inputs
-        self._trace_input = ttnn.from_torch(
-            torch.zeros(1, 1, self.args.dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+        """Capture a trace for the decode path after prefill + warmup.
+
+        Pre-allocates input buffers, runs a warmup pass to compile programs,
+        then captures the trace. DeltaNet states are saved/restored around
+        warmup and capture since both corrupt the in-place state buffers.
+        """
+        # 1. Pre-allocate buffers (host→device, BEFORE capture)
+        self._trace_token_ids = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
         )
         self._trace_cos = ttnn.from_torch(
@@ -590,32 +645,140 @@ class Qwen35Model:
             device=device,
         )
 
-        # Save DeltaNet states before trace capture. Trace capture executes
-        # forward_decode with zero inputs, which corrupts in-place state buffers.
-        saved_dn_states = []
+        # Phase 2: position tensor for paged_update_cache (if enabled)
+        if self._use_paged_cache:
+            self._trace_position = ttnn.from_torch(
+                torch.tensor([0], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+        else:
+            self._trace_position = None
+
+        # 2. Save DeltaNet states (warmup + capture corrupt them)
+        saved_dn_states = self._save_deltanet_states()
+
+        # 3. Warmup (compiles programs, BEFORE capture — host writes OK here)
+        _ = self.forward_decode_traced(self._trace_token_ids, self._trace_cos, self._trace_sin, self._trace_position)
+        ttnn.synchronize_device(device)
+
+        # 4. Restore states after warmup corruption, save again for capture
+        self._restore_deltanet_states(saved_dn_states, device)
+        saved_dn_states = self._save_deltanet_states()
+
+        # 5. Capture — ONLY device ops between begin/end
+        self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._trace_output = self.forward_decode_traced(
+            self._trace_token_ids, self._trace_cos, self._trace_sin, self._trace_position
+        )
+        ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
+
+        # 6. Restore DeltaNet states after capture corruption
+        self._restore_deltanet_states(saved_dn_states, device)
+
+        logger.info("Trace captured successfully (embedding inside trace)!")
+
+    def decode_traced(self, token_ids, current_pos, profile=False):
+        """Execute traced decode: write inputs via host DMA, replay trace.
+
+        Args:
+            token_ids: torch.Tensor [1, 1] — token IDs (int64 or int32)
+            current_pos: int — current position in the sequence
+            profile: if True, log per-phase timing breakdown
+        """
+        import time as _time
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t0 = _time.time()
+
+        # Host→device copies (fast DMA, before trace replay)
+        token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(token_host, self._trace_token_ids)
+
+        # RoPE from pre-computed CPU table (no device ops)
+        cos_host, sin_host = self.rope.get_cos_sin_host(current_pos)
+        ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
+        ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t1 = _time.time()
+
+        # Phase 2: update position tensor for paged_update_cache
+        if self._trace_position is not None:
+            pos_host = ttnn.from_torch(
+                torch.tensor([current_pos], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(pos_host, self._trace_position)
+
+        # Update attention masks BEFORE replay
+        for layer in self.layers:
+            if layer.is_full_attention:
+                layer.attention.update_mask_for_pos(current_pos)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t2 = _time.time()
+
+        # Replay the captured trace
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t3 = _time.time()
+
+        # Phase 1: post-trace KV cache update (only if paged_update_cache not used)
+        if self._trace_position is None:
+            for layer in self.layers:
+                if layer.is_full_attention:
+                    layer.attention.update_cache_after_trace(current_pos)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t4 = _time.time()
+            logger.info(
+                f"  [DECODE PROFILE] host_dma: {(_t1-_t0)*1000:.1f}ms | "
+                f"mask_update: {(_t2-_t1)*1000:.1f}ms | "
+                f"trace_exec: {(_t3-_t2)*1000:.1f}ms | "
+                f"cache_update: {(_t4-_t3)*1000:.1f}ms | "
+                f"total: {(_t4-_t0)*1000:.1f}ms"
+            )
+
+        return self._trace_output
+
+    def reset_state(self, batch_size=None):
+        """Reset all layer states for a new sequence."""
+        for layer in self.layers:
+            if layer.is_full_attention:
+                layer.attention.reset_cache()
+            else:
+                layer.attention.reset_state(batch_size)
+
+    def _save_deltanet_states(self):
+        """Save DeltaNet recurrent + conv states to CPU for restoration after trace capture."""
+        saved = []
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
-                saved_dn_states.append(
+                saved.append(
                     {
                         "recurrent": ttnn.to_torch(dn.recurrent_state),
                         "conv": ttnn.to_torch(dn.fused_conv_state) if dn.fused_conv_state is not None else None,
                     }
                 )
+        return saved
 
-        # Capture trace
-        self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._trace_output = self.forward_decode(self._trace_input, self._trace_cos, self._trace_sin)
-        ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
-
-        # Restore DeltaNet states after trace capture. Must use ttnn.copy() into the
-        # original buffers (not replace references) since the trace recorded operations
-        # against those specific buffer addresses.
+    def _restore_deltanet_states(self, saved_states, device):
+        """Restore DeltaNet states using ttnn.copy into original buffers (preserves addresses)."""
         idx = 0
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
-                saved = saved_dn_states[idx]
+                saved = saved_states[idx]
                 restored = ttnn.from_torch(
                     saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
                 )
@@ -628,46 +791,3 @@ class Qwen35Model:
                     ttnn.copy(restored_conv, dn.fused_conv_state)
                     ttnn.deallocate(restored_conv)
                 idx += 1
-
-        logger.info("Trace captured successfully!")
-
-    def decode_traced(self, token_ids, current_pos):
-        """Execute traced decode: write inputs, replay trace, update KV cache."""
-        # Embed token (outside trace)
-        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
-        ttnn.deallocate(token_ids_ttnn)
-
-        # Write embedding into trace input buffer
-        ttnn.copy(x, self._trace_input)
-        ttnn.deallocate(x)
-
-        # Write position-specific RoPE values into trace buffers
-        cos_pos = self.rope.cos_device[:, current_pos : current_pos + 1, :]
-        sin_pos = self.rope.sin_device[:, current_pos : current_pos + 1, :]
-        ttnn.copy(cos_pos, self._trace_cos)
-        ttnn.copy(sin_pos, self._trace_sin)
-
-        # Update attention masks BEFORE replay
-        # Expose positions 0..current_pos-1 (already in cache) + staging pos (current token)
-        for layer in self.layers:
-            if layer.is_full_attention:
-                layer.attention.update_mask_for_pos(current_pos)
-
-        # Replay the captured trace
-        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
-
-        # After trace: copy staging K/V to the actual position in cache
-        for layer in self.layers:
-            if layer.is_full_attention:
-                layer.attention.update_cache_after_trace(current_pos)
-
-        return self._trace_output
-
-    def reset_state(self, batch_size=None):
-        """Reset all layer states for a new sequence."""
-        for layer in self.layers:
-            if layer.is_full_attention:
-                layer.attention.reset_cache()
-            else:
-                layer.attention.reset_state(batch_size)
