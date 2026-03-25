@@ -45,7 +45,10 @@ def _get_local_num_devices(mesh_device: Optional[ttnn.MeshDevice]) -> int:
     if mesh_device is None:
         raise ValueError("mesh_device is required to determine CCL link counts")
 
-    local_device_ids = mesh_device.get_device_ids()
+    try:
+        local_device_ids = mesh_device.get_device_ids()
+    except Exception as exc:
+        raise ValueError("CCL link detection requires at least one host-local device") from exc
     if not local_device_ids:
         raise ValueError("CCL link detection requires at least one host-local device")
 

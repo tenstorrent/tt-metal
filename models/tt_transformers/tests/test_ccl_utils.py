@@ -27,6 +27,11 @@ class FakeMeshDevice:
         return self._dram_grid_size
 
 
+class FakeMeshDeviceGetDeviceIdsRaises(FakeMeshDevice):
+    def get_device_ids(self):
+        raise RuntimeError("debug assert from get_device_ids")
+
+
 @pytest.mark.parametrize("ccl_module", [tt_transformers_ccl, common_tt_ccl])
 def test_get_num_links_uses_host_local_device_count_for_multihost_wormhole(monkeypatch, ccl_module):
     monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
@@ -50,6 +55,15 @@ def test_get_num_links_rejects_invalid_cluster_axis(monkeypatch, ccl_module):
 def test_get_num_links_requires_local_devices(monkeypatch, ccl_module):
     monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
     mesh_device = FakeMeshDevice(global_num_devices=64, local_device_ids=[])
+
+    with pytest.raises(ValueError, match="requires at least one host-local device"):
+        ccl_module.get_num_links(mesh_device)
+
+
+@pytest.mark.parametrize("ccl_module", [tt_transformers_ccl, common_tt_ccl])
+def test_get_num_links_normalizes_get_device_ids_failures(monkeypatch, ccl_module):
+    monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
+    mesh_device = FakeMeshDeviceGetDeviceIdsRaises(global_num_devices=64, local_device_ids=[])
 
     with pytest.raises(ValueError, match="requires at least one host-local device"):
         ccl_module.get_num_links(mesh_device)
