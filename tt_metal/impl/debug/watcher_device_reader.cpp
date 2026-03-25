@@ -640,9 +640,7 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
     auto fw_launch_value = reader_.env.get_hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
     if (data[0] != fw_launch_value) {
         LogRunningKernels();
-        // TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);
-        log_warning(
-            tt::LogMetal, "Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);
+        TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);
     }
 }
 
