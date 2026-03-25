@@ -90,6 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -102,8 +103,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32*/>(src_format, src_format);
-
-    TileShape tile_shape = {.num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
 
     const int num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
     const int tiles_in_block  = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -118,7 +117,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Binary with reuse_dest: SrcA = DEST (from datacopy), SrcB = unpacked B. Compute op(SrcA, SrcB) -> DEST.
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(tile_shape);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(
+        ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
 
     _llk_math_pack_sync_init_<dest_sync>();
 
@@ -129,7 +129,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if (n == 1)
             {
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(tile_shape);
+                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(
+                    ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
             }
             for (int tile = 0; tile < tiles_in_block; tile++)
             {
