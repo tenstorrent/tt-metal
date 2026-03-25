@@ -204,7 +204,7 @@ inline void risc_init() {
     }
 }
 
-inline __attribute__((interrupt, hot)) void handle_interupt() {
+inline __attribute__((interrupt, hot)) void handle_interrupt() {
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     if ((mcause & 0x8000000000000000) == 0) {  // this is HW exception
@@ -220,7 +220,7 @@ inline __attribute__((interrupt, hot)) void handle_interupt() {
 }
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
-    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interupt);
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interrupt);
     asm volatile("csrw mtvec, %0" : : "r"(isr_address));  // set the interrupt handler
 }
 
@@ -229,13 +229,13 @@ inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     uint64_t mie_val;
     asm volatile("csrr %0, mie" : "=r"(mie_val));
     mie_val |= (1 << 13);
-    asm volatile("csrrs zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
+    asm volatile("csrrs zero, mie, %0" : : "r"(mie_val));
 
     // Enable MIE in mstatus
     uint64_t mstatus_val;
     asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
     mstatus_val |= (1 << 3);
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(mstatus_val));
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
@@ -243,13 +243,13 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     uint64_t mie_val;
     asm volatile("csrr %0, mie" : "=r"(mie_val));
     mie_val &= ~(1 << 13);
-    asm volatile("csrrc zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
+    asm volatile("csrrc zero, mie, %0" : : "r"(mie_val));
 
     // Disable MIE in mstatus
     uint64_t mstatus_val;
     asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
     mstatus_val &= ~(1 << 3);
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(mstatus_val));
 }
 
 #endif  // !defined(COMPILE_FOR_TRISC)
