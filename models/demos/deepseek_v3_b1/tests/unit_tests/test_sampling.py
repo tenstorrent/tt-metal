@@ -598,12 +598,12 @@ def _run_sampling_topk_mesh(
     )
 
     winner_rng = torch.Generator().manual_seed(seed)
-    winner_global_positions = torch.randperm(global_vocab_size, generator=winner_rng)[:k].sort().values
+    winner_global_positions = torch.randperm(global_vocab_size, generator=winner_rng)[:k * num_devices]
     for i, gpos in enumerate(winner_global_positions):
         dev_idx = int(gpos) // vocab_per_device
         local_idx = int(gpos) % vocab_per_device
         torch_scores_all[dev_idx, 0, local_idx] = torch.tensor(100.0 - i, dtype=torch.bfloat16)
-    winner_indices = set(torch_indices_all.reshape(-1)[winner_global_positions].tolist())
+    winner_indices = set(torch_indices_all.reshape(-1)[winner_global_positions[:k]].tolist())
 
     _, golden_topk = SamplingOp.golden(
         torch_scores_all.reshape(1, -1),
@@ -757,6 +757,10 @@ def create_fabric_router_config(max_payload_size):
         ((1, 0), 52098, 0, 0.995, 0.4),
         ((2, 1), 1337, 50, 1.0, 0.8),
         ((2, 0), 4242, 73, 0.1, 0.6),
+        ((0, 0), 999, 0, 1.0, 0.05),
+        ((0, 1), 996, 97, 0.8, 0.01),
+        ((3, 0), 70, 7, 0.9, 0.6),
+        ((3, 1), 5, 39, 0.5, 0.05),
     ],
 )
 @pytest.mark.requires_grid_size(101)
