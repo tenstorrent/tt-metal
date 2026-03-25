@@ -89,25 +89,31 @@ void kernel_main() {
         const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
 
 #ifdef PER_NSB_REDUCTION
-        // Row-major write: compute pushes rows of Mpc tiles each
         for (uint32_t m = 0; m < current_M_block; m++) {
             cb_wait_front(cb_out, Mpc);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
+            uint32_t row = M_start_tile + M_start + m;
             for (uint32_t n = 0; n < Mpc; n++) {
-                uint32_t tid = (M_start_tile + M_start + m) * padded_out_tiles + (N_start_tile + n);
-                noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
+                uint32_t col = N_start_tile + n;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tid = row * padded_out_tiles + col;
+                    noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, Mpc);
         }
 #else
-        // Column-major write: c_6 has Mpc × M_block column-major layout
         for (uint32_t n = 0; n < Mpc; n++) {
             cb_wait_front(cb_out, current_M_block);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
+            uint32_t col = N_start_tile + n;
             for (uint32_t m = 0; m < current_M_block; m++) {
-                uint32_t tid = (M_start_tile + M_start + m) * padded_out_tiles + (N_start_tile + n);
-                noc_async_write_tile(tid, out_writer, l1_read_addr + m * out_tile_size);
+                uint32_t row = M_start_tile + M_start + m;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tid = row * padded_out_tiles + col;
+                    noc_async_write_tile(tid, out_writer, l1_read_addr + m * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, current_M_block);
