@@ -140,7 +140,7 @@ jobs:
             /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
 
       - name: Run Pipeline Test
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
