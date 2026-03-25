@@ -241,6 +241,7 @@ class LTXPipeline:
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
         sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
         from ltx_pipelines.utils.helpers import encode_prompts
         from ltx_pipelines.utils.model_ledger import ModelLedger
 
@@ -332,18 +333,39 @@ class LTXPipeline:
                 vae_state[k[len("vae.") :]] = v
         del raw
 
+        # Store VAE config for lazy loading (avoids exceeding DRAM when both
+        # transformer and VAE are loaded simultaneously)
+        self._vae_checkpoint_path = checkpoint_path
+        self._vae_decoder_blocks = decoder_blocks
+        self._vae_causal = causal
+        self._vae_base_channels = base_channels
         if decoder_blocks:
-            from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+            logger.info(f"VAE config saved for lazy loading ({len(decoder_blocks)} blocks, causal={causal})")
 
-            self.vae_decoder = LTXVideoDecoder(
-                decoder_blocks=decoder_blocks,
-                causal=causal,
-                base_channels=base_channels,
-                mesh_device=self.mesh_device,
-            )
-            self.vae_decoder.load_torch_state_dict(vae_state)
-            logger.info(f"Loaded TTNN VAE decoder ({len(decoder_blocks)} blocks, causal={causal})")
-        del vae_state
+    def load_vae_from_checkpoint(self) -> None:
+        """Load VAE decoder from saved config. Call after transformer weights are freed if needed."""
+        if not self._vae_decoder_blocks:
+            return
+        from safetensors.torch import load_file
+
+        from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+
+        raw = load_file(self._vae_checkpoint_path)
+        vae_state = {}
+        for k, v in raw.items():
+            if k.startswith("vae.decoder."):
+                vae_state[k[len("vae.decoder.") :]] = v
+            elif k.startswith("vae.per_channel_statistics."):
+                vae_state[k[len("vae.") :]] = v
+        del raw
+        self.vae_decoder = LTXVideoDecoder(
+            decoder_blocks=self._vae_decoder_blocks,
+            causal=self._vae_causal,
+            base_channels=self._vae_base_channels,
+            mesh_device=self.mesh_device,
+        )
+        self.vae_decoder.load_torch_state_dict(vae_state)
+        logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
     def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
         """Decode latent tensor to video pixels.
@@ -581,31 +603,46 @@ class LTXPipeline:
         return latent
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute audio RoPE using AudioPatchifier time-in-seconds positions."""
+        """Compute audio RoPE using AudioPatchifier time-in-seconds positions with SPLIT rotation."""
         import sys
 
         sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        from ltx_core.model.audio_vae.audio_vae import AudioPatchifier
+        from ltx_core.components.patchifiers import AudioPatchifier
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+        from ltx_core.model.transformer.rope import generate_freq_grid_np
+        from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
+        from ltx_core.types import AudioLatentShape
 
-        a_positions = AudioPatchifier.get_patch_grid_bounds(audio_N_real, 48000, 24)
-        a_padded = torch.zeros(audio_N, 2)
-        a_padded[:audio_N_real] = a_positions
+        a_patchifier = AudioPatchifier(patch_size=1)
+        a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
+        a_positions = a_patchifier.get_patch_grid_bounds(output_shape=a_shape, device="cpu").float()
 
-        a_cos, a_sin = precompute_freqs_cis(
-            a_padded.unsqueeze(0),
+        a_cos, a_sin = ref_precompute(
+            a_positions.bfloat16(),
             dim=2048,
             out_dtype=torch.float32,
-            max_pos=self.positional_embedding_max_pos,
+            theta=self.positional_embedding_theta,
+            max_pos=[20],  # 1D temporal only
+            use_middle_indices_grid=True,
             num_attention_heads=32,
-        )
-        a_cos_h = a_cos.reshape(1, audio_N, 32, 64).permute(0, 2, 1, 3)
-        a_sin_h = a_sin.reshape(1, audio_N, 32, 64).permute(0, 2, 1, 3)
+            rope_type=RefRopeType.SPLIT,
+            freq_grid_generator=generate_freq_grid_np,
+        )  # (1, 32, audio_N_real, D_half)
+
+        # Pad to audio_N if needed
+        if audio_N > audio_N_real:
+            d_half = a_cos.shape[-1]
+            a_cos_padded = torch.ones(1, 32, audio_N, d_half)
+            a_cos_padded[:, :, :audio_N_real, :] = a_cos
+            a_sin_padded = torch.zeros(1, 32, audio_N, d_half)
+            a_sin_padded[:, :, :audio_N_real, :] = a_sin
+            a_cos, a_sin = a_cos_padded, a_sin_padded
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         return (
-            bf16_tensor_2dshard(a_cos_h, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
-            bf16_tensor_2dshard(a_sin_h, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+            bf16_tensor_2dshard(a_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+            bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
         )
 
     def _prepare_audio_masks(self, audio_N: int, audio_N_real: int) -> tuple:

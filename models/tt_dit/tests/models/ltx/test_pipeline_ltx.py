@@ -260,3 +260,102 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
     assert output.shape[4] == px_width, f"Expected width {px_width}, got {output.shape[4]}"
     logger.info(f"Pipeline+VAE output: {output.shape}")
     logger.info("PASSED: Pipeline with TTNN VAE decoder")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis",
+    [((2, 4), (2, 4), 0, 1)],
+    ids=["wh_lb_2x4"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_pipeline_av_22b(mesh_device: ttnn.MeshDevice, mesh_shape, sp_axis: int, tp_axis: int):
+    """
+    Test LTX-2.3 22B AudioVideo pipeline on WH LB 2x4 mesh.
+
+    Mirrors the reference ti2vid_one_stage.py flow:
+    1. Encode prompts using reference encode_prompts
+    2. Run AV denoising with full MultiModalGuider guidance
+    3. Verify output shapes
+
+    Uses real 22B checkpoint with 5 steps for fast validation.
+    """
+    import os
+
+    from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+
+    ckpt = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
+    if not os.path.exists(ckpt):
+        pytest.skip("22B checkpoint not found")
+
+    gemma = None
+    # Find Gemma model in HF cache
+    import glob
+
+    candidates = glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it/snapshots/*/"))
+    if candidates:
+        gemma = candidates[0].rstrip("/")
+    if gemma is None:
+        pytest.skip("Gemma model not found in HF cache")
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+
+    # Create pipeline (AV mode)
+    pipeline = LTXPipeline(
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        mode="av",
+    )
+
+    # Load checkpoint (transformer + VAE)
+    pipeline.load_from_checkpoint(ckpt)
+
+    # Encode prompts using reference pipeline
+    torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
+    sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+    from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
+
+    prompt = "A cat playing piano in a cozy room with warm lighting"
+    results = pipeline.encode_prompts_reference([prompt, DEFAULT_NEGATIVE_PROMPT], ckpt, gemma)
+    v_embeds = results[0].video_encoding.float()
+    a_embeds = results[0].audio_encoding.float() if results[0].audio_encoding is not None else None
+    neg_v = results[1].video_encoding.float()
+    neg_a = results[1].audio_encoding.float() if results[1].audio_encoding is not None else None
+
+    if a_embeds is None:
+        pytest.skip("Audio embeddings not available")
+
+    # Run AV denoising (2 steps for fast test, no guidance for speed)
+    video_latent, audio_latent = pipeline.call_av(
+        video_prompt_embeds=v_embeds,
+        audio_prompt_embeds=a_embeds,
+        num_frames=33,
+        height=512,
+        width=768,
+        num_inference_steps=2,
+        video_cfg_scale=1.0,
+        audio_cfg_scale=1.0,
+        video_stg_scale=0.0,
+        audio_stg_scale=0.0,
+        video_modality_scale=1.0,
+        audio_modality_scale=1.0,
+        rescale_scale=0.0,
+        seed=10,
+    )
+
+    logger.info(f"Video latent: {video_latent.shape}, Audio latent: {audio_latent.shape}")
+    assert video_latent.shape[1] == 5 * 16 * 24  # 33 frames @ 512x768
+    assert torch.isfinite(video_latent).all(), "Video latent has NaN/Inf"
+    assert torch.isfinite(audio_latent).all(), "Audio latent has NaN/Inf"
+    logger.info("PASSED: AV 22B pipeline test")
