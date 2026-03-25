@@ -5,6 +5,8 @@
 
 from typing import List, Sequence, Iterator
 
+import os
+from safetensors.numpy import save_file
 import ttnn
 import ttml
 import time
@@ -15,22 +17,17 @@ from utils.gsm8k import get_gsm8k
 from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
 from utils.loss import compute_nlog_probs, compute_grpo_loss, compute_rewards_advantages
 
-system_prompt = "You are a helpful math tutor. Show your reasoning step by step and end with exactly one final line in this format: #### <number>"
-user_prompt_template_str = """Question: There are 48 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 64 trees. How many trees did the grove workers plant today?
-Answer: There are 48 trees originally.
-Then there were 64 trees after some more were planted.
-So there must have been 64 - 48 = 16.
-#### 16
 
-Question: If there are 13 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
-Answer: There are originally 13 cars.
-2 more cars arrive.
-13 + 2 = 15.
-#### 15
+def save_grpo_checkpoint(model, checkpoint_dir: str, step: int) -> str:
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    tensors = {}
+    for name, param in model.parameters().items():
+        tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32)
 
-Question: $question
-Answer:
-"""
+    filepath = os.path.join(checkpoint_dir, f"grpo_step_{step}.safetensors")
+    save_file(tensors, filepath)
+    print(f"Saved checkpoint ({len(tensors)} tensors) to {filepath}")
+    return filepath
 
 
 def iter_batched_completions(
@@ -86,6 +83,7 @@ def train_grpo():
     ):
         start_batch = time.perf_counter()
         batch += 1
+
         warmup_factor = min(1.0, batch / grpo_cfg.warmup_steps)
         optimizer.set_lr(grpo_cfg.base_lr * warmup_factor)
 
@@ -138,7 +136,18 @@ def train_grpo():
         print(f"reward_mean={rewards_np.mean():.4f}, reward_std={rewards_np.std():.4f}")
         print(f"batch={batch} done! elapsed={time.perf_counter() - start_batch:.2f} s")
 
+        if batch % 100 == 1:
+            save_grpo_checkpoint(
+                ctx.tt_model,
+                checkpoint_dir="generated/tt-train/grpo_checkpoints",
+                step=batch,
+            )
     print(f"training process done! {time.perf_counter() - start_training} s")
+    save_grpo_checkpoint(
+        ctx.tt_model,
+        checkpoint_dir="generated/tt-train/grpo_checkpoints",
+        step=batch,
+    )
 
 
 if __name__ == "__main__":
