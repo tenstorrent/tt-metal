@@ -67,6 +67,13 @@ class ModelArgs(TTModelArgs):
             cache_hf=cache_hf,
         )
 
+        if dummy_weights:
+            self.tokenizer = self.create_tokenizer()
+            logger.info(
+                "dummy_weights=True: device weights are random (no HF checkpoint load); weight_cache_path is None — "
+                "tokenizer still loaded from HF_MODEL for encode/decode."
+            )
+
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
@@ -176,6 +183,10 @@ class ModelArgs(TTModelArgs):
 
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
+    def _dummy_config_path(self):
+        """Align with ``TTModelArgs._set_hf_params``: bundled ``LOCAL_HF_PARAMS`` when present, else ``HF_MODEL``."""
+        return self.LOCAL_HF_PARAMS.get(self.model_name, self.CKPT_DIR)
+
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
             text_config = base_config.get("text_config", {})
@@ -192,9 +203,19 @@ class ModelArgs(TTModelArgs):
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
+            dummy_path = self._dummy_config_path()
+            logger.info(f"Loading state param for dummy {self.model_name} from {dummy_path}")
+            self.hf_config = AutoConfig.from_pretrained(
+                dummy_path,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
+            ).to_dict()
         else:
-            self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+            self.hf_config = AutoConfig.from_pretrained(
+                self.CKPT_DIR,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
+            ).to_dict()
 
         if "text_config" in self.hf_config or "vision_config" in self.hf_config:
             self._set_params_from_dict(self.hf_config)
@@ -230,25 +251,40 @@ class ModelArgs(TTModelArgs):
 
         return text_prefix + layer_prefix + module_map[module_name]
 
+    def weight_cache_path(self, dtype):
+        if self.dummy_weights:
+            return None
+        return super().weight_cache_path(dtype)
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            from transformers import AutoModelForCausalLM
+            state_dict = super().load_state_dict()
+            # Parent standardizes keys to use "visual." prefix and removes "model." prefix from
+            # multi_modal_projector keys. Gemma3 TT modules expect the original prefixes.
+            # Reverse the standardization.
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith("visual."):
+                    new_state_dict[k.replace("visual.", "model.vision_tower.vision_model.")] = v
+                elif k.startswith("multi_modal_projector."):
+                    new_state_dict["model." + k] = v
+                else:
+                    new_state_dict[k] = v
+            return new_state_dict
 
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
-        else:
-            from transformers import AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM
 
-            model = AutoModelForCausalLM.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
-            if self.cache_hf_flag:
-                self.cached_hf_model = model
-            state_dict = model.state_dict()
+        model = AutoModelForCausalLM.from_pretrained(
+            self.CKPT_DIR,
+            torch_dtype="auto"
+            # Note that the default setting is torch.dtype.float32, but model weights are
+            # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+            # unnecessary cast.
+        )
+        if self.cache_hf_flag:
+            self.cached_hf_model = model
+        state_dict = model.state_dict()
 
         if self.is_multimodal:
             state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
@@ -331,18 +367,6 @@ class ModelArgs(TTModelArgs):
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
-    def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
-
-        if not self.is_multimodal:
-            return AutoModelForCausalLM
-
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
-            if type(self.hf_config) == dict:
-                return model_cls
-
-        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
-
     def reference_mlp(self):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].mlp
@@ -351,13 +375,24 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        pass
+        from transformers import Gemma3ForConditionalGeneration
 
         if self.dummy_weights and not load_checkpoint:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
-        else:
-            from transformers import Gemma3ForConditionalGeneration
+            model_cls = self.get_hf_model_cls()
+            config = self.hf_config if not isinstance(self.hf_config, dict) else None
+            if config is None:
+                from transformers import AutoConfig
 
+                config = AutoConfig.from_pretrained(
+                    self._dummy_config_path(),
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
+            try:
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            except TypeError:
+                model = model_cls.from_config(config)
+        else:
             model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)

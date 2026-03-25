@@ -77,9 +77,10 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
+    from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -87,6 +88,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
@@ -95,13 +97,14 @@ def create_tt_model(
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
+    model = TtGemmaModel(
+        tt_model_args,
+        dtype,
+        mesh_device,
+        state_dict,
+        tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=bool(paged_attention_config),
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
@@ -239,6 +242,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    dummy_weights: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -267,6 +271,7 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            dummy_weights=dummy_weights,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -749,6 +754,8 @@ def test_demo_text(
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if isinstance(sampling_params, str):
+        sampling_params = json.loads(sampling_params)
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
@@ -770,6 +777,8 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
+
+    dummy_weights = request.config.getoption("--dummy_weights")
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
@@ -829,6 +838,7 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        dummy_weights=dummy_weights,
     )
 
     if token_accuracy:

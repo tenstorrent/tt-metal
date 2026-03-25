@@ -62,13 +62,18 @@ def create_multimodal_model(
     optimizations=None,
     num_layers=None,
     paged_attention_config=None,
+    dummy_weights: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
-        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+        mesh_device,
+        max_batch_size=max_batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
@@ -106,6 +111,7 @@ def prepare_generator_args(
     use_paged_kv_cache=False,
     optimizations=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -123,6 +129,7 @@ def prepare_generator_args(
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
+            dummy_weights=dummy_weights,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -207,6 +214,7 @@ def test_multimodal_demo_text(
     optimizations,
     max_gen_len,
     num_layers,
+    request,
     temperature: float = 0,
     top_p: float = 0.9,
     model_parallel_size: Optional[int] = None,
@@ -222,6 +230,8 @@ def test_multimodal_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
+    dummy_weights = request.config.getoption("--dummy_weights")
+
     model_args, model = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
@@ -230,6 +240,7 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         num_layers=num_layers,
+        dummy_weights=dummy_weights,
     )
 
     from transformers import AutoProcessor

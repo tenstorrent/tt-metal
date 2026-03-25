@@ -18,8 +18,20 @@ def pytest_addoption(parser):
     parser.addoption(
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
-    parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
-    parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
+    parser.addoption(
+        "--page_params",
+        action="store",
+        default=None,
+        type=str,
+        help="Page parameters for paged attention (JSON object string)",
+    )
+    parser.addoption(
+        "--sampling_params",
+        action="store",
+        default=None,
+        type=str,
+        help="Sampling parameters for decoding (JSON object string)",
+    )
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )
@@ -56,4 +68,10 @@ def pytest_addoption(parser):
         action="store_false",
         dest="enable_trace",
         help="Whether to enable tracing",
+    )
+    parser.addoption(
+        "--dummy_weights",
+        action="store_true",
+        default=False,
+        help="Random weights from local HF config only (no full checkpoint load); for perf/debug",
     )

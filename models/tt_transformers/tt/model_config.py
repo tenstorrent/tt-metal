@@ -2787,9 +2787,12 @@ class ModelArgs:
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
+            dummy_config_path = self.LOCAL_HF_PARAMS.get(self.model_name, self.CKPT_DIR)
+            logger.info(f"Loading state param for dummy {self.model_name} from {dummy_config_path}")
             self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                dummy_config_path,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
             )
         else:
             self.hf_config = AutoConfig.from_pretrained(
@@ -2926,15 +2929,25 @@ class ModelArgs:
 
     def get_hf_model_cls(self):
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
+        hf_cfg = self.hf_config
+        if isinstance(hf_cfg, dict):
+            model_type = hf_cfg.get("model_type")
+            if model_type not in CONFIG_MAPPING:
+                raise ValueError(f"Unknown model_type in hf_config dict: {model_type}")
+            cfg_obj = CONFIG_MAPPING[model_type].from_dict(hf_cfg)
+        else:
+            cfg_obj = hf_cfg
+
         for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
-            if type(self.hf_config) in model_cls._model_mapping:
+            if type(cfg_obj) in model_cls._model_mapping:
                 return model_cls
 
-        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+        raise ValueError(f"Unknown model for config {type(cfg_obj)}")
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
@@ -2943,7 +2956,9 @@ class ModelArgs:
             from transformers import AutoConfig
 
             config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                self.LOCAL_HF_PARAMS.get(self.model_name, self.CKPT_DIR),
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
             )
             if hasattr(config, "text_config"):
                 config.text_config.num_layers = self.n_layers
