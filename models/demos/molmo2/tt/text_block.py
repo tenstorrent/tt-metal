@@ -129,6 +129,7 @@ class TextBlock(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
         start_pos: int = 0,
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through decoder block.
@@ -140,6 +141,7 @@ class TextBlock(LightweightModule):
             attn_mask: Optional attention mask
             start_pos: Starting position for KV cache
             kv_cache: Optional (k_cache, v_cache) tuple
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Tuple of (output, updated_kv_cache)
@@ -147,7 +149,9 @@ class TextBlock(LightweightModule):
         # Attention block with residual
         residual = x
         x = self.attn_norm(x)
-        attn_out, new_kv_cache = self.self_attn(x, rot_mats, transformation_mats, attn_mask, start_pos, kv_cache)
+        attn_out, new_kv_cache = self.self_attn(
+            x, rot_mats, transformation_mats, attn_mask, start_pos, kv_cache, page_table
+        )
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
@@ -167,6 +171,7 @@ class TextBlock(LightweightModule):
         transformation_mat: ttnn.Tensor,
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass (single token at a time).
@@ -177,6 +182,7 @@ class TextBlock(LightweightModule):
             transformation_mat: RoPE transformation matrix for decode
             kv_cache: (k_cache, v_cache) pre-allocated tensors
             current_pos: Current decode position tensor
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Output tensor
@@ -184,7 +190,7 @@ class TextBlock(LightweightModule):
         # Attention block with residual - use L1 for decode
         residual = x
         x = self.attn_norm(x)
-        attn_out = self.self_attn.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos)
+        attn_out = self.self_attn.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos, page_table)
         x = ttnn.add(residual, attn_out, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
