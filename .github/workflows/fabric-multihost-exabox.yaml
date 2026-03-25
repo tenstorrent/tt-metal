@@ -72,6 +72,7 @@ jobs:
   reset:
     name: Reset cards
     needs: [build-artifact, create-allocation]
+    timeout-minutes: 15
     runs-on:
       group: exabox
       labels: exabox-multihost
@@ -111,6 +112,7 @@ jobs:
 
       - name: Reset cards
         working-directory: /tmp
+        timeout-minutes: 10
         run: |
           mpirun --tag-output --pernode \
             bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
