@@ -40,9 +40,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     auto tile_format = tt::DataFormat::Float16_b;
     auto tile_sz = tt::tile_size(tile_format);
-    // Pad K to multiple of 16 tiles (so K_half is divisible by 8, enabling kb=8)
-    uint32_t K_tiles = tt::round_up(logical_K_tiles, 16u);
-    TT_FATAL(K_tiles % 2 == 0, "K_tiles ({}) must be even for lower/upper K-split", K_tiles);
+    uint32_t K_tiles = logical_K_tiles;
     uint32_t K_half = K_tiles / 2;
 
     auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
