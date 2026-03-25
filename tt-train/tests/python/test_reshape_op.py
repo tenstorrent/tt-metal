@@ -60,6 +60,7 @@ def test_reshape_backward_basic():
     # Create input tensor
     input_data = np.random.randn(batch_size, 1, 1, seq_len, features).astype(np.float32)
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
 
     # Reshape to 4D [B, 1, seq_len, features]
     new_shape = [batch_size, 1, seq_len, features]
@@ -73,9 +74,7 @@ def test_reshape_backward_basic():
     loss.backward(False)
 
     # Verify gradient is initialized
-    assert (
-        input_tensor.is_grad_initialized()
-    ), "Input should have gradient after backward"
+    assert input_tensor.is_grad_initialized(), "Input should have gradient after backward"
 
     # Verify gradient shape matches original input shape (5D)
     grad_tensor = input_tensor.get_grad_rw()
@@ -101,10 +100,9 @@ def test_reshape_5d_to_4d():
     vocab_size = 64  # Tile-aligned
 
     # Create 5D tensor
-    input_data = np.random.randn(batch_size, 1, 1, seq_len, vocab_size).astype(
-        np.float32
-    )
+    input_data = np.random.randn(batch_size, 1, 1, seq_len, vocab_size).astype(np.float32)
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
 
     # Reshape to 4D
     new_shape = [batch_size, 1, seq_len, vocab_size]
@@ -152,18 +150,14 @@ def test_reshape_with_linear_layer():
     out_features = 64  # Tile-aligned
 
     # Create input to linear layer [B, 1, 1, seq_len, in_features]
-    input_data = np.random.randn(batch_size, 1, 1, seq_len, in_features).astype(
-        np.float32
-    )
+    input_data = np.random.randn(batch_size, 1, 1, seq_len, in_features).astype(np.float32)
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
 
     # Create weight for linear layer [1, 1, out_features, in_features]
-    weight_data = np.random.randn(1, 1, out_features, in_features).astype(
-        ml_dtypes.bfloat16
-    )
-    weight_tensor = ttml.autograd.Tensor.from_numpy(
-        weight_data, layout=ttnn.Layout.TILE
-    )
+    weight_data = np.random.randn(1, 1, out_features, in_features).astype(ml_dtypes.bfloat16)
+    weight_tensor = ttml.autograd.Tensor.from_numpy(weight_data, layout=ttnn.Layout.TILE)
+    weight_tensor.set_requires_grad(True)
 
     # Linear layer forward
     linear_out = ttml.ops.linear.linear(input_tensor, weight_tensor, None)
@@ -222,6 +216,7 @@ def test_reshape_preserves_computation_graph():
     # Create input
     input_data = np.random.randn(batch_size, 1, 1, seq_len, features).astype(np.float32)
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
 
     # Apply some operations
     x = ttml.ops.binary.mul(input_tensor, 2.0)
@@ -272,6 +267,7 @@ def test_reshape_multiple_reshapes():
     # Create input [B, 1, 1, seq_len, features]
     input_data = np.random.randn(batch_size, 1, 1, seq_len, features).astype(np.float32)
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
 
     # First reshape: 5D -> 4D
     x1 = ttml.ops.reshape.reshape(input_tensor, [batch_size, 1, seq_len, features])
@@ -294,6 +290,7 @@ def test_reshape_multiple_reshapes():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
     input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
+    input_tensor.set_requires_grad(True)
     x1 = ttml.ops.reshape.reshape(input_tensor, [batch_size, 1, seq_len, features])
     loss = ttml.ops.unary.mean(x1)
     loss.backward(False)

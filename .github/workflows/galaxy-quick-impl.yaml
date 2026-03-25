@@ -31,6 +31,7 @@ jobs:
     runs-on:
       - topology-6u
       - arch-wormhole_b0
+      - pipeline-functional
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
@@ -122,6 +123,7 @@ jobs:
     runs-on:
       - topology-6u
       - arch-wormhole_b0
+      - ${{ matrix.mlperf && 'pipeline-perf' || 'pipeline-functional' }}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
