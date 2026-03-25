@@ -386,9 +386,12 @@ class WanAttention(Module):
         if self.is_self and return_kv:
             k_cur, v_cur = k_BHNE, v_BHNE
         if self.is_self and cached_k is not None and cached_v is not None:
-            # ttnn.concat expects TILE_LAYOUT
+            # ttnn.concat expects TILE_LAYOUT and matching dtypes
             cached_k = ttnn.to_layout(cached_k, ttnn.TILE_LAYOUT)
             cached_v = ttnn.to_layout(cached_v, ttnn.TILE_LAYOUT)
+            if cached_k.dtype != k_BHNE.dtype:
+                cached_k = ttnn.typecast(cached_k, k_BHNE.dtype)
+                cached_v = ttnn.typecast(cached_v, v_BHNE.dtype)
             k_BHNE = ttnn.concat([cached_k, k_BHNE], dim=2)
             v_BHNE = ttnn.concat([cached_v, v_BHNE], dim=2)
 

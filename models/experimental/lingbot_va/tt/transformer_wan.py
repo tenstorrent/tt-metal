@@ -142,7 +142,7 @@ class WanTransformerBlock(Module):
         self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -580,7 +580,7 @@ class WanTransformer3DModel(Module):
     def prepare_rope_features(self, grid_id: torch.Tensor):
         """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L). Pads for sequence parallel."""
         logger.debug("Preparing rope features for shape {}", grid_id.shape)
-        grid_id_tt = bf16_tensor(grid_id, device=self.mesh_device)
+        grid_id_tt = float32_tensor(grid_id.float(), device=self.mesh_device)
         rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)
         # WanRotaryPosEmbed returns [B, L, D] with B = grid_id batch (e.g. 2 for classifier-free guidance).
         sh_cos = tuple(rope_cos_tt.shape)
@@ -952,11 +952,10 @@ class WanTransformer3DModel(Module):
                     valid = valid.unsqueeze(0)
                 ext_k = cache["k"][:, valid].contiguous()
                 ext_v = cache["v"][:, valid].contiguous()
-                cache_dtype = cache["k"].dtype
-                ext_k = ext_k.permute(0, 2, 1, 3).contiguous().to(dtype=cache_dtype)
-                ext_v = ext_v.permute(0, 2, 1, 3).contiguous().to(dtype=cache_dtype)
-                cached_k_tt = bf16_tensor(ext_k.to(torch.bfloat16), device=self.mesh_device)
-                cached_v_tt = bf16_tensor(ext_v.to(torch.bfloat16), device=self.mesh_device)
+                ext_k = ext_k.permute(0, 2, 1, 3).contiguous()
+                ext_v = ext_v.permute(0, 2, 1, 3).contiguous()
+                cached_k_tt = float32_tensor(ext_k.float(), device=self.mesh_device)
+                cached_v_tt = float32_tensor(ext_v.float(), device=self.mesh_device)
 
             if return_kv:
                 attn1_out = block(

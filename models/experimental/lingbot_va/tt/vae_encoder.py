@@ -206,6 +206,7 @@ class WanVAEEncoder(Module):
                 x_BTHWC = down_block(x_BTHWC, logical_h)
             elif isinstance(down_block, WanResidualDownBlock):
                 x_BTHWC = down_block(x_BTHWC, feat_cache=feat_cache, feat_idx=feat_idx)
+                logical_h = x_BTHWC.shape[2]
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
 

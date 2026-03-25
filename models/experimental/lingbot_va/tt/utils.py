@@ -314,7 +314,9 @@ class WanVAEStreamingWrapper:
         parallel_config: "VaeHWParallelConfig | None" = None,
     ):
         self.vae = vae_model
-        self.encoder = load_vae_encoder(vae_model.encoder, vae_model.config, mesh_device, ccl_manager, parallel_config)
+        self.encoder = load_vae_encoder(
+            vae_model.encoder, vae_model.config, mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+        )
         self.quant_conv = WanCausalConv3d(
             vae_model.config.z_dim * 2,
             vae_model.config.z_dim * 2,

@@ -92,6 +92,9 @@ OBS_STATE = "observation.state"
 _ROBOTWIN_CFG = VA_CONFIGS["robotwin"]
 _DEFAULT_NUM_CHUNKS_GEN = int(getattr(_ROBOTWIN_CFG, "num_chunks_to_infer", 10))
 _DEFAULT_DEMO_VIDEO_FPS = int(getattr(_ROBOTWIN_CFG, "demo_video_fps", 10))
+_FAST_NUM_VIDEO_STEPS = 2
+_FAST_NUM_ACTION_STEPS = 2
+_FAST_NUM_CHUNKS = 2
 
 # Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
 # Use a distinct name from inference_torch so the two scripts never share the same VAE cache.
@@ -109,6 +112,23 @@ def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
     """Set random seeds so that inference is reproducible."""
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+
+def _apply_inference_speed_overrides(
+    config,
+    *,
+    fast: bool,
+    num_video_steps: int | None,
+    num_action_steps: int | None,
+) -> None:
+    """Mutate config with shorter demo/test settings when requested."""
+    if fast:
+        config.num_inference_steps = _FAST_NUM_VIDEO_STEPS
+        config.action_num_inference_steps = _FAST_NUM_ACTION_STEPS
+    if num_video_steps is not None:
+        config.num_inference_steps = max(1, int(num_video_steps))
+    if num_action_steps is not None:
+        config.action_num_inference_steps = max(1, int(num_action_steps))
 
 
 class _TTTransformerAdapter:
@@ -676,7 +696,7 @@ def _repeat_input_for_cfg(models, state, input_dict):
     if use_cfg:
         input_dict["noisy_latents"] = input_dict["noisy_latents"].repeat(2, 1, 1, 1, 1)
         input_dict["text_emb"] = torch.cat(
-            [prompt_embeds.to(dtype).clone(), negative_prompt_embeds.to(dtype).clone()], dim=0
+            [prompt_embeds.float().clone(), negative_prompt_embeds.float().clone()], dim=0
         )
         input_dict["grid_id"] = input_dict["grid_id"][None].repeat(2, 1, 1)
         input_dict["timesteps"] = input_dict["timesteps"][None].repeat(2, 1)
@@ -707,7 +727,7 @@ def _prepare_latent_input(
     input_dict = {}
     if latent_model_input is not None:
         input_dict["latent_res_lst"] = {
-            "noisy_latents": latent_model_input,
+            "noisy_latents": latent_model_input.float(),
             "timesteps": torch.ones([latent_model_input.shape[2]], dtype=torch.float32, device=device) * latent_t,
             "grid_id": get_mesh_id(
                 latent_model_input.shape[-3] // patch_size[0],
@@ -717,15 +737,15 @@ def _prepare_latent_input(
                 1,
                 frame_st_id,
             ).to(device),
-            "text_emb": prompt_embeds.to(dtype).clone(),
+            "text_emb": prompt_embeds.float().clone(),
         }
         if latent_cond is not None:
-            input_dict["latent_res_lst"]["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
+            input_dict["latent_res_lst"]["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1].float()
             input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
 
     if action_model_input is not None:
         input_dict["action_res_lst"] = {
-            "noisy_latents": action_model_input,
+            "noisy_latents": action_model_input.float(),
             "timesteps": torch.ones([action_model_input.shape[2]], dtype=torch.float32, device=device) * action_t,
             "grid_id": get_mesh_id(
                 action_model_input.shape[-3],
@@ -736,10 +756,10 @@ def _prepare_latent_input(
                 frame_st_id,
                 action=True,
             ).to(device),
-            "text_emb": prompt_embeds.to(dtype).clone(),
+            "text_emb": prompt_embeds.float().clone(),
         }
         if action_cond is not None:
-            input_dict["action_res_lst"]["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
+            input_dict["action_res_lst"]["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1].float()
             input_dict["action_res_lst"]["timesteps"][0:1] *= 0
         input_dict["action_res_lst"]["noisy_latents"][:, ~action_mask] *= 0
     return input_dict
@@ -857,7 +877,7 @@ def _reset_state(models, state, prompt):
         config.attn_window,
         latent_token_per_chunk,
         action_token_per_chunk,
-        dtype=dtype,
+        dtype=torch.float32,
         device=device,
         batch_size=2 if state["use_cfg"] else 1,
     )
@@ -914,7 +934,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
         state["init_latent"] = init_latent
 
     _set_seed()
-    latents = torch.randn(1, 48, frame_chunk_size, latent_height, latent_width, device=device, dtype=dtype)
+    latents = torch.randn(1, 48, frame_chunk_size, latent_height, latent_width, device=device, dtype=torch.float32)
     actions = torch.randn(
         1,
         config.action_dim,
@@ -922,7 +942,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
         action_per_frame,
         1,
         device=device,
-        dtype=dtype,
+        dtype=torch.float32,
     )
 
     video_inference_step = config.num_inference_steps
@@ -945,7 +965,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     with torch.no_grad():
         for i, t in enumerate(tqdm(timesteps)):
             last_step = i == len(timesteps) - 1
-            latent_cond = init_latent[:, :, 0:1].to(dtype) if frame_st_id == 0 else None
+            latent_cond = init_latent[:, :, 0:1].float() if frame_st_id == 0 else None
             input_dict = _prepare_latent_input(
                 models,
                 state,
@@ -992,7 +1012,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 torch.zeros(
                     [1, config.action_dim, 1, action_per_frame, 1],
                     device=device,
-                    dtype=dtype,
+                    dtype=torch.float32,
                 )
                 if frame_st_id == 0
                 else None
@@ -1158,6 +1178,10 @@ def run_inference(
     message: dict,
     checkpoint_path: str | Path,
     save_dir: str | Path | None = None,
+    *,
+    fast: bool = False,
+    num_video_steps: int | None = None,
+    num_action_steps: int | None = None,
 ) -> dict:
     """
     Run Lingbot-VA inference on the input dict (same behavior as VA_Server.infer).
@@ -1182,6 +1206,9 @@ def run_inference(
     config.save_root = str(save_dir)
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
+    _apply_inference_speed_overrides(
+        config, fast=fast, num_video_steps=num_video_steps, num_action_steps=num_action_steps
+    )
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
     models = _load_models_phase1(config, load_text_encoder=False)
@@ -1230,6 +1257,10 @@ def run_generate(
     save_dir: str | Path,
     num_chunks: int | None = None,
     video_fps: int | None = None,
+    *,
+    fast: bool = False,
+    num_video_steps: int | None = None,
+    num_action_steps: int | None = None,
 ) -> str:
     """
     Run multi-chunk video generation (same behavior as VA_Server.generate).
@@ -1267,6 +1298,9 @@ def run_generate(
     config.input_img_path = str(images_dir)
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks
+    _apply_inference_speed_overrides(
+        config, fast=fast, num_video_steps=num_video_steps, num_action_steps=num_action_steps
+    )
 
     # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
     models = _load_models_phase1(config, load_text_encoder=False)
@@ -1306,7 +1340,10 @@ def run_generate(
 
     pred_latent_lst = []
     pred_action_lst = []
-    print(f"Generating {config.num_chunks_to_infer} chunks")
+    print(
+        f"Generating {config.num_chunks_to_infer} chunks "
+        f"(~{config.num_inference_steps} video + ~{config.action_num_inference_steps} action steps per chunk)"
+    )
     for chunk_id in range(config.num_chunks_to_infer):
         actions, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
         actions = torch.from_numpy(actions)
@@ -1366,6 +1403,260 @@ def run_generate(
     return str(Path(save_dir) / "demo.mp4")
 
 
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Pearson correlation coefficient between two tensors."""
+    a_f = a.float().flatten()
+    b_f = b.float().flatten()
+    a_f = a_f - a_f.mean()
+    b_f = b_f - b_f.mean()
+    denom = a_f.norm() * b_f.norm()
+    if denom < 1e-12:
+        return 0.0
+    return float((a_f * b_f).sum() / denom)
+
+
+def run_diagnose(
+    checkpoint_path: str | Path,
+    images_dir: str | Path,
+    prompt: str,
+    save_dir: str | Path,
+) -> None:
+    """
+    Diagnose TTNN vs PyTorch accuracy at each pipeline stage using real images.
+
+    Runs both TTNN and PyTorch encode_chunk side-by-side, then loads the TT
+    transformer and compares a single forward pass against the reference.
+    All model loading is shared with the normal inference pipeline so startup
+    is the same ~2-3 min.
+    """
+    checkpoint_path = Path(checkpoint_path).resolve()
+    images_dir = Path(images_dir).resolve()
+    _set_seed()
+    os.chdir(_REPO_ROOT)
+    config = deepcopy(VA_CONFIGS["robotwin"])
+    config.wan22_pretrained_model_name_or_path = str(checkpoint_path)
+    config.local_rank = 0
+    config.rank = 0
+    config.world_size = 1
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    config.save_root = str(save_dir)
+    config.vae_enc_cache_path = None
+    config.text_emb_cache_path = None
+    config.input_img_path = str(images_dir)
+    config.prompt = prompt
+
+    models = _load_models_phase1(config, load_text_encoder=False)
+    state = {}
+
+    # ---------- Stage 1: VAE Encoder PCC ----------
+    print("\n" + "=" * 60)
+    print("STAGE 1: VAE ENCODER  (encode_chunk)")
+    print("=" * 60)
+
+    _prepare_state_for_vae_encode(state, config)
+    init_obs = _load_init_obs(config, config.input_img_path)
+    env_type = models["env_type"]
+    height, width = state["height"], state["width"]
+    dtype = models["dtype"]
+
+    images = init_obs["obs"]
+    if not isinstance(images, list):
+        images = [images]
+    videos = []
+    for k_i, k in enumerate(config.obs_cam_keys):
+        if env_type == "robotwin_tshape":
+            h_i, w_i = (height, width) if k_i == 0 else (height // 2, width // 2)
+        else:
+            h_i, w_i = height, width
+        hv = torch.from_numpy(np.stack([each[k] for each in images])).float().permute(3, 0, 1, 2)
+        hv = F.interpolate(hv, size=(h_i, w_i), mode="bilinear", align_corners=False).unsqueeze(0)
+        videos.append(hv)
+
+    videos_high = videos[0] / 255.0 * 2.0 - 1.0
+    videos_lr = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
+
+    # PyTorch reference encode (uses the already-loaded PyTorch wrappers)
+    ref_vae = models["streaming_vae"]
+    ref_vae_half = models["streaming_vae_half"]
+    ref_vae.clear_cache()
+    ref_vae_half.clear_cache()
+    print("Running PyTorch encode_chunk (CPU)...")
+    t0 = time.time()
+    with torch.no_grad():
+        ref_enc_high = ref_vae.encode_chunk(videos_high.to(dtype))
+        ref_enc_lr = ref_vae_half.encode_chunk(videos_lr.to(dtype))
+    print(f"  done in {time.time() - t0:.1f}s")
+
+    # TTNN encode
+    print("Running TTNN encode_chunk (device)...")
+    _load_tt_vae_into_models(models, config)
+    tt_vae = models["streaming_vae"]
+    tt_vae_half = models["streaming_vae_half"]
+    t0 = time.time()
+    tt_enc_high = tt_vae.encode_chunk(videos_high.to(dtype))
+    tt_enc_lr = tt_vae_half.encode_chunk(videos_lr.to(dtype))
+    print(f"  done in {time.time() - t0:.1f}s")
+    _free_tt_vae_from_models(models, config)
+
+    # Compare
+    def _report(name, tt_t, ref_t):
+        p = _pcc(tt_t, ref_t)
+        d = (tt_t.float() - ref_t.float()).abs()
+        tag = "PASS" if p > 0.99 else ("WARN" if p > 0.9 else "FAIL")
+        print(f"  [{tag}] {name}: PCC={p:.6f}  MaxDiff={d.max():.4f}  MeanDiff={d.mean():.6f}")
+        print(
+            f"         TT  range: [{tt_t.float().min():.4f}, {tt_t.float().max():.4f}]  mean={tt_t.float().mean():.4f}"
+        )
+        print(
+            f"         Ref range: [{ref_t.float().min():.4f}, {ref_t.float().max():.4f}]  mean={ref_t.float().mean():.4f}"
+        )
+        return p
+
+    print("\nResults:")
+    pcc_high = _report("encode_chunk (high-res)", tt_enc_high, ref_enc_high)
+    pcc_lr = _report("encode_chunk (low-res)", tt_enc_lr, ref_enc_lr)
+
+    # Combined mu
+    ref_enc = torch.cat([torch.cat(ref_enc_lr.split(1, dim=0), dim=-1), ref_enc_high], dim=-2)
+    tt_enc = torch.cat([torch.cat(tt_enc_lr.split(1, dim=0), dim=-1), tt_enc_high], dim=-2)
+    ref_mu, _ = torch.chunk(ref_enc, 2, dim=1)
+    tt_mu, _ = torch.chunk(tt_enc, 2, dim=1)
+    pcc_mu = _report("combined mu (init_latent)", tt_mu, ref_mu)
+
+    # ---------- Stage 2: Transformer PCC (single forward) ----------
+    print("\n" + "=" * 60)
+    print("STAGE 2: TRANSFORMER  (single forward pass)")
+    print("=" * 60)
+
+    _load_transformer_into_models(models, config)
+    _reset_state(models, state, prompt)
+    tt_transformer = models["transformer"]
+
+    # Load PyTorch reference transformer
+    from models.experimental.lingbot_va.reference.transformer_wan import (
+        WanTransformer3DModel as TorchTransformer,
+    )
+
+    ckpt = config.wan22_pretrained_model_name_or_path
+    print("Loading PyTorch reference transformer...")
+    t0 = time.time()
+    torch_transformer = (
+        TorchTransformer.from_pretrained(
+            os.path.join(ckpt, "transformer"),
+            torch_dtype=torch.float32,
+            attn_mode="torch",
+            local_files_only=True,
+        )
+        .eval()
+        .to("cpu")
+    )
+    print(f"  loaded in {time.time() - t0:.1f}s")
+
+    # Build a single forward-pass input using PyTorch reference VAE output
+    vae = models["vae"]
+    latents_mean = torch.tensor(vae.config.latents_mean)
+    latents_std = torch.tensor(vae.config.latents_std)
+    init_latent = _normalize_latents(ref_mu, latents_mean, 1.0 / latents_std)
+    init_latent = torch.cat(init_latent.split(1, dim=0), dim=-1)
+    state["init_latent"] = init_latent.to(models["device"])
+
+    latent_height, latent_width = state["latent_height"], state["latent_width"]
+    frame_chunk_size = config.frame_chunk_size
+    device = models["device"]
+    _set_seed()
+    latents = torch.randn(1, 48, frame_chunk_size, latent_height, latent_width, device=device, dtype=torch.float32)
+    latent_cond = init_latent[:, :, 0:1].float()
+
+    # Get text embeddings (populate state so _reset_state won't re-encode)
+    _load_text_encoder_into_models(models, config)
+    prompt_embeds, neg_embeds = _encode_prompt(
+        models,
+        state,
+        prompt,
+        do_classifier_free_guidance=(config.guidance_scale > 1),
+        max_sequence_length=512,
+    )
+    state["prompt_embeds"] = prompt_embeds
+    state["negative_prompt_embeds"] = neg_embeds
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    state["_prompt_embeds_prompt"] = prompt_list
+    _free_tt_model(models, "text_encoder")
+
+    scheduler = models["scheduler"]
+    scheduler.set_timesteps(config.num_inference_steps, training=False)
+
+    input_dict = _prepare_latent_input(
+        models,
+        state,
+        latents,
+        None,
+        latent_cond=latent_cond,
+        frame_st_id=0,
+    )
+    cfg_input = _repeat_input_for_cfg(models, state, input_dict["latent_res_lst"])
+
+    # Init PyTorch transformer cache (same shape as TT)
+    ref_cache_name = "ref_diag"
+    latent_token_per_chunk = (
+        frame_chunk_size
+        // config.patch_size[0]
+        * (latent_height // config.patch_size[1])
+        * (latent_width // config.patch_size[2])
+    )
+    action_token_per_chunk = config.action_dim * config.frame_chunk_size * config.action_per_frame
+    batch_size = 2 if state.get("use_cfg") else 1
+    torch_transformer.create_empty_cache(
+        ref_cache_name,
+        config.attn_window,
+        latent_token_per_chunk,
+        action_token_per_chunk,
+        device="cpu",
+        dtype=torch.float32,
+        batch_size=batch_size,
+    )
+
+    # Build CPU copy of cfg_input for reference (tensors on CPU)
+    cfg_input_cpu = {k: v.cpu().float() if isinstance(v, torch.Tensor) else v for k, v in cfg_input.items()}
+
+    # Run TT transformer
+    print("Running TT transformer forward...")
+    t0 = time.time()
+    with torch.no_grad():
+        tt_out = tt_transformer(cfg_input, update_cache=1, cache_name=models["cache_name"], action_mode=False)
+    if isinstance(tt_out, torch.Tensor):
+        tt_out_f = tt_out.float().cpu()
+    else:
+        tt_out_f = tt_out
+    print(f"  done in {time.time() - t0:.1f}s, shape={tt_out_f.shape}")
+
+    # Run PyTorch transformer
+    print("Running PyTorch transformer forward (CPU, this may take a few minutes)...")
+    t0 = time.time()
+    with torch.no_grad():
+        ref_out = torch_transformer(cfg_input_cpu, update_cache=1, cache_name=ref_cache_name, action_mode=False)
+    ref_out_f = ref_out.float().cpu()
+    print(f"  done in {time.time() - t0:.1f}s, shape={ref_out_f.shape}")
+
+    print("\nResults:")
+    pcc_xfm = _report("transformer output", tt_out_f, ref_out_f)
+
+    # ---------- Summary ----------
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    for name, val in [
+        ("VAE encode (high)", pcc_high),
+        ("VAE encode (low)", pcc_lr),
+        ("VAE encode (mu)", pcc_mu),
+        ("Transformer fwd", pcc_xfm),
+    ]:
+        tag = "PASS" if val > 0.99 else ("WARN" if val > 0.9 else "FAIL")
+        print(f"  [{tag}] {name}: PCC={val:.6f}")
+    print("=" * 60)
+
+    ttnn.close_mesh_device(models["mesh_device"])
+
+
 def _print_dict_shapes(d: dict, prefix: str = "") -> None:
     """Print dict keys and shapes of numpy arrays (for debugging)."""
     for k, v in d.items():
@@ -1418,12 +1709,17 @@ def main() -> None:
         help="Run multi-chunk video generation instead of infer(): decode to RGB, save demo.mp4. Do not run infer().",
     )
     parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="Run TTNN vs PyTorch accuracy diagnostics (VAE encoder + transformer) on the provided images.",
+    )
+    parser.add_argument(
         "--num-chunks",
         type=int,
-        default=_DEFAULT_NUM_CHUNKS_GEN,
+        default=None,
         help=(
             "For --generate: transformer chunks to run. Latent T grows by frame_chunk_size (2) per chunk. "
-            f"Default: {_DEFAULT_NUM_CHUNKS_GEN} (reference.configs va_robotwin_cfg.num_chunks_to_infer)."
+            f"Default: {_DEFAULT_NUM_CHUNKS_GEN}, or {_FAST_NUM_CHUNKS} with --fast."
         ),
     )
     parser.add_argument(
@@ -1435,11 +1731,34 @@ def main() -> None:
             f"Default: {_DEFAULT_DEMO_VIDEO_FPS} (va_robotwin_cfg.demo_video_fps)."
         ),
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            f"Shorter run: {_FAST_NUM_VIDEO_STEPS} video + {_FAST_NUM_ACTION_STEPS} action steps per chunk, "
+            f"and default --num-chunks {_FAST_NUM_CHUNKS} when --num-chunks is omitted."
+        ),
+    )
+    parser.add_argument(
+        "--video-steps",
+        type=int,
+        default=None,
+        help="Override num_inference_steps (video diffusion steps per chunk).",
+    )
+    parser.add_argument(
+        "--action-steps",
+        type=int,
+        default=None,
+        help="Override action_num_inference_steps (action diffusion steps per chunk).",
+    )
     args = parser.parse_args()
 
     save_dir = args.save_dir or str(_SCRIPT_DIR / "out_inference")
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     images_dir = Path(args.images_dir) if args.images_dir else _REPO_ROOT / "example" / "robotwin"
+    num_chunks = (
+        args.num_chunks if args.num_chunks is not None else (_FAST_NUM_CHUNKS if args.fast else _DEFAULT_NUM_CHUNKS_GEN)
+    )
 
     if args.generate:
         if not args.checkpoint:
@@ -1459,8 +1778,9 @@ def main() -> None:
         print("Checkpoint:", args.checkpoint)
         print("Images dir:", images_dir)
         print("Prompt:", repr(args.prompt))
-        print("Num chunks:", args.num_chunks)
+        print("Num chunks:", num_chunks)
         print("Video FPS:", args.video_fps)
+        print("Fast preset:", args.fast)
         print("Save dir:", save_dir)
         print("=" * 60)
         out_path = run_generate(
@@ -1468,10 +1788,31 @@ def main() -> None:
             images_dir,
             args.prompt,
             save_dir,
-            num_chunks=args.num_chunks,
+            num_chunks=num_chunks,
             video_fps=args.video_fps,
+            fast=args.fast,
+            num_video_steps=args.video_steps,
+            num_action_steps=args.action_steps,
         )
         print("Generated video saved to:", out_path)
+        return
+
+    if args.diagnose:
+        if not args.checkpoint:
+            print("--diagnose requires --checkpoint (or LINGBOT_VA_CHECKPOINT).")
+            sys.exit(1)
+        for key in (
+            "observation.images.cam_high",
+            "observation.images.cam_left_wrist",
+            "observation.images.cam_right_wrist",
+        ):
+            if not (images_dir / f"{key}.png").exists():
+                print(f"Missing {images_dir / f'{key}.png'} for diagnose(). Use --images-dir.")
+                sys.exit(1)
+        print("=" * 60)
+        print("Running TTNN vs PyTorch DIAGNOSTIC")
+        print("=" * 60)
+        run_diagnose(args.checkpoint, images_dir, args.prompt, save_dir)
         return
 
     # Infer mode: build message, run reset + infer one chunk
@@ -1510,7 +1851,14 @@ def main() -> None:
 
     print("\nRunning inference (reset + infer one chunk)...")
     print("Internal saves (latents_*.pt, actions_*.pt):", save_dir)
-    result = run_inference(message, args.checkpoint, save_dir=save_dir)
+    result = run_inference(
+        message,
+        args.checkpoint,
+        save_dir=save_dir,
+        fast=args.fast,
+        num_video_steps=args.video_steps,
+        num_action_steps=args.action_steps,
+    )
     print("=" * 60)
     print("Inference result")
     print("=" * 60)
