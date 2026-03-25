@@ -293,6 +293,8 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor to write into. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to this set of cores. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -308,7 +310,11 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
 
-            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT.
+
+            ``output_tensor`` and ``sub_core_grids`` are only used on the native LLK path.
+            When the op falls back to the composite path (unsupported broadcast or block-float
+            subtile broadcast), these arguments are ignored.
         )doc",
         "mac",
         "ttnn.mac",

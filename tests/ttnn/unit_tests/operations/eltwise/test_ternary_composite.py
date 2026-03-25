@@ -288,3 +288,38 @@ def test_mac_ttnn(input_shapes, device):
 
     output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+
+
+def test_mac_output_tensor(device):
+    """Test that ttnn.mac correctly writes into a preallocated output_tensor."""
+    shape = torch.Size([1, 1, 32, 32])
+    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device)
+    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device)
+
+    preallocated = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.mac(input_tensor1, input_tensor2, input_tensor3, output_tensor=preallocated)
+
+    # Result must be the same object as the preallocated tensor
+    assert result.data_ptr() == preallocated.data_ptr()
+
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
+    output_torch = result.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
+
+
+def test_mac_sub_core_grids(device):
+    """Test that ttnn.mac accepts sub_core_grids and produces correct results."""
+    shape = torch.Size([1, 1, 32, 32])
+    in_data1, input_tensor1 = data_gen_with_range(shape, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(shape, -100, 100, device)
+    in_data3, input_tensor3 = data_gen_with_range(shape, -100, 100, device)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    output_tensor = ttnn.mac(input_tensor1, input_tensor2, input_tensor3, sub_core_grids=core_grid)
+
+    golden_fn = ttnn.get_golden_function(ttnn.mac)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3)
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)

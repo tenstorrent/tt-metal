@@ -411,6 +411,15 @@ Tensor mac(
                             (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+        TT_FATAL(
+            !output.has_value(),
+            "ttnn::mac: output_tensor is not supported when the operation falls back to the composite path "
+            "(unsupported broadcast shape or block-float subtile broadcast). "
+            "Remove output_tensor or use shapes/dtypes that are supported by the native LLK path.");
+        TT_FATAL(
+            !sub_core_grids.has_value(),
+            "ttnn::mac: sub_core_grids is not supported when the operation falls back to the composite path. "
+            "Remove sub_core_grids or use shapes/dtypes that are supported by the native LLK path.");
         log_debug(tt::LogOp, "Mac Fallback - TTT");
         return _mac(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
     }
