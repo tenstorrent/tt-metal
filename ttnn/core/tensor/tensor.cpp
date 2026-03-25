@@ -28,6 +28,7 @@
 #include <tt-metalium/bfloat8.hpp>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
@@ -595,6 +596,22 @@ Tensor set_tensor_id(const Tensor& tensor) {
 };
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+
+std::uint64_t Tensor::to_hash() const noexcept {
+    if (this->tensor_attributes == nullptr) {
+        return ttsl::hash::hash_objects(static_cast<ttsl::hash::hash_t>(0), std::uint8_t{0}, this->tensor_id);
+    }
+    return ttsl::hash::hash_objects(
+        static_cast<ttsl::hash::hash_t>(0),
+        this->dtype(),
+        this->memory_config(),
+        this->layout(),
+        this->tensor_spec().tile(),
+        this->logical_shape(),
+        this->padded_shape(),
+        this->shard_spec(),
+        this->nd_shard_spec());
+}
 
 const tt::tt_metal::Shape& Tensor::logical_shape() const {
     return this->tensor_attributes->get_tensor_spec().logical_shape();

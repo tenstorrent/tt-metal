@@ -19,6 +19,7 @@
 #include "device/layernorm_op_multi_core_sharded.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include "device/layernorm_types.hpp"
 #include "device/layernorm_common.hpp"
 
@@ -250,6 +251,18 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
 
 void bind_normalization_layernorm_device_operation(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormDeviceOperation>(mod, "LayerNormDeviceOperation")
+        .def_static(
+            "compute_program_hash",
+            [](const ttnn::prim::LayerNormParams& attrs, const ttnn::prim::LayerNormInputs& tensors) {
+                return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
+                    attrs, tensors);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            R"doc(
+            Compute the program hash from operation attributes and tensor metadata.
+            Same hash used by the C++ program cache.  Does not run the factory.
+            )doc")
         .def_static(
             "create_output_tensors",
             &ttnn::prim::LayerNormDeviceOperation::create_output_tensors,

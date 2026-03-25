@@ -251,6 +251,11 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
 
+    // Used by `ttsl::hash::hash_object` before the reflective `attribute_values()` path.
+    // `attribute_values()` calls `storage()` which dereferences `tensor_attributes`; default-constructed tensors must
+    // still hash safely for default `compute_program_hash` over `tensor_args`.
+    [[nodiscard]] std::uint64_t to_hash() const noexcept;
+
     static std::uint64_t get_tensor_id_counter();
 
     static void set_tensor_id_counter(std::uint64_t id);
