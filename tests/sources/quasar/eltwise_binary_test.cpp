@@ -85,6 +85,7 @@ const bool is_int_fpu_en = false;
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "params.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -100,9 +101,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    // Initialize eltwise binary operation with proper TileShape
-    TileShape tile_shape = {.num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(tile_shape);
+    // Initialize eltwise binary operation with default 32x32 tensor shape
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
 
     // Perform eltwise binary operation for each tile
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)

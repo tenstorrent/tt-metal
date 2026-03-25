@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -61,16 +62,16 @@ inline std::uint32_t eltwise_di_binary_func(
  * @brief Sets up mop config for elementwise binary operations
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t rows_per_mop_run =
-        (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? tile_shape.face_r_dim : (tile_shape.num_faces * tile_shape.face_r_dim);
+        (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? tensor_shape.face_r_dim : (tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
     constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     // For reuse_dest + Elwmul we need dest accumulation (dest = old_dest + srcA*srcB) ; LoFi alone sets EN_DST_ACC_EN=0.
@@ -117,9 +118,9 @@ inline void _llk_math_eltwise_binary_mop_config_(const TileShape& tile_shape)
 // Direct Indexing Method
 //----------------------
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_di_binary_mop_config_(const TileShape& tile_shape)
+inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& tensor_shape)
 {
-    const std::uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
+    const std::uint32_t total_num_rows_per_tile = tensor_shape.total_num_faces() * tensor_shape.face_r_dim;
     const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
     const std::uint32_t MOP_INNER_LOOP          = to_underlying(MATH_FIDELITY_TYPE) + 1;
     constexpr bool high_fidelity                = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
@@ -232,24 +233,24 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
- * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
     bool EN_DI                            = false,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_init_(const TileShape& tile_shape)
+inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape)
 {
     if constexpr (EN_DI)
     {
         _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>();
-        _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(tile_shape);
+        _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
     else
     {
         _llk_math_eltwise_binary_addrmod_<MATH_FIDELITY_TYPE>();
-        _llk_math_eltwise_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE, reuse_dest>(tile_shape);
+        _llk_math_eltwise_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE, reuse_dest>(tensor_shape);
     }
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
