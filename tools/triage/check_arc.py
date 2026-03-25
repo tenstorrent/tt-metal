@@ -121,7 +121,7 @@ def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
 
-    heartbeat_results = run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device))
+    heartbeat_results = run_checks.run_per_device_check(get_heartbeat_sample)
     if heartbeat_results is None:
         raise RuntimeError(
             "Could not collect heartbeat samples — upstream device data collection failed. "
