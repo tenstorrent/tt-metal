@@ -62,8 +62,8 @@ def test_text_mlp(device):
 
     # Split fused ff_proj into gate and up
     ff_proj = state_dict[f"{prefix}.ff_proj.weight"]
-    ref_model.gate_proj.weight.data = ff_proj[:intermediate_dim, :]
-    ref_model.up_proj.weight.data = ff_proj[intermediate_dim:, :]
+    ref_model.up_proj.weight.data = ff_proj[:intermediate_dim, :]
+    ref_model.gate_proj.weight.data = ff_proj[intermediate_dim:, :]
     ref_model.down_proj.weight.data = state_dict[f"{prefix}.ff_out.weight"]
     ref_model.eval()
 
