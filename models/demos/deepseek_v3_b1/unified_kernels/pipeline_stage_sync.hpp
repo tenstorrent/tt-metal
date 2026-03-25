@@ -105,7 +105,7 @@ struct PipelineStageSync {
         void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        FORCE_INLINE void stalling_logic(uint32_t stalling_device_semaphore_l1_addr) {
+        static FORCE_INLINE void stalling_impl(uint32_t stalling_device_semaphore_l1_addr) {
             /*
              * - Wait min as multiple signals may have been received before testing semaphore value
              * - Decrement by one (instead of set to 0), so further signals aren't erased
@@ -118,7 +118,7 @@ struct PipelineStageSync {
             invalidate_l1_cache();
         }
 
-        FORCE_INLINE void signalling_logic(
+        static FORCE_INLINE void signalling_impl(
             uint32_t stalling_device_semaphore_noc_x_addr,
             uint32_t stalling_device_semaphore_noc_y_addr,
             uint32_t stalling_device_semaphore_l1_addr,
@@ -170,9 +170,9 @@ struct PipelineStageSync {
             // ================================================================
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (CTArgs::run_stalling_logic_on_ncrisc) {
-                stalling_logic(args.stalling_device_semaphore_l1_addr);
+                stalling_impl(args.stalling_device_semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_ncrisc) {
-                signalling_logic(
+                signalling_impl(
                     args.stalling_device_semaphore_noc_x_addr,
                     args.stalling_device_semaphore_noc_y_addr,
                     args.stalling_device_semaphore_l1_addr,
@@ -187,9 +187,9 @@ struct PipelineStageSync {
             // ================================================================
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (CTArgs::run_stalling_logic_on_brisc) {
-                stalling_logic(args.stalling_device_semaphore_l1_addr);
+                stalling_impl(args.stalling_device_semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_brisc) {
-                signalling_logic(
+                signalling_impl(
                     args.stalling_device_semaphore_noc_x_addr,
                     args.stalling_device_semaphore_noc_y_addr,
                     args.stalling_device_semaphore_l1_addr,
