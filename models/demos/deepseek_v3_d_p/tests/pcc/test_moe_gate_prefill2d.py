@@ -272,7 +272,7 @@ def test_forward_pass(
         tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
-        reference_offsets = per_group_offsets[col]
+        reference_offsets = per_group_offsets[col][row : row + 1, :]
 
         offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
         status_char = "✅" if offsets_match else "❌"
