@@ -28,6 +28,7 @@ sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 def test_sigma_schedule():
     """Test that sigma schedule matches LTX-2 reference."""
+    pytest.importorskip("ltx_core", reason="LTX-2 reference package required")
     from ltx_core.components.schedulers import LTX2Scheduler
 
     steps = 30
@@ -52,6 +53,7 @@ def test_sigma_schedule():
 
 def test_euler_step():
     """Test that Euler step matches LTX-2 reference."""
+    pytest.importorskip("ltx_core", reason="LTX-2 reference package required")
     from ltx_core.components.diffusion_steps import EulerDiffusionStep
 
     torch.manual_seed(42)
@@ -84,6 +86,7 @@ def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
     Test the full pipeline denoising loop with a 1-layer model.
     Verifies device↔host data flow, sigma stepping, and output shape.
     """
+    pytest.importorskip("ltx_core", reason="LTX-2 reference package required")
     from ltx_core.model.transformer.model import LTXModel, LTXModelType
 
     sp_axis, tp_axis = 0, 1
@@ -166,6 +169,7 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
     """
     Test pipeline with TTNN VAE decoder: denoise → decode to video.
     """
+    pytest.importorskip("ltx_core", reason="LTX-2 reference package required")
     from ltx_core.model.transformer.model import LTXModel, LTXModelType
 
     sp_axis, tp_axis = 0, 1
@@ -323,8 +327,7 @@ def test_pipeline_av_22b(mesh_device: ttnn.MeshDevice, mesh_shape, sp_axis: int,
 
     # Encode prompts using reference pipeline
     torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
-    sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-    from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
+    from models.tt_dit.utils.ltx import DEFAULT_NEGATIVE_PROMPT
 
     prompt = "A cat playing piano in a cozy room with warm lighting"
     results = pipeline.encode_prompts_reference([prompt, DEFAULT_NEGATIVE_PROMPT], ckpt, gemma)
