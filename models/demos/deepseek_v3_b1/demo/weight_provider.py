@@ -213,6 +213,7 @@ class CacheWeightProvider:
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         with ttnn.device.setup_fast_dispatch(device):
             preloaded_experts = load_moe_routed_experts(self._path, device, layer_id)
+        ttnn.enable_asynchronous_slow_dispatch(device)
         return load_moe_decoder_layer(self._path, device, layer_id, preloaded_routed_experts=preloaded_experts)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
