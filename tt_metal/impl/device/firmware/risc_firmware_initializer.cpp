@@ -26,6 +26,7 @@
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
+#include "llrt/cmac_boot_params.hpp"
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -225,6 +226,9 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
     }
 
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;
+        }
         static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
         auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
@@ -273,9 +277,15 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
         return;
     }
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;  // CMAC cores don't use standard launch messages
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
     for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;  // CMAC cores don't use standard launch messages
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
     cluster_.l1_barrier(device_id);
@@ -283,6 +293,9 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
 
 void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId device_id) {
     for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, logical_core)) {
+            continue;  // CMAC cores handle their own reset in initialize_cmac_firmware
+        }
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         if (rtoptions_.get_enable_2_erisc_mode()) {
@@ -307,6 +320,9 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
 
 void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_id) {
     for (const auto& logical_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, logical_core)) {
+            continue;  // CMAC cores handle their own reset in initialize_cmac_firmware
+        }
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -320,6 +336,9 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         if (hal_.get_eth_fw_is_cooperative()) {
             for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+                if (cluster_.is_external_cmac_port(device_id, logical_core)) {
+                    continue;  // CMAC cores don't run cooperative erisc firmware
+                }
                 CoreCoord virtual_core =
                     cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 if (erisc_app_still_running(device_id, virtual_core)) {
@@ -991,6 +1010,56 @@ void RiscFirmwareInitializer::initialize_firmware(
     }
 }
 
+void RiscFirmwareInitializer::initialize_cmac_firmware(tt::ChipId device_id, CoreCoord virtual_core) {
+    // Put entire eth core into reset before writing firmware.
+    // Must use ALL (not just ERISC0) to clear any stale soft-reset bits
+    // left by assert_inactive_ethernet_cores (which asserts ALL_TENSIX).
+    // On Wormhole, the TRISC0-2/NCRISC bits in the soft-reset register
+    // gate shared hardware on eth cores; leaving them asserted causes
+    // ERISC0 to hang during MAC register access.
+    cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+
+    // Load erisc_cmac_simple ELF — pre-built binary from budabackend
+    std::string cmac_elf_path = rtoptions_.get_root_dir() + "tt_metal/hw/firmware/bin/erisc_cmac_simple.elf";
+    TT_FATAL(
+        std::filesystem::exists(cmac_elf_path),
+        "erisc_cmac_simple.elf not found at {}. Build from budabackend and copy to this path.",
+        cmac_elf_path);
+
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(cmac_elf_path);
+
+    // Write ELF segments directly to L1 — no HAL relocation needed.
+    // The budabackend ELF uses direct ethernet core L1 addresses.
+    binary_mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        cluster_.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), addr);
+    });
+
+    // Write 256-byte boot_params to L1 at 0x1000
+    uint32_t aiclk_mhz = cluster_.get_device_aiclk(device_id);
+    uint32_t aiclk_ps = (aiclk_mhz > 0) ? (1'000'000 / aiclk_mhz) : 833;
+    auto params =
+        llrt::CmacBootParams::build(aiclk_ps, rtoptions_.get_cmac_rs_fec(), rtoptions_.get_cmac_tx_rate_cycles());
+    cluster_.write_core(
+        params.data(),
+        llrt::CmacBootParams::kSizeBytes,
+        tt_cxy_pair(device_id, virtual_core),
+        llrt::CmacBootParams::kL1Address);
+
+    // Release entire eth core from reset — firmware begins executing.
+    // Must deassert ALL to match the assert above, ensuring no stale
+    // TRISC/NCRISC soft-reset bits remain that would gate ERISC0 hardware.
+    cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+
+    log_info(
+        tt::LogMetal,
+        "Loaded erisc_cmac_simple on device {} core {} (aiclk_ps={}, rs_fec={}, tx_rate={})",
+        device_id,
+        virtual_core.str(),
+        aiclk_ps,
+        rtoptions_.get_cmac_rs_fec() ? 1 : 0,
+        rtoptions_.get_cmac_tx_rate_cycles());
+}
+
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {
     ZoneScoped;
 
@@ -1027,6 +1096,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
 
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;  // cmac cores don't use APP_SYNC_INFO
+        }
         static std::vector<uint32_t> zero_vec_erisc_init(
             hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t),
             0);
@@ -1052,6 +1124,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;  // handled in dedicated cmac loop below
+        }
         core_info.view().absolute_logical_x() = eth_core.x;
         core_info.view().absolute_logical_y() = eth_core.y;
         cluster_.write_core_immediate(
@@ -1076,6 +1151,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+        if (cluster_.is_external_cmac_port(device_id, eth_core)) {
+            continue;  // handled in dedicated cmac loop below
+        }
         core_info.view().absolute_logical_x() = eth_core.x;
         core_info.view().absolute_logical_y() = eth_core.y;
         cluster_.write_core_immediate(
@@ -1086,6 +1164,33 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
+    }
+
+    // Initialize cmac ports — these may not appear in active/inactive core lists
+    // because they have no TT peer (they connect to FPGAs/external devices).
+    log_info(
+        tt::LogMetal,
+        "CMAC init check: has_external_cmac_ports={}, device_id={}",
+        rtoptions_.has_external_cmac_ports(),
+        device_id);
+    if (rtoptions_.has_external_cmac_ports()) {
+        const auto& soc_desc = cluster_.get_soc_desc(device_id);
+        for (const auto& [chip_id, eth_chan] : rtoptions_.get_external_cmac_ports()) {
+            log_info(
+                tt::LogMetal,
+                "CMAC port: chip_id={}, eth_chan={}, device_id={}, match={}",
+                chip_id,
+                eth_chan,
+                device_id,
+                static_cast<ChipId>(chip_id) == device_id);
+            if (static_cast<ChipId>(chip_id) != device_id) {
+                continue;  // this port is for a different chip
+            }
+            CoreCoord logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+            initialize_cmac_firmware(device_id, virtual_core);
+        }
     }
 
     cluster_.l1_barrier(device_id);

@@ -323,6 +323,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
     NOC noc_index = MetalContext::instance(context_id_).get_dispatch_query_manager().go_signal_noc();
+    const auto& cluster = MetalContext::instance(context_id_).get_cluster();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
@@ -333,8 +334,11 @@ void SubDeviceManager::populate_noc_data() {
 
         // TODO: Precompute number of eth cores and resize once
         for (const auto& core_range : eth_cores.ranges()) {
-            noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
+                if (cluster.is_external_cmac_port(device_->id(), core)) {
+                    continue;
+                }
+                noc_mcast_unicast_data_.resize(idx + 1);
                 auto virtual_core = device_->virtual_core_from_logical_core(core, CoreType::ETH);
                 noc_mcast_unicast_data_[idx++] = device_->get_noc_unicast_encoding(noc_index, virtual_core);
             }

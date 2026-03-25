@@ -1379,6 +1379,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
         routing_info_enabled.view().dst_acked_valid_cmd() = 0;
         for (const auto& chip_id : non_mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
+                if (is_external_cmac_port(chip_id, eth_core)) {
+                    continue;
+                }
                 tt_cxy_pair virtual_eth_core(
                     chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
@@ -1388,6 +1391,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
         }
         for (const auto& chip_id : mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
+                if (is_external_cmac_port(chip_id, eth_core)) {
+                    continue;
+                }
                 tt_cxy_pair virtual_eth_core(
                     chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
@@ -1402,6 +1408,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
         routing_info_disabled.view().dst_acked_valid_cmd() = 0;
         for (const auto& chip_id : mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
+                if (is_external_cmac_port(chip_id, eth_core)) {
+                    continue;
+                }
                 tt_cxy_pair virtual_eth_core(
                     chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
@@ -1411,6 +1420,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
         }
         for (const auto& chip_id : non_mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
+                if (is_external_cmac_port(chip_id, eth_core)) {
+                    continue;
+                }
                 tt_cxy_pair virtual_eth_core(
                     chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
@@ -1461,6 +1473,11 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
         }
     }
     return is_external_cable;
+}
+
+bool Cluster::is_external_cmac_port(ChipId physical_chip_id, CoreCoord eth_core) const {
+    auto chan_id = this->get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+    return rtoptions_.is_external_cmac_port(static_cast<int>(physical_chip_id), static_cast<int>(chan_id));
 }
 
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {

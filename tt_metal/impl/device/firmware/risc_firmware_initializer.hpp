@@ -88,6 +88,7 @@ private:
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
 
+    void initialize_cmac_firmware(tt::ChipId device_id, CoreCoord virtual_core);
     void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();
 

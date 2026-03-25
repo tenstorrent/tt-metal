@@ -296,10 +296,16 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
             continue;
         }
+        if (cluster.is_external_cmac_port(id_, logical_core)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
         if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
+        if (cluster.is_external_cmac_port(id_, logical_core)) {
             continue;
         }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
@@ -331,6 +337,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     std::vector<CoreRange> active_eth_core_ranges;
     active_eth_core_ranges.reserve(active_eth_cores.size());
     for (const auto& core : active_eth_cores) {
+        if (cluster.is_external_cmac_port(id_, core)) {
+            continue;
+        }
         active_eth_core_ranges.emplace_back(core, core);
     }
 

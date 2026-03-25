@@ -107,6 +107,13 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
 
     // ========================================
+    // EXTERNAL CMAC CONFIGURATION
+    // ========================================
+    TT_METAL_EXTERNAL_CMAC_PORTS,  // Comma-separated chip:chan pairs for CMAC-designated ETH ports
+    TT_METAL_CMAC_RS_FEC,          // RS-FEC enable for CMAC ports (default 1, must match FPGA)
+    TT_METAL_CMAC_TX_RATE_CYCLES,  // TX inter-burst delay cycles (default 0 = full rate)
+
+    // ========================================
     // PROFILING & PERFORMANCE
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
@@ -1377,6 +1384,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (legacy DPRINT is used)
         // Usage: export TT_METAL_DEVICE_PRINT=1
         case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+
+        // ========================================
+        // EXTERNAL CMAC CONFIGURATION
+        // ========================================
+        case EnvVarID::TT_METAL_EXTERNAL_CMAC_PORTS: ParseExternalCmacPorts(value); break;
+        case EnvVarID::TT_METAL_CMAC_RS_FEC: this->cmac_rs_fec_ = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_CMAC_TX_RATE_CYCLES: this->cmac_tx_rate_cycles_ = std::stoul(value); break;
     }
 }
 
@@ -1561,6 +1575,34 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     }
 
     fabric_telemetry_settings = parsed_settings;
+}
+
+void RunTimeOptions::ParseExternalCmacPorts(const char* value) {
+    if (value == nullptr) {
+        return;
+    }
+    std::string spec = trim_copy(value);
+    if (spec.empty() || spec == "0") {
+        return;
+    }
+
+    // Format: "chip:chan,chip:chan" e.g. "0:15,1:15"
+    std::stringstream ss(spec);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        token = trim_copy(token);
+        if (token.empty()) {
+            continue;
+        }
+        auto colon = token.find(':');
+        if (colon == std::string::npos) {
+            TT_THROW("Invalid TT_METAL_EXTERNAL_CMAC_PORTS entry '{}': expected chip:chan", token);
+        }
+        int chip_id = parse_int_token<int>(token.substr(0, colon), "TT_METAL_EXTERNAL_CMAC_PORTS chip");
+        int eth_chan = parse_int_token<int>(token.substr(colon + 1), "TT_METAL_EXTERNAL_CMAC_PORTS chan");
+        external_cmac_ports_.insert({chip_id, eth_chan});
+    }
+    log_trace(tt::LogMetal, "External CMAC ports configured: {} port(s)", external_cmac_ports_.size());
 }
 
 void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {

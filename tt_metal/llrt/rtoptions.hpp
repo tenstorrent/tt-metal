@@ -203,6 +203,12 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+
+    // External CMAC port configuration
+    // Sorted set of (chip_id, eth_channel) pairs — deterministic iteration for compile hash
+    std::set<std::pair<int, int>> external_cmac_ports_;
+    bool cmac_rs_fec_ = true;           // default: RS-FEC enabled
+    uint32_t cmac_tx_rate_cycles_ = 0;  // default: full rate
     bool experimental_noc_debug_dump_enabled = false;
 
     bool null_kernels = false;
@@ -538,6 +544,13 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
+        if (!external_cmac_ports_.empty()) {
+            compile_hash_str += "_cmac";
+            for (const auto& [chip, chan] : external_cmac_ports_) {
+                compile_hash_str += fmt::format("_{}.{}", chip, chan);
+            }
+            compile_hash_str += fmt::format("_fec{}_tx{}", cmac_rs_fec_ ? 1 : 0, cmac_tx_rate_cycles_);
+        }
         return compile_hash_str;
     }
 
@@ -608,6 +621,14 @@ public:
 
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
+
+    bool is_external_cmac_port(int chip_id, int eth_chan) const {
+        return external_cmac_ports_.contains({chip_id, eth_chan});
+    }
+    bool has_external_cmac_ports() const { return !external_cmac_ports_.empty(); }
+    const std::set<std::pair<int, int>>& get_external_cmac_ports() const { return external_cmac_ports_; }
+    bool get_cmac_rs_fec() const { return cmac_rs_fec_; }
+    uint32_t get_cmac_tx_rate_cycles() const { return cmac_tx_rate_cycles_; }
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
@@ -773,6 +794,7 @@ private:
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFabricTelemetryEnv(const char* value);
+    void ParseExternalCmacPorts(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)
     void InitializeFromEnvVars();         // Initialize all environment variables from table

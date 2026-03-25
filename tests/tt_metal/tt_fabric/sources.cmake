@@ -26,6 +26,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
+    test_cmac_rtoptions.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp

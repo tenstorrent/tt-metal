@@ -207,7 +207,10 @@ def _safe_arg_str(v):
             return f"torch.Tensor(shape={list(v.shape)}, dtype={v.dtype})"
     except ImportError:
         pass
-    return str(v)
+    try:
+        return str(v)
+    except (TypeError, RuntimeError):
+        return f"<{type(v).__name__}>"
 
 
 def record_python_operation(name, function_args, function_kwargs):

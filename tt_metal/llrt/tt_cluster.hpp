@@ -361,6 +361,7 @@ public:
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
+    bool is_external_cmac_port(ChipId physical_chip_id, CoreCoord eth_core) const;
 
     uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
 
