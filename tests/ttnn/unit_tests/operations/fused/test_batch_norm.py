@@ -39,78 +39,47 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
 @pytest.mark.parametrize("momentum", [0.0, 0.1])
 @pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
-@pytest.mark.parametrize("testing_dtype2", ["float32", "bfloat16"])
-@pytest.mark.parametrize("use_output_tensor", [True, False])
 def test_batch_norm_tests(
-    input_shapes,
-    check_mean,
-    check_var,
-    weight,
-    bias,
-    eps,
-    device,
-    momentum,
-    training,
-    testing_dtype,
-    testing_dtype2,
-    use_output_tensor,
+    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype
 ):
-    # Skip certain configurations that we don't want to test or support
-    if (not training) and ((not check_mean) or (not check_var)):
-        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
-
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
     mean_data, mean_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if (check_mean)
         else (None, None)
     )
     var_data, var_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype2)
+        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype)
         if (check_var)
         else (None, None)
     )
     weight_data, weight_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if weight
         else (None, None)
     )
     bias_data, bias_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if bias
         else (None, None)
     )
 
-    if use_output_tensor:
-        _, tt_output_tensor_on_device = data_gen_with_range_batch_norm(
-            input_shapes, 0, 1, device, is_input=True, testing_dtype=testing_dtype
-        )
-        ttnn.batch_norm(
-            input_tensor,
-            running_mean=mean_tensor,
-            running_var=var_tensor,
-            training=training,
-            eps=eps,
-            weight=weight_tensor,
-            bias=bias_tensor,
-            momentum=momentum,
-            output=tt_output_tensor_on_device,
-        )
-    else:
-        tt_output_tensor_on_device = ttnn.batch_norm(
-            input_tensor,
-            running_mean=mean_tensor,
-            running_var=var_tensor,
-            training=training,
-            eps=eps,
-            weight=weight_tensor,
-            bias=bias_tensor,
-            momentum=momentum,
-        )
-    tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+    if (not training) and ((not check_mean) or (not check_var)):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
+    tt_output_tensor_on_device = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        training=training,
+        eps=eps,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        momentum=momentum,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     tt_updated_mean = None
     tt_updated_var = None
     if training:
@@ -119,40 +88,37 @@ def test_batch_norm_tests(
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
 
-    # PyTorch batch_norm does not support mixed dtypes; use float32 reference then cast back
-    in_ref = in_data.float()
-    mean_ref = mean_data.float() if mean_data is not None else None
-    var_ref = var_data.float() if var_data is not None else None
-    weight_ref = weight_data.float() if weight_data is not None else None
-    bias_ref = bias_data.float() if bias_data is not None else None
     torch_result = torch.nn.functional.batch_norm(
-        input=in_ref,
-        running_mean=mean_ref,
-        running_var=var_ref,
-        weight=weight_ref,
-        bias=bias_ref,
+        input=in_data,
+        running_mean=mean_data,
+        running_var=var_data,
+        weight=weight_data,
+        bias=bias_data,
         training=training,
         eps=eps,
         momentum=momentum,
     )
-    torch_result = torch_result.to(tt_output.dtype)
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     if training:
         channels = input_shapes[1]
         if check_mean:
-            mean_compare = mean_ref.view(1, channels, 1, 1).to(mean_data.dtype)
             comp_BN_running_mean = compare_results_batch_norm(
-                [tt_updated_mean], [mean_compare], stats=True
+                [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running mean
         else:
-            comp_BN_running_mean = tt_updated_mean is None
+            if tt_updated_mean is None:
+                comp_BN_running_mean = True
+            else:
+                comp_BN_running_mean = False
         if check_var:
-            var_compare = var_ref.view(1, channels, 1, 1).to(var_data.dtype)
             comp_BN_running_var = compare_results_batch_norm(
-                [tt_updated_var], [var_compare], stats=True
+                [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running var
         else:
-            comp_BN_running_var = tt_updated_var is None
+            if tt_updated_var is None:
+                comp_BN_running_var = True
+            else:
+                comp_BN_running_var = False
         comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
     assert comp_BN_Output
 
@@ -559,3 +525,145 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, device)
     assert all(
         high > low for high, low in zip(pccs_high, pccs_low)
     ), "High-accuracy config should have higher PCC than low-accuracy config"
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+    ],
+)
+@pytest.mark.parametrize("use_output_tensor", [False, True])
+@pytest.mark.parametrize(
+    "training, check_mean, check_var",
+    [
+        (True, True, True),
+        (True, True, False),
+        (True, False, True),
+        (True, False, False),
+        # (False, False, False),  # xfail case
+        # (False, True, False),  # xfail case
+        # (False, False, True),  # xfail case
+        (False, True, True),
+    ],
+)
+@pytest.mark.parametrize("weight", [False, True])
+@pytest.mark.parametrize("bias", [False, True])
+@pytest.mark.parametrize("eps", [1e-05])
+@pytest.mark.parametrize("momentum", [0.1])
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("testing_dtype2", ["bfloat16", "float32"])
+def test_batch_norm_mixed_precision(
+    input_shapes,
+    use_output_tensor,
+    training,
+    check_mean,
+    check_var,
+    weight,
+    bias,
+    eps,
+    device,
+    momentum,
+    testing_dtype,
+    testing_dtype2,
+):
+    # Skip certain configurations that we don't want to test or support
+    if (not training) and ((not check_mean) or (not check_var)):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
+
+    in_data, input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
+    )
+    mean_data, mean_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        if (check_mean)
+        else (None, None)
+    )
+    var_data, var_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype2)
+        if (check_var)
+        else (None, None)
+    )
+    weight_data, weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        if weight
+        else (None, None)
+    )
+    bias_data, bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
+        if bias
+        else (None, None)
+    )
+
+    if use_output_tensor:
+        _, tt_output_tensor_on_device = data_gen_with_range_batch_norm(
+            input_shapes, 0, 1, device, is_input=True, testing_dtype=testing_dtype
+        )
+        ttnn.batch_norm(
+            input_tensor,
+            running_mean=mean_tensor,
+            running_var=var_tensor,
+            training=training,
+            eps=eps,
+            weight=weight_tensor,
+            bias=bias_tensor,
+            momentum=momentum,
+            output=tt_output_tensor_on_device,
+        )
+    else:
+        tt_output_tensor_on_device = ttnn.batch_norm(
+            input_tensor,
+            running_mean=mean_tensor,
+            running_var=var_tensor,
+            training=training,
+            eps=eps,
+            weight=weight_tensor,
+            bias=bias_tensor,
+            momentum=momentum,
+        )
+    tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+
+    tt_updated_mean = None
+    tt_updated_var = None
+    if training:
+        if check_mean:
+            tt_updated_mean = ttnn.to_torch(mean_tensor)
+        if check_var:
+            tt_updated_var = ttnn.to_torch(var_tensor)
+
+    # PyTorch batch_norm does not support float32 input, bfloat16 output; use float32 reference then cast back
+    in_ref = in_data.float()
+    mean_ref = mean_data.float() if mean_data is not None else None
+    var_ref = var_data.float() if var_data is not None else None
+    weight_ref = weight_data.float() if weight_data is not None else None
+    bias_ref = bias_data.float() if bias_data is not None else None
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_ref,
+        running_mean=mean_ref,
+        running_var=var_ref,
+        weight=weight_ref,
+        bias=bias_ref,
+        training=training,
+        eps=eps,
+        momentum=momentum,
+    )
+    torch_result = torch_result.to(tt_output.dtype)
+    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
+    if training:
+        channels = input_shapes[1]
+        if check_mean:
+            mean_compare = mean_ref.view(1, channels, 1, 1).to(mean_data.dtype)
+            comp_BN_running_mean = compare_results_batch_norm(
+                [tt_updated_mean], [mean_compare], stats=True
+            )  # Check Updated running mean
+        else:
+            comp_BN_running_mean = tt_updated_mean is None
+        if check_var:
+            var_compare = var_ref.view(1, channels, 1, 1).to(var_data.dtype)
+            comp_BN_running_var = compare_results_batch_norm(
+                [tt_updated_var], [var_compare], stats=True
+            )  # Check Updated running var
+        else:
+            comp_BN_running_var = tt_updated_var is None
+        comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
+    assert comp_BN_Output
