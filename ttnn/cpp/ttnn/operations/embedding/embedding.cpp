@@ -10,6 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace ttnn {
 
@@ -31,12 +32,23 @@ ttnn::Tensor embedding(
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto original_input_rank = input_tensor.logical_shape().rank();
+    const auto& input_shape = input_tensor.logical_shape();
+    auto original_input_rank = input_shape.rank();
+
+    TT_FATAL(original_input_rank >= 1, "Embedding input must have rank >= 1, got rank {}", original_input_rank);
+    TT_FATAL(input_shape[-1] > 0, "Last dimension of embedding input must be > 0");
+
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
-    // If indices tensor is 1 dimensional, batch size is 1
-    auto batch_size = (input_tensor.logical_shape().rank() == 1) ? 1 : input_tensor.logical_shape()[0];
-    auto sentence_size = input_tensor.logical_shape()[-1];
+    // Compute batch_size as product of all dimensions except the last (sequence dimension)
+    // This correctly handles ND inputs like [B, 1, 1, S] or [d1, d2, ..., dn]
+    uint32_t batch_size = 1;
+    for (size_t i = 0; i < original_input_rank - 1; ++i) {
+        batch_size *= input_shape[i];
+    }
+    // For rank 1, batch_size remains 1
+    auto sentence_size = input_shape[-1];
+
     auto embedding_input_tensor = input_tensor;
     if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
@@ -66,12 +78,17 @@ ttnn::Tensor embedding(
         memory_config,
         pad_token,
         optional_output_tensor);
-    // Don't include batch_size if there was none
-    if (original_input_rank == 1) {
-        embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
-    } else {
-        embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
+
+    // Restore original shape with embedding dimension appended
+    // Input: [d1, d2, ..., dn] -> Output: [d1, d2, ..., dn, embedding_dim]
+    ttsl::SmallVector<uint32_t> output_shape_vec;
+    output_shape_vec.reserve(original_input_rank + 1);
+    for (size_t i = 0; i < original_input_rank; ++i) {
+        output_shape_vec.push_back(input_shape[i]);
     }
+    output_shape_vec.push_back(hidden_embedding_dim);
+    embeddings = ttnn::reshape(embeddings, ttnn::Shape(std::move(output_shape_vec)));
+
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
         embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
