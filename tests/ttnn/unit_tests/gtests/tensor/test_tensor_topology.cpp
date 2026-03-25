@@ -8,6 +8,8 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 
+#include <ttnn/distributed/tensor_topology.hpp>
+
 #include "ttnn/distributed/api.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
@@ -17,7 +19,10 @@ namespace ttnn::distributed::test {
 
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
+using tt::tt_metal::TensorTopology;
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshMapperConfig;
+using tt::tt_metal::distributed::MeshShape;
 
 using TensorTopologyTest = GenericMeshDeviceFixture;
 using TensorTopology2x4Test = MeshDevice2x4Fixture;
@@ -241,6 +246,36 @@ TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
     auto expected_topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1);
 
     EXPECT_EQ(tensor_topology, expected_topology);
+}
+
+TEST(TensorTopologyHashTest, EqualTopologiesHaveEqualHash) {
+    TensorTopology a;
+    TensorTopology b;
+    EXPECT_EQ(a.to_hash(), b.to_hash());
+    EXPECT_EQ(a.to_hash(), TensorTopology().to_hash());
+}
+
+TEST(TensorTopologyHashTest, ShardedDiffersFromDefault) {
+    TensorTopology default_topology;
+    TensorTopology sharded = TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2), 0);
+    EXPECT_NE(default_topology.to_hash(), sharded.to_hash());
+}
+
+TEST(TensorTopologyHashTest, ReplicatedVsShardedOnSameMeshShape) {
+    MeshShape mesh_shape(1, 2);
+    TensorTopology replicated = TensorTopology::create_fully_replicated_tensor_topology(mesh_shape);
+    TensorTopology sharded = TensorTopology::create_sharded_tensor_topology(mesh_shape, 0);
+    EXPECT_NE(replicated.to_hash(), sharded.to_hash());
+    EXPECT_EQ(replicated.to_hash(), TensorTopology::create_fully_replicated_tensor_topology(mesh_shape).to_hash());
+}
+
+TEST(TensorTopologyHashTest, DifferentMeshCoordsDiffersWhenRestEqual) {
+    MeshShape dist_shape(1, 2);
+    tt::stl::SmallVector<MeshMapperConfig::Placement> placements = {
+        MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}};
+    TensorTopology t0(dist_shape, placements, std::vector<MeshCoordinate>{MeshCoordinate(0, 1), MeshCoordinate(1, 0)});
+    TensorTopology t1(dist_shape, placements, std::vector<MeshCoordinate>{MeshCoordinate(0, 0), MeshCoordinate(1, 1)});
+    EXPECT_NE(t0.to_hash(), t1.to_hash());
 }
 
 }  // namespace ttnn::distributed::test
