@@ -133,13 +133,15 @@ RedistributeToMemoryConfigRowMajorProgramFactory::create(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_reader.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/redistribute_to_memory_config/device/kernels/dataflow/"
+        "to_sharded_pages_row_major_reader.cpp",
         ordered_cores_with_data_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_writer.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/redistribute_to_memory_config/device/kernels/dataflow/"
+        "to_sharded_pages_row_major_writer.cpp",
         ordered_cores_with_data_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
