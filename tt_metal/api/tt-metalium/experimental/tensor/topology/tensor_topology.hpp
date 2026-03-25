@@ -61,7 +61,7 @@ public:
         const tt::tt_metal::distributed::MeshCoordinate& device_coord) const;
 
     // Used by `ttsl::hash::hash_object` / `Tensor::to_hash`; includes distribution and replica vs shard choice.
-    [[nodiscard]] std::uint64_t to_hash() const noexcept;
+    [[nodiscard]] std::uint64_t to_hash() const;
 
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;

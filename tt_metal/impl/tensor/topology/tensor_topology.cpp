@@ -123,7 +123,7 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
     return std::nullopt;
 }
 
-std::uint64_t TensorTopology::to_hash() const noexcept {
+std::uint64_t TensorTopology::to_hash() const {
     using tt::tt_metal::distributed::MeshMapperConfig;
     ttsl::hash::hash_t h = 0;
     h = ttsl::hash::hash_objects(h, distribution_shape_);
