@@ -1234,7 +1234,7 @@ HostTensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
-    TT_FATAL(tensor.layout() != Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
     return dispatch(tensor.dtype(), [&]<typename T>() {
         return pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
