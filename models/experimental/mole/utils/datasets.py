@@ -113,7 +113,13 @@ def _download_https_file(dataset_url: str, destination: Path, *, max_redirects: 
                 raise RuntimeError(f"download failed with HTTP {response.status} for {current_url}")
 
             with destination.open("wb") as output_file:
-                output_file.write(response.read())
+                # Stream the response to disk to avoid loading the full payload into memory.
+                chunk_size = 1024 * 1024  # 1 MiB
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    output_file.write(chunk)
             return
         finally:
             connection.close()
@@ -290,17 +296,22 @@ def load_tslib_csv(
     with dataset_path.open(newline="") as csv_file:
         reader = csv.reader(csv_file)
         header = next(reader)
-        rows = list(reader)
 
-    if not rows:
+        # Avoid holding the whole CSV as strings in memory. Instead, parse each row as we read it.
+        date_values: list[str] = []
+        values_list: list[list[float]] = []
+        for row in reader:
+            date_values.append(row[0])
+            values_list.append([float(value) for value in row[1:]])
+
+    if not values_list:
         raise ValueError(f"dataset is empty: {dataset_path}")
 
     has_date_column = bool(header) and header[0].lower() == "date"
     if not has_date_column:
         raise ValueError(f"expected first CSV column to be 'date' for time-feature extraction: {dataset_path}")
 
-    date_values = [row[0] for row in rows]
-    values = torch.tensor([[float(value) for value in row[1:]] for row in rows], dtype=torch.float32)
+    values = torch.tensor(values_list, dtype=torch.float32)
     time_marks = _build_time_marks(date_values, freq, minute_bucket=minute_bucket)
     return values, time_marks
 

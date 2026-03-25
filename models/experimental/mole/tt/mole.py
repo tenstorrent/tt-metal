@@ -373,7 +373,7 @@ class TtMoLE:
         for expert in self._reference_experts:
             affine_weight = expert.rev.affine_weight.detach()
             affine_bias = expert.rev.affine_bias.detach()
-              output_bias = affine_bias
+            output_bias = affine_bias
             output_denom = affine_weight + (self.config.revin_eps**2)
 
             affine_weight_blocks.append(affine_weight.unsqueeze(1).repeat(1, seq_len))

@@ -489,10 +489,6 @@ def main() -> None:
     if metrics["profile_single_replay"] > 0:
         print("- replay_mode: single")
     print(f"- measurement_mode: {mode}")
-    if mode == "trace_replay":
-        print("- measurement_scope: cached TTNN execution only (no per-iteration upload/readback)")
-    else:
-        print("- measurement_scope: upload + execution + host readback")
     print(f"- batch_size: {metrics['batch_size']:.0f}")
     print(f"- total_calls: {metrics['total_calls']:.0f}")
     print(f"- cpu_latency_ms: {metrics['cpu_latency_ms']:.3f}")
