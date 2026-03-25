@@ -8,6 +8,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_bmm.cpp
     test_compile_program.cpp
     test_compile_sets_kernel_binaries.cpp
+    test_compile_stress.cpp
     test_core_range_set.cpp
     test_datacopy.cpp
     test_datacopy_bfp8b.cpp
