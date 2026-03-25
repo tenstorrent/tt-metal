@@ -20,12 +20,10 @@ from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 
 
 @pytest.mark.parametrize(
@@ -137,32 +135,29 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
     semaphores = None
     recv_socket = None
     if is_stage1:
-        input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
-        input_shard_spec = ttnn.ShardSpec(input_shard_grid, tuple(output_shape), ttnn.ShardOrientation.ROW_MAJOR)
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=input_shard_spec,
+        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        mesh_rows, mesh_cols = mesh_device.shape
+        bcast_inputs = build_broadcast_test_inputs(
+            mesh_device=mesh_device,
+            mesh_rows=mesh_rows,
+            mesh_cols=mesh_cols,
+            sender_coord=sender_coord,
+            output_shape=tuple(output_shape),
+            input_shard_shape=tuple(output_shape),
+            tensor_mem_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            layout=ttnn.TILE_LAYOUT,
+            input_dtype=ttnn.bfloat16,
+            bcast_core=bcast_core,
+            create_output_tensor_mesh=True,
+            create_semaphores=True,
+            input_tensor_torch=torch.zeros(tuple(output_shape), dtype=torch.bfloat16),
+            tile=ttnn.Tile((1, 32)),
         )
+        input_tensor_mesh = bcast_inputs.input_tensor_mesh
+        intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
+        semaphores = bcast_inputs.semaphores
+        input_mem_config = input_tensor_mesh.memory_config()
 
-        input_tensor_mesh = ttnn.from_torch(
-            torch.zeros(tuple(output_shape), dtype=torch.bfloat16),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            tile=ttnn.Tile((1, 32)),
-            dtype=ttnn.bfloat16,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        intermediate_tensor_mesh = ttnn.from_torch(
-            torch.zeros(tuple(output_shape), dtype=torch.bfloat16),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            tile=ttnn.Tile((1, 32)),
-            dtype=ttnn.bfloat16,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
         gamma_tensor = ttnn.from_torch(
             torch_gamma,
             device=mesh_device,
@@ -182,16 +177,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        compute_grid_size = mesh_device.compute_with_storage_grid_size()
-        num_cores = compute_grid_size.x * compute_grid_size.y
-        available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-        out_ready_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        barrier_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        secondary_sync_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
-
         recv_socket = pipeline_block.get_downstream_socket()
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
 
     pipeline_block.run()
     logger.info(f"[rank={my_mesh_id}] pipeline programs launched")
@@ -219,12 +205,10 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             sender_coord,
             output_tensor,
             semaphores=semaphores,
-            cluster_axis=0,
-            secondary_cluster_axis=1,
             epsilon=epsilon,
             skip_ccl=False,
             socket=recv_socket,
-            is_torus=(device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_TORUS_Y),
+            fabric_config=device_params["fabric_config"],
         )
         logger.info("[rank=1] BroadcastRMSNorm completed")
 

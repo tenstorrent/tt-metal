@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,
@@ -40,12 +41,6 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -868,8 +863,6 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -939,14 +932,13 @@ def create_decoder_block_tensors(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1012,7 +1004,8 @@ def test_decoder(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
@@ -1021,7 +1014,7 @@ def test_decoder(
     ttnn_attn_ref_output_torch = None
     if validate_standalone_mla:
         logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
         ttnn_attn_ref_result = AttentionBlock.op(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -1053,16 +1046,15 @@ def test_decoder(
             d["device_chunk_size"],
             d["ttnn_attn_ref_output"],
             attn_ref_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links,
             epsilon,
             use_fp32,
             False,  # skip_ccl
             noc_mode,
             num_iterations=1,
+            fabric_config=device_params["fabric_config"],
         )
         ttnn.synchronize_device(submesh)
         ttnn_attn_ref_output_torch = ttnn.to_torch(
@@ -1132,11 +1124,9 @@ def test_decoder(
             reduce_root_coord=d["reduce_root_coord"],
             # Shared parameters
             enable_routing=True,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
             reduce_cluster_axis=reduce_cluster_axis,
             sdpa_cluster_axis=0,  # sdpa_cluster_axis
-            num_links=1,  # num_links
+            num_links=num_links,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
@@ -1144,6 +1134,7 @@ def test_decoder(
             num_iterations=num_internal_iterations,
             upstream_socket=None,
             downstream_sockets=None,
+            fabric_config=device_params["fabric_config"],
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
@@ -1390,8 +1381,6 @@ def test_decoder(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -1421,14 +1410,13 @@ def test_decoder(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1475,7 +1463,8 @@ def test_decoder_mlp(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     logger.info(f"Running dense decoder operation with position_id={position_id}...")
@@ -1536,11 +1525,9 @@ def test_decoder_mlp(
             reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
             # Shared parameters
             enable_routing=False,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
             reduce_cluster_axis=reduce_cluster_axis,
             sdpa_cluster_axis=0,
-            num_links=1,
+            num_links=num_links,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
@@ -1549,6 +1536,7 @@ def test_decoder_mlp(
             num_iterations=num_internal_iterations,
             upstream_socket=None,
             downstream_sockets=None,
+            fabric_config=device_params["fabric_config"],
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
