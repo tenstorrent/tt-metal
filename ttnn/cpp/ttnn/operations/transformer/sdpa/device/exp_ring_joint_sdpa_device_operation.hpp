@@ -47,12 +47,9 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
-    CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    std::optional<std::vector<CoreCoord>> ccl_worker_cores = std::nullopt,
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 8);
 

@@ -225,11 +225,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const CoreCoord ccl_core_grid_offset,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
-    std::optional<std::vector<CoreCoord>> ccl_worker_cores,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
@@ -250,12 +247,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         cluster_axis,
         mesh_device,
         topology,
-        ccl_core_grid_offset,
         subdevice_id,
         scale,
         compute_kernel_config,
-        core_allocation_strategy,
-        std::move(ccl_worker_cores),
         num_workers_per_link,
         num_buffers_per_channel);
     return {
