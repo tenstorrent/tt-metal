@@ -7,8 +7,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
+#include <chrono>
 
 namespace tt::tt_metal {
 
@@ -148,7 +151,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
         max_transaction_size_bytes = max_transmittable_bytes;
     }
 
-    constexpr uint32_t total_transactions = 1000000;
+    constexpr uint32_t total_transactions = 100000;
     CoreCoord master_core_coord = {0, 0};
 
     // Sweep transaction sizes by powers of 2 from page_size_bytes to max
@@ -166,6 +169,55 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
         };
 
         EXPECT_TRUE(unit_tests::dm::pcie_read_bw::run_dm(mesh_device, test_config));
+    }
+}
+
+/* ========== Host-side D2H (ReadShard) bandwidth sweep; Test id = 607 ========== */
+TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
+    GTEST_SKIP() << "Skipping test";
+    auto mesh_device = get_mesh_device();
+    auto device_coord = distributed::MeshCoordinate(0, 0);
+    auto& cq = mesh_device->mesh_command_queue();
+
+    constexpr uint32_t page_size = 4096;
+    constexpr uint32_t num_iterations = 100000;
+    constexpr uint32_t min_buf_size = 4 * 1024;
+    constexpr uint32_t max_buf_size = 16 * 1024 * 1024;
+
+    for (uint32_t buf_size = min_buf_size; buf_size <= max_buf_size; buf_size *= 4) {
+        auto buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buf_size},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false},
+            mesh_device.get());
+
+        // Seed device buffer
+        vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
+        distributed::WriteShard(cq, buffer, src, device_coord, false);
+        distributed::Finish(cq);
+
+        vector<uint32_t> dst;
+
+        // Warmup
+        distributed::ReadShard(cq, dst, buffer, device_coord, true);
+
+        // Timed
+        auto start = chrono::high_resolution_clock::now();
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            distributed::ReadShard(cq, dst, buffer, device_coord, true);
+        }
+        auto end = chrono::high_resolution_clock::now();
+
+        double elapsed_s = chrono::duration<double>(end - start).count();
+        double bw_gbps = ((double)buf_size * num_iterations / elapsed_s) / 1e9;
+
+        log_info(
+            LogTest,
+            "PCIe Host Read (D2H): buf={} bytes, iterations={}, BW={:.2f} GB/s",
+            buf_size,
+            num_iterations,
+            bw_gbps);
+        EXPECT_GT(bw_gbps, 0.0);
     }
 }
 

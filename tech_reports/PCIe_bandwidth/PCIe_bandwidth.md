@@ -54,6 +54,26 @@ dmtest --gtest-filter="*PCIeBandwidthSweep*" --verbose-log --plot
 
 <img src="pcie_write_bw_sweep_blackhole.png" style="width:800px;"/>
 
+## Host-Side Tests (WriteShard / ReadShard)
+
+Test IDs 606 (H2D) and 607 (D2H) measure the same PCIe link but from the host API level using `distributed::WriteShard` and `distributed::ReadShard`. These go through the full dispatch path — command queue serialization, DMA engine, etc. No kernels are involved; timing is done with `std::chrono` on the host.
+
+The sweep varies buffer size from 4 KB to 16 MB (powers of 4), with 100k iterations per point. Page size is fixed at 4 KB.
+
+```bash
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*PCIeHost*"
+```
+
+### Host Read (D2H) — p150 / Blackhole
+
+<img src="pcie_host_read_bw_blackhole.png" style="width:800px;"/>
+
+### Host Write (H2D) — p150 / Blackhole
+
+<img src="pcie_host_write_bw_blackhole.png" style="width:800px;"/>
+
 ## Notes
 
-Small transaction sizes show lower bandwidth due to per-transaction overhead. Bandwidth increases with transaction size and should approach the PCIe link's sustained rate at the larger sizes. Read and write may differ -- PCIe reads require a round-trip (request + response), while writes can be posted.
+**Kernel-side tests (604/605):** Small transaction sizes show lower bandwidth due to per-transaction overhead. Bandwidth increases with transaction size and should approach the PCIe link's sustained rate at the larger sizes. Read and write may differ — PCIe reads require a round-trip (request + response), while writes can be posted.
+
+**Host-side tests (606/607):** These include dispatch overhead on top of the raw PCIe transfer, so bandwidth is generally lower than the kernel-side measurements. Bandwidth scales with buffer size up to a point, then may plateau or regress for very large buffers due to memory allocation and DMA chunking behavior in the dispatch path.

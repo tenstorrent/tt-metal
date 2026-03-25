@@ -34,3 +34,4 @@ The tests use the Mesh Device API with fast dispatch mode:
 Test case uses Float32 as L1 data format.
 
 1. PCIe Write Bandwidth Sweep (ID 604): Sweeps transaction sizes from flit size up to the NOC max packet size (8 kB on Wormhole, 16 kB on Blackhole) with 1M transactions at each size. Transaction sizes increase by powers of 2.
+2. PCIe Host Write (H2D) Bandwidth Sweep (ID 606): Host-side bandwidth test using `distributed::WriteShard`. Sweeps buffer sizes from 4 KB to 16 MB, timed with `std::chrono`. No kernel involved — measures the full dispatch path including command queue and DMA overhead.

@@ -673,6 +673,12 @@ tests:
     name: "PCIe Read Bandwidth Sweep"
     bandwidth_unit: "gbps"
 
+  606:
+    name: "PCIe Host Write (H2D) Bandwidth Sweep"
+
+  607:
+    name: "PCIe Host Read (D2H) Bandwidth Sweep"
+
   610:
     name: "Transaction ID - Write After Read"
     comment: |
