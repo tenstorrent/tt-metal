@@ -196,6 +196,7 @@ class LTXPipeline:
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
+        has_gate = any("to_gate_logits" in k for k in state_dict)
         self.transformer = LTXTransformerModel(
             num_attention_heads=self.num_attention_heads,
             attention_head_dim=self.attention_head_dim,
@@ -207,6 +208,7 @@ class LTXPipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
             has_audio=self.mode == "av",
+            apply_gated_attention=has_gate,
         )
         self.transformer.load_torch_state_dict(state_dict)
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
