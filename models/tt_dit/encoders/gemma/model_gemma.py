@@ -90,6 +90,10 @@ class GemmaRotaryEmbedding(Module):
         self._cos_cached = freqs.cos().unsqueeze(0).unsqueeze(0)  # (1, 1, seq, D/2)
         self._sin_cached = freqs.sin().unsqueeze(0).unsqueeze(0)
 
+    def forward(self, seq_len: int):
+        """Not used directly — call get_cos_sin instead."""
+        return self.get_cos_sin(seq_len, self.mesh_device)
+
     def get_cos_sin(self, seq_len: int, device) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Get cos/sin for given sequence length, push to device."""
         cos = self._cos_cached[:, :, :seq_len, :].bfloat16()
@@ -194,12 +198,17 @@ class GemmaAttention(Module):
             k = ttnn.repeat(k, ttnn.Shape([1, repeats, 1, 1]))
             v = ttnn.repeat(v, ttnn.Shape([1, repeats, 1, 1]))
 
+        # Ensure DRAM interleaved layout for SDPA compatibility
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+
         # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
-            is_causal=True,
+            is_causal=False,  # Encoder mode: attend to all tokens
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
@@ -309,12 +318,16 @@ class GemmaEncoderLayer(Module):
 
     def _prepare_torch_state(self, state):
         # HF keys: self_attn.{q,k,v,o}_proj, mlp.{gate,up,down}_proj, input_layernorm, post_attention_layernorm
-        # Route self_attn and mlp substates to their respective modules
         rename_substate(state, "input_layernorm", "self_attn.input_layernorm")
         rename_substate(state, "post_attention_layernorm", "ff.post_attention_layernorm")
         rename_substate(state, "mlp.gate_proj", "ff.gate_proj")
         rename_substate(state, "mlp.up_proj", "ff.up_proj")
         rename_substate(state, "mlp.down_proj", "ff.down_proj")
+        # Gemma3-specific: extra norms we don't use (pre/post FF norms, QK norms)
+        pop_substate(state, "pre_feedforward_layernorm")
+        pop_substate(state, "post_feedforward_layernorm")
+        pop_substate(state, "self_attn.q_norm")
+        pop_substate(state, "self_attn.k_norm")
 
     def forward(self, hidden_states, cos, sin):
         hidden_states = self.self_attn(hidden_states, cos, sin)
@@ -357,12 +370,25 @@ class GemmaEncoder(Module):
         self.norm = GemmaRMSNorm(config, mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # HF key prefix: model.embed_tokens, model.layers.N.*, model.norm
-        rename_substate(state, "model.embed_tokens", "embed_tokens")
-        rename_substate(state, "model.norm", "norm")
-        rename_substate(state, "model.layers", "layers")
-        # Remove lm_head (not needed for encoding)
+        # HF Gemma3ForConditionalGeneration key prefix: language_model.model.*
+        # Strip prefix to get model.embed_tokens, model.layers.N.*, model.norm
+        prefix = "language_model.model."
+        stripped = {}
+        for k, v in list(state.items()):
+            if k.startswith(prefix):
+                stripped[k[len(prefix) :]] = v
+                del state[k]
+        state.update(stripped)
+
+        rename_substate(state, "embed_tokens", "embed_tokens")
+        rename_substate(state, "norm", "norm")
+        rename_substate(state, "layers", "layers")
+        # Remove keys we don't use
         pop_substate(state, "lm_head")
+        pop_substate(state, "language_model")
+        # Remove vision/multimodal keys
+        for prefix_to_remove in ["vision_tower", "multi_modal_projector", "model.vision"]:
+            pop_substate(state, prefix_to_remove)
 
     def forward(self, token_ids: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
         """Run forward and return hidden states from all layers.
