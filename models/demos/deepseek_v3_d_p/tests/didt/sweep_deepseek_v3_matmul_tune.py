@@ -37,7 +37,6 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     TILE_SIZE,
 )
 from tests.didt.op_test_base import OpParameter, OpTestBase
-from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 
 # ---------------------------------------------------------------------------
 # Compute utilization: ideal cycles vs actual cycles (same as test_benchmark.py)
@@ -356,13 +355,11 @@ def _run_single_config(
         ]
         test.activations = test.convert_activations_to_memory_config(a_t)
 
-        start = start_measuring_time()
         for _ in range(iterations):
             out = test.run_device_operation()
             for device_idx in test.device_ids:
                 ttnn.device.synchronize_device(test.get_device(device_idx))
             out.deallocate(True)
-        duration_ns = stop_measuring_time(start)
 
         ttnn.ReadDeviceProfiler(mesh_device)
 
