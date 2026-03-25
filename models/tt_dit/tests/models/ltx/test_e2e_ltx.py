@@ -19,7 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.ltx.vae_ltx import LTXVideoDecoder
+from models.tt_dit.models.vae.vae_ltx import LTXVideoDecoder
 from models.tt_dit.pipelines.ltx.pipeline_ltx import compute_sigmas, euler_step
 
 sys.path.insert(0, "LTX-2/packages/ltx-core/src")
