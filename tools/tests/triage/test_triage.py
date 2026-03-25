@@ -103,7 +103,7 @@ def cause_hang_with_app(request):
 
         # Only error if the process actually exited early with a non-zero code
         if process_exited_early and proc.returncode != 0:
-            stdout_bytes, stderr_bytes = proc.communicate(input=None, timeout=5)
+            stdout_bytes, stderr_bytes = proc.communicate(input=None, timeout=0)
             stdout_text = stdout_bytes.decode("utf-8") if stdout_bytes else "(empty)"
             stderr_text = stderr_bytes.decode("utf-8") if stderr_bytes else "(empty)"
             print("\n=== Process stdout ===")

@@ -171,15 +171,8 @@ _MAX_PORT = 65535
 
 
 def _get_rank_from_env() -> int:
-    """Return MPI/mesh rank from process env for rank-aware Inspector port, or -1 if not set.
+    """Return MPI/mesh rank from process env for rank-aware Inspector port, or -1 if not set."""
 
-    Precedence (highest to lowest):
-      1. OMPI_COMM_WORLD_RANK  -- OpenMPI standard
-      2. PMI_RANK              -- MPICH / Hydra / Slurm PMI
-      3. SLURM_PROCID          -- Slurm native (without PMI layer)
-      4. PMIX_RANK             -- PMIx-aware launchers (OpenPMIx, PRRTE)
-      5. TT_MESH_HOST_RANK     -- TT-specific fallback (may be duplicated across ranks)
-    """
     rank = get_rank_from_env()
     return -1 if rank is None else rank
 
