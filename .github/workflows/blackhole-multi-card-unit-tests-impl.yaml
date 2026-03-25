@@ -127,6 +127,7 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2' -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
             timeout: 45
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
