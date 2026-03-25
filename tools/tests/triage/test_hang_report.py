@@ -34,6 +34,8 @@ def test_hang_generates_junit_xml():
     existing = set(REPORT_DIR.glob("hang_report_*.xml")) if REPORT_DIR.exists() else set()
 
     triage_output_path = METAL_HOME / "generated/triage_output.txt"
+    if triage_output_path.exists():
+        triage_output_path.unlink()
     hang_report_cmd = f"python3 {HANG_REPORT_SCRIPT}"
     triage_cmd = f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check --triage-summary-path=generated/triage_summary.txt"
     dispatch_cmd = f"{hang_report_cmd}; mkdir -p generated; {triage_cmd} 2>&1 | tee {triage_output_path} 1>&2; {hang_report_cmd} --update"
@@ -74,5 +76,4 @@ def test_hang_generates_junit_xml():
     assert "Triage summary" in (failure.text or "")
 
     assert triage_output_path.exists(), f"Triage output file not created at {triage_output_path}"
-    triage_output_content = triage_output_path.read_text()
-    assert len(triage_output_content) > 0, "Triage output file is empty"
+    assert triage_output_path.stat().st_size > 0, "Triage output file is empty"
