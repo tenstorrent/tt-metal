@@ -399,13 +399,24 @@ def _load_tt_vae_into_models(models: dict, config) -> None:
         models["ccl_manager"],
         vae_parallel_config,
     )
-    if config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
+    # Default to a single TT wrapper for both high and left/right cameras.
+    # This matches the validated debug path and avoids divergence between two separately
+    # constructed TT wrappers on the same mesh. Keep dual-wrapper mode as explicit opt-in.
+    use_dual_tt_wrappers = os.environ.get("LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS", "0") == "1"
+    if use_dual_tt_wrappers and config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
         models["streaming_vae_half"] = TTWanVAEStreamingWrapper(
             models["vae_half"],
             models["mesh_device"],
             models["ccl_manager"],
             vae_parallel_config,
         )
+    else:
+        models["streaming_vae_half"] = models["streaming_vae"]
+        if config.env_type == "robotwin_tshape":
+            logger.info(
+                "Using single TT VAE wrapper for high + left_right "
+                "(set LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS=1 to force dual wrappers)."
+            )
     logger.info("Loaded TT VAE encoder (streaming_vae) on device.")
 
 
@@ -693,7 +704,10 @@ def _encode_obs(models, state, obs):
         videos_left_and_right = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
         vae_device = next(streaming_vae.vae.parameters()).device
         enc_out_high = streaming_vae.encode_chunk(videos_high.to(vae_device).to(dtype))
-        enc_out_left_and_right = streaming_vae_half.encode_chunk(videos_left_and_right.to(vae_device).to(dtype))
+        # In TT mode we default streaming_vae_half to the same object as streaming_vae.
+        # Preserve compatibility if a separate half wrapper is explicitly configured.
+        encode_lr = streaming_vae_half if streaming_vae_half is not None else streaming_vae
+        enc_out_left_and_right = encode_lr.encode_chunk(videos_left_and_right.to(vae_device).to(dtype))
         enc_out = torch.cat(
             [
                 torch.cat(enc_out_left_and_right.split(1, dim=0), dim=-1),

@@ -41,8 +41,8 @@ class TtAvgDown3D(Module):
 
         B, T, H, W, C = x.shape
 
-        # ---- convert to torch ----
-        x_torch = ttnn.to_torch(x)  # [B, T, H, W, C]
+        # Match PyTorch AvgDown3D in float32; bf16 pooling drifts vs diffusers reference.
+        x_torch = ttnn.to_torch(x).float()  # [B, T, H, W, C]
 
         # ---- convert to BCTHW ----
         x_bcthw = x_torch.permute(0, 4, 1, 2, 3).contiguous()
@@ -94,11 +94,11 @@ class TtAvgDown3D(Module):
         x_bcthw = x_bcthw.mean(dim=2)
 
         # ---- convert back to BTHWC ----
-        x_bthwc = x_bcthw.permute(0, 2, 3, 4, 1).contiguous()
+        x_bthwc = x_bcthw.permute(0, 2, 3, 4, 1).to(torch.bfloat16).contiguous()
 
         return ttnn.from_torch(
             x_bthwc,
-            dtype=x.dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=x.device(),
         )
