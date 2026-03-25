@@ -11,6 +11,7 @@ import transformers
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.demos.wormhole.bge_m3.tt.common import create_tt_model
+from models.demos.wormhole.bge_m3.tt.model_config import get_padded_sequence_length
 from models.tt_transformers.tt.generator import create_submeshes
 
 
@@ -187,8 +188,7 @@ class BgeM3ForEmbedding:
 
     @staticmethod
     def _get_padded_seq_len(seq_len: int) -> int:
-        pad_multiple = 2048 if seq_len > 2048 else 128
-        return ((seq_len + pad_multiple - 1) // pad_multiple) * pad_multiple
+        return get_padded_sequence_length(seq_len)
 
     def _validate_request(self, batch_size: int, padded_seq_len: int) -> None:
         if batch_size > self.max_batch_size:
