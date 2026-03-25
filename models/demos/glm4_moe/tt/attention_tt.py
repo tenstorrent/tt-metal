@@ -887,6 +887,7 @@ class Glm4MoeAttention(LightweightModule):
         attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,  # 12
+            sub_core_grids=_worker_scg,
         )
         # -> [1, 1, batch, 1536] (12 heads * 128 dim)
 
