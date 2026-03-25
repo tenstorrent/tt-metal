@@ -16,7 +16,7 @@ jobs:
 
       - name: Ensure CURSOR_API_KEY is configured
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           if [ -z "$CURSOR_API_KEY" ]; then
             echo "Missing secret CURSOR_API_KEY"
