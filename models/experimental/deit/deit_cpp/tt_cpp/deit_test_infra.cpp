@@ -1,8 +1,10 @@
-#include "deit_test_infra.hpp"
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
+#include "deit_test_infra.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation.hpp"
-
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
