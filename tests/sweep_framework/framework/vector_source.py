@@ -158,6 +158,17 @@ class VectorExportSource(VectorSource):
                 logger.warning("get_machine_info() returned None - tt-smi might have failed")
                 return None
 
+            # Validate that board_type looks like an actual board name (e.g. "Wormhole",
+            # "Blackhole") rather than a PCI address or device path, which indicates
+            # the tt-smi output parser misaligned columns.
+            board = machine_info.get("board_type", "")
+            if not board or ":" in board or "/" in board:
+                logger.warning(
+                    f"get_machine_info() returned suspicious board_type='{board}' "
+                    f"(likely a tt-smi parsing issue). Ignoring machine info."
+                )
+                return None
+
             logger.debug(f"Successfully retrieved machine info: {machine_info}")
             return machine_info
         except Exception as e:
@@ -292,7 +303,9 @@ class VectorExportSource(VectorSource):
                             # Filter vectors based on hardware compatibility.
                             # Lead models use strict 4-field matching (board_type, device_series,
                             # card_count, device_count) since they are routed to correct hardware.
-                            # Non-lead runs only skip multi-card vectors since CI only has N150.
+                            # Non-lead runs skip vectors whose traced card_count exceeds the current
+                            # machine's card_count (e.g. galaxy vectors are skipped on N150 but run
+                            # on galaxy machines).
                             skip_for_resources = False
                             if current_machine_info and traced_machine_entries:
                                 if is_lead_models:
@@ -339,14 +352,21 @@ class VectorExportSource(VectorSource):
                                         machine_mismatch_count += 1
                                         skip_for_resources = True
                                 else:
-                                    # TODO: Tighten this once CI runners cover more hardware variants.
-                                    has_single_card = any(
-                                        entry.get("card_count") == 1 or entry.get("card_count") is None
+                                    # For non-lead runs: skip vectors that require more hardware than the
+                                    # current machine provides. Compare traced card_count against
+                                    # current_machine_info.card_count so that galaxy vectors run on
+                                    # galaxy machines and are skipped only on machines with fewer cards
+                                    # (e.g. N150).
+                                    current_card_count = current_machine_info.get("card_count") or 1
+                                    has_compatible_card_count = any(
+                                        entry.get("card_count") is None
+                                        or entry.get("card_count", 1) <= current_card_count
                                         for entry in traced_machine_entries
                                     )
-                                    if not has_single_card:
+                                    if not has_compatible_card_count:
                                         logger.debug(
-                                            "Skipping vector - no single-card entry found and " "not a lead models run"
+                                            f"Skipping vector - traced card_count exceeds current machine "
+                                            f"card_count={current_card_count}"
                                         )
                                         machine_mismatch_count += 1
                                         skip_for_resources = True

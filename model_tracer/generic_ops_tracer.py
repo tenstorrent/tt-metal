@@ -78,65 +78,73 @@ BASE_DIR = get_base_dir()
 
 
 def get_machine_info():
-    """Get machine info (board type, device series, card count, and device count) using tt-smi command."""
+    """Get machine info (board type, device series, card count, and device count).
+
+    Uses the pyluwen Python API for chip arch detection and
+    ``tt-smi -s --snapshot_no_tty`` (structured JSON) for device series
+    and card count — no table parsing, immune to tt-smi formatting changes.
+    """
     try:
-        result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
-        if result.returncode != 0 or not result.stdout.strip():
+        # --- Arch detection via pyluwen (authoritative, no parsing) ----------
+        from pyluwen import PciChip, pci_scan
+
+        pci_interfaces = pci_scan()
+        if not pci_interfaces:
             return None
 
-        # Parse "All available boards" section for total device count
-        all_devices = []
-        in_all_boards = False
+        chip = PciChip(pci_interface=pci_interfaces[0])
+        if chip.as_wh() is not None:
+            board_type = "Wormhole"
+        elif chip.as_bh() is not None:
+            board_type = "Blackhole"
+        else:
+            board_type = "Unknown"
 
-        # Parse "Boards that can be reset" section for card count
-        in_reset_table = False
-        machines = {}
+        device_count = len(pci_interfaces)
 
-        for line in result.stdout.split("\n"):
-            # Track when we enter "All available boards" section
-            if "All available boards on host" in line:
-                in_all_boards = True
-                in_reset_table = False
-                continue
+        # --- Device series & card count via tt-smi JSON snapshot -------------
+        import json
+        from collections import Counter
 
-            # Track when we enter "Boards that can be reset" section
-            if "Boards that can be reset" in line:
-                in_all_boards = False
-                in_reset_table = True
-                continue
-
-            # Parse device rows in "All available boards" section
-            if in_all_boards and line.strip().startswith("│"):
-                parts = [p.strip() for p in line.split("│") if p.strip()]
-                if len(parts) >= 3:
-                    pci_dev_id = parts[0]
-                    board_type = parts[1]
-                    device_series = parts[2].rstrip("LR").strip()  # Remove L/R suffix
-                    if board_type and device_series and board_type != "Board Type" and pci_dev_id != "PCI Dev ID":
-                        all_devices.append((board_type, device_series))
-
-            # Count cards from "Boards that can be reset" section
-            if in_reset_table and line.strip().startswith("│"):
-                parts = [p.strip() for p in line.split("│") if p.strip()]
-                if len(parts) >= 3:
-                    board_type = parts[1]
-                    device_series = parts[2].rstrip("LR").strip()
-                    if board_type and device_series and board_type != "Board Type":
-                        key = (board_type, device_series)
-                        machines[key] = machines.get(key, 0) + 1
-
-        if machines and all_devices:
-            (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
-            # Count total devices from "All available boards" section
-            device_count = len(all_devices)
-
+        result = subprocess.run(
+            ["tt-smi", "-s", "--snapshot_no_tty"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            # Fallback: we have arch and device count from pyluwen
             return {
                 "board_type": board_type,
-                "device_series": device_series,
-                "card_count": card_count,
+                "device_series": board_type.lower(),
+                "card_count": device_count,
                 "device_count": device_count,
             }
-        return None
+
+        data = json.loads(result.stdout)
+        devices = data.get("device_info", [])
+
+        # Count devices by board series (e.g. "tt-galaxy-wh L", "n150 S")
+        series_counts = Counter()
+        for d in devices:
+            bt = d.get("board_info", {}).get("board_type", "")
+            if bt:
+                series_counts[bt] += 1
+
+        if series_counts:
+            board_series_raw, card_count = series_counts.most_common(1)[0]
+            # Strip optional L/R suffix (e.g. "tt-galaxy-wh L" → "tt-galaxy-wh")
+            device_series = board_series_raw.rstrip(" LR").strip()
+        else:
+            device_series = board_type.lower()
+            card_count = device_count
+
+        return {
+            "board_type": board_type,
+            "device_series": device_series,
+            "card_count": card_count,
+            "device_count": device_count,
+        }
     except Exception:
         return None
 
