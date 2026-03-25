@@ -272,7 +272,7 @@ class LTXPipeline:
             use_ttnn: If True, use TTNN decoder; if False, use torch-only wrapper
         """
         if use_ttnn:
-            from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+            from ...models.vae.vae_ltx import LTXVideoDecoder
 
             self.vae_decoder = LTXVideoDecoder(
                 decoder_blocks=decoder_blocks,
@@ -285,7 +285,7 @@ class LTXPipeline:
             self.vae_decoder.load_torch_state_dict(state_dict)
             logger.info("Loaded TTNN VAE decoder")
         else:
-            from ...models.vae.ltx.vae_ltx import LTXVideoDecoderTorch
+            from ...models.vae.vae_ltx import LTXVideoDecoderTorch
 
             self.vae_decoder = LTXVideoDecoderTorch.from_config(
                 decoder_blocks, in_channels=self.in_channels, patch_size=patch_size, base_channels=base_channels
@@ -348,7 +348,7 @@ class LTXPipeline:
             return
         from safetensors.torch import load_file
 
-        from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+        from ...models.vae.vae_ltx import LTXVideoDecoder
 
         raw = load_file(self._vae_checkpoint_path)
         vae_state = {}
@@ -386,7 +386,7 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+        from ...models.vae.vae_ltx import LTXVideoDecoder
 
         if isinstance(self.vae_decoder, LTXVideoDecoder):
             return self.vae_decoder(latent_spatial)

@@ -27,8 +27,8 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module, ModuleList, Parameter
-from ....utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ...layers.module import Module, ModuleList, Parameter
+from ...utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
 
 
 class LTXCausalConv3d(Module):
