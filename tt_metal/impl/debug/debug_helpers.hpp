@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <set>
+#include <span>
 #include <vector>
 #include <cctype>
 #include <cstdio>
@@ -426,6 +427,40 @@ inline int debug_server_wait_timeout_sec(const llrt::RunTimeOptions& rtoptions) 
 
 inline int debug_server_finish_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
     return rtoptions.get_simulator_enabled() ? 30 : 2;
+}
+
+// Format ring buffer output - auto-detects SPSC (WH/BH) vs MPSC (Quasar) based on arch
+// For MPSC, thread_indices and core_type are used to prefix entries with processor name
+// Returns vector of lines like ["[0x00270028,...,", " 0x001f0020,...,", "]"]
+// or for MPSC: ["[[DM0]0x00270028,...,", " [DM0]0x001f0020,...,", "]"]
+inline std::vector<std::string> FormatRingBuffer(
+    std::span<const uint32_t> data,
+    std::span<const uint32_t> thread_indices = {},
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
+    if (data.empty()) {
+        return {};
+    }
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool is_mpsc = (hal.get_arch() == tt::ARCH::QUASAR);
+
+    std::vector<std::string> lines;
+    std::string line = "[";
+    for (size_t i = 0; i < data.size(); i++) {
+        if (is_mpsc && !thread_indices.empty()) {
+            auto name = hal.get_processor_class_name(core_type, thread_indices[i], false);
+            line += fmt::format("[{}]0x{:08x},", name, data[i]);
+        } else {
+            line += fmt::format("0x{:08x},", data[i]);
+        }
+        if ((i + 1) % 8 == 0 && i + 1 < data.size()) {
+            lines.push_back(line);
+            line = " ";  // Continuation lines start with space
+        }
+    }
+    line.pop_back();  // Remove trailing comma
+    line += "]";
+    lines.push_back(line);
+    return lines;
 }
 
 }  // namespace tt::tt_metal

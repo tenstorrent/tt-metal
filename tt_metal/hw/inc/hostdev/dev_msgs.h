@@ -29,6 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "hostdev/debug_ring_buffer_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -309,12 +310,8 @@ struct debug_pause_msg_t {
 // Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
 static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
-constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
-constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
 struct debug_ring_buf_msg_t {
-    int16_t current_ptr;
-    uint16_t wrapped;
-    uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
+    uint8_t data[debug_ring_buf_size];
 };
 
 struct debug_stack_usage_per_cpu_t {

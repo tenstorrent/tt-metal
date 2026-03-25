@@ -23,6 +23,12 @@ constexpr uint32_t DEBUG_SANITIZE_SENTINEL_OK_32 = 0xbadabada;
 constexpr uint16_t DEBUG_SANITIZE_SENTINEL_OK_16 = 0xbada;
 constexpr uint8_t DEBUG_SANITIZE_SENTINEL_OK_8 = 0xda;
 
+// MPSC ring buffer entry for host-side tracking (data + thread for display)
+struct MpscRingBufEntry {
+    uint32_t data;
+    uint32_t thread_idx;  // Needed for [DM0] prefix in output
+};
+
 class WatcherDeviceReader {
 public:
     WatcherDeviceReader(
@@ -51,6 +57,13 @@ private:
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
     std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;
+
+    // MPSC ring buffer reader state (Quasar only) - tracks last consumed position per core
+    // Mutable because this is reader state updated during const Dump operations
+    mutable std::map<CoreCoord, uint32_t> mpsc_last_consumed_pos_;
+    // MPSC ring buffer entries (Quasar only) - maintains full buffer contents per core for display
+    // Stores entries newest-first, limited to buffer capacity (32 entries)
+    mutable std::map<CoreCoord, std::vector<MpscRingBufEntry>> mpsc_ring_buf_entries_;
 };
 
 }  // namespace tt::tt_metal
