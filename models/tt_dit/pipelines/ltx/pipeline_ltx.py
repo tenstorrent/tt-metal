@@ -853,3 +853,91 @@ class LTXPipeline:
 
         logger.info(f"AV done. video: {video_lat.shape}, audio: ({B},{audio_N_real},{self.in_channels})")
         return video_lat, audio_lat[:, :audio_N_real, :]
+
+    def decode_audio_reference(
+        self, audio_latent: torch.Tensor, checkpoint_path: str, num_frames: int, fps: float = 24.0
+    ):
+        """Decode audio latent using reference audio VAE + vocoder (CPU torch).
+
+        Matches the reference ti2vid pipeline: unpatchify → audio_decoder → vocoder → trim.
+
+        Args:
+            audio_latent: (1, audio_N, 128) raw audio latent from call_av()
+            checkpoint_path: path to safetensors checkpoint
+            num_frames: video frame count (for duration trimming)
+            fps: video frame rate
+
+        Returns:
+            Audio object with .waveform and .sampling_rate, or None on failure
+        """
+        try:
+            import sys
+
+            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+            torch.cuda.synchronize = lambda *a, **kw: None
+            from ltx_core.model.audio_vae.audio_vae import decode_audio as vae_decode_audio
+            from ltx_core.types import Audio
+            from ltx_pipelines.utils.model_ledger import ModelLedger
+
+            ledger = ModelLedger(dtype=torch.bfloat16, device=torch.device("cpu"), checkpoint_path=checkpoint_path)
+            audio_decoder = ledger.audio_decoder()
+            vocoder = ledger.vocoder()
+
+            # Unpatchify: (1, N, 128) → (1, 8, N, 16)
+            audio_N = audio_latent.shape[1]
+            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).bfloat16()
+
+            with torch.no_grad():
+                audio_obj = vae_decode_audio(audio_spatial, audio_decoder, vocoder)
+
+            # Trim to video duration
+            video_duration = num_frames / fps
+            target_samples = int(video_duration * audio_obj.sampling_rate)
+            if audio_obj.waveform.shape[-1] > target_samples:
+                audio_obj = Audio(
+                    waveform=audio_obj.waveform[..., :target_samples], sampling_rate=audio_obj.sampling_rate
+                )
+
+            logger.info(
+                f"Audio decoded: {audio_obj.waveform.shape} "
+                f"({audio_obj.waveform.shape[-1]/audio_obj.sampling_rate:.2f}s @ {audio_obj.sampling_rate}Hz)"
+            )
+            return audio_obj
+        except Exception as e:
+            logger.warning(f"Audio decode failed: {e}")
+            return None
+
+    def export_video(self, video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
+        """Export decoded video (and optionally audio) to MP4.
+
+        Matches reference encode_video: correct [-1,1] → uint8 conversion.
+
+        Args:
+            video_pixels: (B, C, F, H, W) from decode_latents(), range [-1, 1]
+            output_path: output .mp4 path
+            fps: frame rate
+            audio: Audio object from decode_audio_reference(), or None
+        """
+        try:
+            import sys
+
+            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+            from ltx_pipelines.utils.media_io import encode_video
+
+            # Convert to reference format: (F, H, W, C) uint8
+            frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+            frames = frames.permute(1, 2, 3, 0)  # (F, H, W, C)
+
+            encode_video(video=frames, fps=fps, audio=audio, output_path=output_path, video_chunks_number=1)
+            logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")
+        except ImportError:
+            import imageio
+
+            frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+            frames = frames.permute(1, 2, 3, 0).numpy()
+            writer = imageio.get_writer(output_path, fps=fps)
+            for f in frames:
+                writer.append_data(f)
+            writer.close()
+            logger.info(f"Saved (no audio): {output_path} ({frames.shape[0]}f @ {fps}fps)")
