@@ -121,10 +121,14 @@ def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
 
-    heartbeat_samples = {
-        sample.device_description.device: sample.result
-        for sample in run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device))
-    }
+    heartbeat_results = run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device))
+    if heartbeat_results is None:
+        raise RuntimeError(
+            "Could not collect heartbeat samples — upstream device data collection failed. "
+            "Check prior failures from run_checks.py / metal_device_id_mapping.py / inspector data."
+        )
+
+    heartbeat_samples = {sample.device_description.device: sample.result for sample in heartbeat_results}
     time.sleep(2)
     return run_checks.run_per_device_check(lambda device: check_arc(device, heartbeat_samples[device]))
 
