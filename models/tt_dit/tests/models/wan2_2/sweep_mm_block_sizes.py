@@ -16,11 +16,11 @@ Architecture:
 Usage:
     # Orchestrator: sweep one shape on BH 4x8
     pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep \\
-        -k "bh_4x8-6144_5120_3456_11x10_mm" -x -s
+        -k "6144_5120_3456_11x10_mm-bh_4x8" -x -s
 
     # Worker: run directly (useful for debugging, no profiling)
     pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
-        -k "bh_4x8-6144_5120_3456_11x10_mm-m4" -x -s
+        -k "m4-6144_5120_3456_11x10_mm-bh_4x8" -x -s
 
     # Standalone script
     python models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py \\
@@ -502,7 +502,7 @@ def test_mm_sweep(device_config, shape):
         subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
         command = (
             f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
-            f"::test_mm_sweep_worker[{device_config}-{shape_id}-m{m_block}] -x"
+            f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
         )
 
         logger.info(f"  M_block={m_block}: profiling {len(kn_combos)} combos...")
@@ -676,7 +676,7 @@ def main():
             subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
             command = (
                 f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
-                f"::test_mm_sweep_worker[{device_config}-{shape_id}-m{m_block}] -x"
+                f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
             )
 
             print(f"  M_block={m_block}: profiling {len(kn_combos)} combos...", end=" ", flush=True)
