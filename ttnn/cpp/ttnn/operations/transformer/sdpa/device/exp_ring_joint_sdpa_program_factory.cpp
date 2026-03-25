@@ -275,8 +275,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
 
-    CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
-                                                          : mesh_device->compute_with_storage_grid_size();
+    const auto device_grid = mesh_device->compute_with_storage_grid_size();
+    CoreCoord grid_size = {device_grid.x - 1, device_grid.y};
     bool exp_approx_mode =
         args.program_config.has_value()
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)

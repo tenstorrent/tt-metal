@@ -18,6 +18,8 @@ def create_fabric_router_config(max_payload_size=8192):
     config = ttnn.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
@@ -331,18 +333,11 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
-    sdpa_grid_override=None,
-    ccl_offset_override=None,
-    use_column_major_ccl=False,
-    ccl_worker_cores=None,
     num_workers_per_link=5,
     num_buffers_per_channel=32,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (
-        sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
-    )
-    ccl_core_grid_offset = ccl_offset_override if ccl_offset_override is not None else (0, full_compute_grid.y - 1)
+    sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -361,7 +356,9 @@ def run_ring_joint_sdpa(
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles: one per link for per-chunk sync
-    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0, num_links=num_links) for _ in range(n_iters)]
+    ccl_semaphore_handles = [
+        create_global_semaphores(submesh, ccl_sub_device_crs, 0, num_links=num_links) for _ in range(n_iters)
+    ]
 
     kv_shard_dims = [None, None]
     kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
@@ -509,13 +506,6 @@ def run_ring_joint_sdpa(
                 mesh_device=submesh,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=ccl_core_grid_offset,
-                **({"use_column_major_ccl": True} if use_column_major_ccl else {}),
-                **(
-                    {"ccl_worker_cores": [ttnn.CoreCoord(x, y) for x, y in ccl_worker_cores]}
-                    if ccl_worker_cores is not None
-                    else {}
-                ),
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
@@ -608,7 +598,6 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
-    ccl_worker_cores=None,
     num_workers_per_link=5,
     num_buffers_per_channel=48,
 ):
@@ -650,7 +639,6 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
-        ccl_worker_cores=ccl_worker_cores,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
@@ -731,7 +719,12 @@ all_parallel_config_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -877,7 +870,12 @@ model_input_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -988,7 +986,12 @@ wh_t3k_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1066,7 +1069,12 @@ bh_qb_ge_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1107,7 +1115,6 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        ccl_worker_cores=[(11, 1), (11, 2)],
     )
 
 
@@ -1145,7 +1152,12 @@ wh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1223,7 +1235,12 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1264,7 +1281,6 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
     )
 
 
@@ -1284,16 +1300,30 @@ def test_ring_joint_sdpa_dit_bh_glx(
     indirect=["device_params"],
     ids=["ring"],
 )
-@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor",
+    [
+        ((4, 32), 2, 40, 75600, 1, 32, 0, 4),
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4),
+        ((1, 4), 2, 10, 8960, 1, 4, 0, 1),
+    ],
+    ids=["4x32", "4x8", "1x4"],
+    indirect=["mesh_device"],
+)
 def test_ring_joint_sdpa_dit_bh_glx_custom(
     mesh_device,
     num_links,
+    nh,
+    base_seq_len,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
     all_gather_topology,
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
-    b, nh, base_seq_len, joint_seq_len, d = (1, 40, 18944, 0, 128)
-    rp_axis, rp_factor, up_axis, up_factor = parallel_config_map["bh_glx"]["wan_14b_720p"]  # (0, 8, 1, 4)
+    b, joint_seq_len, d = 1, 0, 128
     q_chunk_size = 224
     k_chunk_size = 512
     n_iters = 5
@@ -1327,8 +1357,4 @@ def test_ring_joint_sdpa_dit_bh_glx_custom(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
-        sdpa_grid_override=(11, 10),
-        ccl_offset_override=(11, 0),
-        use_column_major_ccl=True,
-        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
     )
