@@ -10,7 +10,7 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 The master core issues NOC write transactions to push data from L1 into PCIe memory using `noc_async_write`. The test measures the time taken and calculates the bandwidth. Results are logged with detailed performance metrics.
 
-Test attributes such as transaction sizes and number of transactions, as well as latency measures like kernel and pre-determined scope cycles, are recorded by the profiler. DeviceTimestampedData is recorded for Python wrapper compatibility. The kernel also reads the device wall clock register directly before and after the transaction loop, logging the duration for independent bandwidth computation.
+Test attributes such as transaction sizes and number of transactions, as well as latency measures like kernel and pre-determined scope cycles, are recorded by the profiler. DeviceTimestampedData is recorded for Python wrapper compatibility. The host test queries the real device clock frequency via `device->get_clock_rate_mhz()` and passes it to the kernel, which logs it for GB/s conversion in the reporting pipeline.
 
 Test expectations are that sufficient test attribute data is captured by the profiler for higher-level bandwidth/regression checks.
 

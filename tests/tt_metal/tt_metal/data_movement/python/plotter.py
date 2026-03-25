@@ -365,7 +365,7 @@ class Plotter:
                 riscv_runs.sort(key=lambda r: r["transaction_id_count"])
 
                 x_vals = [run["transaction_id_count"] for run in riscv_runs]
-                y_vals = [run["bandwidth"] * self.noc_freq_ghz for run in riscv_runs]
+                y_vals = [run["bandwidth"] for run in riscv_runs]
 
                 label = f"{risc_to_kernel_map[riscv]} (Transaction Size={transaction_size}B)"
 
@@ -379,7 +379,7 @@ class Plotter:
         ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0, fontsize=8)
 
         ax.set_xlabel("Transaction ID Count")
-        ax.set_ylabel("Bandwidth (GB/s)")
+        ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Transaction ID Count vs Bandwidth")
         ax.grid()
 
@@ -391,7 +391,7 @@ class Plotter:
 
         title = "Number of Transactions vs Bandwidth"
         xlabel = "Number of Transactions"
-        ylabel = "Bandwidth (GB/s)"
+        ylabel = "Bandwidth (bytes/cycle)"
 
         self._plot_series(
             ax=ax,
@@ -405,7 +405,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            y_scale=self.noc_freq_ghz,
         )
 
     # Direct Write: Address pattern
@@ -416,7 +415,7 @@ class Plotter:
 
         title = "Number of Transactions vs Bandwidth"
         xlabel = "Number of Transactions"
-        ylabel = "Bandwidth (GB/s)"
+        ylabel = "Bandwidth (bytes/cycle)"
 
         self._plot_series(
             ax=ax,
@@ -430,7 +429,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            y_scale=self.noc_freq_ghz,
         )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
@@ -441,7 +439,7 @@ class Plotter:
 
         title = "Grid Dimensions vs Bandwidth"
         xlabel = "Grid Dimensions"
-        ylabel = "Bandwidth (GB/s)"
+        ylabel = "Bandwidth (bytes/cycle)"
 
         filtered_data = {
             r: [run for run in runs if run.get("noc_index") == noc_index] for r, runs in data.items() if r == riscv
@@ -460,7 +458,6 @@ class Plotter:
             title=title,
             xlabel=xlabel,
             ylabel=ylabel,
-            y_scale=self.noc_freq_ghz,
         )
 
     def plot_bandwidth_virtual_channels(self, ax, data, noc_index):
@@ -470,7 +467,7 @@ class Plotter:
 
         title = f"Transaction Size vs Bandwidth (NOC {noc_index})"
         xlabel = "Transaction Size (bytes)"
-        ylabel = "Bandwidth (GB/s)"
+        ylabel = "Bandwidth (bytes/cycle)"
 
         # Filter data for the specific NOC index
         filtered_data = {}
@@ -507,7 +504,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            y_scale=self.noc_freq_ghz,
         )
 
     # NOC API Latency: Transaction Size vs Cycles per Transaction

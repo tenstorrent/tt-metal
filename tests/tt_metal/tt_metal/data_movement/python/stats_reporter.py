@@ -145,13 +145,12 @@ class StatsReporter:
                 # Add performance metrics at the end
                 use_gbps = bandwidth_unit == "gbps"
                 if bandwidth_mode == "combined":
-                    bw_label = "Combined Bandwidth (GB/s)" if use_gbps else "Combined Bandwidth (bytes/cycle)"
                     header.extend(
                         [
                             "Number of Cores",
                             "Total Bytes",
                             "Latency (cycles)",
-                            bw_label,
+                            "Combined Bandwidth (bytes/cycle)",
                         ]
                     )
                 else:
@@ -227,14 +226,12 @@ class StatsReporter:
 
                         # Add performance metrics at the end
                         if bandwidth_mode == "combined":
-                            bw_val = run_stats.get("combined_bandwidth", run_stats["bandwidth"])
-                            # TODO: convert combined_bandwidth to GB/s when use_gbps
                             row.extend(
                                 [
                                     run_stats.get("num_cores", 1),
                                     run_stats.get("total_bytes", 0),
                                     run_stats.get("wall_clock_time", run_stats["duration_cycles"]),
-                                    bw_val,
+                                    run_stats.get("combined_bandwidth", run_stats["bandwidth"]),
                                 ]
                             )
                         else:
