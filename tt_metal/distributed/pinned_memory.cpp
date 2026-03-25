@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <cstdint>
+#include <utility>
 #include <unistd.h>
 
 #include <tt-metalium/device.hpp>
@@ -39,29 +40,26 @@ PinnedMemoryImpl::~PinnedMemoryImpl() {
 }
 
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
-    buffer_size_(other.buffer_size_),
-    map_to_noc_(other.map_to_noc_),
-    host_offset_(other.host_offset_),
+    buffer_size_(std::exchange(other.buffer_size_, 0)),
+    map_to_noc_(std::exchange(other.map_to_noc_, false)),
+    use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
+    host_offset_(std::exchange(other.host_offset_, 0)),
     device_buffers_(std::move(other.device_buffers_)),
-    device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
-    other.buffer_size_ = 0;
-    other.map_to_noc_ = false;
-    other.host_offset_ = 0;
-}
+    device_to_mmio_map_(std::move(other.device_to_mmio_map_)),
+    barrier_events_(std::move(other.barrier_events_)) {}
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
     if (this != &other) {
+        drain_barrier_events();
         device_buffers_.clear();
 
-        buffer_size_ = other.buffer_size_;
-        map_to_noc_ = other.map_to_noc_;
-        host_offset_ = other.host_offset_;
+        buffer_size_ = std::exchange(other.buffer_size_, 0);
+        map_to_noc_ = std::exchange(other.map_to_noc_, false);
+        use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
+        host_offset_ = std::exchange(other.host_offset_, 0);
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
-
-        other.buffer_size_ = 0;
-        other.map_to_noc_ = false;
-        other.host_offset_ = 0;
+        barrier_events_ = std::move(other.barrier_events_);
     }
     return *this;
 }
