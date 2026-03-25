@@ -114,8 +114,8 @@ def get_machine_info():
                 board_type = "Wormhole"
             elif chip.as_bh() is not None:
                 board_type = "Blackhole"
-            else:
-                board_type = "Unknown"
+            # Chip arch not recognised — leave board_type as None so
+            # downstream callers treat machine info as unavailable.
             pyluwen_device_count = len(pci_interfaces)
     except Exception:
         # pyluwen is an optional dependency; on any failure we fall back to tt-smi below.
@@ -135,7 +135,7 @@ def get_machine_info():
             data = json.loads(result.stdout)
             devices = data.get("device_info", [])
 
-            if (board_type is None or board_type == "Unknown") and devices:
+            if board_type is None and devices:
                 board_type = _infer_board_type_from_arch(devices[0].get("arch", ""))
 
             device_count = pyluwen_device_count or len(devices)
@@ -149,18 +149,17 @@ def get_machine_info():
             if series_counts:
                 board_series_raw, card_count = series_counts.most_common(1)[0]
                 device_series = board_series_raw.rstrip(" LR").strip()
-            else:
-                device_series = board_type.lower() if board_type else "unknown"
-                card_count = None
 
-            return {
-                "board_type": board_type,
-                "device_series": device_series,
-                "card_count": card_count,
-                "device_count": device_count,
-            }
+                return {
+                    "board_type": board_type,
+                    "device_series": device_series,
+                    "card_count": card_count,
+                    "device_count": device_count,
+                }
+            # series_counts is empty — card_count cannot be determined.
+            # Fall through rather than returning a partial dict.
     except Exception:
-        pass
+        logger.debug("tt-smi JSON snapshot failed; falling back to pyluwen-only.", exc_info=True)
 
     # --- Step 3: pyluwen-only fallback (tt-smi unavailable) ------------------
     # If tt-smi is unavailable and we cannot reliably determine card_count,
