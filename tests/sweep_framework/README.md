@@ -6,7 +6,7 @@ The sweep framework tests TTNN operations across large parameter spaces. It gene
 
 ```bash
 # 1. Install dependencies (if not already in your venv)
-uv pip install -r tests/sweep_framework/requirements-sweeps.txt
+uv pip install -r requirements-dev.txt
 
 # 2. Generate test vectors for one module
 python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
