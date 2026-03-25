@@ -52,7 +52,7 @@
   cmd: pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model: sentence_bert
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 5
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
