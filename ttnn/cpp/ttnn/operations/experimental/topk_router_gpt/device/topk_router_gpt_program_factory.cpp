@@ -189,6 +189,9 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     for (const auto& tensor : tensors) {
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
     }
+    // Output tensor accessors (indices_rm and weights_rm)
+    tt::tt_metal::TensorAccessorArgs(*std::get<0>(tensor_return_value).buffer()).append_to(compile_args);
+    tt::tt_metal::TensorAccessorArgs(*std::get<1>(tensor_return_value).buffer()).append_to(compile_args);
 
     const uint32_t tile_size_bf16 = tt::tile_size(tt::DataFormat::Float16_b);
 

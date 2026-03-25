@@ -15,6 +15,11 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_named_compile_time_arg_val("tile_size_bf16");
     constexpr uint32_t n_tiles_total = get_named_compile_time_arg_val("n_tiles");
 
+    // Tensor accessors (compile-time args from TensorAccessorArgs)
+    constexpr auto input_accessor_args = TensorAccessorArgs<0>();
+    constexpr auto weight_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto bias_accessor_args = TensorAccessorArgs<weight_accessor_args.next_compile_time_args_offset()>();
+
     // Run-time arguments (shared layout with dm1 and compute)
     uint32_t argidx = 0;
     const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
@@ -43,11 +48,8 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_bias = tt::CBIndex::c_4;
 
-    const InterleavedAddrGenFast</*DRAM=*/true> input_addrgen = {
-        .bank_base_address = input_addr, .page_size = tile_size, .data_format = get_dataformat(cb_input)};
-
-    const InterleavedAddrGenFast</*DRAM=*/true> weight_addrgen = {
-        .bank_base_address = weight_addr, .page_size = tile_size, .data_format = get_dataformat(cb_weight)};
+    const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr, tile_size);
+    const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr, tile_size);
 
     // Push tiles in blocks so compute can start matmul before all tiles arrive.
     constexpr uint32_t BLOCK_SIZE = 2;
@@ -78,8 +80,7 @@ void kernel_main() {
 
     // Read bias (worker only, 1 tile)
     if (is_worker) {
-        const InterleavedAddrGenFast</*DRAM=*/true> bias_addrgen = {
-            .bank_base_address = bias_addr, .page_size = tile_size, .data_format = get_dataformat(cb_bias)};
+        const auto bias_addrgen = TensorAccessor(bias_accessor_args, bias_addr, tile_size);
 
         cb_reserve_back(cb_bias, 1);
         uint32_t bias_write_ptr = get_write_ptr(cb_bias);

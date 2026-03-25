@@ -67,6 +67,14 @@ void kernel_main() {
     constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_phys_y = get_named_compile_time_arg_val("collector_physical_y");
 
+    // Tensor accessors (compile-time args from TensorAccessorArgs)
+    constexpr auto input_accessor_args = TensorAccessorArgs<0>();
+    constexpr auto weight_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto bias_accessor_args = TensorAccessorArgs<weight_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto indices_rm_accessor_args = TensorAccessorArgs<bias_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto weights_rm_accessor_args =
+        TensorAccessorArgs<indices_rm_accessor_args.next_compile_time_args_offset()>();
+
     // Run-time arguments (shared layout with dm0 and compute)
     uint32_t argidx = 0;
     const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
@@ -300,11 +308,11 @@ void kernel_main() {
     // Complete the CB reserve/push lifecycle
     cb_push_back(cb_dispatch, 1);
 
-    const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
-    const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
+    const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr, aligned_page_size);
+    const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr, aligned_page_size);
     for (uint32_t p = 0; p < 32; p++) {
-        noc_async_write(idx_base + p * data_size, get_noc_addr(p, idx_ag), data_size);
-        noc_async_write(wgt_base + p * data_size, get_noc_addr(p, wgt_ag), data_size);
+        noc_async_write_page(p, idx_ag, idx_base + p * data_size);
+        noc_async_write_page(p, wgt_ag, wgt_base + p * data_size);
     }
     noc_async_write_barrier();
 

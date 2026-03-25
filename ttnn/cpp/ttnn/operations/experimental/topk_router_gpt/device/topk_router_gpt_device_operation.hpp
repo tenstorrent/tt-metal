@@ -23,17 +23,15 @@ struct TopkRouterGptDeviceOperation {
 
     using program_factory_t = std::variant<program::TopkRouterGptProgramFactory>;
 
-    static void validate_on_program_cache_miss(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
