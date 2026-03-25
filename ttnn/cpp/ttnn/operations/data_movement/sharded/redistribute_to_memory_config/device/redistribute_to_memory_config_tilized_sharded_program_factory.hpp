@@ -5,11 +5,11 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "to_sharded_device_operation_types.hpp"
+#include "redistribute_to_memory_config_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
-struct ToShardedTilizedProgramFactory {
+struct RedistributeToMemoryConfigTilizedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};

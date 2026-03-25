@@ -2,25 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "to_sharded_device_operation.hpp"
+#include "redistribute_to_memory_config_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
-#include "to_sharded_device_operation_types.hpp"
+#include "redistribute_to_memory_config_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
 
-ToShardedDeviceOperation::program_factory_t ToShardedDeviceOperation::select_program_factory(
+RedistributeToMemoryConfigDeviceOperation::program_factory_t
+RedistributeToMemoryConfigDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     if (input_tensor.layout() == Layout::TILE) {
-        return ToShardedTilizedProgramFactory{};
+        return RedistributeToMemoryConfigTilizedProgramFactory{};
     }
-    return ToShardedRowMajorProgramFactory{};
+    return RedistributeToMemoryConfigRowMajorProgramFactory{};
 }
 
-void ToShardedDeviceOperation::validate_on_program_cache_miss(
+void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_mem_config = operation_attributes.output_mem_config;
@@ -60,7 +61,8 @@ void ToShardedDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ToShardedDeviceOperation::spec_return_value_t ToShardedDeviceOperation::compute_output_specs(
+RedistributeToMemoryConfigDeviceOperation::spec_return_value_t
+RedistributeToMemoryConfigDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value().tensor_spec();
@@ -83,7 +85,8 @@ ToShardedDeviceOperation::spec_return_value_t ToShardedDeviceOperation::compute_
             output_padded_shape));
 }
 
-ToShardedDeviceOperation::tensor_return_value_t ToShardedDeviceOperation::create_output_tensors(
+RedistributeToMemoryConfigDeviceOperation::tensor_return_value_t
+RedistributeToMemoryConfigDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value();
@@ -94,10 +97,10 @@ ToShardedDeviceOperation::tensor_return_value_t ToShardedDeviceOperation::create
     return create_device_tensor(spec, input_tensor.device());
 }
 
-ttsl::hash::hash_t ToShardedDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RedistributeToMemoryConfigDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    return tt::tt_metal::operation::hash_operation<ToShardedDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<RedistributeToMemoryConfigDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         input_tensor.dtype(),
@@ -106,12 +109,12 @@ ttsl::hash::hash_t ToShardedDeviceOperation::compute_program_hash(
         input_tensor.padded_shape());
 }
 
-Tensor to_sharded(
+Tensor redistribute_to_memory_config(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
-    return ttnn::device_operation::launch<ToShardedDeviceOperation>(
+    return ttnn::device_operation::launch<RedistributeToMemoryConfigDeviceOperation>(
         operation_attributes_t{output_mem_config, output_dtype},  // keep_l1_aligned},
         tensor_args_t{input_tensor, preallocated_output});
 }

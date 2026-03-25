@@ -9,6 +9,6 @@
 namespace ttnn::operations::data_movement {
 
 namespace nb = nanobind;
-void bind_to_sharded(nb::module_& mod);
+void bind_redistribute_to_memory_config(nb::module_& mod);
 
 }  // namespace ttnn::operations::data_movement

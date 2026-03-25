@@ -81,7 +81,7 @@ def check_mem_config(tensor, expected_memory_config, is_nd_sharded):
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
-def test_to_sharded_rm_interleaved_to_nd_sharded(
+def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
     torch.manual_seed(0)
@@ -94,7 +94,7 @@ def test_to_sharded_rm_interleaved_to_nd_sharded(
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
 
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
@@ -136,7 +136,9 @@ def test_to_sharded_rm_interleaved_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_rm_interleaved_to_nd_sharded_dram(device, tensor_shape, shard_shape, grid, shard_orientation):
+def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded_dram(
+    device, tensor_shape, shard_shape, grid, shard_orientation
+):
     torch.manual_seed(0)
 
     num_dram_banks = device.dram_grid_size().x
@@ -152,7 +154,7 @@ def test_to_sharded_rm_interleaved_to_nd_sharded_dram(device, tensor_shape, shar
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
 
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
@@ -183,12 +185,12 @@ def test_to_sharded_rm_interleaved_to_nd_sharded_dram(device, tensor_shape, shar
         ),
     ],
 )
-def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_row_major_interleaved_larger_padded_width(
+def test_redistribute_to_memory_config_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_row_major_interleaved_larger_padded_width(
     device, hw, kernel, stride, pad, shard_shape, grid
 ):
     """
     Runs avg_pool2d to produce a row-major interleaved tensor whose padded_shape width
-    is larger than its logical_shape width, then converts to ND sharded via to_sharded.
+    is larger than its logical_shape width, then converts to ND sharded via redistribute_to_memory_config.
     Validates that the sharded output data matches the avg_pool2d result.
     """
     h, w = hw
@@ -240,7 +242,7 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
-    y_sharded = ttnn.to_sharded(y, sharded_memory_config)
+    y_sharded = ttnn.redistribute_to_memory_config(y, sharded_memory_config)
 
     check_mem_config(y_sharded, sharded_memory_config, is_nd_sharded=True)
 
@@ -325,7 +327,7 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_legacy_sharded_to_nd_sharded(
+def test_redistribute_to_memory_config_legacy_sharded_to_nd_sharded(
     device,
     tensor_shape,
     input_shard_layout,
@@ -351,7 +353,7 @@ def test_to_sharded_legacy_sharded_to_nd_sharded(
     nd_shard_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
     output_sharded_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_sharded_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_sharded_mem_config)
 
     check_mem_config(output_tensor, output_sharded_mem_config, is_nd_sharded=True)
 
@@ -459,7 +461,7 @@ def test_to_sharded_legacy_sharded_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_nd_sharded_to_nd_sharded(
+def test_redistribute_to_memory_config_nd_sharded_to_nd_sharded(
     device,
     tensor_shape,
     input_nd_shard_shape,
@@ -484,7 +486,7 @@ def test_to_sharded_nd_sharded_to_nd_sharded(
     output_nd_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, output_nd_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=True)
 
@@ -546,7 +548,7 @@ def test_to_sharded_nd_sharded_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_rm_interleaved_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_rm_interleaved_to_legacy_2d_sharded(
     device, tensor_shape, output_shard_layout, output_shard_shape_2d, output_grid, shard_orientation
 ):
     torch.manual_seed(0)
@@ -558,7 +560,7 @@ def test_to_sharded_rm_interleaved_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 
@@ -650,7 +652,7 @@ def test_to_sharded_rm_interleaved_to_legacy_2d_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_legacy_2d_sharded_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_legacy_2d_sharded_to_legacy_2d_sharded(
     device,
     tensor_shape,
     input_shard_layout,
@@ -677,7 +679,7 @@ def test_to_sharded_legacy_2d_sharded_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 
@@ -769,7 +771,7 @@ def test_to_sharded_legacy_2d_sharded_to_legacy_2d_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_nd_sharded_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_nd_sharded_to_legacy_2d_sharded(
     device,
     tensor_shape,
     input_nd_shard_shape,
@@ -795,7 +797,7 @@ def test_to_sharded_nd_sharded_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 
@@ -849,7 +851,7 @@ def test_to_sharded_nd_sharded_to_legacy_2d_sharded(
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
-def test_to_sharded_tilized_interleaved_to_nd_sharded(
+def test_redistribute_to_memory_config_tilized_interleaved_to_nd_sharded(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
     torch.manual_seed(0)
@@ -862,7 +864,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded(
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
 
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
@@ -916,7 +918,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_interleaved_to_nd_sharded_dtype_conversion(
+def test_redistribute_to_memory_config_tilized_interleaved_to_nd_sharded_dtype_conversion(
     device, tensor_shape, shard_shape, grid, input_dtype, output_dtype, pcc, shard_orientation
 ):
     torch.manual_seed(0)
@@ -929,7 +931,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dtype_conversion(
     input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config, output_dtype=output_dtype)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config, output_dtype=output_dtype)
 
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
@@ -977,7 +979,9 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dtype_conversion(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape, shard_shape, grid, shard_orientation):
+def test_redistribute_to_memory_config_tilized_interleaved_to_nd_sharded_dram(
+    device, tensor_shape, shard_shape, grid, shard_orientation
+):
     torch.manual_seed(0)
 
     num_dram_banks = device.dram_grid_size().x
@@ -993,7 +997,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape,
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
 
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
@@ -1045,7 +1049,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape,
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
+def test_redistribute_to_memory_config_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
     device, tensor_shape, shard_shape, grid, input_dtype, output_dtype, pcc, shard_orientation
 ):
     torch.manual_seed(0)
@@ -1063,7 +1067,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
     input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    output_tensor = ttnn.to_sharded(input_tensor, sharded_memory_config, output_dtype=output_dtype)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config, output_dtype=output_dtype)
 
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
@@ -1165,7 +1169,7 @@ def test_to_sharded_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_legacy_sharded_to_nd_sharded(
+def test_redistribute_to_memory_config_tilized_legacy_sharded_to_nd_sharded(
     device,
     tensor_shape,
     input_shard_layout,
@@ -1191,7 +1195,7 @@ def test_to_sharded_tilized_legacy_sharded_to_nd_sharded(
     nd_shard_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
     output_sharded_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_sharded_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_sharded_mem_config)
 
     check_mem_config(output_tensor, output_sharded_mem_config, is_nd_sharded=True)
 
@@ -1292,7 +1296,7 @@ def test_to_sharded_tilized_legacy_sharded_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_nd_sharded_to_nd_sharded(
+def test_redistribute_to_memory_config_tilized_nd_sharded_to_nd_sharded(
     device,
     tensor_shape,
     input_nd_shard_shape,
@@ -1317,7 +1321,7 @@ def test_to_sharded_tilized_nd_sharded_to_nd_sharded(
     output_nd_spec = ttnn.NdShardSpec(output_nd_shard_shape, output_grid, orientation=shard_orientation)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, output_nd_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=True)
 
@@ -1400,7 +1404,7 @@ def test_to_sharded_tilized_nd_sharded_to_nd_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_interleaved_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_tilized_interleaved_to_legacy_2d_sharded(
     device, tensor_shape, output_shard_layout, output_shard_shape_2d, output_grid, shard_orientation
 ):
     torch.manual_seed(0)
@@ -1412,7 +1416,7 @@ def test_to_sharded_tilized_interleaved_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 
@@ -1524,7 +1528,7 @@ def test_to_sharded_tilized_interleaved_to_legacy_2d_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_legacy_2d_sharded_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_tilized_legacy_2d_sharded_to_legacy_2d_sharded(
     device,
     tensor_shape,
     input_shard_layout,
@@ -1551,7 +1555,7 @@ def test_to_sharded_tilized_legacy_2d_sharded_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 
@@ -1652,7 +1656,7 @@ def test_to_sharded_tilized_legacy_2d_sharded_to_legacy_2d_sharded(
     "shard_orientation",
     [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
-def test_to_sharded_tilized_nd_sharded_to_legacy_2d_sharded(
+def test_redistribute_to_memory_config_tilized_nd_sharded_to_legacy_2d_sharded(
     device,
     tensor_shape,
     input_nd_shard_shape,
@@ -1678,7 +1682,7 @@ def test_to_sharded_tilized_nd_sharded_to_legacy_2d_sharded(
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
 
-    output_tensor = ttnn.to_sharded(input_tensor, output_mem_config)
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
 
     check_mem_config(output_tensor, output_mem_config, is_nd_sharded=False)
 

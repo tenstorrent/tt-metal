@@ -9,19 +9,20 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "to_sharded_device_operation_types.hpp"
-#include "to_sharded_row_major_sharded_program_factory.hpp"
-#include "to_sharded_tilized_sharded_program_factory.hpp"
+#include "redistribute_to_memory_config_device_operation_types.hpp"
+#include "redistribute_to_memory_config_row_major_sharded_program_factory.hpp"
+#include "redistribute_to_memory_config_tilized_sharded_program_factory.hpp"
 
 namespace ttnn::prim {
 
-struct ToShardedDeviceOperation {
+struct RedistributeToMemoryConfigDeviceOperation {
     using operation_attributes_t = operation_attributes_t;
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
 
-    using program_factory_t = std::variant<ToShardedRowMajorProgramFactory, ToShardedTilizedProgramFactory>;
+    using program_factory_t =
+        std::variant<RedistributeToMemoryConfigRowMajorProgramFactory, RedistributeToMemoryConfigTilizedProgramFactory>;
     static program_factory_t select_program_factory(
         const ::ttnn::prim::operation_attributes_t&, const ::ttnn::prim::tensor_args_t&);
 
@@ -38,7 +39,7 @@ struct ToShardedDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-tensor_return_value_t to_sharded(
+tensor_return_value_t redistribute_to_memory_config(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
