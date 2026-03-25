@@ -65,7 +65,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto out_tile_format = tt::DataFormat::Float16_b;
     auto out_tile_sz = tt::tile_size(out_tile_format);
 
-    bool mirror = (attrs.output_mode == OutputMode::Full);
+    bool mirror = (attrs.output_mode == ttml::metal::OutputMode::Full);
 
     // Joint optimization of K_block_tiles and M_block with N_block = M_block streaming.
     // Mirror mode adds c_4 (mb tiles) + c_7 (mb tiles) = +2*mb*out_sz to linear term.

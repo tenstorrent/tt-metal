@@ -86,7 +86,6 @@ std::vector<float> extract_output_tile(
 }  // namespace
 
 TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
-    using namespace ttml::metal::ops::k_split_gram_matmul::device;
     auto input = make_test_tensor(128, 4096);
     auto output = ttml::metal::gram_matmul(input);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
@@ -112,7 +111,6 @@ TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
 }
 
 TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
-    using namespace ttml::metal::ops::k_split_gram_matmul::device;
     auto input = make_test_tensor(128, 11008);
     auto output = ttml::metal::gram_matmul(input);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
@@ -130,9 +128,8 @@ TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
 }
 
 TEST_F(KSplitGramMatmulTest, VerificationMirror) {
-    using namespace ttml::metal::ops::k_split_gram_matmul::device;
     auto input = make_test_tensor(20);
-    auto output = ttml::metal::gram_matmul(input, OutputMode::Full);
+    auto output = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::Full);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
@@ -158,7 +155,6 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
-    using namespace ttml::metal::ops::k_split_gram_matmul::device;
     struct Shape {
         uint32_t M_tiles, K_dim;
     };
