@@ -35,8 +35,6 @@ void kernel_main() {
     experimental::CircularBuffer cb16(cb_out0);
     experimental::CircularBuffer cb17(cb_out1);
 
-    // TODO: Top32 — configure unpack (llk_unpack_A_top32_rm) and SFPU (ckernel_sfpu_deepseek_top32_rm) here.
-
     ckernel::compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
 
     cb0.wait_front(num_input_tiles);
@@ -80,6 +78,9 @@ void kernel_main() {
     uint32_t increasing = 1;
     MATH((llk_math_deepseek_top32_rm_init<false>()));
     MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing)));
+    MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, /*across_tiles*/ false)));
+    MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+        value_offset_tiles, decreasing, /*skip_second*/ true)));
 
     // loop for number of remaining values:
     for (uint32_t i = 64; i < row_elements; i += 64) {
@@ -105,12 +106,15 @@ void kernel_main() {
         MATH((llk_math_top32_rm(cb_in1, index_offset_tiles + 1, num_faces)));
 
         // step 4
-        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, increasing)));
+        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing)));
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, /*across_tiles*/ false)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+            value_offset_tiles + 1, increasing, /*skip_second*/ true)));
 
         // step 5
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles)));
-        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(
-            value_offset_tiles, decreasing)));  // replace with rebuild
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, /*across_tiles*/ true)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+            value_offset_tiles, decreasing, /*skip_second*/ true)));
     }
 
     //     tensix_sync();
