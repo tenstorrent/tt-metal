@@ -37,7 +37,7 @@ jobs:
 
       - name: Run simple Cursor prompt
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
