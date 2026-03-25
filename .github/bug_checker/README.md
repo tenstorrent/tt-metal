@@ -33,7 +33,7 @@ python .github/bug_checker/run_bug_checker.py --branch origin/release-1.0
 python .github/bug_checker/run_bug_checker.py --pr 39432 --verbose
 ```
 
-**Requirements**: `pip install anthropic pyyaml loguru`
+**Requirements**: `pip install -r .github/bug_checker/requirements-bug-checker.txt`
 
 **Environment variables**:
 - `BUG_CHECKER_API_KEY` or `ANTHROPIC_API_KEY` — Claude API key
