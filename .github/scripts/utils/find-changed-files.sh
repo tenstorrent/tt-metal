@@ -69,6 +69,15 @@ while IFS= read -r FILE; do
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
+        tt_metal/python_env/requirements*.txt|tt_metal/python_env/create_venv.sh)
+            # Runtime dependency changes can alter behavior of tests/tooling
+            # without touching C++/Python source directly.
+            ANY_CODE_CHANGED=true
+            ;;
+        tools/triage/requirements.txt)
+            TOOLS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
             if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
