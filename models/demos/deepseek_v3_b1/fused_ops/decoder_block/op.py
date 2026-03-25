@@ -115,12 +115,12 @@ class DecoderBlock:
         return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
 
     @staticmethod
-    def get_num_semaphores():
-        return AttentionBlock.get_num_semaphores() + MoeSem.NUM_SEMAPHORES
+    def get_num_semaphores(num_links=1):
+        return AttentionBlock.get_num_semaphores(num_links=num_links) + MoeSem.NUM_SEMAPHORES
 
     @staticmethod
-    def create_semaphores(mesh_device):
-        return AttentionBlock.create_semaphores(mesh_device) + MoeOp.create_semaphores(mesh_device)
+    def create_semaphores(mesh_device, num_links=1):
+        return AttentionBlock.create_semaphores(mesh_device, num_links=num_links) + MoeOp.create_semaphores(mesh_device)
 
     @staticmethod
     def op(
@@ -154,8 +154,6 @@ class DecoderBlock:
         sdpa_per_device_chunk_size,
         attention_block_output_tensor,
         attention_block_semaphores=None,
-        bcast_cluster_axis=0,
-        bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
         num_links=1,
@@ -190,7 +188,9 @@ class DecoderBlock:
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
         upstream_socket=None,
-        downstream_socket=None,
+        downstream_sockets=None,
+        fabric_config=None,
+        broadcast_topology_override=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
         is_torus=True,
@@ -231,8 +231,6 @@ class DecoderBlock:
             attention_block_output_tensor,
             # Shared semaphores, and some default values
             attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             sdpa_cluster_axis,
             num_links,
@@ -242,6 +240,8 @@ class DecoderBlock:
             noc_mode,
             mla_cb_id_context,
             upstream_socket=upstream_socket,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         moe = MoeOp(
@@ -274,7 +274,7 @@ class DecoderBlock:
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
             cb_id_context=moe_cb_id_context,
-            downstream_socket=downstream_socket,
+            downstream_sockets=downstream_sockets,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
             bcast_sender_coord=sender_coord,
@@ -432,22 +432,19 @@ class DecoderBlock:
                 semaphores=ctx["semaphore_list"] + moe.device_sem_descs,
             )
             broadcast_worker_core = ctx["broadcast_worker_core"]
-            dst_nodes = ctx["dst_nodes"]
-            if not skip_ccl and len(dst_nodes) > 0:
-                for idx, kernel in enumerate(program.kernels):
-                    if kernel.core_ranges.contains(broadcast_worker_core) and (
-                        isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
-                        or (
-                            isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                            and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
-                        )
-                    ):
-                        writer_rt_args_ref = kernel.runtime_args[broadcast_worker_core.x][broadcast_worker_core.y]
-                        fabric_args = ttnn.setup_routing_plane_connection(
-                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, broadcast_worker_core
-                        )
-                        extend_fabric_args(writer_rt_args_ref, fabric_args)
-                        break
+            if not skip_ccl:
+                bcast_cfg = ctx["bcast_config"]
+                bcast_writer_group = kernel_result.get_group_by_arg("is_input_core", 1)
+                if bcast_writer_group is None:
+                    raise RuntimeError("Missing is_input_core kernel group for broadcast fabric append")
+                writer_kernel_idx = bcast_writer_group.ncrisc_kernel_index
+                writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
+                    broadcast_worker_core.y
+                ]
+                bcast_writer_args = bcast_cfg.get_ncrisc_per_core_rt_args(mesh_coord, program, broadcast_worker_core)
+                program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
+                    broadcast_worker_core.y
+                ] = list(bcast_writer_args) + list(writer_rt_args_ref)
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================

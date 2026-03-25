@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
+from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
@@ -19,7 +20,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, merge_per_core_runtime_args
 
 
 class PreSDPA:
@@ -79,6 +80,7 @@ class PreSDPA:
             matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (torch.Tensor) [1, N]
             matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M]
+                Must be in [ALL_NOPE | ALL_ROPE] column layout (use deinterleave_q_b_proj on HF weights).
             matmul3_weights_tensor: Matmul3 weights (torch.Tensor) [num_qnope_heads, qnope_head_dim, qnope_out_dim]
                                     e.g., [64, 128, 512] for batched matmul on Qnope heads
             sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
@@ -158,12 +160,14 @@ class PreSDPA:
         return full_q, new_kv, output
 
     @staticmethod
-    def get_num_semaphores(skip_ccl=False):
-        return 10 if skip_ccl else 13
+    def get_num_semaphores(skip_ccl=False, num_links=1):
+        if skip_ccl:
+            return 10
+        return 10 + DeepseekMinimalBroadcast.get_num_semaphores(num_links)
 
     @staticmethod
-    def create_semaphores(mesh_device, skip_ccl=False):
-        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl)
+    def create_semaphores(mesh_device, skip_ccl=False, num_links=1):
+        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl, num_links=num_links)
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         available_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
@@ -196,13 +200,14 @@ class PreSDPA:
         sdpa_out_interm_buffer,
         sender_coord,
         semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=1,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -221,9 +226,7 @@ class PreSDPA:
             position_ids_tensor: Position IDs tensor (sharded tensor for RoPE)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
-            semaphores: List of global semaphores [out_ready, barrier, secondary_sync] for CCL
-            cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
-            secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
+            semaphores: List of global semaphores. In CCL mode, first num_links are broadcast semaphores.
             num_links: Number of fabric links for CCL
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
@@ -239,12 +242,9 @@ class PreSDPA:
                 trisc_named_compile_time_args, brisc_common_runtime_args,
                 ncrisc_common_runtime_args, trisc_common_runtime_args,
                 unified_compile_time_core_descriptors, per_core_compile_time_descriptors,
-                per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
-                cbs_list, worker_core, fabric_node_id, dst_nodes
+                per_core_ncrisc_tail_args, per_core_brisc_args, per_core_trisc_args,
+                cbs_list, worker_core
         """
-        sender_row = sender_coord[0]
-        sender_col = sender_coord[1]
-
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -268,38 +268,18 @@ class PreSDPA:
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
 
-        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl)
+        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl, num_links=num_links)
 
-        # Semaphore addresses (only needed for CCL mode)
-        out_ready_sem_addr = 0
-        barrier_sem_addr = 0
-        secondary_sync_sem_addr = 0
+        bcast_semaphores = []
         semaphore_index = 0
         if not skip_ccl:
-            out_ready_semaphore = semaphores[semaphore_index]
-            semaphore_index += 1
-            barrier_semaphore = semaphores[semaphore_index]
-            semaphore_index += 1
-            secondary_sync_semaphore = semaphores[semaphore_index]
-            semaphore_index += 1
-            out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
-            barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
-            secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
-
-        # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
+            bcast_semaphores = semaphores[:num_links]
+            semaphore_index = num_links
 
         # Get tensor properties (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-
-        # CCL broadcast page info
-        element_size = 2
-        tile_id_start = 0
-        bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
-        bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-        num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles
@@ -599,7 +579,22 @@ class PreSDPA:
         mla_out_final_cb = 43  # Output final CB for MLA
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 44  # Packet buffer for CCL broadcast
+        bcast_cb_id = 44
+
+        bcast_config = DeepseekMinimalBroadcast.configure(
+            mesh_device=mesh_device,
+            input_tensor_mesh=input_tensor_mesh,
+            output_tensor=intermediate_tensor_mesh,
+            sender_coord=sender_coord,
+            semaphores=bcast_semaphores,
+            socket=None,
+            skip_ccl=skip_ccl,
+            chunk_size_bytes=None,
+            bcast_cb_id=bcast_cb_id,
+            num_links=num_links,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
+        )
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -1296,18 +1291,6 @@ class PreSDPA:
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # CCL role calculation (only matters if not skipping CCL)
-                if skip_ccl:
-                    is_sender = False
-                    is_secondary_sender = False
-                    is_receiver = False
-                else:
-                    is_sender = (row == sender_row) and (col == sender_col)
-                    is_secondary_sender = (
-                        secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
-                    )
-                    is_receiver = not is_sender and not is_secondary_sender
-
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
@@ -1326,63 +1309,20 @@ class PreSDPA:
                 sdpa_out_interm_buffer_device = sdpa_out_interm_buffers_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
-                device_local = input_tensor_device.device()
                 device_input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 device_shard_grid_start = device_input_shard_grid.bounding_box().start
                 worker_core = ttnn.CoreCoord(device_shard_grid_start.x, device_shard_grid_start.y)
                 worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
                 assert rmsnorm_core_grid == worker_core_set, "RMSNorm core grid does not match worker core"
 
-                # Get physical core for NOC addressing
-                data_core_physical = device_local.worker_core_from_logical_core(worker_core)
-                core_noc_x = data_core_physical.x
-                core_noc_y = data_core_physical.y
-
-                # Calculate ring index and targets for primary axis (column)
-                ring_size = mesh_rows
-                ring_index = row
-
-                # For Linear topology, calculate forward and backward targets
-                num_targets_forward = ring_size - ring_index - 1
-                num_targets_backward = ring_index
-
-                # Determine if this device has secondary axis connections
-                has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-
-                # Calculate mcast distances
-                start_distance_forward = 1 if num_targets_forward > 0 else 0
-                range_hops_forward = num_targets_forward
-                start_distance_backward = 1 if num_targets_backward > 0 else 0
-                range_hops_backward = num_targets_backward
-                bcast_num_pages_to_read = bcast_num_pages
-
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
-                bcast_brisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                ]
+                bcast_brisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
+                bcast_brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
-                bcast_ncrisc_named_compile_time_args = [
-                    ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
-                    ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
-                    ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
-                    ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
-                    ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                ]
+                bcast_ncrisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
+                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
                 bcast_trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -1416,8 +1356,9 @@ class PreSDPA:
                 sdpa_kv_cache_running_offset = 0
                 sdpa_kv_cache_running_offset_mcast_core = 0
 
-                # CB: CCL broadcast packet buffer
-                bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
+                bcast_cb_descriptor = bcast_config.get_cb_descriptor(coord)
+                if bcast_cb_descriptor is not None:
+                    sdpa_kv_cache_running_offset += bcast_cb_descriptor.total_size
 
                 # CB: RMSNorm output buffer
                 rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2088,52 +2029,7 @@ class PreSDPA:
                 # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
                 # These are common to all cores since only one core participates in CCL
                 # ================================================================
-                if skip_ccl:
-                    # Single-device mode: empty broadcast args
-                    ncrisc_bcast_common_args = [0] * 13
-                    dst_nodes = []
-                    fabric_node_id = None
-                else:
-                    # Multi-device mode: CCL broadcast runtime args
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    # Build dst_nodes first to compute num_connections = len(dst_nodes)
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                    dst_nodes = []
-
-                    # Primary axis connections (forward and backward in column)
-                    if num_targets_forward > 0:
-                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-
-                    if num_targets_backward > 0:
-                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-
-                    # Secondary axis connection (for sender to secondary sender)
-                    if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    num_connections = len(dst_nodes)
-
-                    ncrisc_bcast_common_args = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        int(wait_output_semaphore),
-                        int(reset_global_semaphore),
-                        core_noc_x,  # out_ready_sem_noc0_x
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,
-                        int(barrier_sem_addr),
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),
-                        num_connections,
-                    ]
+                ncrisc_bcast_common_args = bcast_config.get_ncrisc_common_rt_args(coord)
 
                 # RoPE DRAM address args (per-device)
                 qrope_cos_tensor_address = qrope_cos_tensor_device.buffer_address()
@@ -2323,7 +2219,11 @@ class PreSDPA:
                     ),
                 ]
 
-                per_core_ncrisc_args = mla_ncrisc_per_core_args
+                # Two-phase per-core NCRISC args:
+                # 1) Tail args from non-broadcast ops are assembled here.
+                # 2) Broadcast prefix args are prepended later after program creation,
+                #    because setup_fabric_connection requires ProgramDescriptor.
+                per_core_ncrisc_tail_args = mla_ncrisc_per_core_args
                 per_core_brisc_args = mla_brisc_per_core_args
                 per_core_trisc_args = mla_trisc_per_core_args
 
@@ -2361,8 +2261,8 @@ class PreSDPA:
                     kv_cache_input_cb_descriptor,
                     *mla_cb_descriptors,
                 ]
-                if not skip_ccl:
-                    cbs_list.append(bcast_pkt_cb_descriptor)
+                if bcast_cb_descriptor is not None:
+                    cbs_list.append(bcast_cb_descriptor)
 
                 per_device_contexts.append(
                     {
@@ -2377,19 +2277,20 @@ class PreSDPA:
                         "trisc_common_runtime_args": trisc_common_runtime_args,
                         "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
                         "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
-                        "per_core_ncrisc_args": per_core_ncrisc_args,
+                        "per_core_ncrisc_tail_args": per_core_ncrisc_tail_args,
                         "per_core_brisc_args": per_core_brisc_args,
                         "per_core_trisc_args": per_core_trisc_args,
+                        # Broadcast contributes the current define set. If this fused op
+                        # adds extra defines later, merge/de-dupe at the op layer.
+                        "kernel_defines": bcast_config.get_kernel_defines(coord),
                         "input_cb_descriptor": in_cb_descriptor,
                         "output_cb_descriptor": final_output_cb_descriptor,
                         "cbs_list": cbs_list,
                         "worker_core": worker_core,
-                        "fabric_node_id": fabric_node_id,
-                        "dst_nodes": dst_nodes,
                     }
                 )
 
-        return full_device_grid, per_device_contexts
+        return full_device_grid, per_device_contexts, bcast_config
 
     @staticmethod
     def op(
@@ -2416,13 +2317,14 @@ class PreSDPA:
         sdpa_out_interm_buffer,
         sender_coord,
         semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=1,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         io_tensors = [
             input_tensor_mesh,
@@ -2441,7 +2343,7 @@ class PreSDPA:
             sdpa_out_interm_buffer,
             output_tensor,
         ]
-        full_device_grid, per_device_contexts = PreSDPA.get_program_context(
+        full_device_grid, per_device_contexts, bcast_config = PreSDPA.get_program_context(
             input_tensor_mesh,
             intermediate_tensor_mesh,
             gamma_tensor,
@@ -2465,13 +2367,13 @@ class PreSDPA:
             sdpa_out_interm_buffer,
             sender_coord,
             semaphores,
-            cluster_axis,
-            secondary_cluster_axis,
             num_links,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -2496,10 +2398,11 @@ class PreSDPA:
                 unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
                 per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
                 per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                    ncrisc_args=ctx["per_core_ncrisc_args"],
+                    ncrisc_args=ctx["per_core_ncrisc_tail_args"],
                     brisc_args=ctx["per_core_brisc_args"],
                     trisc_args=ctx["per_core_trisc_args"],
                 ),
+                defines=ctx["kernel_defines"],
                 noc_mode=noc_mode,
             )
 
@@ -2511,22 +2414,28 @@ class PreSDPA:
 
             coord = ctx["coord"]
             worker_core = ctx["worker_core"]
-            dst_nodes = ctx["dst_nodes"]
-            if not skip_ccl and len(dst_nodes) > 0:
-                for idx, kernel in enumerate(program.kernels):
-                    if kernel.core_ranges.contains(worker_core) and (
-                        isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
-                        or (
-                            isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                            and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
-                        )
-                    ):
-                        writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
-                        fabric_args = ttnn.setup_routing_plane_connection(
-                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, worker_core
-                        )
-                        writer_rt_args_ref.extend(fabric_args)
-                        break
+            for idx, kernel in enumerate(program.kernels):
+                if kernel.core_ranges.contains(worker_core) and (
+                    isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
+                    or (
+                        isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
+                        and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
+                    )
+                ):
+                    # Phase 2 (CCL mode only): build bcast prefix args (program-dependent
+                    # fabric setup), then merge only for the bcast worker core in explicit
+                    # order: bcast prefix first, that core's tail args after.
+                    #
+                    bcast_writer_args = bcast_config.get_ncrisc_per_core_rt_args(coord, program, worker_core)
+                    bcast_group = [(worker_core, bcast_writer_args)]
+                    merged_ncrisc_group = merge_per_core_runtime_args(
+                        bcast_group,
+                        [(worker_core, kernel.runtime_args[worker_core.x][worker_core.y])],
+                    )
+                    # TODO: Generalize to multi-core merge/writeback if bcast and tail
+                    # producers overlap on additional cores in this op.
+                    kernel.runtime_args[worker_core.x][worker_core.y] = merged_ncrisc_group[0][1]
+                    break
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

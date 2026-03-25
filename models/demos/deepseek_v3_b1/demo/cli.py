@@ -19,7 +19,7 @@ from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
-DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
+DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -154,10 +154,18 @@ def run_demo(
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            logger.debug(f"Encoded prompt: {prompt_ids}")
+            messages = [{"role": "user", "content": prompt}]
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            logger.debug("Prompt with chat template: {}", prompt)
+
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             if not prompt_ids:
-                prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
+                raise RuntimeError("Chat template produced an empty prompt")
+            logger.debug(f"Encoded prompt: {prompt_ids}")
 
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
             generated_tokens = model_pipeline.run_inference(

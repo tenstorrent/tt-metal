@@ -27,7 +27,7 @@ jobs:
       - ${{ inputs.extra-tag }}
       - topology-6u
       - arch-wormhole_b0
-      - pipeline-functional
+      - pipeline-perf
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
@@ -93,7 +93,7 @@ jobs:
       - ${{ inputs.extra-tag }}
       - topology-6u
       - arch-wormhole_b0
-      - pipeline-functional
+      - pipeline-perf
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

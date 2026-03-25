@@ -14,43 +14,9 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::unary {
+using namespace ttnn::operations::unary;
 
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryTSVariant<unary_op_type>::invoke(
-    const Tensor& input_tensor,
-    ScalarVariant parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return std::visit(
-        [&](auto param) {
-            return detail::unary_impl(
-                input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
-        },
-        parameter);
-}
-
-template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
-template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
-
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
-    const Tensor& input_tensor,
-    const float parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-        memory_config,
-        optional_output_tensor,
-        sub_core_grids);
-}
-
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
-
-namespace detail {
+namespace ttnn::detail {
 
 Tensor unary_impl(
     const Tensor& input_tensor,
@@ -87,9 +53,7 @@ Tensor unary_impl(
         sub_core_grids);
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::unary
+}  // namespace ttnn::detail
 
 namespace ttnn {
 
@@ -116,15 +80,17 @@ Tensor deg2rad(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     constexpr float DEG_TO_RAD = 0.017453292519943295f;  // pi/180
-    return operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+    return ttnn::multiply(
         input_tensor,
         DEG_TO_RAD,
-        input_tensor.dtype(),
+        std::optional(input_tensor.dtype()),
         memory_config,
         optional_output_tensor,
         {},
         {},
         {},
+        std::nullopt,
+        std::nullopt,
         std::nullopt);
 }
 
@@ -133,15 +99,17 @@ Tensor rad2deg(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     constexpr float RAD_TO_DEG = 57.29577951308232f;  // 180/pi
-    return operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+    return ttnn::multiply(
         input_tensor,
         RAD_TO_DEG,
-        input_tensor.dtype(),
+        std::optional(input_tensor.dtype()),
         memory_config,
         optional_output_tensor,
         {},
         {},
         {},
+        std::nullopt,
+        std::nullopt,
         std::nullopt);
 }
 
@@ -157,10 +125,9 @@ Tensor bitcast(
     }
     // Use unary infrastructure with BITCAST op type
     // BITCAST uses identity kernel (copy_tile + pack_tile) with output format for both CBs
-    operations::unary::EltwiseUnaryWithParam bitcast_op(
-        operations::unary::UnaryOpType::BITCAST,
-        {static_cast<float>(input_tensor.dtype()), static_cast<float>(output_dtype)});
-    return operations::unary::detail::unary_impl(input_tensor, {bitcast_op}, memory_config, optional_output_tensor);
+    EltwiseUnaryWithParam bitcast_op(
+        UnaryOpType::BITCAST, {static_cast<float>(input_tensor.dtype()), static_cast<float>(output_dtype)});
+    return ttnn::detail::unary_impl(input_tensor, {bitcast_op}, memory_config, optional_output_tensor);
 }
 
 Tensor rdiv(
@@ -172,20 +139,17 @@ Tensor rdiv(
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
-    operations::unary::UnaryOpType op_type = operations::unary::UnaryOpType::RDIV;
+    UnaryOpType op_type = UnaryOpType::RDIV;
     // Convert rounding_mode to numeric value: 0 = none, 1 = trunc, 2 = floor
     uint32_t rounding_mode_value = !rounding_mode ? 0 : (*rounding_mode == "trunc" ? 1 : 2);
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{op_type, {value, rounding_mode_value}}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, {value, rounding_mode_value}}}, memory_config, optional_output_tensor);
 }
 
 Tensor where_tss(
     const Tensor& condition,
-    const operations::unary::ScalarVariant& value_true,
-    const operations::unary::ScalarVariant& value_false,
+    const ScalarVariant& value_true,
+    const ScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -195,18 +159,18 @@ Tensor where_tss(
 
     // Convert input tensor to float32 only if input is INT32/UINT32 and scalars are float
     if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && has_float_scalar) {
-        input = ttnn::typecast(condition, DataType::FLOAT32);
+        input = ttnn::typecast(condition, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
     }
-    operations::unary::UnaryOpType op_type = operations::unary::UnaryOpType::WHERE_TSS;
+    UnaryOpType op_type = UnaryOpType::WHERE_TSS;
     auto param = std::visit(
         [op_type](const auto& val_true, const auto& val_false) {
             using T = std::decay_t<decltype(val_true)>;
-            return operations::unary::EltwiseUnaryWithParam{op_type, std::vector<T>{val_true, val_false}};
+            return EltwiseUnaryWithParam{op_type, std::vector<T>{val_true, val_false}};
         },
         value_true,
         value_false);
 
-    return operations::unary::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
+    return ttnn::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor xielu(
@@ -215,11 +179,8 @@ Tensor xielu(
     float alpha_n,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::XIELU, {alpha_p, alpha_n}}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
 }
 
 Tensor unary_fmod(
@@ -227,9 +188,9 @@ Tensor unary_fmod(
     float parameter,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::FMOD, static_cast<float>(parameter)}},
+        {UnaryWithParam{UnaryOpType::FMOD, static_cast<float>(parameter)}},
         memory_config,
         optional_output_tensor);
 }
@@ -240,11 +201,9 @@ Tensor threshold(
     float parameter_b,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{
-            operations::unary::UnaryOpType::THRESHOLD,
-            {static_cast<float>(parameter_a), static_cast<float>(parameter_b)}}},
+        {UnaryWithParam{UnaryOpType::THRESHOLD, {static_cast<float>(parameter_a), static_cast<float>(parameter_b)}}},
         memory_config,
         optional_output_tensor);
 }
@@ -254,9 +213,9 @@ Tensor round(
     const std::optional<int32_t>& parameter,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::ROUND, parameter.value_or(0)}},
+        {EltwiseUnaryWithParam{UnaryOpType::ROUND, parameter.value_or(0)}},
         memory_config,
         optional_output_tensor);
 }
@@ -265,43 +224,32 @@ Tensor identity(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::IDENTITY}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::IDENTITY}}, memory_config, optional_output_tensor);
 }
 
 Tensor abs(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    auto op_type = input_tensor.dtype() == tt::tt_metal::DataType::INT32 ? operations::unary::UnaryOpType::ABS_INT32
-                                                                         : operations::unary::UnaryOpType::ABS;
-    return operations::unary::detail::unary_impl(
-        input_tensor, {operations::unary::UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    auto op_type = input_tensor.dtype() == tt::tt_metal::DataType::INT32 ? UnaryOpType::ABS_INT32 : UnaryOpType::ABS;
+    return ttnn::detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor eqz(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::EQZ}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::EQZ}}, memory_config, optional_output_tensor);
 }
 
 Tensor hardmish(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::HARDMISH}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::HARDMISH}}, memory_config, optional_output_tensor);
 }
 
 Tensor hardshrink(
@@ -309,9 +257,9 @@ Tensor hardshrink(
     float lambda,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::HARDSHRINK, static_cast<float>(lambda)}},
+        {UnaryWithParam{UnaryOpType::HARDSHRINK, static_cast<float>(lambda)}},
         memory_config,
         optional_output_tensor);
 }
@@ -321,9 +269,9 @@ Tensor logit(
     std::optional<float> eps,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
+        {UnaryWithParam{UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
         memory_config,
         optional_output_tensor);
 }
@@ -333,11 +281,8 @@ Tensor elu(
     float alpha,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::ELU, static_cast<float>(alpha)}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::ELU, static_cast<float>(alpha)}}, memory_config, optional_output_tensor);
 }
 
 Tensor hardtanh(
@@ -346,9 +291,9 @@ Tensor hardtanh(
     float max_val,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::HARDTANH, {min_val, max_val}}},
+        {UnaryWithParam{UnaryOpType::HARDTANH, {min_val, max_val}}},
         memory_config,
         optional_output_tensor);
 }
@@ -358,9 +303,9 @@ Tensor softshrink(
     float lambda,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::SOFTSHRINK, static_cast<float>(lambda)}},
+        {UnaryWithParam{UnaryOpType::SOFTSHRINK, static_cast<float>(lambda)}},
         memory_config,
         optional_output_tensor);
 }
@@ -371,9 +316,9 @@ Tensor clamp_tss(
     float max_val,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
+        {UnaryWithParam{UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
         memory_config,
         optional_output_tensor);
 }
@@ -384,9 +329,9 @@ Tensor clamp_tss(
     int32_t max_val,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
+        {EltwiseUnaryWithParam{UnaryOpType::CLAMP_TSS, {min_val, max_val}}},
         memory_config,
         optional_output_tensor);
 }
@@ -397,11 +342,8 @@ Tensor softplus(
     float threshold,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::SOFTPLUS, {beta, threshold}}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
 }
 
 Tensor tanh(
@@ -409,11 +351,8 @@ Tensor tanh(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     bool approx) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::TANH, static_cast<float>(approx)}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::TANH, static_cast<float>(approx)}}, memory_config, optional_output_tensor);
 }
 
 Tensor tanhshrink(
@@ -421,11 +360,8 @@ Tensor tanhshrink(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     bool /*approx*/) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::TANHSHRINK}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::TANHSHRINK}}, memory_config, optional_output_tensor);
 }
 
 Tensor prelu_sfpu(
@@ -433,11 +369,8 @@ Tensor prelu_sfpu(
     float value,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::PRELU_SFPU, value}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::PRELU_SFPU, value}}, memory_config, optional_output_tensor);
 }
 
 Tensor selu(
@@ -446,22 +379,16 @@ Tensor selu(
     float alpha,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::SELU, {scale, alpha}}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::SELU, {scale, alpha}}}, memory_config, optional_output_tensor);
 }
 
 Tensor swish(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SILU}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{UnaryOpType::SILU}}, memory_config, optional_output_tensor);
 }
 
 Tensor power_iterative(
@@ -469,9 +396,9 @@ Tensor power_iterative(
     uint32_t exponent,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::POWER_ITERATIVE, exponent}},
+        {EltwiseUnaryWithParam{UnaryOpType::POWER_ITERATIVE, exponent}},
         memory_config,
         optional_output_tensor);
 }
@@ -479,28 +406,25 @@ Tensor power_iterative(
 Tensor sigmoid(
     const Tensor& input,
     int vector_mode,
-    operations::unary::SigmoidMode mode,
+    SigmoidMode mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    std::vector<operations::unary::EltwiseUnaryWithParam> op_chain;
+    std::vector<EltwiseUnaryWithParam> op_chain;
     switch (mode) {
-        case operations::unary::SigmoidMode::FAST_APPROXIMATE:
-            op_chain = {operations::unary::UnaryWithParam(
-                operations::unary::UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 1.0f})};
+        case SigmoidMode::FAST_APPROXIMATE:
+            op_chain = {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 1.0f})};
             break;
-        case operations::unary::SigmoidMode::ACCURATE_FAST_EXP:
+        case SigmoidMode::ACCURATE_FAST_EXP:
             op_chain = {
-                operations::unary::UnaryWithParam(operations::unary::UnaryOpType::NEG),
-                operations::unary::UnaryWithParam(operations::unary::UnaryOpType::EXP, 1.0f),
-                operations::unary::UnaryWithParam(operations::unary::UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-                operations::unary::UnaryWithParam(operations::unary::UnaryOpType::RECIP)};
+                UnaryWithParam(UnaryOpType::NEG),
+                UnaryWithParam(UnaryOpType::EXP, 1.0f),
+                UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+                UnaryWithParam(UnaryOpType::RECIP)};
             break;
-        case operations::unary::SigmoidMode::ACCURATE: [[fallthrough]];
-        default:
-            op_chain = {operations::unary::UnaryWithParam(
-                operations::unary::UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 0.0f})};
+        case SigmoidMode::ACCURATE: [[fallthrough]];
+        default: op_chain = {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 0.0f})};
     }
-    return operations::unary::detail::unary_impl(input, op_chain, memory_config, optional_output_tensor);
+    return ttnn::detail::unary_impl(input, op_chain, memory_config, optional_output_tensor);
 }
 
 Tensor sigmoid_accurate(
@@ -508,33 +432,29 @@ Tensor sigmoid_accurate(
     bool fast_and_approximate_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    auto
-        op_chain = fast_and_approximate_mode
-                       ? std::vector<
-                             operations::unary::EltwiseUnaryWithParam>{operations::unary::UnaryWithParam(operations::unary::UnaryOpType::NEG), operations::unary::UnaryWithParam(operations::unary::UnaryOpType::EXP, 1.0f), operations::unary::UnaryWithParam(operations::unary::UnaryOpType::ADD_UNARY_SFPU, 1.0f), operations::unary::UnaryWithParam(operations::unary::UnaryOpType::RECIP)}
-                       : std::vector<operations::unary::EltwiseUnaryWithParam>{operations::unary::UnaryWithParam(
-                             operations::unary::UnaryOpType::SIGMOID,
-                             {static_cast<float>(operations::unary::VecMode::RC), 0.0f})};
-    return operations::unary::detail::unary_impl(input, op_chain, memory_config, optional_output_tensor);
+    auto op_chain =
+        fast_and_approximate_mode
+            ? std::vector<
+                  EltwiseUnaryWithParam>{UnaryWithParam(UnaryOpType::NEG), UnaryWithParam(UnaryOpType::EXP, 1.0f), UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f), UnaryWithParam(UnaryOpType::RECIP)}
+            : std::vector<EltwiseUnaryWithParam>{
+                  UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), 0.0f})};
+    return ttnn::detail::unary_impl(input, op_chain, memory_config, optional_output_tensor);
 }
 
 Tensor log_sigmoid(
     const Tensor& input,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LOGSIGMOID}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::LOGSIGMOID}}, memory_config, optional_output_tensor);
 }
 
 Tensor unary_chain(
     const Tensor& input_tensor,
-    const std::vector<operations::unary::EltwiseUnaryWithParam>& ops_chain,
+    const std::vector<EltwiseUnaryWithParam>& ops_chain,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
+    return ttnn::detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
 }
 
 template <typename T>
@@ -543,11 +463,8 @@ Tensor rsub_sfpu(
     T param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSUB, {param}}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{UnaryOpType::RSUB, {param}}}, memory_config, optional_output_tensor);
 }
 
 template Tensor ttnn::rsub_sfpu<float>(
@@ -561,9 +478,9 @@ Tensor add_sfpu(
     float param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam(operations::unary::UnaryOpType::ADD_UNARY_SFPU, (param))},
+        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, (param))},
         memory_config,
         optional_output_tensor);
 }
@@ -573,9 +490,9 @@ Tensor add_sfpu(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam(operations::unary::UnaryOpType::ADD_UNARY_SFPU, (param))},
+        {EltwiseUnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, (param))},
         memory_config,
         optional_output_tensor);
 }
@@ -585,9 +502,9 @@ Tensor mul_sfpu(
     float param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam(operations::unary::UnaryOpType::MUL_UNARY_SFPU, (param))},
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, (param))},
         memory_config,
         optional_output_tensor);
 }
@@ -597,9 +514,9 @@ Tensor mul_sfpu(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam(operations::unary::UnaryOpType::MUL_UNARY_SFPU, (param))},
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, (param))},
         memory_config,
         optional_output_tensor);
 }
@@ -609,9 +526,9 @@ Tensor sub_sfpu(
     float param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SUB_UNARY_SFPU, (param)}},
+        {EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, (param)}},
         memory_config,
         optional_output_tensor);
 }
@@ -621,11 +538,8 @@ Tensor sub_sfpu(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSUB, (param)}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{UnaryOpType::RSUB, (param)}}, memory_config, optional_output_tensor);
 }
 
 Tensor div_sfpu(
@@ -633,9 +547,9 @@ Tensor div_sfpu(
     float param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
+    return ttnn::detail::unary_impl(
         input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::DIV_UNARY_SFPU, (param)}},
+        {EltwiseUnaryWithParam{UnaryOpType::DIV_UNARY_SFPU, (param)}},
         memory_config,
         optional_output_tensor);
 }
@@ -645,24 +559,18 @@ Tensor div_sfpu(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RDIV, (param)}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{UnaryOpType::RDIV, (param)}}, memory_config, optional_output_tensor);
 }
 
 Tensor unary_with_int32_param(
-    operations::unary::UnaryOpType op_type,
+    UnaryOpType op_type,
     const Tensor& input_tensor,
     int32_t param,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::unary::detail::unary_impl(
-        input_tensor,
-        {operations::unary::EltwiseUnaryWithParam{op_type, param}},
-        memory_config,
-        optional_output_tensor);
+    return ttnn::detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{op_type, param}}, memory_config, optional_output_tensor);
 }
 
 }  // namespace ttnn

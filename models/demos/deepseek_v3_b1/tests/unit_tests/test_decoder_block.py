@@ -16,7 +16,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
+from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
@@ -24,9 +25,11 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
+    get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,
@@ -40,10 +43,26 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterle
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
+    """Map mode string to (num_routed_experts_to_upload, rigged_group_count).
+
+    Supported modes:
+      - unrigged_all_experts
+      - rigged_groups1 ... rigged_groups8
+
+    For rigged_groupsN we upload contiguous groups [0..N-1] and rig
+    pseudo-random experts within those uploaded groups.
+    """
+    if expert_upload_mode == "unrigged_all_experts":
+        return 256, None
+    if expert_upload_mode.startswith("rigged_groups"):
+        suffix = expert_upload_mode.removeprefix("rigged_groups")
+        if suffix.isdigit():
+            rigged_group_count = int(suffix)
+            if not (1 <= rigged_group_count <= 8):
+                raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
+            return rigged_group_count * 32, rigged_group_count
+    raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
 
 
 # ============================================================================
@@ -64,7 +83,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     num_routed_experts: int = 0,
     preloaded_weights=None,
-    rigged_experts: bool = False,
+    rigged_group_count: int | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -85,9 +104,24 @@ def create_decoder_block_tensors(
     device_grid_size = submesh.compute_with_storage_grid_size()
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
+    # TODO: Shouldn't hardcode this here
+    class _RopeConfig:
+        qk_rope_head_dim = 64
+        rope_theta = 10000.0
+        rope_scaling = {
+            "factor": 40,
+            "original_max_position_embeddings": 4096,
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+        }
+
+    _RopeConfig.max_seq_len = max_seq_len
+
     # ── Constants for runtime tensors ──
     QNOPE_HEAD_DIM = 128
-    QROPE_HEAD_DIM = 64
+    QROPE_HEAD_DIM = _RopeConfig.qk_rope_head_dim
     QNOPE_OUT_DIM = 512
     KNOPE_DIM = 512
     KROPE_DIM = 64
@@ -96,7 +130,12 @@ def create_decoder_block_tensors(
     K = 7168
     output_size = 7168
     shape = (1, K)
-    scale = (QNOPE_HEAD_DIM + QROPE_HEAD_DIM) ** -0.5
+    q_head_dim = QNOPE_HEAD_DIM + QROPE_HEAD_DIM
+    mscale = yarn_get_mscale(
+        _RopeConfig.rope_scaling["factor"],
+        _RopeConfig.rope_scaling["mscale_all_dim"],
+    )
+    scale = q_head_dim**-0.5 * mscale * mscale
     kvpe_dim = KNOPE_DIM + KROPE_DIM
 
     QNOPE_GRID_COLS = 8
@@ -172,7 +211,7 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    if rigged_experts:
+    if rigged_group_count is not None:
         # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
         # (all-ones can produce brittle saturation in downstream low-precision paths)
         torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -183,12 +222,29 @@ def create_decoder_block_tensors(
 
     rigged_group_ids = None
     rigged_expert_ids = None
-    if rigged_experts and is_moe and preloaded_weights is None:
-        # Deterministically pick 4 groups and 2 experts/group, then bias-rig gate selection.
+    if rigged_group_count is not None and is_moe and preloaded_weights is None:
+        # Pseudo-random rigging within uploaded groups:
+        # - pick up to 4 groups among [0 .. rigged_group_count-1]
+        # - pick exactly 8 total experts, split pseudo-randomly across selected groups
         g = torch.Generator()
         g.manual_seed(2026)
-        rigged_group_ids = torch.randperm(8, generator=g)[:4].tolist()
-        rigged_expert_ids = {grp: torch.randperm(32, generator=g)[:2].tolist() for grp in rigged_group_ids}
+        if not (1 <= rigged_group_count <= 8):
+            raise ValueError(f"rigged_group_count must be in [1, 8], got {rigged_group_count}")
+        num_selected_groups = min(4, rigged_group_count)
+        rigged_group_ids = torch.randperm(rigged_group_count, generator=g)[:num_selected_groups].tolist()
+
+        total_rigged_experts = 8
+        # Start with one expert per selected group, then randomly distribute the remainder.
+        experts_per_group = [1] * num_selected_groups
+        remaining = total_rigged_experts - num_selected_groups
+        for _ in range(remaining):
+            chosen_group = int(torch.randint(0, num_selected_groups, (1,), generator=g).item())
+            experts_per_group[chosen_group] += 1
+
+        rigged_expert_ids = {
+            grp: torch.randperm(32, generator=g)[:num_experts].tolist()
+            for grp, num_experts in zip(rigged_group_ids, experts_per_group, strict=True)
+        }
 
         rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
         for grp in rigged_group_ids:
@@ -318,12 +374,10 @@ def create_decoder_block_tensors(
     # ── RoPE TTNN tensors ──
     qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     position_ids = torch.tensor([position_id])
-    base = 10000.0
-    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
-    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
+
+    cos_sin_4d, sin_sin_4d = get_cos_sin_matrix(_RopeConfig)
+    torch_cos = cos_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
+    torch_sin = sin_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
     torch_trans_mat = get_rot_transformation_mat()
 
     ttnn_qrope_cos = ttnn.from_torch(
@@ -626,31 +680,28 @@ def create_decoder_block_tensors(
         def _sd_key(suffix):
             return f"model.layers.{layer_idx}.{suffix}"
 
-        golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
-        golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
-        golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-        golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+        (
+            golden_torch_matmul_weights,
+            golden_torch_matmul2_weights,
+            golden_torch_dkv_matmul_weights,
+            golden_kv_b1,
+            golden_kv_b2,
+            golden_torch_o_proj_weights,
+            golden_torch_gamma,
+            golden_torch_rmsnorm2_gamma,
+            golden_torch_dkv_rmsnorm_gamma,
+            ffn_norm,
+        ) = get_layer_raw_tensors(state_dict, layer_idx)
 
-        V_HEAD_DIM = 128
-        KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
-        kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
-        kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
-        total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
-        kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
-        golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
-        golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+        total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
+        kv_lora_rank = golden_kv_b1.shape[1]
         golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
         golden_total_qnope_heads = total_kv_heads
         golden_total_qrope_heads = total_kv_heads
 
         # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
-        golden_moe_rmsnorm_gamma = (
-            state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
-        )
+        golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
         if is_moe:
             golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
             golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
@@ -812,8 +863,6 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -845,7 +894,20 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
-@pytest.mark.parametrize("rigged_experts", [False, True], ids=["normal_gate", "fixed_experts"])
+@pytest.mark.parametrize(
+    "expert_upload_mode",
+    [
+        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups4", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups5", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
+        "rigged_groups8",
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -870,21 +932,20 @@ def create_decoder_block_tensors(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
     noc_mode,
     num_internal_iterations,
-    rigged_experts,
+    expert_upload_mode,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -902,12 +963,22 @@ def test_decoder(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
+    effective_num_routed_experts, rigged_group_count = _decode_expert_upload_mode(expert_upload_mode)
+    logger.info(f"Expert upload mode: {expert_upload_mode}")
+    if effective_num_routed_experts != num_routed_experts:
+        logger.info(
+            "Mode {}: uploading {} routed experts instead of {}",
+            expert_upload_mode,
+            effective_num_routed_experts,
+            num_routed_experts,
+        )
+
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=num_routed_experts,
+        num_routed_experts=effective_num_routed_experts,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -922,8 +993,8 @@ def test_decoder(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         max_seq_len=max_seq_len,
         is_moe=True,
-        num_routed_experts=num_routed_experts,
-        rigged_experts=rigged_experts,
+        num_routed_experts=effective_num_routed_experts,
+        rigged_group_count=rigged_group_count,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -933,7 +1004,8 @@ def test_decoder(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
@@ -942,7 +1014,7 @@ def test_decoder(
     ttnn_attn_ref_output_torch = None
     if validate_standalone_mla:
         logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
         ttnn_attn_ref_result = AttentionBlock.op(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -974,16 +1046,15 @@ def test_decoder(
             d["device_chunk_size"],
             d["ttnn_attn_ref_output"],
             attn_ref_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links,
             epsilon,
             use_fp32,
             False,  # skip_ccl
             noc_mode,
             num_iterations=1,
+            fabric_config=device_params["fabric_config"],
         )
         ttnn.synchronize_device(submesh)
         ttnn_attn_ref_output_torch = ttnn.to_torch(
@@ -1053,18 +1124,17 @@ def test_decoder(
             reduce_root_coord=d["reduce_root_coord"],
             # Shared parameters
             enable_routing=True,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
             reduce_cluster_axis=reduce_cluster_axis,
             sdpa_cluster_axis=0,  # sdpa_cluster_axis
-            num_links=1,  # num_links
+            num_links=num_links,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
+            fabric_config=device_params["fabric_config"],
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
@@ -1311,8 +1381,6 @@ def test_decoder(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -1342,14 +1410,13 @@ def test_decoder(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1396,7 +1463,8 @@ def test_decoder_mlp(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     logger.info(f"Running dense decoder operation with position_id={position_id}...")
@@ -1457,11 +1525,9 @@ def test_decoder_mlp(
             reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
             # Shared parameters
             enable_routing=False,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
             reduce_cluster_axis=reduce_cluster_axis,
             sdpa_cluster_axis=0,
-            num_links=1,
+            num_links=num_links,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
@@ -1469,7 +1535,8 @@ def test_decoder_mlp(
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
-            downstream_socket=None,
+            downstream_sockets=None,
+            fabric_config=device_params["fabric_config"],
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=True,
         )
