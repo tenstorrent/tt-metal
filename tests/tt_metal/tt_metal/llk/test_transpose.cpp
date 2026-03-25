@@ -134,8 +134,8 @@ void run_single_core_transpose(
     std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    uint32_t num_buffer_tiles = 32;
-    uint32_t num_output_buffer_tiles = 32;
+    uint32_t num_buffer_tiles = 36;
+    uint32_t num_output_buffer_tiles = 36;
 
     uint32_t dfb_src0 = 0;
     uint32_t dfb_output = 0;
