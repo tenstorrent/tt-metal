@@ -85,6 +85,18 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def should_pad_sampling_logits_to_power_of_2(
+    base_model_name: str, padded_vocab_size: int, sampling_splits: int
+) -> bool:
+    # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
+    if sampling_splits < 1:
+        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
+        return False
+
+    per_device_vocab = padded_vocab_size // sampling_splits
+    return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -2602,6 +2614,17 @@ class ModelArgs:
             raise AssertionError(
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
+
+        if self.num_devices > 0:
+            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
+            # Only enable this optimization on the non-multi-step sampling path.
+            # The [1, 1] mesh path splits logits before TopK today and would need
+            # matching input padding in `TTSampling.sample()` to safely use it.
+            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
+                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+            )
+        else:
+            self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs

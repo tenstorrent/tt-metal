@@ -472,6 +472,8 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = true;
+    this->supports_implicit_dfb_sync_ = true;
 
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
