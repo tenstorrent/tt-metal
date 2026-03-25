@@ -951,7 +951,7 @@ if constexpr (!Core::skip_ccl) {
                 deepseek_b1_ops::CreateQHeads::
                     Op<CreateQHeadsReceiverCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
                         create_q_heads_receiver;
-                create_q_heads(create_q_heads_receiver_args);
+                create_q_heads_receiver(create_q_heads_receiver_args);
 #endif
             }
         }
