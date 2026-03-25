@@ -277,6 +277,8 @@ class WanCausalConv3d(Module):
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            h_factor=parallel_config.height_parallel.factor,
+            w_factor=parallel_config.width_parallel.factor,
         )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -709,6 +711,8 @@ class WanConv2d(Module):
             self.kernel_size,
             dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            h_factor=parallel_config.height_parallel.factor,
+            w_factor=parallel_config.width_parallel.factor,
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
 

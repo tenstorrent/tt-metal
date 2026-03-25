@@ -23,34 +23,110 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
-    if weights_dtype == ttnn.float32:
-        # Use smaller block size to reduce memory use.
-        config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
-    else:
-        config_to_blocking = {
-            # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-            # Keep the old padded conv_out tuning for the new unpadded C_out=3 path.
-            (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
-            (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
-            (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
-            (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
-            (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
-            (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
-            (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
-            (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
-        }
+# Mesh-specific blocking table: (h_factor, w_factor, C_in, C_out, kernel) -> blocking
+# Blockings swept on BH p150b (130 cores, 13x10 grid).
+# WH 4x8 shares (4, 8) entries with BH — needs re-sweep on actual WH hardware.
+# See models/tt_dit/tests/models/wan2_2/sweep_results.md for full results.
+_MESH_BLOCKINGS = {
+    # --- BH Galaxy / WH Galaxy 4x8 (h_factor=4, w_factor=8) ---
+    (4, 8, 32, 384, (3, 3, 3)): (32, 64, 1, 4, 16),
+    (4, 8, 384, 384, (3, 3, 3)): (128, 32, 1, 16, 2),
+    (4, 8, 192, 384, (3, 3, 3)): (96, 64, 1, 4, 8),
+    (4, 8, 192, 192, (3, 3, 3)): (96, 64, 1, 8, 4),
+    (4, 8, 96, 192, (3, 3, 3)): (96, 64, 1, 4, 4),
+    (4, 8, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),
+    (4, 8, 96, 3, (3, 3, 3)): (96, 32, 1, 8, 8),
+    (4, 8, 96, 32, (3, 3, 3)): (96, 32, 1, 8, 8),
+    (4, 8, 32, 96, (3, 3, 3)): (32, 96, 1, 16, 8),
+    (4, 8, 384, 32, (3, 3, 3)): (32, 32, 1, 4, 1),
+    (4, 8, 384, 192, (1, 3, 3)): (128, 64, 1, 16, 16),
+    (4, 8, 192, 96, (1, 3, 3)): (96, 96, 1, 16, 8),
+    (4, 8, 384, 768, (3, 1, 1)): (96, 256, 1, 8, 4),
+    (4, 8, 192, 384, (3, 1, 1)): (192, 128, 1, 32, 2),
+    # --- BH Loud Box 2x4 (h_factor=2, w_factor=4) ---
+    (2, 4, 32, 384, (3, 3, 3)): (32, 64, 1, 32, 2),
+    (2, 4, 384, 384, (3, 3, 3)): (64, 96, 1, 4, 8),
+    (2, 4, 192, 384, (3, 3, 3)): (96, 128, 1, 4, 8),
+    (2, 4, 192, 192, (3, 3, 3)): (96, 96, 1, 16, 4),
+    (2, 4, 96, 192, (3, 3, 3)): (96, 96, 1, 4, 4),
+    (2, 4, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),
+    (2, 4, 96, 32, (3, 3, 3)): (96, 32, 1, 8, 16),
+    (2, 4, 32, 96, (3, 3, 3)): (32, 96, 1, 16, 16),
+    (2, 4, 384, 32, (3, 3, 3)): (128, 32, 1, 1, 4),
+    (2, 4, 96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (2, 4, 384, 192, (1, 3, 3)): (128, 64, 1, 8, 8),
+    (2, 4, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
+    (2, 4, 384, 768, (3, 1, 1)): (96, 384, 1, 8, 2),
+    (2, 4, 192, 384, (3, 1, 1)): (192, 128, 1, 4, 8),
+    # --- BH Galaxy 6U 4x32 (h_factor=4, w_factor=32) ---
+    (4, 32, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 2),
+    (4, 32, 384, 384, (3, 3, 3)): (32, 64, 1, 8, 4),
+    (4, 32, 192, 384, (3, 3, 3)): (64, 64, 1, 32, 2),
+    (4, 32, 192, 192, (3, 3, 3)): (96, 32, 1, 8, 8),
+    (4, 32, 96, 192, (3, 3, 3)): (96, 32, 1, 4, 4),
+    (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),
+    (4, 32, 96, 3, (3, 3, 3)): (96, 32, 1, 4, 32),
+    (4, 32, 96, 32, (3, 3, 3)): (96, 32, 1, 4, 32),
+    (4, 32, 32, 96, (3, 3, 3)): (32, 96, 1, 8, 8),
+    (4, 32, 384, 32, (3, 3, 3)): (32, 32, 1, 4, 1),
+    (4, 32, 384, 192, (1, 3, 3)): (128, 64, 1, 32, 4),
+    (4, 32, 192, 96, (1, 3, 3)): (96, 96, 1, 4, 16),
+    (4, 32, 384, 768, (3, 1, 1)): (128, 96, 1, 32, 1),
+    (4, 32, 192, 384, (3, 1, 1)): (192, 64, 1, 8, 16),
+}
 
-    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
+# Fallback table when no mesh-specific entry exists (bh_4x8 defaults).
+_DEFAULT_BLOCKINGS = {
+    (32, 384, (3, 3, 3)): (32, 64, 1, 4, 16),
+    (384, 384, (3, 3, 3)): (128, 64, 1, 4, 8),
+    (192, 384, (3, 3, 3)): (96, 64, 1, 4, 8),
+    (192, 192, (3, 3, 3)): (96, 96, 1, 8, 8),
+    (96, 192, (3, 3, 3)): (96, 64, 1, 4, 4),
+    (96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),
+    (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (32, 96, (3, 3, 3)): (32, 96, 1, 16, 8),
+    (384, 32, (3, 3, 3)): (32, 32, 1, 4, 1),
+    (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (384, 192, (1, 3, 3)): (128, 64, 1, 32, 4),
+    (192, 96, (1, 3, 3)): (192, 96, 1, 8, 4),
+    (384, 768, (3, 1, 1)): (128, 384, 1, 8, 8),
+    (192, 384, (3, 1, 1)): (192, 128, 1, 1, 32),
+}
+
+
+def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1):
+    """
+    Get optimized Conv3dConfig for a conv3d layer.
+
+    Blockings are mesh-aware: different (h_factor, w_factor) use different spatial tiling
+    since per-device tensor shapes depend on how H and W are fractured across devices.
+    """
+    if weights_dtype == ttnn.float32:
+        return ttnn.Conv3dConfig(
+            weights_dtype=weights_dtype,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            T_out_block=1,
+            W_out_block=1,
+            H_out_block=1,
+            C_out_block=32,
+            C_in_block=32,
+            compute_with_storage_grid_size=grid_size,
+        )
+
+    mesh_key = (h_factor, w_factor, in_channels, out_channels, kernel_size)
+    shape_key = (in_channels, out_channels, kernel_size)
+    blocking = _MESH_BLOCKINGS.get(mesh_key) or _DEFAULT_BLOCKINGS.get(shape_key)
+
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(
-            f"No blocking found for {(in_channels, out_channels, kernel_size)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            f"No blocking found for {shape_key} on mesh ({h_factor}x{w_factor}). "
+            f"Using default: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
         )
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
