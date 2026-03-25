@@ -265,15 +265,8 @@ class LTXAttention(Module):
         if self.to_gate_logits is None:
             return None
 
-        # TP-gather spatial for gate linear (gate weights are NOT TP-sharded)
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_full = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-        else:
-            spatial_full = spatial_1BND
-
-        gate_logits = self.to_gate_logits(spatial_full, compute_kernel_config=self.mm_compute_kernel_config)
+        # spatial_1BND is already TP-gathered at this point (by forward() line 403-406)
+        gate_logits = self.to_gate_logits(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         # gate_logits: (1, B, N, H_total). Apply 2*sigmoid.
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
