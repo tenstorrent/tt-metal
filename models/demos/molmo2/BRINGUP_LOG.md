@@ -15,13 +15,36 @@
 - Text model now matches HuggingFace reference exactly (PCC > 0.999)
 
 ### tt-inference-server Integration (2026-03-24)
-**Status: WORKING ✓ - Multiple image requests stable with `--disable-trace-capture`**
+**Status: WORKING ✓ - Trace support enabled with warmup passes**
 
-**Video Token Support (2026-03-24):**
-- Added `<|video|>` token support for video inputs (instead of multiple `<|image|>` tokens)
-- Video frames are processed as images but use single `<|video|>` placeholder
-- `get_replacement_video()` generates combined tokens for all frames
-- Committed: d31d2588c9
+**Trace Capture Fix (2026-03-24):**
+- Fixed "Writes not supported during trace capture" error
+- Added warmup forward passes before trace capture in:
+  - `_capture_prefill_trace()` - Runs model forward once before capture
+  - `_capture_decode_trace()` - Runs decode forward once before capture
+  - `_capture_vision_trace()` - Runs vision forward once before capture
+- This ensures all lazy tensor allocations happen before trace begins
+- Traces now capture and execute correctly
+
+**Video Token Support (2026-03-25) - DEMO FLOW IMPLEMENTED:**
+- **KEY FIX:** vLLM video now uses same flow as demo (string-level token expansion)
+- **Previous issue:** vLLM used token-level expansion AFTER tokenization, but demo uses string-level expansion BEFORE tokenization with frame markers and timestamps
+- **Changes made:**
+  1. `Molmo2ProcessorWrapper.__call__()`: When video detected, process frames using demo approach:
+     - Resize, normalize, stack into combined tensor `[n_frames, 3, H, W]`
+     - Generate video token string with `get_video_tokens()` including `<frame_start>`, `<im_patch>`, `<frame_end>` and timestamps
+     - Replace `<|video|>` at STRING level before tokenization
+  2. `_hf_processor_applies_updates()`: Returns True for video (tokens already expanded)
+  3. `_get_mm_fields_config()`: Uses `flat_from_sizes` for video modality with proper sizes:
+     - pixel_values: `flat_from_sizes("video", np.array([n_frames]))` - 8 frames for 1 video
+     - image_grids: `flat_from_sizes("video", np.array([1]))` - 1 grid entry for 1 video
+     - image_num_crops: `flat_from_sizes("video", np.array([1]))` - 1 crop count for 1 video
+     - **This fixes the "Cannot merge different batch sizes" error** where pixel_values had 8 items but other fields had 1
+  4. `prefill_forward()`: Detects demo-style video by tensor shape and pooling cache format
+- **Verification:**
+  - pixel_values: `[8, 3, 378, 378]` - 8 frames combined
+  - image_token_pooling: `[8, 196, 4]` -> reshaped to `[1, 1568, 4]` for prefill
+  - Token string: 1568 `<im_patch>` tokens with 8 `<frame_start>`/`<frame_end>` markers
 
 **Fixed issues:**
 1. Pre-unfolded patch format detection: vLLM's MolmoProcessor outputs pixel_values as `[num_crops, num_patches, 588]` (already patch-extracted), not raw images `[B, C, H, W]`. Added format detection to use `patch_embed_from_patches_ttnn` for pre-unfolded data.
