@@ -223,7 +223,7 @@ def test_lerp_overload_ttnn(input_shapes, value, device):
     golden_fn = ttnn.get_golden_function(ttnn.lerp)
     golden_tensor = golden_fn(in_data1, in_data2, value)
 
-    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
 
 
@@ -244,7 +244,7 @@ def test_lerp_ttnn(input_shapes, device):
     golden_fn = ttnn.get_golden_function(ttnn.lerp)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
-    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
 
 
@@ -265,7 +265,7 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, value1, value2)
 
-    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
 
 
@@ -286,7 +286,7 @@ def test_mac_ttnn(input_shapes, device):
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
-    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
 
 
@@ -304,11 +304,11 @@ def test_mac_output_tensor(device):
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
     # Verify result is numerically correct
-    output_torch = result.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(result)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
 
     # Verify the preallocated buffer was written to (should now hold the same values as result)
-    preallocated_torch = preallocated.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    preallocated_torch = ttnn.to_torch(preallocated)
     assert_with_ulp(golden_tensor, preallocated_torch, ulp_threshold=1)
 
 
@@ -324,5 +324,5 @@ def test_mac_sub_core_grids(device):
 
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
-    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    output_torch = ttnn.to_torch(output_tensor)
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
