@@ -875,35 +875,14 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
         reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
     string out;
-    if (ring_buf_data->current_ptr != DEBUG_RING_BUFFER_STARTING_INDEX) {
-        out += "\n\tdebug_ring_buffer=\n\t[";
-        int curr_idx = ring_buf_data->current_ptr;
-        size_t ring_buffer_elements = DEBUG_RING_BUFFER_SPSC_ELEMENTS;
-        for (int count = 1; count <= ring_buffer_elements; count++) {
-            out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
-            if (count % 8 == 0) {
-                out += "\n\t ";
-            }
-            if (curr_idx == 0) {
-                if (ring_buf_data->wrapped == 0) {
-                    break;  // No wrapping, so no extra data available
-                }
-                curr_idx = ring_buffer_elements - 1;  // Loop
-            } else {
-                curr_idx--;
-            }
-        }
-        // Remove the last comma
-        out.pop_back();
-        out += "]";
+    auto lines = FormatRingBuffer(*ring_buf_data, programmable_core_type_);
+    if (!lines.empty()) {
+        out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
     }
 
     // This function can either dump to stdout or the log file.
     if (to_stdout) {
-        if (!out.empty()) {
-            out = string("Last ring buffer status: ") + out;
-            log_info(tt::LogMetal, "{}", out);
-        }
+        log_info(tt::LogMetal, "Last ring buffer status: {}", out);
     } else {
         fprintf(reader_.f, "%s", out.c_str());
     }

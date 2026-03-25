@@ -23,6 +23,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "hostdev/debug_ring_buffer_common.h"
 
 namespace tt::tt_metal {
 
@@ -251,6 +252,25 @@ inline std::vector<std::string> FormatRingBuffer(
     line += "]";
     lines.push_back(line);
     return lines;
+}
+
+// SPSC overload - extracts data in newest-first order and formats
+inline std::vector<std::string> FormatRingBuffer(
+    const debug_spsc_ring_buf_msg_t& buf, HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
+    if (buf.current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
+        return {};
+    }
+    // Extract newest-first: walk backwards from current_ptr, wrap at 0
+    std::vector<uint32_t> data;
+    int16_t ptr = buf.current_ptr;
+    int16_t count = buf.wrapped ? DEBUG_RING_BUFFER_SPSC_ELEMENTS : (ptr + 1);
+    for (int16_t i = 0; i < count; i++) {
+        data.push_back(buf.data[ptr]);
+        if (--ptr < 0) {
+            ptr = DEBUG_RING_BUFFER_SPSC_ELEMENTS - 1;
+        }
+    }
+    return FormatRingBuffer(data, {}, core_type);
 }
 
 }  // namespace tt::tt_metal
