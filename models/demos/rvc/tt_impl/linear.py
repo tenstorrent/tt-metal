@@ -74,7 +74,7 @@ class Linear:
             dtype=self.dtype,
             activation=self.activation,
             compute_kernel_config=self.compute_config,
-            memory_config=output_memory_config,
+            # memory_config=output_memory_config,
         )
         return out
 
