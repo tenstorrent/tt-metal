@@ -163,11 +163,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
             bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
             bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
-            if (is_1d_column &&
-                output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                memory_layout_compatible = true;
-            } else if (
-                is_1d_row && output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            if ((is_1d_column &&
+                 output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                (is_1d_row &&
+                 output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
                 memory_layout_compatible = true;
             }
         }
