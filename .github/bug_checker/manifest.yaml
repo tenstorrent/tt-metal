@@ -8,7 +8,6 @@ rules:
     paths:
       - "tt_metal/impl/ccl/**"
       - "ttnn/cpp/ttnn/operations/ccl/**"
-      - ".github/bug_checker/tests/fixtures/ccl/**"
     labels:
       - "area:ccl"
 
@@ -20,6 +19,5 @@ rules:
     group: null
     paths:
       - "ttnn/cpp/ttnn/operations/data_movement/**"
-      - ".github/bug_checker/tests/fixtures/data_movement/**"
     labels:
       - "area:ops"
