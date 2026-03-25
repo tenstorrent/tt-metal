@@ -689,7 +689,7 @@ def test_gpt_oss_demo(
             # Row-parallel batched prefill through generator infrastructure
             logger.info("Starting row-parallel batched prefill through generator...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-            prefill_result = generator.prefill_forward_text(
+            generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
@@ -698,10 +698,6 @@ def test_gpt_oss_demo(
                 warmup_prefill=warmup_prefill,
                 sampling_params=device_sampling_params,
             )
-            if isinstance(prefill_result, tuple):
-                prefilled_token = prefill_result[0].squeeze(-1)
-            else:
-                prefilled_token = torch.argmax(prefill_result, dim=-1)
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Row-parallel prefill compilation done")
 

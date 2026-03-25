@@ -512,7 +512,6 @@ class Generator(WarmupForwardMixin):
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
         # Row-sharded batched prefill: process 1 user per row per iteration
         model_0 = self.model[0]
-        num_mesh_rows = model_0.mesh_device.shape[0] if hasattr(model_0, "mesh_device") else 1
         if getattr(model_0, "users_row_sharded", False) and batch_size > 1:
             return self._row_sharded_batched_prefill(
                 tokens,
