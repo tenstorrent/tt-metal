@@ -578,13 +578,13 @@ def convert_decoder_layer_weights(
         mesh_mapper=qkv_mapper,
         cache_file_name=c("w_qkv", tp_variant),
     )
-    # DRAM-sharded copy for prefetcher: dram_prefetcher needs WIDTH_SHARDED DRAM layout
-    # to correctly read per-bank weight shards. Only created when PREFETCH is enabled.
-    w_qkv_interleaved = None  # field name kept for struct compat; holds interleaved (standard) copy
+    # When prefetcher is active: replace interleaved with DRAM-sharded copy.
+    # NO dual storage — saves 1.66 GB/device across 92 layers (was causing OOM with MTP).
+    # Llama Galaxy uses DRAM-sharded weights for both prefill and decode.
+    # Prefill uses the same DRAM-sharded weight with explicit program_config.
+    w_qkv_interleaved = None
     if _prefetch:
-        # Swap: w_qkv becomes the sharded version (for prefetcher insert_tensor),
-        # w_qkv_interleaved becomes the interleaved version (for standard matmul).
-        w_qkv_interleaved = w_qkv  # this IS the interleaved one
+        ttnn.deallocate(w_qkv, force=False)  # free the interleaved copy
         w_qkv = ttnn.as_tensor(
             qkv_cat,
             dtype=attn_dtype,
@@ -594,7 +594,7 @@ def convert_decoder_layer_weights(
             mesh_mapper=qkv_mapper,
             cache_file_name=c("w_qkv", tp_variant + "_dram_shard"),
         )
-        logger.info("  [DEBUG L{}] QKV dual storage: interleaved + DRAM-sharded for prefetch", layer_idx)
+        logger.info("  [DEBUG L{}] QKV DRAM-sharded (single copy, no dual storage)", layer_idx)
     logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
 
     # ---- Fused QKV Bias ----
@@ -641,7 +641,7 @@ def convert_decoder_layer_weights(
     )
     w_o_interleaved = None
     if _prefetch:
-        w_o_interleaved = w_o  # interleaved copy for standard matmul
+        ttnn.deallocate(w_o, force=False)  # free the interleaved copy
         w_o = _linear_weight_tt(
             device=device,
             torch_weight_out_in=_wo_torch,
@@ -650,7 +650,7 @@ def convert_decoder_layer_weights(
             mesh_mapper=wo_mapper,
             memory_config=create_dram_sharded_mem_config(device, 1536, 5120),
         )
-        logger.info("  [DEBUG L{}] O-proj dual storage: interleaved + DRAM-sharded for prefetch", layer_idx)
+        logger.info("  [DEBUG L{}] O-proj DRAM-sharded (single copy, no dual storage)", layer_idx)
     logger.info("  [DEBUG L{}] w_o done", layer_idx)
 
     # ---- MLP Weights ----
