@@ -21,6 +21,7 @@ struct WelfordReduceParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool correction{true};
+    uint32_t reduce_batch_size{1};
 };
 
 }  // namespace ttnn::prim

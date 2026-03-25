@@ -19,6 +19,8 @@
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
+#include <numeric>
+
 namespace ttnn::operations::reduction {
 
 // Does not support ReduceType::Prod (handled separately in prod.cpp).
@@ -314,10 +316,14 @@ static Tensor std_var_impl(
     bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 
     // Determine the reduce dimension and prepare the input tensor.
-    // Single H or W: use the optimized direct kernel path.
-    // All other cases (multi-dim, non-H/W dim): permute + reshape to 2D, then W-reduce.
+    //   single H or W:      direct H-reduce or W-reduce kernel
+    //   single non-H/W dim: permute to H position, H-reduce, inverse permute
+    //   2+ dims:            unified HW path with reduce_batch_size
     tt::tt_metal::ReduceOpDim reduce_dim;
     ttnn::Tensor input_tensor = input_tensor_arg;
+    uint32_t reduce_batch_size = 1;
+    bool needs_inverse_permute = false;
+    ttnn::SmallVector<int64_t> inverse_perm;
 
     if (single_h || single_w) {
         reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -325,13 +331,25 @@ static Tensor std_var_impl(
         if (rank == 1) {
             input_tensor = ttnn::reshape(input_tensor, ttnn::Shape{1, input_shape[0]});
         }
-    } else if (dim.size() == 2) {
-        // Two-dim HW hybrid path: permute the two reduction dims to the last
-        // two positions (H, W) and use the dedicated HW kernel.
+    } else if (dim.size() == 1) {
+        // Single non-H/W dim: permute to H position, H-reduce, inverse permute.
+        reduce_dim = tt::tt_metal::ReduceOpDim::H;
+        int target_dim = dim[0];
+        ttnn::SmallVector<int64_t> perm(rank);
+        std::iota(perm.begin(), perm.end(), 0);
+        std::swap(perm[target_dim], perm[rank - 2]);
+        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
+        needs_inverse_permute = true;
+        inverse_perm = perm;  // swap is its own inverse
+    } else {
+        // 2+ dims: unified HW path.  Permute all reduction dims to the end,
+        // last two become H and W.  Extra reduction dims (if any) fold into
+        // the NC batch dimension; reduce_batch_size tells the writer kernel
+        // how many consecutive NC slices to group per output element.
         reduce_dim = tt::tt_metal::ReduceOpDim::HW;
 
-        // Build permutation: kept dims first (in original order), then the two
-        // reduction dims at positions rank-2 and rank-1.
+        // Build permutation: kept dims first (in original order), then all
+        // reduction dims.  dim is already sorted ascending by generate_reduce_dim.
         ttnn::SmallVector<int64_t> perm;
         perm.reserve(rank);
         for (uint32_t i = 0; i < rank; ++i) {
@@ -345,34 +363,11 @@ static Tensor std_var_impl(
 
         // ttnn::permute checks for identity internally and skips data movement if not needed.
         input_tensor = ttnn::permute(input_tensor, perm, memory_config);
-    } else {
-        // 3+ dims path: permute reduction dims to the end, flatten into W.
-        reduce_dim = tt::tt_metal::ReduceOpDim::W;
 
-        // Build permutation: kept dims first (in original order), reduce dims last.
-        ttnn::SmallVector<int64_t> perm;
-        perm.reserve(rank);
-        uint32_t product_of_kept = 1;
-        for (uint32_t i = 0; i < rank; ++i) {
-            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
-                perm.push_back(static_cast<int64_t>(i));
-                product_of_kept *= input_shape[i];
-            }
+        // Extra reduction dims beyond the last two contribute to reduce_batch_size.
+        for (size_t i = 0; i < dim.size() - 2; ++i) {
+            reduce_batch_size *= input_shape[dim[i]];
         }
-        for (int d : dim) {
-            perm.push_back(static_cast<int64_t>(d));
-        }
-
-        // ttnn::permute checks for identity internally and skips data movement if not needed.
-        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
-
-        // Flatten to 2D: [product_of_kept, product_of_reduce].
-        // product_of_kept may be 1 when reducing all dims (e.g. dim=None).
-        if (product_of_kept == 0) {
-            product_of_kept = 1;
-        }
-        input_tensor = ttnn::reshape(
-            input_tensor, ttnn::Shape{static_cast<uint32_t>(product_of_kept), static_cast<uint32_t>(reduced_volume)});
     }
 
     if (input_tensor.layout() != Layout::TILE) {
@@ -392,7 +387,12 @@ static Tensor std_var_impl(
         std::nullopt,
         compute_kernel_config,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        reduce_batch_size);
+
+    if (needs_inverse_permute) {
+        output_tensor = ttnn::permute(output_tensor, inverse_perm, memory_config);
+    }
 
     // Compensate for any shape adjustments applied to the input tensor.
     return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);

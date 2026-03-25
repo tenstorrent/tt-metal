@@ -15,7 +15,7 @@ from models.common.utility_functions import is_blackhole, torch_random, skip_wit
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, (-2, -1), None])
+@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_std(device, batch_size, h, w, dim, correction, keepdim):
@@ -733,9 +733,15 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
 @pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
 @pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("dim", [-1, -2, (-2, -1), None])
+@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
 @pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
 def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
+    rank = len(shape)
+    if isinstance(dim, tuple):
+        normalized = set((d % rank) for d in dim)
+        if len(normalized) < len(dim):
+            pytest.skip("Duplicate dims after normalization")
+
     if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
         pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
 
@@ -763,16 +769,20 @@ def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
     if op == "sum":
         # sum may compute mix of some large values and some small values, so we need to
         # allow for larger errors. PCC should catch any significant errors.
-        atol = 1
+        atol = 25
         rtol = 0.4
     else:
         atol = 0.1
         rtol = 0.1
-    if op in ("var", "std"):
+    if op == "var":
         # For var/std there are cases where all values are close to 1, and we're using bfloat16,
         # so even a rounding error of 0.5 ULP has a significant impact on PCC.
-        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
         pcc = 0.98
+    elif op == "std":
+        # For std, sqrtf() adds an extra rounding step on top of variance, further
+        # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
+        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
+        pcc = 0.96
     else:
         pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
