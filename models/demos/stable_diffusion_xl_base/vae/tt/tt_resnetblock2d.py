@@ -154,8 +154,8 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
-        use_welford = reciprocals_tensor is not None
+        # On Blackhole, disable Welford algorithm due to precision issues
+        use_welford = reciprocals_tensor is not None  # and not is_blackhole()
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -225,8 +225,13 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+<<<<<<< HEAD
         # NOTE: On Blackhole, using welford causes PCC drop in unit tests
         use_welford = reciprocals_tensor is not None
+=======
+        # On Blackhole, disable Welford algorithm due to precision issues
+        use_welford = reciprocals_tensor is not None  # and not is_blackhole()
+>>>>>>> 290a151159 (Enable welford in VAE)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
