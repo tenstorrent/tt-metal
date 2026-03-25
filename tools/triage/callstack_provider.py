@@ -130,6 +130,54 @@ def get_callstack(
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
+def get_function_die(entry: CallstackEntry):
+    """Navigate from a callstack entry's argument/local dies to the parent function die."""
+    for var in entry.arguments + entry.locals:
+        current = var.die.parent
+        while current is not None:
+            if current.tag == "DW_TAG_subprogram":
+                return current
+            if current.tag == "DW_TAG_inlined_subroutine":
+                abstract_origin = current.get_DIE_from_attribute("DW_AT_abstract_origin")
+                if abstract_origin is not None:
+                    return abstract_origin
+                return current
+            current = current.parent
+    return None
+
+
+def extract_template_params(function_die) -> list[tuple[str | None, str]]:
+    """Extract template parameters (name, display_value) from a function die."""
+    actual_die = function_die
+    if "DW_AT_specification" in actual_die.attributes:
+        spec_die = actual_die.get_DIE_from_attribute("DW_AT_specification")
+        if spec_die is not None:
+            actual_die = spec_die
+
+    template_params = []
+    for child in actual_die.iter_children():
+        if child.tag == "DW_TAG_template_type_param":
+            param_name = child.name
+            type_die = child.resolved_type
+            type_name = type_die.name if type_die and type_die is not child else "?"
+            template_params.append((param_name, type_name))
+        elif child.tag == "DW_TAG_template_value_param":
+            param_name = child.name
+            value = child.value
+            template_params.append((param_name, f"{value}" if value is not None else "?"))
+        elif child.tag == "DW_TAG_GNU_template_parameter_pack":
+            for pack_child in child.iter_children():
+                if pack_child.tag == "DW_TAG_template_type_param":
+                    type_die = pack_child.resolved_type
+                    template_params.append(
+                        (pack_child.name, type_die.name if type_die and type_die is not pack_child else "?")
+                    )
+                elif pack_child.tag == "DW_TAG_template_value_param":
+                    value = pack_child.value
+                    template_params.append((pack_child.name, f"{value}" if value is not None else "?"))
+    return template_params
+
+
 def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
