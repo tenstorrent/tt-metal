@@ -163,7 +163,7 @@ def get_gate_outputs(
     logger.info(f"  expert_offsets.shape={expert_offsets.shape}")
     logger.info(f"  expert_token_counts.shape={expert_token_counts.shape}")
     logger.info(f"  cum_sum.shape={cum_sum.shape}")
-    return expert_offsets, expert_token_counts, cum_sum
+    return expert_offsets, expert_token_counts, expert_counter
 
 
 def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor):

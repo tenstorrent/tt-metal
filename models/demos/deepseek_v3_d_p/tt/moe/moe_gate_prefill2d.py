@@ -221,6 +221,12 @@ class MoEGate_prep_dispatch_combine(LightweightModule):
         else:
             ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
 
+        ttnn_top_k_experts_indices = ttnn.pad(
+            ttnn_top_k_experts_indices,
+            padding=((0, 0), (0, num_routed_experts - num_experts_per_tok)),
+            value=257,
+        )
+
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
             shape=(seq_len_per_chip // 64, num_routed_experts),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),

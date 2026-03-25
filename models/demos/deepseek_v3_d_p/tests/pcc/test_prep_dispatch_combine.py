@@ -161,7 +161,7 @@ def test_prep_dispatch_combine(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, per_device_expert_counter = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -174,7 +174,7 @@ def test_prep_dispatch_combine(
         mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table
     )
 
-    tt_expert_offsets, tt_expert_token_counts, tt_cum_sum = tt_gate_outputs(
+    tt_expert_offsets, tt_expert_token_counts, tt_per_device_expert_counter = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         dispatch_group_size=dispatch_group_size,
         num_routed_experts=num_routed_experts,
@@ -183,8 +183,10 @@ def test_prep_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    logger.warning(f"{expert_offsets.shape=}, {expert_token_counts.shape=}, {cum_sum.shape=}")
-    logger.warning(f"{tt_expert_offsets.shape=}, {tt_expert_token_counts.shape=}, {tt_cum_sum.shape=}")
+    logger.warning(f"{expert_offsets.shape=}, {expert_token_counts.shape=}, {per_device_expert_counter.shape=}")
+    logger.warning(
+        f"{tt_expert_offsets.shape=}, {tt_expert_token_counts.shape=}, {tt_per_device_expert_counter.shape=}"
+    )
 
     composer = ttnn.create_mesh_composer(
         mesh_device,
@@ -196,7 +198,7 @@ def test_prep_dispatch_combine(
     for name, torch_tensor, tt_tensor in [
         ("expert_offsets", expert_offsets, tt_expert_offsets),
         ("expert_token_counts", expert_token_counts, tt_expert_token_counts),
-        ("cum_sum", cum_sum, tt_cum_sum),
+        ("per_device_expert_counter", per_device_expert_counter, tt_per_device_expert_counter),
     ]:
         logger.info(f"Validating {name}...")
         logger.info(f"{tt_tensor.tensor_topology()=}")
