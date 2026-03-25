@@ -944,7 +944,12 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
-                raise ValueError("feat_cache cannot be None")
+                # No-cache full-T mode: WanCausalConv3d zero-pads temporal front (same as "Rep" boundary)
+                x_time_BTHWU = self.time_conv(x_BTHWC, logical_h)  # no cache_x → zero-padded
+                T1 = x_time_BTHWU.shape[1]
+                x_BTHW2C = ttnn.reshape(x_time_BTHWU, (B, T1, H, W, 2, C))
+                x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
 
         if self.is_upsample:
             T2 = x_BTHWC.shape[1]
@@ -976,7 +981,8 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                raise ValueError("feat_cache cannot be None")
+                # No-cache full-T mode: time_conv with zero-padded temporal boundary
+                x_conv_BTHWC = self.time_conv(x_conv_BTHWC, logical_h)
         return x_conv_BTHWC, logical_h
 
 
@@ -1319,31 +1325,40 @@ class WanDecoder(Module):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape
 
-        self.clear_cache()
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        output_BCTHW = None
-        for i in range(T):
-            # Process one frame at a time
-            self._conv_idx = [0]
-            out_BTHWC, new_logical_h = self.decoder(
-                x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
-            )
-            out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            if output_BCTHW is None:
-                output_BCTHW = out_BCTHW
-            else:
-                output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+        if use_cache:
+            self.clear_cache()
+            output_BCTHW = None
+            for i in range(T):
+                # Process one frame at a time
+                self._conv_idx = [0]
+                out_BTHWC, new_logical_h = self.decoder(
+                    x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+                )
+                # Channels first
+                out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+                # Trim padding on output channels
+                out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
+                if output_BCTHW is None:
+                    output_BCTHW = out_BCTHW
+                else:
+                    output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+            self.clear_cache()
+        else:
+            # No-cache full-T single-pass mode
+            out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
+            output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+            output_BCTHW = output_BCTHW[:, : self.out_channels, :, :, :]
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-        self.clear_cache()
         return (output_BCTHW, new_logical_h)
 
 
