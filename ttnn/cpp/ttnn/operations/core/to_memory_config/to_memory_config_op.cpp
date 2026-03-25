@@ -5,6 +5,7 @@
 #include "to_memory_config_op.hpp"
 
 #include "ttnn/core.hpp"
+#include "ttnn/operations/data_movement/sharded/redistribute_to_memory_config/redistribute_to_memory_config.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
@@ -19,6 +20,13 @@ Tensor to_memory_config(
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
     using namespace tt::tt_metal;
+
+    if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+        memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return ttnn::redistribute_to_memory_config(
+            tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
+    }
+
     // Temporary until we see why buffer data not being populated
     const auto original_memory_config = ttnn::get_memory_config(tensor);
     if (original_memory_config.has_value() && original_memory_config.value() == memory_config &&
