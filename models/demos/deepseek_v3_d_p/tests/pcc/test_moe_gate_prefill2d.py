@@ -254,14 +254,88 @@ def test_forward_pass(
         name="expert_token_counts",
     )
 
-    all_results = [recall_topk_indices, pcc_logits, pcc_scores, exact_dispatch_offsets, expert_token_counts]
-    for res in all_results:
-        res.log_mismatches()
-    log_validation_results(
-        results=all_results,
-        num_dispatch_groups=n_tp_devices,
+    # Per-dispatch-group masked offsets and totals
+    per_group_offsets = {}
+    per_group_totals = {}
+    for group in range(n_tp_devices):
+        group_mask = dispatch_table[group] >= 0
+        masked_counter = expert_counter.clone()
+        masked_counter[:, ~group_mask] = 0
+        cum_sum = torch.cumsum(masked_counter, dim=0)
+        offsets = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
+        per_group_offsets[group] = offsets.long()
+        per_group_totals[group] = cum_sum[-1:].long()
+
+    expert_offsets, _, _ = get_gate_outputs(
+        indices=indices_for_gate,
         dispatch_group_size=n_sp_devices,
-        title="Gate Prefill2D Validation",
+        num_routed_experts=n_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len_per_device,
+        num_experts_per_tok=config.n_activated_experts,
     )
-    merged = ValidationResult.merge(all_results, name="gate_prefill2d")
-    merged.assert_passed("Gate prefill2d validation failed")
+
+    reference_offsets = expert_offsets.long()
+
+    per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
+    for device_id in range(len(per_device_dispatch_offsets)):
+        tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
+        row = device_id // n_tp_devices
+        col = device_id % n_tp_devices
+        reference_offsets = per_group_offsets[col][row : row + 1, :]
+
+        offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
+        status_char = "✅" if offsets_match else "❌"
+        if offsets_match:
+            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
+        else:
+            diff = (tt_offsets_torch - reference_offsets).abs()
+            max_diff = diff.max().item()
+            num_mismatches = (diff > 0).sum().item()
+            total_elements = diff.numel()
+            logger.info(
+                f"{status_char} Device {device_id} (row={row}, col={col}): "
+                f"Dispatch offsets MISMATCH - max_diff={max_diff}, "
+                f"mismatches={num_mismatches}/{total_elements}"
+            )
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): "
+                f"Dispatch offsets mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
+            )
+
+    per_device_totals = ttnn.get_device_tensors(total_counts_per_expert)
+    for device_id in range(len(per_device_totals)):
+        tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
+        row = device_id // n_tp_devices
+        col = device_id % n_tp_devices
+        reference_totals = per_group_totals[col]
+
+        totals_match = torch.equal(tt_totals_torch, reference_totals)
+        status_char = "✅" if totals_match else "❌"
+        if totals_match:
+            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
+        else:
+            diff = (tt_totals_torch - reference_totals).abs()
+            max_diff = diff.max().item()
+            num_mismatches = (diff > 0).sum().item()
+            total_elements = diff.numel()
+            logger.info(
+                f"{status_char} Device {device_id} (row={row}, col={col}): "
+                f"Total counts MISMATCH - max_diff={max_diff}, "
+                f"mismatches={num_mismatches}/{total_elements}"
+            )
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): "
+                f"Total counts mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
+            )
+
+    assert all_passed, "\n".join(assert_msgs)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_topk_indices)
+    ttnn.deallocate(tt_logits)
+    ttnn.deallocate(dispatch_offsets)
+    ttnn.deallocate(total_counts_per_expert)

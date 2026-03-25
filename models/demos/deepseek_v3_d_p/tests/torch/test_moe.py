@@ -94,7 +94,17 @@ def test_moe(
         num_dispatch_groups=1,
     )
 
-    # Create weights
+    # Compute gate outputs
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+    )
+
+    # Create weights for random-weights mode
     if use_hf_weights:
         routed_expert_weights = None
         shared_expert_weights = None
