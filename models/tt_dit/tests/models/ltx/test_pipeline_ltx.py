@@ -132,7 +132,7 @@ def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
 
     # Run pipeline with tiny dimensions
     num_frames = 17
-    px_height, px_width = 128, 128
+    px_height, px_width = 256, 256
     output = pipeline(
         prompt=["test"],
         num_frames=num_frames,
@@ -246,7 +246,7 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
 
     # Run pipeline — output should be decoded video
     num_frames = 17
-    px_height, px_width = 128, 128
+    px_height, px_width = 256, 256
     output = pipeline(
         prompt=["test"],
         num_frames=num_frames,
