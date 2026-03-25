@@ -253,73 +253,16 @@ def test_sdpa_determinism(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype
     run_sdpa_determinism(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
 
 
-def post_process_ops_log(
-    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
-):
-    """Process the ops log CSV and extract performance data."""
-    from tracy.process_model_log import get_latest_ops_log_filename
-    import pandas as pd
-
-    filename = get_latest_ops_log_filename(output_logs_subdir)
-    df = pd.read_csv(filename)
-
-    if has_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        start = markers[markers == "start"].index[0]
-        stop = markers[markers == "stop"].index[0]
-        df = df.iloc[start + 1 : stop]
-    if op_name != "":
-        df = df[df["OP CODE"] == op_name]
-
-    results = {}
-    if float_columns:
-        for col in float_columns:
-            df_filtered = df[df[col] != "-"]
-            if sum_vals:
-                results[col] = df_filtered[col].astype(float).sum()
-            else:
-                results[col] = df_filtered[col].astype(float).to_numpy()
-    if columns:
-        for col in columns:
-            df_filtered = df[df[col] != "-"]
-            results[col] = df_filtered[col]
-    else:
-        results = df
-    return results
-
-
-def compute_cores_used(seqlen, q_chunk_size, num_cores, num_heads):
-    """
-    Compute number of cores actually used based on parallelization scheme.
-
-    Parallelization hierarchy (from sdpa_program_factory.cpp):
-    1. batch_parallel_factor = min(B, num_cores)
-    2. nh_parallel_factor = min(num_cores / batch_parallel_factor, NQH)
-    3. q_parallel_factor = min(num_cores / (batch * nh), q_num_chunks)
-    """
-    B = 1
-    q_num_chunks = math.ceil(seqlen / q_chunk_size)
-
-    batch_parallel = min(B, num_cores)
-    nh_parallel = min(num_cores // batch_parallel, num_heads)
-    q_parallel = min(num_cores // (batch_parallel * nh_parallel), q_num_chunks)
-
-    cores_used = batch_parallel * nh_parallel * q_parallel
-    return cores_used
+from tests.nightly.sdpa_perf_utils import (
+    post_process_ops_log,
+    compute_cores_used,
+    compute_math_utilization,
+)
 
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
-    """
-    Compute math utilization for SDPA.
-
-    Returns:
-        Utilization as a percentage (0-100)
-    """
-    mm_flops = 4 * seqlen * seqlen * head_dim * num_heads
-    cycles = duration_ns * 1.35
-    theoretical_flops = core_count * cycles * 2048
-    utilization = (mm_flops / theoretical_flops) * 100
-    return utilization
+    """Single-chip SDPA utilization (local_seq == total_seq, arch=blackhole)."""
+    return compute_math_utilization(seqlen, seqlen, head_dim, num_heads, duration_ns, core_count)
 
 
 # === TEST 4: PERFORMANCE TABLE (skipped on CI) ===
