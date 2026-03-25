@@ -1,4 +1,5 @@
-from __future__ import annotations
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -20,8 +21,8 @@ class BgeM3TransformerBlock(LightweightModule):
         self.dtype = dtype
         self.layer_num = layer_num
 
-        attention_weights = build_attention_weights(state_dict, layer_num, dtype)
-        mlp_weights = build_mlp_weights(state_dict, layer_num, dtype)
+        attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
+        mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
 
         self.attention = BgeM3Attention.from_config(
             BgeM3AttentionConfig(
@@ -32,6 +33,16 @@ class BgeM3TransformerBlock(LightweightModule):
                 hidden_size=args.dim,
                 num_heads=args.n_heads,
                 head_dim=args.head_dim,
+                mesh_device=mesh_device,
+                qkv_dtype=dtype,
+                score_dtype=ttnn.bfloat16,
+                output_dtype=dtype,
+                score_prg_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=args.grid_size,
+                    q_chunk_size=128,
+                    k_chunk_size=512,
+                    exp_approx_mode=False,
+                ),
             )
         )
         self.attention_norm = _build_optional_layer_norm(
@@ -48,6 +59,10 @@ class BgeM3TransformerBlock(LightweightModule):
                 wo_bias=mlp_weights.wo_bias,
                 hidden_size=args.dim,
                 intermediate_size=args.intermediate_size,
+                mesh_device=mesh_device,
+                wi_dtype=dtype,
+                wo_dtype=dtype,
+                activation_dtype=ttnn.bfloat16,
             )
         )
         self.feed_forward_norm = _build_optional_layer_norm(
@@ -89,8 +104,3 @@ def _build_optional_layer_norm(
             mesh_device=mesh_device,
         )
     )
-
-
-# Backwards-friendly alias for users importing a generic block name.
-TransformerBlock = BgeM3TransformerBlock
-BgeM3EncoderLayer = BgeM3TransformerBlock
