@@ -282,35 +282,66 @@ void kernel_main() {
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
     };
 
-    deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
+    deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
+        constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
+        uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t is_output_core = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t output_core_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t output_core_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
+        per_core_rta_arg_idx += num_tree_reduction_steps * 4;
+
         flash_mla_args = {
-            .k_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 0),
             .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
-            .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .St = get_named_compile_time_arg_val("St"),
-            .DHt = get_named_compile_time_arg_val("DHt"),
+            .cur_batch = cur_batch,
+            .core_num_in_reduce = core_num_in_reduce,
+            .is_output_core = is_output_core,
+            .is_mcast_sender = is_mcast_sender,
+            .output_core_noc_x = output_core_noc_x,
+            .output_core_noc_y = output_core_noc_y,
+            .mcast_start_x = mcast_start_x,
+            .mcast_start_y = mcast_start_y,
+            .mcast_end_x = mcast_end_x,
+            .mcast_end_y = mcast_end_y,
+            .tree_reduction_info = tree_reduction_info,
             .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
             .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
+            .reducer_semaphore_addr = get_named_compile_time_arg_val("mla_reducer_semaphore_addr"),
             .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
+            .q_chunk_size_bytes = get_named_compile_time_arg_val("q_chunk_size_bytes"),
+            .DHt = get_named_compile_time_arg_val("DHt"),
+            .num_mcast_dests = get_named_compile_time_arg_val("num_mcast_dests"),
+            .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
+            .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
+            .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
+            .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
+            .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
+            .q_input_mcast_semaphore_addr = get_named_compile_time_arg_val("mla_q_input_mcast_semaphore_addr"),
             .mcast_semaphore_addr = get_named_compile_time_arg_val("mla_mcast_semaphore_addr"),
-            .k_page_size = get_named_compile_time_arg_val("k_page_size"),
-            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
             .ncrisc_brisc_sync_semaphore_addr = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_addr"),
+            .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
+            .num_tree_reduction_steps = num_tree_reduction_steps,
             .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
-            .kv_cache_cur_pos_ready_semaphore_addr =
-                get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_semaphore_addr"),
-            .kv_cache_cur_pos_ready_value = get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_value"),
             .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
+            .cb_q_in = get_named_compile_time_arg_val("mla_q_in_cb"),
+            .cb_mask = get_named_compile_time_arg_val("mla_mask_cb"),
+            .cb_out_in = get_named_compile_time_arg_val("mla_out_in_cb"),
+            .cb_ms_in = get_named_compile_time_arg_val("mla_ms_in_cb"),
+            .cb_out_ms = get_named_compile_time_arg_val("mla_out_ms_cb"),
         };
     }
 
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
+        get_named_compile_time_arg_val("k_page_size"),
+        get_named_compile_time_arg_val("vDHt"),
+        get_named_compile_time_arg_val("mla_out_o_cb")>;
 
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -595,66 +626,35 @@ void kernel_main() {
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
     };
 
-    deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
+    deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
-        constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
-        uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t is_output_core = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t output_core_noc_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t output_core_noc_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t mcast_end_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
-        tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
-        per_core_rta_arg_idx += num_tree_reduction_steps * 4;
-
         flash_mla_args = {
+            .k_addr = get_common_arg_val<uint32_t>(0),
             .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
-            .cur_batch = cur_batch,
-            .core_num_in_reduce = core_num_in_reduce,
-            .is_output_core = is_output_core,
-            .is_mcast_sender = is_mcast_sender,
-            .output_core_noc_x = output_core_noc_x,
-            .output_core_noc_y = output_core_noc_y,
-            .mcast_start_x = mcast_start_x,
-            .mcast_start_y = mcast_start_y,
-            .mcast_end_x = mcast_end_x,
-            .mcast_end_y = mcast_end_y,
-            .tree_reduction_info = tree_reduction_info,
+            .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_x = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .mcast_start_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .vc = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .St = get_named_compile_time_arg_val("St"),
+            .DHt = get_named_compile_time_arg_val("DHt"),
             .Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t"),
             .num_cores_per_head = get_named_compile_time_arg_val("num_cores_per_head"),
-            .reducer_semaphore_addr = get_named_compile_time_arg_val("mla_reducer_semaphore_addr"),
             .k_chunk_size = get_named_compile_time_arg_val("k_chunk_size"),
-            .q_chunk_size_bytes = get_named_compile_time_arg_val("q_chunk_size_bytes"),
-            .DHt = get_named_compile_time_arg_val("DHt"),
-            .num_mcast_dests = get_named_compile_time_arg_val("num_mcast_dests"),
-            .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-            .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-            .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-            .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-            .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
-            .q_input_mcast_semaphore_addr = get_named_compile_time_arg_val("mla_q_input_mcast_semaphore_addr"),
             .mcast_semaphore_addr = get_named_compile_time_arg_val("mla_mcast_semaphore_addr"),
-            .ncrisc_brisc_sync_semaphore_addr = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_addr"),
+            .k_page_size = get_named_compile_time_arg_val("k_page_size"),
             .k_num_pages = get_named_compile_time_arg_val("k_num_pages"),
-            .num_tree_reduction_steps = num_tree_reduction_steps,
+            .ncrisc_brisc_sync_semaphore_addr = get_named_compile_time_arg_val("mla_ncrisc_brisc_sync_semaphore_addr"),
             .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
+            .kv_cache_cur_pos_ready_semaphore_addr =
+                get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_semaphore_addr"),
+            .kv_cache_cur_pos_ready_value = get_named_compile_time_arg_val("mla_kv_cache_cur_pos_ready_value"),
             .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
-            .cb_q_in = get_named_compile_time_arg_val("mla_q_in_cb"),
-            .cb_mask = get_named_compile_time_arg_val("mla_mask_cb"),
-            .cb_out_in = get_named_compile_time_arg_val("mla_out_in_cb"),
-            .cb_ms_in = get_named_compile_time_arg_val("mla_ms_in_cb"),
-            .cb_out_ms = get_named_compile_time_arg_val("mla_out_ms_cb"),
         };
     }
 
-    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
-        get_named_compile_time_arg_val("k_page_size"),
-        get_named_compile_time_arg_val("vDHt"),
-        get_named_compile_time_arg_val("mla_out_o_cb")>;
+    using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;

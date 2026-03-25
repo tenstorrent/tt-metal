@@ -1204,7 +1204,7 @@ class PreSDPA:
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
         num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
 
-        mla_brisc_named_compile_time_args = [
+        mla_ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -1233,7 +1233,7 @@ class PreSDPA:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
         ]
-        mla_ncrisc_named_compile_time_args = [
+        mla_brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -1965,8 +1965,8 @@ class PreSDPA:
                         output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
                     )
 
-                    # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-                    mla_ncrisc_per_core_args.append(
+                    # BRISC per-core runtime args (common args: k_addr, pos_addr)
+                    mla_brisc_per_core_args.append(
                         (
                             core,
                             [
@@ -1985,8 +1985,8 @@ class PreSDPA:
                         device, s_block_idx, cur_batch
                     )
 
-                    # BRISC per-core runtime args (common args: pos_addr)
-                    mla_brisc_args = [
+                    # NCRISC per-core runtime args (common args: pos_addr)
+                    mla_ncrisc_args = [
                         cur_batch,
                         core_num_in_reduce,
                         is_output_core,
@@ -1999,8 +1999,8 @@ class PreSDPA:
                         mcast_end_y,
                     ]
                     for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                        mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-                    mla_brisc_per_core_args.append((core, mla_brisc_args))
+                        mla_ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+                    mla_ncrisc_per_core_args.append((core, mla_ncrisc_args))
 
                     is_sender_after_reduce = (
                         1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0
