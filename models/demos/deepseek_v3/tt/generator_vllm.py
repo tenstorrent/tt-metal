@@ -131,7 +131,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         sample_on_device_mode = kwargs.get("sample_on_device_mode", "unknown")
         # sample_on_device_mode is not passed by vLLM, TODO, check if its missing in the vLLM code
         # sample_on_device = sample_on_device_mode in ["all"]
-        sample_on_device = sampling_params is not None
+        # sample_on_device = sampling_params is not None
+        sample_on_device = True
         logger.info(
             "prefill_forward shapes: tokens={} lengths={} page_table={} kv_cache={} empty_slots={} sampling_params={} sample_on_device_mode={} sample_on_device={}",
             tuple(tokens.shape),
@@ -209,7 +210,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             #         self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
             #     )
             prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
-        self.ccl.reset_sem_counters()  # is this helping in fixing hang?
         prefill_tokens = torch.stack(prefill_tokens)  # [num_of_users, S, V]
 
         logger.info(f"Prefill tokens shape: {prefill_tokens.shape}")

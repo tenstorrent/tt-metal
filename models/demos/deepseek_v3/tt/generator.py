@@ -286,6 +286,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         enable_mtp: bool = False,
     ) -> None:
         # sampling values of all users are assumed to be the same default values if not provided.
+        if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+            logger.info("Sampling generator already initialized, skipping initialization")
+            return
+
         self.sample_on_device = sample_on_device
         self.sampling_params = (
             sampling_params
