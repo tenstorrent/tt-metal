@@ -70,36 +70,35 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t best_subs = UINT32_MAX;
     uint32_t best_kb = 0, best_mb = 0, best_db = 1;
 
+    constexpr uint32_t db_factor_required = 2;
     for (uint32_t kb = std::min(K_half, 8u); kb >= 1; kb--) {
         if (K_half % kb != 0)
             continue;
-        for (uint32_t db : {2u, 1u}) {
-            uint32_t lo = 1, hi = Mpc, mb = 0;
-            while (lo <= hi) {
-                uint32_t mid = (lo + hi) / 2;
-                uint32_t l1 = mid * mid * intermed_tile_sz +
-                              mid * (2 * Mpc * out_tile_sz + out_tile_sz + mirror_out_overhead + 2 * db * kb * tile_sz);
-                if (l1 <= L1_BUDGET) {
-                    mb = mid;
-                    lo = mid + 1;
-                } else {
-                    hi = mid - 1;
-                }
-            }
-            if (mb == 0)
-                continue;
-            uint32_t subs = (Mpc + mb - 1) / mb;
-            bool better = (subs < best_subs) || (subs == best_subs && db > best_db) ||
-                          (subs == best_subs && db == best_db && kb > best_kb);
-            if (better) {
-                best_subs = subs;
-                best_kb = kb;
-                best_mb = mb;
-                best_db = db;
+        uint32_t lo = 1, hi = Mpc, mb = 0;
+        while (lo <= hi) {
+            uint32_t mid = (lo + hi) / 2;
+            uint32_t l1 =
+                mid * mid * intermed_tile_sz + mid * (2 * Mpc * out_tile_sz + out_tile_sz + mirror_out_overhead +
+                                                      2 * db_factor_required * kb * tile_sz);
+            if (l1 <= L1_BUDGET) {
+                mb = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
         }
+        if (mb == 0)
+            continue;
+        uint32_t subs = (Mpc + mb - 1) / mb;
+        bool better = (subs < best_subs) || (subs == best_subs && kb > best_kb);
+        if (better) {
+            best_subs = subs;
+            best_kb = kb;
+            best_mb = mb;
+            best_db = db_factor_required;
+        }
     }
-    TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul CBs in L1");
+    TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul with db=2 in L1");
 
     // Per-nsb reduction: eliminates c_3, shrinks c_5 to mb*nb=mb².
     uint32_t pernsb_best_subs = UINT32_MAX;
@@ -108,30 +107,27 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     for (uint32_t kb = std::min(K_half, 8u); kb >= 1; kb--) {
         if (K_half % kb != 0)
             continue;
-        for (uint32_t db : {2u, 1u}) {
-            uint32_t lo = 1, hi = Mpc, mb = 0;
-            while (lo <= hi) {
-                uint32_t mid = (lo + hi) / 2;
-                uint32_t l1 = mid * mid * (intermed_tile_sz + out_tile_sz) +
-                              mid * (out_tile_sz + mirror_out_overhead + 2 * db * kb * tile_sz);
-                if (l1 <= L1_BUDGET) {
-                    mb = mid;
-                    lo = mid + 1;
-                } else {
-                    hi = mid - 1;
-                }
+        uint32_t lo = 1, hi = Mpc, mb = 0;
+        while (lo <= hi) {
+            uint32_t mid = (lo + hi) / 2;
+            uint32_t l1 = mid * mid * (intermed_tile_sz + out_tile_sz) +
+                          mid * (out_tile_sz + mirror_out_overhead + 2 * db_factor_required * kb * tile_sz);
+            if (l1 <= L1_BUDGET) {
+                mb = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
-            if (mb == 0)
-                continue;
-            uint32_t subs = (Mpc + mb - 1) / mb;
-            bool better = (subs < pernsb_best_subs) || (subs == pernsb_best_subs && db > pernsb_best_db) ||
-                          (subs == pernsb_best_subs && db == pernsb_best_db && kb > pernsb_best_kb);
-            if (better) {
-                pernsb_best_subs = subs;
-                pernsb_best_kb = kb;
-                pernsb_best_mb = mb;
-                pernsb_best_db = db;
-            }
+        }
+        if (mb == 0)
+            continue;
+        uint32_t subs = (Mpc + mb - 1) / mb;
+        bool better = (subs < pernsb_best_subs) || (subs == pernsb_best_subs && kb > pernsb_best_kb);
+        if (better) {
+            pernsb_best_subs = subs;
+            pernsb_best_kb = kb;
+            pernsb_best_mb = mb;
+            pernsb_best_db = db_factor_required;
         }
     }
 
