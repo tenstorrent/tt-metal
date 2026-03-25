@@ -4,7 +4,6 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
@@ -60,11 +59,6 @@ class TtUpsample2D(LightweightModule):
     def forward(self, hidden_states):
         hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
-
-        if is_blackhole() and "up_blocks.1.upsamplers.0" in self.module_path:
-            # Most conv2d have reshard_if_not_optimal=True so it will sometimes reshard again for BH but it is cheap
-            # Only conv2d ops in up_blocks.1.upsamplers.0 have reshard_if_not_optimal=False to avoid resharding overhead of the host code (See Issue #39723)
-            self.conv_config.reshard_if_not_optimal = False
 
         [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
