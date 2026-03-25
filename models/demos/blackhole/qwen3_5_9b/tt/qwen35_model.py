@@ -198,19 +198,54 @@ class Qwen35Model:
         B, T = token_ids.shape
         self.reset_state(batch_size=B)
 
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t_embed_start = _time.time()
+
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(token_ids_ttnn)
 
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t_embed_end = _time.time()
+            logger.info(
+                f"[PROFILE] embedding: {(_t_embed_end - _t_embed_start)*1000:.1f}ms "
+                f"(B={B}, T={T}, chunk_size={chunk_size})"
+            )
+            _layer_summary = {"deltanet": [], "attention": []}
+            _component_totals = {
+                "attn_norm": 0.0,
+                "attn": 0.0,
+                "resid_ffnorm": 0.0,
+                "mlp": 0.0,
+                "resid_out": 0.0,
+                "slice_rope": 0.0,
+                "concat_dram": 0.0,
+            }
+
+        # Attention layers can use larger chunks than DeltaNet — no Neumann series
+        # limitation, and fewer chunks means fewer unique KV cache sizes for SDPA
+        # compilation. 4096 = 4x fewer SDPA compilations vs chunk_size=1024.
+        attn_chunk_size = max(chunk_size, 4096)
+
         for layer_idx, layer in enumerate(self.layers):
+            layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
+
             if profile:
                 ttnn.synchronize_device(self.device)
                 _tl0 = _time.time()
+                _chunk_times = []
 
             chunks_out = []
-            for chunk_start in range(0, T, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, T)
+            num_chunks = (T + layer_chunk_size - 1) // layer_chunk_size
+            for chunk_i, chunk_start in enumerate(range(0, T, layer_chunk_size)):
+                chunk_end = min(chunk_start + layer_chunk_size, T)
+
+                if profile:
+                    ttnn.synchronize_device(self.device)
+                    _tc0 = _time.time()
 
                 x_chunk = x[:, chunk_start:chunk_end, :]
                 x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)
@@ -218,7 +253,7 @@ class Qwen35Model:
                 if layer.is_full_attention:
                     cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
                     sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
-                    x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
+                    x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill", profile=profile)
                 else:
                     x_chunk = layer.forward(
                         x_chunk,
@@ -226,9 +261,19 @@ class Qwen35Model:
                         sin=None,
                         mode="prefill",
                         chunk_size=layer.attention.long_prefill_chunk_size,
+                        profile=profile,
                     )
 
+                if profile:
+                    ttnn.synchronize_device(self.device)
+                    _tc1 = _time.time()
+                    _chunk_times.append((_tc1 - _tc0) * 1000)
+
                 chunks_out.append(x_chunk)
+
+            if profile:
+                ttnn.synchronize_device(self.device)
+                _t_concat0 = _time.time()
 
             if len(chunks_out) == 1:
                 x_new = chunks_out[0]
@@ -244,26 +289,86 @@ class Qwen35Model:
             if profile:
                 ttnn.synchronize_device(self.device)
                 _tl1 = _time.time()
+                _concat_dram_ms = (_tl1 - _t_concat0) * 1000
                 kind = "attention" if layer.is_full_attention else "deltanet"
-                import torch as _torch
+                layer_total_ms = (_tl1 - _tl0) * 1000
+                _layer_summary[kind].append(layer_total_ms)
+                _component_totals["concat_dram"] += _concat_dram_ms
 
-                x_diag = ttnn.to_torch(x).float()
-                x_last_tok = x_diag[:, -1:, :].float()
+                # Accumulate component breakdown from decoder forward
+                if hasattr(layer, "_last_profile"):
+                    # Sum across chunks for this layer (last chunk's profile only for single chunk)
+                    p = layer._last_profile
+                    _component_totals["attn_norm"] += p["attn_norm_ms"]
+                    _component_totals["attn"] += p["attn_ms"]
+                    _component_totals["resid_ffnorm"] += p["resid_ffnorm_ms"]
+                    _component_totals["mlp"] += p["mlp_ms"]
+                    _component_totals["resid_out"] += p["resid_out_ms"]
+
+                # Per-chunk detail for this layer
+                chunk_detail = " ".join(f"{ct:.0f}" for ct in _chunk_times)
+                chunk_avg = sum(_chunk_times) / len(_chunk_times) if _chunk_times else 0
                 diag_msg = (
-                    f"Layer {layer_idx} ({kind}) {(_tl1-_tl0)*1000:.0f}ms | "
-                    f"x: mean={x_diag.abs().mean():.4f} max={x_diag.abs().max():.4f} "
-                    f"inf={_torch.isinf(x_diag).sum().item()} | "
-                    f"x_last: mean={x_last_tok.abs().mean():.4f}"
+                    f"  Layer {layer_idx:2d} ({kind:9s}) {layer_total_ms:7.0f}ms | "
+                    f"chunks({num_chunks}): [{chunk_detail}]ms avg={chunk_avg:.0f}ms | "
+                    f"concat+dram: {_concat_dram_ms:.0f}ms"
                 )
-                if not layer.is_full_attention:
-                    s = ttnn.to_torch(layer.attention.recurrent_state).float()
-                    diag_msg += f" | state: mean={s.abs().mean():.6f} max={s.abs().max():.4f}"
+                if hasattr(layer, "_last_profile"):
+                    p = layer._last_profile
+                    diag_msg += (
+                        f" | norm={p['attn_norm_ms']:.0f} "
+                        f"{'attn' if layer.is_full_attention else 'delta'}={p['attn_ms']:.0f} "
+                        f"mlp={p['mlp_ms']:.0f}"
+                    )
                 logger.info(diag_msg)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t_head0 = _time.time()
 
         x_last = x[:, -1:, :]
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x_last, self.lm_head_weight)
         ttnn.deallocate(x)
+
+        if profile:
+            ttnn.synchronize_device(self.device)
+            _t_head1 = _time.time()
+            head_ms = (_t_head1 - _t_head0) * 1000
+
+            dn_times = _layer_summary["deltanet"]
+            att_times = _layer_summary["attention"]
+            dn_total = sum(dn_times)
+            att_total = sum(att_times)
+            dn_avg = dn_total / len(dn_times) if dn_times else 0
+            att_avg = att_total / len(att_times) if att_times else 0
+            total_ms = (_t_head1 - _t_embed_start) * 1000
+
+            logger.info("=" * 80)
+            logger.info(f"[PROFILE] PREFILL SUMMARY (T={T}, chunk_size={chunk_size})")
+            logger.info(f"  embedding:      {(_t_embed_end - _t_embed_start)*1000:8.1f}ms")
+            logger.info(
+                f"  deltanet (x{len(dn_times)}): {dn_total:8.1f}ms  "
+                f"(avg {dn_avg:.1f}ms, min {min(dn_times):.1f}ms, max {max(dn_times):.1f}ms)"
+                if dn_times
+                else f"  deltanet (x0):        0.0ms"
+            )
+            logger.info(
+                f"  attention (x{len(att_times)}): {att_total:8.1f}ms  "
+                f"(avg {att_avg:.1f}ms, min {min(att_times):.1f}ms, max {max(att_times):.1f}ms)"
+                if att_times
+                else f"  attention (x0):       0.0ms"
+            )
+            logger.info(f"  norm+lm_head:   {head_ms:8.1f}ms")
+            logger.info(f"  TOTAL:          {total_ms:8.1f}ms  ({T / (total_ms / 1000):.0f} tok/s)")
+            logger.info(f"  --- Component breakdown (last chunk per layer, summed across layers) ---")
+            logger.info(f"  attn_norm:      {_component_totals['attn_norm']:8.1f}ms")
+            logger.info(f"  attn/deltanet:  {_component_totals['attn']:8.1f}ms")
+            logger.info(f"  resid+ff_norm:  {_component_totals['resid_ffnorm']:8.1f}ms")
+            logger.info(f"  mlp:            {_component_totals['mlp']:8.1f}ms")
+            logger.info(f"  resid_out:      {_component_totals['resid_out']:8.1f}ms")
+            logger.info(f"  concat+dram:    {_component_totals['concat_dram']:8.1f}ms")
+            logger.info("=" * 80)
 
         return logits
 
@@ -361,6 +466,7 @@ class Qwen35Model:
                 layer.attention.use_preallocated_cache = False
 
         chunk_size = 1024
+        attn_chunk_size = max(chunk_size, 4096)
         if T <= chunk_size:
             position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
             cos, sin = self.rope.get_rot_mats(position_ids)
@@ -368,9 +474,10 @@ class Qwen35Model:
                 x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
         else:
             for layer_idx, layer in enumerate(self.layers):
+                layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
                 chunks_out = []
-                for chunk_start in range(0, T, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, T)
+                for chunk_start in range(0, T, layer_chunk_size):
+                    chunk_end = min(chunk_start + layer_chunk_size, T)
 
                     x_chunk = x[:, chunk_start:chunk_end, :]
                     x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)

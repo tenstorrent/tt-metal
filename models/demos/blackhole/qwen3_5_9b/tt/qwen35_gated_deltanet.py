@@ -169,11 +169,11 @@ class Qwen35GatedDeltaNet:
         self.prefill_chunk_size = 64
         self.cached_masks = create_chunk_masks(self.prefill_chunk_size, device)
 
-        # chunk_size=64 is the largest safe value — at chunk_size=256, the Neumann
-        # inverse R=(I-M)^{-1} overflows float32 (entries grow as ~1.5^chunk_size).
-        # Using 64 matches the proven-working regular prefill path.
-        self.long_prefill_chunk_size = 64
-        self.cached_masks_long = self.cached_masks  # same size, share masks
+        # The Neumann approximation overflows at chunk_size=256, but we now use
+        # exact forward substitution (CPU triangular solve) which is numerically
+        # stable at any chunk size. Larger chunks = fewer CPU round-trips.
+        self.long_prefill_chunk_size = 256
+        self.cached_masks_long = create_chunk_masks(self.long_prefill_chunk_size, device)
 
         self.recurrent_state = None
         # Conv states: ttnn tensors on device [B, kernel_size-1, D]
