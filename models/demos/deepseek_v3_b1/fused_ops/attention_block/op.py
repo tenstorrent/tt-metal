@@ -1595,7 +1595,7 @@ class AttentionBlock:
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
         num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
 
-        mla_brisc_named_compile_time_args = [
+        mla_ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -1624,7 +1624,7 @@ class AttentionBlock:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
         ]
-        mla_ncrisc_named_compile_time_args = [
+        mla_brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -1929,7 +1929,7 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset_mcast_core = 0
 
         sdpa_forwarder_scratch_running_offset = 0
-        sdpa_forwarder_scratch_running_offset_kv_cache_update_offset = 0
+        input_running_offset = 0
 
         # Create circular buffer descriptors
         # CB: Input (created from sharded tensor)
@@ -2299,8 +2299,8 @@ class AttentionBlock:
         create_q_heads_out_total_size = create_q_heads_out_page_size * q_tiles
         create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             create_q_heads_out_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_attention_block_output_tensor,  # Overlap with attn output since it's only on the mcast core
+            address_offset=0,
             total_size=create_q_heads_out_total_size,
             core_ranges=full_device_grid,
         )
@@ -2312,7 +2312,6 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
-        sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
         # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
@@ -2467,12 +2466,12 @@ class AttentionBlock:
         kv_cache_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_cache_intermed_cb,
             ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset_kv_cache_update_offset,
+            address_offset=sdpa_forwarder_scratch_running_offset,
             total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
             core_ranges=full_device_grid,
         )
         kv_cache_intermed_cb_descriptor.format_descriptors = [kv_cache_intermed_cb_format]
-        sdpa_forwarder_scratch_running_offset_kv_cache_update_offset += kv_cache_intermed_cb_descriptor.total_size
+        sdpa_forwarder_scratch_running_offset += kv_cache_intermed_cb_descriptor.total_size
         # Flash MLA cb descriptors
         mla_cb_descriptors = []
 
@@ -2547,8 +2546,8 @@ class AttentionBlock:
         # cb_mask: Mask input
         mla_mask_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_mask_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=q_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2560,14 +2559,14 @@ class AttentionBlock:
                 tile=q_tile_descriptor,
             )
         ]
-        sdpa_forwarder_scratch_running_offset += mla_mask_cb_descriptor.total_size
+        input_running_offset += mla_mask_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_mask_cb_descriptor)
 
         # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
         mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_o_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=out0_t * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2575,7 +2574,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_o_cb_descriptor.total_size
+        input_running_offset += mla_out_o_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_o_cb_descriptor)
         # Uncomment to debug local FlashMLA output
         # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
@@ -2589,8 +2588,8 @@ class AttentionBlock:
         # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
         mla_out_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_ms_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=statistics_tiles * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2598,7 +2597,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_ms_cb_descriptor.total_size
+        input_running_offset += mla_out_ms_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_ms_cb_descriptor)
 
         # Post SDPA
@@ -2990,8 +2989,8 @@ class AttentionBlock:
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-            mla_ncrisc_per_core_args.append(
+            # BRISC per-core runtime args (common args: k_addr, pos_addr)
+            mla_brisc_per_core_args.append(
                 (
                     core,
                     [
@@ -3008,8 +3007,8 @@ class AttentionBlock:
             # Tree reduction partner coordinates
             tree_reduction_info = optimized_mla_grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # BRISC per-core runtime args (common args: pos_addr)
-            mla_brisc_args = [
+            # NCRISC per-core runtime args (common args: pos_addr)
+            mla_ncrisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_output_core,
@@ -3022,8 +3021,8 @@ class AttentionBlock:
                 mcast_end_y,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-            mla_brisc_per_core_args.append((core, mla_brisc_args))
+                mla_ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            mla_ncrisc_per_core_args.append((core, mla_ncrisc_args))
 
             is_sender_after_reduce = (
                 1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0

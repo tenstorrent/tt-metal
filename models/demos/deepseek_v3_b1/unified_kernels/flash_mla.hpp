@@ -6,10 +6,10 @@
 #include "kernel_op_api.hpp"
 #include "../micro_ops/flash_mla/kernels/rt_args_common.hpp"
 
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
-#elif defined(COMPILE_FOR_BRISC)
+#elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
 #include "api/debug/assert.h"
@@ -25,9 +25,9 @@ static_assert(noc_mode == DM_DYNAMIC_NOC, "Flash MLA Decode kernel only supports
 #endif
 
 // ============================================================================
-// NCRISC helpers
+// BRISC helpers (Reader)
 // ============================================================================
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
 template <typename Accessor>
 FORCE_INLINE uint64_t get_shard_noc_addr_helper(const Accessor& reader, uint32_t shard_id) {
     return reader.get_shard_noc_addr(shard_id);
@@ -38,9 +38,9 @@ constexpr uint32_t MCAST_VALID = 1;
 #endif
 
 // ============================================================================
-// BRISC helpers
+// NCRISC helpers (Writer)
 // ============================================================================
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
 template <uint32_t bits_per_step>
 FORCE_INLINE constexpr uint32_t step_semaphore_inc(uint32_t step) {
     return 1U << (step * bits_per_step);
@@ -81,8 +81,8 @@ namespace deepseek_b1_ops {
 // Flash MLA Decode micro-op
 //
 // Implements flash attention decode for MLA where K and V share the same tensor.
-//   NCRISC (Reader): Read Q from sharded memory, read K from ND-sharded DRAM
-//   BRISC (Writer):  Multicast K data to S block receivers, tree reduction
+//   BRISC (Reader): Read Q from sharded memory, read K from ND-sharded DRAM
+//   NCRISC (Writer):  Multicast K data to S block receivers, tree reduction
 //   TRISC (Compute): SDPA compute with flash attention chunking and tree reduction
 // ============================================================================
 struct FlashMLADecode {
@@ -200,7 +200,7 @@ struct FlashMLADecode {
         uint32_t num_tree_reduction_steps;
     };
 
-    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+    using RTArgs = unified_kernels::SelectByRISCV<WriterArgs, ReaderArgs, ComputeArgs>;
 
     // ========================================================================
     // Op - templated on CTArgs (compile-time args) and IsActiveCore
@@ -242,9 +242,9 @@ struct FlashMLADecode {
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
 // ====================================================================
-// NCRISC (Reader)
+// BRISC (Reader)
 // ====================================================================
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
             constexpr uint8_t READ_NOC_INDEX = 0;
             constexpr uint8_t ATOMIC_NOC_INDEX = 1;
             constexpr auto k_tensor_args = TensorAccessorArgs<0>();
@@ -304,7 +304,7 @@ struct FlashMLADecode {
 
             // Only the core handling the last chunk needs to wait for the KV cache cur pos ready
             bool wait_for_kv_cache_ready = k_chunk_end == k_num_chunks;
-
+            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -377,9 +377,9 @@ struct FlashMLADecode {
             noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
 
 // ====================================================================
-// BRISC (Writer)
+// NCRISC (Writer)
 // ====================================================================
-#elif defined(COMPILE_FOR_BRISC)
+#elif defined(COMPILE_FOR_NCRISC)
             constexpr uint8_t MCAST_NOC_INDEX = 0;
             constexpr uint8_t READ_NOC_INDEX = 1;
             constexpr uint8_t WRITE_NOC_INDEX = 1;
