@@ -625,6 +625,9 @@ class Molmo2Generator:
         num_layers: int,
         batch_size: int = 1,
         max_seq_len: int = 2048,
+        use_paged_attention: bool = False,
+        block_size: int = 64,
+        num_blocks: int = 512,
     ):
         self.mesh_device = mesh_device
         self.model = model
@@ -632,6 +635,13 @@ class Molmo2Generator:
         self.num_layers = num_layers
         self.batch_size = batch_size
         self.max_seq_len = max_seq_len
+
+        # Paged attention config
+        self.use_paged_attention = use_paged_attention
+        self.block_size = block_size
+        self.num_blocks = num_blocks
+        self.page_table = None  # ttnn tensor for current request's page table
+        self.page_table_torch = None  # torch tensor for page table management
 
         # Separate trace state for prefill and decode
         self.prefill_traces = {}  # {seq_len: (trace_id, trace_inputs, trace_output)}
@@ -655,24 +665,73 @@ class Molmo2Generator:
 
     def init_kv_cache(self):
         """Initialize KV cache, position tensors, and RoPE index tensors."""
-        from models.demos.molmo2.tt.text_model import init_decode_position, init_kv_cache
+        from models.demos.molmo2.tt.text_model import init_decode_position, init_kv_cache, init_paged_kv_cache
 
         if self.kv_caches is None:
-            self.kv_caches = init_kv_cache(
-                mesh_device=self.mesh_device,
-                num_layers=self.num_layers,
-                batch_size=self.batch_size,
-                num_kv_heads=8,
-                max_seq_len=self.max_seq_len,
-                head_dim=128,
-                dtype=ttnn.bfloat16,
-            )
+            if self.use_paged_attention:
+                # Paged KV cache: [num_blocks, num_kv_heads, block_size, head_dim]
+                self.kv_caches = init_paged_kv_cache(
+                    mesh_device=self.mesh_device,
+                    num_layers=self.num_layers,
+                    num_blocks=self.num_blocks,
+                    num_kv_heads=8,
+                    block_size=self.block_size,
+                    head_dim=128,
+                    dtype=ttnn.bfloat16,
+                )
+                logger.info(f"Initialized paged KV cache: {self.num_blocks} blocks, block_size={self.block_size}")
+            else:
+                # Non-paged KV cache: [batch, num_kv_heads, max_seq_len, head_dim]
+                self.kv_caches = init_kv_cache(
+                    mesh_device=self.mesh_device,
+                    num_layers=self.num_layers,
+                    batch_size=self.batch_size,
+                    num_kv_heads=8,
+                    max_seq_len=self.max_seq_len,
+                    head_dim=128,
+                    dtype=ttnn.bfloat16,
+                )
             self.current_pos = init_decode_position(
                 mesh_device=self.mesh_device,
                 batch_size=self.batch_size,
                 initial_pos=0,
             )
             self.rot_mat_idxs = self.model.text_model.rotary_setup.allocate_decode_rot_idxs(initial_pos=0)
+
+    def init_page_table(self, seq_len: int):
+        """
+        Initialize page table for a new request.
+
+        For paged attention, creates a page table that maps sequence positions
+        to physical block indices. Each block holds block_size tokens.
+
+        Args:
+            seq_len: Initial sequence length (prompt length)
+        """
+        if not self.use_paged_attention:
+            return
+
+        # Calculate number of blocks needed for this sequence
+        num_blocks_needed = (seq_len + self.block_size - 1) // self.block_size
+        # Add extra blocks for generation (up to max_seq_len)
+        max_blocks_per_seq = (self.max_seq_len + self.block_size - 1) // self.block_size
+        num_blocks_needed = min(num_blocks_needed + 128, max_blocks_per_seq)  # Extra for generation
+
+        # Create page table: [batch_size, max_blocks_per_seq]
+        # Each entry maps to a physical block index (0 to num_blocks-1)
+        # For demo, we use sequential allocation starting from 0
+        self.page_table_torch = torch.arange(num_blocks_needed, dtype=torch.int32).unsqueeze(0)
+
+        # Convert to ttnn tensor
+        self.page_table = ttnn.from_torch(
+            self.page_table_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+        logger.info(f"Initialized page table: {num_blocks_needed} blocks for seq_len={seq_len}")
 
     def reset_kv_cache(self, start_pos: int = 0):
         """Reset KV cache position and RoPE indices for new generation."""
@@ -1037,8 +1096,15 @@ class Molmo2Generator:
         self,
         seq_len: int,
         hidden_dim: int = 4096,
+        max_num_blocks: int = 64,
     ) -> dict:
-        """Pre-allocate all tensors needed for traced prefill."""
+        """Pre-allocate all tensors needed for traced prefill.
+
+        Args:
+            seq_len: Sequence length for prefill
+            hidden_dim: Hidden dimension size
+            max_num_blocks: Maximum number of blocks per sequence for page_table
+        """
         # Allocate hidden states input tensor
         hidden_states_shape = [1, 1, seq_len, hidden_dim]
         trace_hidden_states = ttnn.allocate_tensor_on_device(
@@ -1076,11 +1142,22 @@ class Molmo2Generator:
         ttnn.deallocate(rot_mats[0])
         ttnn.deallocate(rot_mats[1])
 
+        # Allocate page_table trace tensor for paged attention
+        # Shape: [batch_size=1, max_num_blocks]
+        trace_page_table = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, max_num_blocks]),
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         return {
             "hidden_states": trace_hidden_states,
             "cos": trace_cos,
             "sin": trace_sin,
             "seq_len": seq_len,
+            "page_table": trace_page_table,
         }
 
     def _capture_prefill_trace(
@@ -1099,6 +1176,7 @@ class Molmo2Generator:
             attn_mask=None,
             kv_caches=self.kv_caches,  # Pass KV cache to fill during prefill
             rot_mats=rot_mats,
+            page_table=trace_tensors["page_table"],  # Capture with paged attention ops
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -1112,10 +1190,15 @@ class Molmo2Generator:
         trace_tensors: dict,
         trace_output: ttnn.Tensor,
         hidden_states_ttnn: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Execute captured prefill trace with new inputs."""
         # Device-to-device copy: no host roundtrip
         ttnn.copy(hidden_states_ttnn, trace_tensors["hidden_states"])
+
+        # Copy page_table to trace tensor if provided (paged attention)
+        if page_table is not None and "page_table" in trace_tensors:
+            ttnn.copy(page_table, trace_tensors["page_table"])
 
         # Execute trace
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
@@ -1561,8 +1644,13 @@ class Molmo2Generator:
 
         return logits, timing
 
-    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
-        """Allocate tensors needed for traced decode."""
+    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096, max_num_blocks: int = 64) -> dict:
+        """Allocate tensors needed for traced decode.
+
+        Args:
+            hidden_dim: Hidden dimension size
+            max_num_blocks: Maximum number of blocks per sequence for page_table
+        """
         trace_hidden_states = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, 1, hidden_dim]),
             ttnn.bfloat16,
@@ -1571,8 +1659,19 @@ class Molmo2Generator:
             ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Allocate page_table trace tensor for paged attention
+        # Shape: [batch_size=1, max_num_blocks]
+        trace_page_table = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, max_num_blocks]),
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         return {
             "hidden_states": trace_hidden_states,
+            "page_table": trace_page_table,
         }
 
     def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
@@ -1581,6 +1680,10 @@ class Molmo2Generator:
         The RoPE embedding lookup reads from self.rot_mat_idxs (managed via
         ttnn.plus_one outside the trace). KV cache position reads from
         self.current_pos (also managed via ttnn.plus_one outside the trace).
+
+        The trace includes paged attention operations with page_table as an input.
+        Before each trace execution, the actual page_table values are copied to
+        the trace_tensors["page_table"] tensor.
         """
         logger.info("Capturing decode trace...")
 
@@ -1588,15 +1691,17 @@ class Molmo2Generator:
 
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
 
+        # Capture trace WITH paged attention - page_table is a trace input tensor
         logits_trace = self.model.text_model.forward_decode(
             hidden_states=trace_tensors["hidden_states"],
             kv_caches=self.kv_caches,
             current_pos=self.current_pos,
             rot_mats=rot_mats,
+            page_table=trace_tensors["page_table"],
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        logger.info("Decode trace captured")
+        logger.info("Decode trace captured with paged attention support")
 
         return trace_id, logits_trace
 
@@ -1606,14 +1711,23 @@ class Molmo2Generator:
         trace_tensors: dict,
         trace_output: ttnn.Tensor,
         hidden_states: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Execute captured decode trace with new inputs.
 
         Position tensors (current_pos, rot_mat_idxs) are kept on device and
         incremented via ttnn.plus_one in run_decode_step after trace execution.
         The trace reads their current values for RoPE and KV cache updates.
+
+        For paged attention, the page_table values are copied to the trace
+        tensor before execution so the trace uses the correct block mappings.
         """
         ttnn.copy(hidden_states, trace_tensors["hidden_states"])
+
+        # Copy page_table to trace tensor if provided (paged attention)
+        if page_table is not None and "page_table" in trace_tensors:
+            ttnn.copy(page_table, trace_tensors["page_table"])
+
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
         return trace_output
 
@@ -1632,14 +1746,16 @@ class Molmo2Generator:
             ttnn.copy(hidden_states_ttnn, trace_tensors["hidden_states"])
 
             # Run forward to compile - MUST pass kv_caches to compile fill_cache ops
-            # This matches the tt_transformers pattern where compilation happens with kv_cache
+            # Also pass page_table to compile paged attention ops
             rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+            page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
             logits, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
                 start_pos=0,
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
+                page_table=page_table,  # Compile paged attention ops
             )
         else:
             logits, _ = self.model.text_model.forward(
@@ -1667,11 +1783,13 @@ class Molmo2Generator:
             ttnn.copy(hidden_states, trace_tensors["hidden_states"])
 
             rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
+            page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
             logits = self.model.text_model.forward_decode(
                 hidden_states=trace_tensors["hidden_states"],
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
                 rot_mats=rot_mats,
+                page_table=page_table,  # Compile paged attention ops
             )
         else:
             logits = self.model.text_model.forward_decode(
@@ -1693,6 +1811,7 @@ class Molmo2Generator:
         use_trace: bool = False,
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
@@ -1704,6 +1823,7 @@ class Molmo2Generator:
             use_trace: Whether to trace text model prefill
             use_vision_trace: Whether to trace vision backbone (ViT + pooling)
             use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Tuple of (logits, timing_dict)
@@ -1716,6 +1836,13 @@ class Molmo2Generator:
         input_ids, seq_len, _ = pad_input_ids(input_ids, pad_token_id=0)
         if seq_len != original_seq_len:
             logger.info(f"Padded input_ids from {original_seq_len} to {seq_len} for trace reuse")
+
+        # Initialize page table for paged attention (demo mode)
+        # If page_table is provided externally (vLLM), use that instead
+        effective_page_table = page_table
+        if effective_page_table is None and self.use_paged_attention:
+            self.init_page_table(seq_len)
+            effective_page_table = self.page_table
 
         timing = {}
 
@@ -1838,7 +1965,9 @@ class Molmo2Generator:
 
             # Execute trace (actual TTFT measurement)
             ttft_start = time.perf_counter()
-            logits = self._execute_prefill_trace(trace_id, trace_tensors, trace_output, hidden_states_ttnn)
+            logits = self._execute_prefill_trace(
+                trace_id, trace_tensors, trace_output, hidden_states_ttnn, page_table=effective_page_table
+            )
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
 
@@ -1854,6 +1983,7 @@ class Molmo2Generator:
                 start_pos=0,
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
+                page_table=effective_page_table,
             )
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
@@ -1879,6 +2009,7 @@ class Molmo2Generator:
         token_id_ttnn: ttnn.Tensor,
         use_trace: bool = False,
         is_first: bool = False,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, float]:
         """
         Run single decode step with CPU-free forward pass.
@@ -1890,10 +2021,16 @@ class Molmo2Generator:
             token_id_ttnn: Token ID on device [1, 1] uint32
             use_trace: Whether to use tracing
             is_first: Whether this is the first decode step (for warm-up)
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Tuple of (tt_next_token on device [1, 1] uint32, decode_time_ms)
         """
+        # Use demo's page_table if paged attention is enabled and no external page_table provided
+        effective_page_table = page_table
+        if effective_page_table is None and self.use_paged_attention:
+            effective_page_table = self.page_table
+
         hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
 
         if use_trace:
@@ -1911,6 +2048,7 @@ class Molmo2Generator:
                 self.decode_trace_tensors,
                 self.decode_trace_output,
                 hidden_states,
+                page_table=effective_page_table,
             )
             ttnn.synchronize_device(self.mesh_device)
             decode_time = (time.perf_counter() - start_time) * 1000
@@ -1924,6 +2062,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
                 rot_mat_idxs=self.rot_mat_idxs,
+                page_table=effective_page_table,
             )
             ttnn.synchronize_device(self.mesh_device)
             decode_time = (time.perf_counter() - start_time) * 1000
