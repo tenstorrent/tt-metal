@@ -279,11 +279,24 @@ FORCE_INLINE
                 }
                 // If a semaphore increment is being performed, the increment value is fed in in the chunk size, to
                 // reduce payload size
-                noc_semaphore_inc<true>(
+                // noc_semaphore_inc<true>(
+                //     final_destination_noc_address,
+                //     scatter.chunk_size[last_chunk_index],
+                //     tt::tt_fabric::edm_to_local_chip_noc,
+                //     tt::tt_fabric::forward_and_local_write_noc_vc);
+
+                // HACKY EMBED INC VALUE IN L1
+                uint32_t seminc_src_addr =
+                    reinterpret_cast<uint32_t>(&packet_start->command_fields.unicast_scatter_write.noc_address[0]);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seminc_src_addr) =
+                    static_cast<uint32_t>(scatter.chunk_size[last_chunk_index]);
+                noc_async_write_one_packet_with_trid<update_counter, false>(
+                    seminc_src_addr,
                     final_destination_noc_address,
-                    scatter.chunk_size[last_chunk_index],
-                    tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                    4,
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc);
             } else {
                 // Every scatter write packet contains a chunk_count, and the unicast_writes above are only called for
                 // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).

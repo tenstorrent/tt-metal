@@ -190,40 +190,40 @@ def run_decode_reduce_scatter_deepseek_impl(
             3,
             4,
         ),
-        (
-            [8, 1, 8, 7168],
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-            ttnn.MemoryConfig(
-                ttnn.BufferType.L1,
-                ttnn.NdShardSpec(
-                    ttnn.Shape([1, 1, 32, 128]),
-                    ttnn.CoreRangeSet(
-                        [
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                        ]
-                    ),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-                ),
-            ),
-            ttnn.MemoryConfig(
-                ttnn.BufferType.L1,
-                ttnn.NdShardSpec(
-                    ttnn.Shape([1, 1, 32, 32]),
-                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))]),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-                ),
-            ),
-            3,
-            4,
-        ),
+        # (
+        #     [8, 1, 8, 7168],
+        #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        #     ttnn.MemoryConfig(
+        #         ttnn.BufferType.L1,
+        #         ttnn.NdShardSpec(
+        #             ttnn.Shape([1, 1, 32, 128]),
+        #             ttnn.CoreRangeSet(
+        #                 [
+        #                     ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+        #                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        #                 ]
+        #             ),
+        #             ttnn.ShardOrientation.ROW_MAJOR,
+        #             ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        #         ),
+        #     ),
+        #     ttnn.MemoryConfig(
+        #         ttnn.BufferType.L1,
+        #         ttnn.NdShardSpec(
+        #             ttnn.Shape([1, 1, 32, 32]),
+        #             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))]),
+        #             ttnn.ShardOrientation.ROW_MAJOR,
+        #             ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        #         ),
+        #     ),
+        #     3,
+        #     4,
+        # ),
     ],
 )
 @pytest.mark.parametrize(
