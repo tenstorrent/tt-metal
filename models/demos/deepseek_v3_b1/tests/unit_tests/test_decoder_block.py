@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
@@ -74,12 +75,13 @@ def create_decoder_block_tensors(
     mesh_cols,
     sender_row,
     sender_col,
-    position_id,
     state_dict,
     layer_idx,
-    max_seq_len,
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
+    metadata: DeepseekMetadata = DeepseekMetadata(),
+    max_seq_len: int = 128 * 1024,
+    num_slots: int = 1,
     is_moe: bool = True,
     num_routed_experts: int = 0,
     preloaded_weights=None,
@@ -373,7 +375,6 @@ def create_decoder_block_tensors(
 
     # ── RoPE TTNN tensors ──
     qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    position_ids = torch.tensor([position_id])
 
     cos_sin_4d, sin_sin_4d = get_cos_sin_matrix(_RopeConfig)
     torch_cos = cos_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
@@ -436,23 +437,11 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    # ── Position IDs ──
-    pos_core_grid = ttnn.CoreRangeSet(
+    # ── Metadata ──
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem,
-        mesh_mapper=mesh_mapper,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # ── KV Cache (ND sharded DRAM) ──
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
@@ -466,8 +455,10 @@ def create_decoder_block_tensors(
     kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
     num_sp = mesh_rows
     dcs = program_config.device_chunk_size
-    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
-    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros((num_slots, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, : metadata.position_id, :] = torch.randn(
+        1, 1, metadata.position_id, kvpe_dim, dtype=torch.bfloat16
+    )
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
     kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     ttnn_kv_cache = ttnn.from_torch(
@@ -478,7 +469,10 @@ def create_decoder_block_tensors(
         memory_config=kv_mem,
         mesh_mapper=kv_cache_2d_mesh_mapper,
     )
-    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    per_device_max_seq_len = max_seq_len // num_sp
+    kv_cache_bfp8_before_op = ttnn.to_torch(
+        ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
     ttnn_kv_cache_attn_ref = ttnn.from_torch(
@@ -751,7 +745,7 @@ def create_decoder_block_tensors(
             "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
             "golden_torch_sin": torch_sin,
             "golden_torch_cos": torch_cos,
-            "golden_position_ids": position_ids,
+            "golden_metadata": metadata,
             "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
             "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
             "golden_torch_kv_cache": torch_kv_cache,
@@ -761,6 +755,8 @@ def create_decoder_block_tensors(
             "golden_total_qnope_heads": golden_total_qnope_heads,
             "golden_total_qrope_heads": golden_total_qrope_heads,
             "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+            "num_slots": num_slots,
+            "per_device_max_seq_len": per_device_max_seq_len,
             "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
             "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
             "golden_moe_shared_gate": golden_moe_shared_gate,
@@ -801,7 +797,7 @@ def create_decoder_block_tensors(
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
         "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_position_ids": ttnn_position_ids,
+        "ttnn_metadata_tensor": ttnn_metadata_tensor,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
@@ -929,6 +925,7 @@ def create_decoder_block_tensors(
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
@@ -951,6 +948,8 @@ def test_decoder(
     num_routed_experts,
     validate_standalone_mla,
     validate_standalone_moe,
+    slot_id,
+    num_slots,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -988,10 +987,11 @@ def test_decoder(
         mesh_cols,
         sender_row,
         sender_col,
-        position_id,
         state_dict,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
         max_seq_len=max_seq_len,
+        num_slots=num_slots,
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_count=rigged_group_count,
@@ -1030,7 +1030,7 @@ def test_decoder(
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache_attn_ref"],
-            d["ttnn_position_ids"],
+            d["ttnn_metadata_tensor"],
             d["scale"],
             d["ttnn_sdpa_output"],
             d["sdpa_kv_cache_buffer"],
@@ -1082,7 +1082,7 @@ def test_decoder(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
+        d["ttnn_metadata_tensor"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -1141,7 +1141,12 @@ def test_decoder(
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
-    kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, d["num_slots"], 1, d["per_device_max_seq_len"], -1
+    )
 
     ttnn_attention_output = ttnn.to_torch(
         attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -1249,7 +1254,7 @@ def test_decoder(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -1306,13 +1311,13 @@ def test_decoder(
             continue
 
         assert torch.equal(
-            d["golden_kv_cache_bfp8_before_op"][device_idx, ..., :local_seq_len, :],
-            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
         ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
         logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
         if sp_group == owning_sp_device:
-            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
             expected_nope = golden_new_kv[..., :KNOPE_DIM]
             expected_rope = golden_new_kv[..., KNOPE_DIM:]
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
@@ -1325,6 +1330,17 @@ def test_decoder(
             rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        # Other slots must be completely unchanged
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     if moe_scores is not None:
         logger.info(f"Golden MoE scores: {moe_scores}")
@@ -1408,6 +1424,7 @@ def test_decoder(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
@@ -1424,6 +1441,8 @@ def test_decoder_mlp(
     position_id,
     noc_mode,
     num_internal_iterations,
+    slot_id,
+    num_slots,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -1450,10 +1469,11 @@ def test_decoder_mlp(
         mesh_cols,
         sender_row,
         sender_col,
-        position_id,
         state_dict,
         layer_idx=DENSE_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
         max_seq_len=max_seq_len,
+        num_slots=num_slots,
         is_moe=False,
     )
 
@@ -1485,7 +1505,7 @@ def test_decoder_mlp(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
+        d["ttnn_metadata_tensor"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -1569,7 +1589,7 @@ def test_decoder_mlp(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+    _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
         d["golden_torch_gamma"],
         d["golden_torch_matmul_weights"],
@@ -1578,7 +1598,7 @@ def test_decoder_mlp(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -1603,6 +1623,68 @@ def test_decoder_mlp(
         moe_rmsnorm_epsilon=epsilon,
         moe_enable_routing=False,
     )
+
+    # ========================================================================
+    # Validate KV cache outputs (per SP device)
+    # ========================================================================
+    device_chunk_size = d["device_chunk_size"]
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, num_slots, 1, d["per_device_max_seq_len"], -1
+    )
+
+    def get_local_seq_len(sp_idx):
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        return num_full_blocks * device_chunk_size + dev_contrib
+
+    for device_idx in range(num_devices):
+        sp_group = device_idx // mesh_cols
+        local_seq_len = get_local_seq_len(sp_group)
+
+        if local_seq_len == 0 and sp_group != owning_sp_device:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
+            continue
+
+        assert torch.equal(
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
+
+        if sp_group == owning_sp_device:
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     # ========================================================================
     # Validate MLP output vs DecoderBlock golden

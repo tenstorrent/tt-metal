@@ -528,7 +528,7 @@ struct SdpaReduceWorker {
         uint32_t r1_recv_buffer_addr;
         uint32_t r2_recv_buffer_addr;
         // Position args (only meaningful when position_enabled CTArg is set)
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
         uint32_t r2_neighbor_r1_neighbor_idx;
@@ -561,7 +561,7 @@ struct SdpaReduceWorker {
 
     // Compute args (TRISC): position validity for SDPA reduction
     struct ComputeArgs {
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t device_idx;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
@@ -585,6 +585,12 @@ struct SdpaReduceWorker {
             writer_impl(args);
 #elif defined(COMPILE_FOR_TRISC)
             compute_impl(args);
+#endif
+        }
+
+        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t global_pos) {
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
+            args.global_pos = global_pos;
 #endif
         }
 
@@ -624,8 +630,7 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (CTArgs::position_enabled) {
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                uint32_t position_id = pos_ptr[0];
+                uint32_t position_id = args.global_pos;
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
                 r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
@@ -785,8 +790,7 @@ struct SdpaReduceWorker {
                 r1_neighbor_device_idx = args.r1_neighbor_device_idx;
                 r2_neighbor_device_idx = args.r2_neighbor_device_idx;
 
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                position_id = pos_ptr[0];
+                position_id = args.global_pos;
 
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 local_valid = (position_id >= device_idx * chunk);

@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.kv_cache_branch.op import KVCacheBranch
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.kv_cache_update.op import KVCacheUpdate
 
@@ -51,8 +52,8 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     # Meta-style: stack [cos(t), cos(t)] interleaved
     torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)  # [max_seq_len, head_dim]
     torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)  # [max_seq_len, head_dim]
-    position_ids = torch.tensor([position_id])  # positions 0, 1, 2, ...
-    position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
+    metadata = DeepseekMetadata(position_id=position_id)
+    position_ids_expanded = torch.tensor([position_id]).unsqueeze(1)  # [batch, 1]
 
     logger.info(f"Done creating torch tensors.")
 
@@ -277,22 +278,10 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tile=tile,
     )
 
-    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=pos_mem_config,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(device, metadata_core_grid, metadata)
 
     logger.info(f"Created KV cache tensor in DRAM with shape {kv_cache_shape}")
 
@@ -308,7 +297,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tt_trans_replicated,
         ttnn_output,
         ttnn_kv_cache,
-        position_ids_tensor=ttnn_position_ids,  # Current decode position, used as DRAM page ID for KV cache write
+        metadata_tensor=ttnn_metadata_tensor,
     )
 
     logger.info("Running KV cache branch golden reference...")
@@ -388,25 +377,12 @@ def test_kv_cache_dram_shard(device, position_id):
         tile=rope_input_tile,
     )
 
-    # pass in address of position_id tensor
     grid_size = device.compute_with_storage_grid_size()
-    position_ids = torch.ones(1, dtype=torch.int32) * position_id
-    position_replicated = torch.full((grid_size.x * grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
+    metadata = DeepseekMetadata(position_id=position_id)
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
     )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=pos_mem_config,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(device, metadata_core_grid, metadata)
 
     # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     ttnn_output = ttnn.from_torch(
@@ -459,7 +435,9 @@ def test_kv_cache_dram_shard(device, position_id):
 
     kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache)
 
-    _ = KVCacheUpdate.op(ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_position_ids, output_tensor=ttnn_output)
+    _ = KVCacheUpdate.op(
+        ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_metadata_tensor, output_tensor=ttnn_output
+    )
 
     torch_kv_cache_output = ttnn.to_torch(ttnn_kv_cache)
     # check that kv cache for 0 to pos_id -  1 is identical to kv cache before op

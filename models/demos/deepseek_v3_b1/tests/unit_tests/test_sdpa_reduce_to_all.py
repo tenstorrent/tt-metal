@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
@@ -252,21 +253,11 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
         )
 
     # ========================================================================
-    # Position ID tensor: HEIGHT_SHARDED, int32, replicated across mesh
-    # Each worker core gets [1, 1] shard containing the position_id value.
-    # This allows position_id to be updated between calls (e.g., trace replay).
+    # Metadata tensor: HEIGHT_SHARDED, uint32, replicated across mesh
+    # Each worker core gets [1, 2] shard containing DeepseekMetadata fields.
     # ========================================================================
-    position_data = torch.full((num_cores, 1), position_id, dtype=torch.int32)
-    pos_shard_spec = ttnn.ShardSpec(shard_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR)
-    pos_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, pos_shard_spec)
-    position_id_tensor_mesh = ttnn.from_torch(
-        position_data,
-        device=submesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=pos_mem_config,
-        mesh_mapper=mesh_mapper2,
-    )
+    metadata = DeepseekMetadata(position_id=position_id)
+    position_id_tensor_mesh = create_metadata_tensor(submesh_device, shard_grid, metadata)
 
     semaphores = [ttnn.create_global_semaphore(submesh_device, shard_grid, 0) for _ in range(2)]
     ttnn.synchronize_device(submesh_device)
