@@ -256,7 +256,17 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
     # Step 1: Try to identify which ranks actually failed
     failed_ranks = _try_get_failed_ranks(comm)
 
-    # Step 2: Revoke the communicator so that any ranks blocked in MPI calls
+    # Step 2: Capture communicator size *before* revoking, because
+    # comm.Get_size() may fail on a revoked communicator.
+    comm_size = -1
+    try:
+        comm_size = comm.Get_size()
+    except (RuntimeError, OSError):
+        # If we cannot query the communicator size, keep the sentinel -1.
+        # This is a best-effort diagnostic only and should not affect handling.
+        pass
+
+    # Step 3: Revoke the communicator so that any ranks blocked in MPI calls
     # will receive ERR_REVOKED and can exit cleanly.  comm.Revoke() is only
     # available in ULFM-enabled mpi4py builds.
     if hasattr(comm, "Revoke"):
@@ -268,21 +278,13 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
             # bad state.
             pass
 
-    # Step 3: Structured diagnostic to stderr (matches C++ format)
+    # Step 4: Structured diagnostic to stderr (matches C++ format)
     _ulfm_error_name = {
         getattr(MPI, "ERR_PROC_FAILED", -1): "ERR_PROC_FAILED",
         getattr(MPI, "ERR_PROC_FAILED_PENDING", -1): "ERR_PROC_FAILED_PENDING",
         getattr(MPI, "ERR_REVOKED", -1): "ERR_REVOKED",
     }
     error_name = _ulfm_error_name.get(error_code, f"UNKNOWN({error_code})")
-
-    comm_size = -1
-    try:
-        comm_size = comm.Get_size()
-    except (RuntimeError, OSError):
-        # If we cannot query the communicator size, keep the sentinel -1.
-        # This is a best-effort diagnostic only and should not affect handling.
-        pass
 
     print(
         f"\n{'='*72}\n"
@@ -297,7 +299,7 @@ def _ulfm_fast_fail(comm: Any, rank: int, error_code: int, operation_name: str) 
         flush=True,
     )
 
-    # Step 4: Exit with EX_SOFTWARE (70) — same as the C++ handler.
+    # Step 5: Exit with EX_SOFTWARE (70) — same as the C++ handler.
     # Use os._exit() rather than sys.exit() to bypass Python atexit handlers
     # (including any that call MPI_Finalize), which would deadlock on a revoked
     # communicator — mirroring _exit(70) in the C++ handle_rank_failure().

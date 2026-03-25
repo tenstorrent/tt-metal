@@ -140,7 +140,7 @@ fi
 # Spawns 4 MPI ranks via mpirun, each writes a rank-tagged marker file,
 # then rank 0 verifies get_log_directory() resolves correctly for every
 # rank's environment.  Pure Python — no hardware needed.
-MPIRUN_WRAPPER="${repo_root}/tests/tt_metal/multihost/mpirun_wrapper.sh"
+mpirun_wrapper="${repo_root}/tests/tt_metal/multihost/mpirun_wrapper.sh"
 echo "LOG_METAL: Running MPI multiprocess rank resolution test (-np 4)"
 # Notes:
 #   - Wrapped in subshell so set -e doesn't fire before fail accumulation.
@@ -152,7 +152,7 @@ echo "LOG_METAL: Running MPI multiprocess rank resolution test (-np 4)"
 #     Guard with a pre-flight check so CI does not fail when the package is
 #     absent from the Python environment.
 if python3 -c "import mpi4py" 2>/dev/null; then
-  ("$MPIRUN_WRAPPER" -np 4 --oversubscribe --allow-run-as-root \
+  ("$mpirun_wrapper" -np 4 --oversubscribe --allow-run-as-root \
     python3 -m pytest \
     --override-ini "addopts=--import-mode=importlib -v -rA --durations=0" \
     "${repo_root}/tools/tests/triage/test_multihost_rank_resolution_mpi.py") || fail=$((fail + 1))

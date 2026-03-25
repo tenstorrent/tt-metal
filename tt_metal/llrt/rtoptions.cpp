@@ -309,6 +309,12 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
 /** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Rank detection precedence: OMPI_COMM_WORLD_RANK > PMI_RANK > SLURM_PROCID > PMIX_RANK > TT_MESH_HOST_RANK
+ * NOTE: This logic is duplicated in three places. Keep in sync:
+ *   - tt_metal/llrt/rtoptions.cpp (C++ — this file)
+ *   - tools/triage/rank_env.py (Python)
+ *   - ttnn/ttnn/distributed/ttrun.py (Python, ENV_BLOCKLIST comments)
+ *
  * Precedence (highest to lowest):
  *   1. OMPI_COMM_WORLD_RANK  — OpenMPI standard
  *   2. PMI_RANK              — MPICH / Hydra / Slurm PMI

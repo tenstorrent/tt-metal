@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
                 }
                 device_ids.push_back(static_cast<ChipId>(device_id));
             }
-        } else if ((s.starts_with("-n=")) || (s.starts_with("--num-hw-cqs=="))) {
+        } else if ((s.starts_with("-n=")) || (s.starts_with("--num-hw-cqs="))) {
             string value_str = s.substr(s.find('=') + 1);
             num_hw_cqs = std::stoi(value_str);
         } else if (s == "-w" || s == "--dump-watcher") {

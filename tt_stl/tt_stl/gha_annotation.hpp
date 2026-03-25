@@ -26,6 +26,8 @@ enum class annotation_level {
     error,
 };
 
+// The string_view fields (message, file, title) do NOT own their data.
+// The caller must ensure the referenced strings outlive the annotation object.
 struct annotation {
     annotation_level level{annotation_level::notice};
     std::string_view message{};

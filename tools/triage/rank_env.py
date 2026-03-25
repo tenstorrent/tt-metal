@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import os
 
-# Keep this order aligned with the MPI/launcher rank detection used by TT-Metal.
+# Rank detection precedence: OMPI_COMM_WORLD_RANK > PMI_RANK > SLURM_PROCID > PMIX_RANK > TT_MESH_HOST_RANK
+# NOTE: This logic is duplicated in three places. Keep in sync:
+#   - tools/triage/rank_env.py (Python — this file)
+#   - ttnn/ttnn/distributed/ttrun.py (Python, ENV_BLOCKLIST comments)
+#   - tt_metal/llrt/rtoptions.cpp (C++, get_rank_from_env)
 RANK_ENV_VAR_PRECEDENCE = (
     "OMPI_COMM_WORLD_RANK",
     "PMI_RANK",

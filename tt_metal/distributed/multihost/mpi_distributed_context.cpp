@@ -805,8 +805,15 @@ static void mpi_terminate_handler() noexcept {
     // Revoke so that any rank blocked in a collective receives ERR_REVOKED
     // and our MPI_CHECK_CTX macro triggers the FailurePolicy dispatch.
     // This is best-effort: MPI_COMM_WORLD may already be revoked or
-    // MPI may not be initialized yet.
-    MPIX_Comm_revoke(MPI_COMM_WORLD);
+    // MPI may not be initialized yet.  We swallow any exception (or error
+    // return) so that _exit(kUlfmExitCode) below is always reached — an
+    // already-revoked communicator or torn-down MPI runtime must not
+    // prevent the process from terminating.
+    try {
+        MPIX_Comm_revoke(MPI_COMM_WORLD);
+    } catch (...) {
+        // Intentionally ignored — see comment above.
+    }
 #endif
     emit_terminate_annotation_if_enabled(local_rank, local_hostname);
 

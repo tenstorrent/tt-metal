@@ -148,6 +148,8 @@ class DispatcherData:
         device = _find_device_with_build_env()
         if device is None:
             self._populate_build_env_cache(strict=True)
+            # Only reached when strict population succeeded but didn't find the
+            # needed device (vs. raised TTTriageError).
             device = _find_device_with_build_env()
         if device is None:
             unique_ids = [hex(d.unique_id) for d in run_checks.devices[:MAX_DEVICE_IDS_IN_ERROR_SUMMARY]]

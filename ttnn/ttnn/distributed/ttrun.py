@@ -4,6 +4,8 @@
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
+from __future__ import annotations
+
 import atexit
 import enum
 import functools
@@ -16,7 +18,6 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
 
 import click
 import yaml
@@ -81,8 +82,8 @@ class ExitCodeInterpretation:
 
     raw_code: int
     category: ExitCategory
-    signal_num: Optional[int]  # If killed by signal, the signal number
-    signal_name: Optional[str]  # Human-readable signal name
+    signal_num: int | None  # If killed by signal, the signal number
+    signal_name: str | None  # Human-readable signal name
     summary: str  # One-line human-readable summary
     ci_exit_code: int  # Normalized exit code for CI (0, 1, 2, 3, 124, 130)
 
@@ -239,7 +240,7 @@ def _log_exit_interpretation(interp: ExitCodeInterpretation) -> None:
 ORIGINAL_CWD = Path.cwd().resolve()
 
 
-def get_local_network_interfaces() -> List[str]:
+def get_local_network_interfaces() -> list[str]:
     """Get list of network interface names on the local host.
 
     Returns:
@@ -285,7 +286,7 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
 
 
 @functools.lru_cache(maxsize=1)
-def _detect_openmpi_major_version() -> Optional[int]:
+def _detect_openmpi_major_version() -> int | None:
     """Detect the major version of the installed OpenMPI by parsing mpirun --version.
 
     The result is cached via lru_cache so subprocess is only invoked once per process.
@@ -342,24 +343,24 @@ class RankBinding(BaseModel):
 
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
     mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
-    mesh_host_rank: Optional[int] = Field(None, ge=0, description="Host rank within the mesh")
-    env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
+    mesh_host_rank: int | None = Field(None, ge=0, description="Host rank within the mesh")
+    env_overrides: dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
 
 
 class TTRunConfig(BaseModel):
     """Rank binding YAML specification consumed by `tt-run`."""
 
-    rank_bindings: List[RankBinding] = Field(..., min_length=1, description="Rank to fabric bindings")
-    global_env: Dict[str, str] = Field(default_factory=dict, description="Global environment variables for all ranks")
+    rank_bindings: list[RankBinding] = Field(..., min_length=1, description="Rank to fabric bindings")
+    global_env: dict[str, str] = Field(default_factory=dict, description="Global environment variables for all ranks")
     mesh_graph_desc_path: Path = Field(..., description="Path to mesh graph descriptor")
-    mock_cluster_rank_binding: Dict[int, Path] = Field(
+    mock_cluster_rank_binding: dict[int, Path] = Field(
         default_factory=dict, description="Mock cluster rank binding configuration (rank -> resolved path)"
     )
 
     model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("rank_bindings")
-    def validate_ranks(cls, bindings: List[RankBinding]) -> List[RankBinding]:
+    def validate_ranks(cls, bindings: list[RankBinding]) -> list[RankBinding]:
         """Ensure ranks are unique and contiguous starting from 0"""
         ranks = [b.rank for b in bindings]
 
@@ -373,7 +374,7 @@ class TTRunConfig(BaseModel):
         return bindings
 
     @field_validator("mesh_graph_desc_path", mode="before")
-    def validate_mesh_graph_exists(cls, path: Union[str, Path]) -> Path:
+    def validate_mesh_graph_exists(cls, path: str | Path) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
@@ -381,7 +382,7 @@ class TTRunConfig(BaseModel):
         return resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
 
 
-def get_search_paths() -> List[Optional[Path]]:
+def get_search_paths() -> list[Path | None]:
     """Get the ordered list of paths to search for relative file resolution.
 
     Search order:
@@ -401,7 +402,7 @@ def get_search_paths() -> List[Optional[Path]]:
 
 
 def resolve_path(
-    path: Union[str, Path],
+    path: str | Path,
     description: str = "file",
     must_exist: bool = True,
     must_be_file: bool = False,
@@ -475,7 +476,7 @@ def resolve_path(
     return (ORIGINAL_CWD / expanded_path).resolve()
 
 
-def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
+def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Path | None = None) -> TTRunConfig:
     """Parse YAML configuration file with schema validation.
 
     Resolves all relative paths in the configuration against the launch directory
@@ -502,7 +503,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         mock_data = yaml.safe_load(resolved_mock_path.read_text())
 
         # Validate and resolve mock cluster rank binding configuration paths
-        resolved_mock_bindings: Dict[int, Path] = {}
+        resolved_mock_bindings: dict[int, Path] = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
             resolved_path = resolve_path(
                 path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
@@ -552,6 +553,11 @@ ENV_BLOCKLIST = frozenset(
     {
         # Managed by tt-run - values derived from rank bindings, not parent environment
         "TT_MESH_ID",  # Mesh identifier from rank binding
+        # Rank detection precedence: OMPI_COMM_WORLD_RANK > PMI_RANK > SLURM_PROCID > PMIX_RANK > TT_MESH_HOST_RANK
+        # NOTE: This logic is duplicated in three places. Keep in sync:
+        #   - ttnn/ttnn/distributed/ttrun.py (Python — this file, ENV_BLOCKLIST)
+        #   - tools/triage/rank_env.py (Python)
+        #   - tt_metal/llrt/rtoptions.cpp (C++, get_rank_from_env)
         "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
         "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
         "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
@@ -648,19 +654,19 @@ def is_auto_passthrough_env_var(key: str) -> bool:
     return has_auto_passthrough_prefix(key) and not is_blocklisted_env_var(key, include_launcher_only=False)
 
 
-def strip_blocklisted_env_vars(source_env: Dict[str, str]) -> Dict[str, str]:
+def strip_blocklisted_env_vars(source_env: dict[str, str]) -> dict[str, str]:
     """Return a copy of source_env with exact-key and prefix blocklisted variables removed."""
     return {key: value for key, value in source_env.items() if not is_blocklisted_env_var(key)}
 
 
-def get_auto_rank_passthrough_from_parent() -> tuple[Dict[str, str], List[str]]:
+def get_auto_rank_passthrough_from_parent() -> tuple[dict[str, str], list[str]]:
     """Collect parent env vars eligible for automatic rank `-x KEY=value` pass-through.
 
     Only variables matching ENV_PASSTHROUGH_PREFIXES and not present in ENV_BLOCKLIST
     are auto-passed to rank environments.
     """
-    auto_passthrough_env: Dict[str, str] = {}
-    blocked_prefixed_vars: List[str] = []
+    auto_passthrough_env: dict[str, str] = {}
+    blocked_prefixed_vars: list[str] = []
     for key, value in os.environ.items():
         if not has_auto_passthrough_prefix(key):
             continue
@@ -671,7 +677,7 @@ def get_auto_rank_passthrough_from_parent() -> tuple[Dict[str, str], List[str]]:
     return auto_passthrough_env, blocked_prefixed_vars
 
 
-def should_use_name_only_mpi_export(key: str, value: str, launcher_env: Dict[str, str]) -> bool:
+def should_use_name_only_mpi_export(key: str, value: str, launcher_env: dict[str, str]) -> bool:
     """Return True when key should be exported as `-x KEY` (not `-x KEY=value`)."""
     if key in FORCE_NAME_ONLY_MPI_EXPORT_VARS:
         return key in launcher_env
@@ -686,12 +692,12 @@ def should_use_name_only_mpi_export(key: str, value: str, launcher_env: Dict[str
 
 
 def classify_mpi_env_exports(
-    rank_env: Dict[str, str], launcher_env: Dict[str, str]
-) -> tuple[Dict[str, str], List[str], List[str]]:
+    rank_env: dict[str, str], launcher_env: dict[str, str]
+) -> tuple[dict[str, str], list[str], list[str]]:
     """Split rank env into KEY=value and KEY-only MPI export groups."""
-    direct_exports: Dict[str, str] = {}
-    name_only_exports: List[str] = []
-    missing_launcher_keys: List[str] = []
+    direct_exports: dict[str, str] = {}
+    name_only_exports: list[str] = []
+    missing_launcher_keys: list[str] = []
 
     for key, value in rank_env.items():
         if should_use_name_only_mpi_export(key, value, launcher_env):
@@ -777,7 +783,7 @@ def validate_path_safety(path_str: str, var_name: str) -> None:
             )
 
 
-def apply_rank_scoped_paths(env: Dict[str, str], rank: int, explicit_keys: set[str] | None = None) -> None:
+def apply_rank_scoped_paths(env: dict[str, str], rank: int, explicit_keys: set[str] | None = None) -> None:
     """Scope selected filesystem paths per rank (in-place).
 
     For each key in RANK_SCOPED_PATH_ENV_VARS, append `<hostname>_rank_<rank>`
@@ -800,7 +806,7 @@ def apply_rank_scoped_paths(env: Dict[str, str], rank: int, explicit_keys: set[s
         env[key] = str(scoped_path / rank_dirname)
 
 
-def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
+def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> dict[str, str]:
     """Get all environment variables for a specific rank.
 
     Args:
@@ -944,7 +950,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     return env
 
 
-def get_launcher_environment() -> Dict[str, str]:
+def get_launcher_environment() -> dict[str, str]:
     """Build launcher environment for mpirun.
 
     MPI launchers may inherit caller environment in addition to rank-local `-x KEY=value`.
@@ -960,7 +966,7 @@ def get_launcher_environment() -> Dict[str, str]:
     return launcher_env
 
 
-def build_rank_environment_args(binding: RankBinding, config: TTRunConfig, launcher_env: Dict[str, str]) -> List[str]:
+def build_rank_environment_args(binding: RankBinding, config: TTRunConfig, launcher_env: dict[str, str]) -> list[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -991,11 +997,11 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig, launc
 
 def build_mpi_command(
     config: TTRunConfig,
-    program: List[str],
-    launcher_env: Dict[str, str],
-    mpi_args: Optional[List[str]] = None,
+    program: list[str],
+    launcher_env: dict[str, str],
+    mpi_args: list[str] | None = None,
     debug_gdbserver: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Check if running in SLURM interactive session
     if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
@@ -1054,7 +1060,7 @@ def build_mpi_command(
     return cmd
 
 
-def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
+def print_command(cmd: list[str], prefix: str = TT_RUN_PREFIX) -> None:
     """Pretty print a command for readability."""
     if len(cmd) > PRETTY_PRINT_THRESHOLD:
         logger.info(f"{prefix} Command:")
@@ -1128,12 +1134,12 @@ def main(
     rank_binding: Path,
     dry_run: bool,
     verbose: bool,
-    mpi_args: Optional[List[str]],
+    mpi_args: list[str] | None,
     debug_gdbserver: bool,
-    mock_cluster_rank_binding: Optional[Path],
+    mock_cluster_rank_binding: Path | None,
     skip_executable_check: bool,
     bare: bool,
-    tcp_interface: Optional[str],
+    tcp_interface: str | None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1565,7 +1571,7 @@ def main(
         # when a remote rank crashes without triggering ULFM or orte abort.
         # Set TT_RUN_TIMEOUT (seconds) in the environment to enable.
         _timeout_str = os.environ.get("TT_RUN_TIMEOUT", "")
-        _timeout: Optional[float] = float(_timeout_str) if _timeout_str else None
+        _timeout: float | None = float(_timeout_str) if _timeout_str else None
         try:
             proc.wait(timeout=_timeout)
         except subprocess.TimeoutExpired:

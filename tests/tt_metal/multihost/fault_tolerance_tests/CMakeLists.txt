@@ -2,6 +2,8 @@
 # Skip the entire target when building without distributed support (no OpenMPI::MPI target).
 if(NOT TARGET OpenMPI::MPI)
     message(STATUS "Skipping fault_tolerance_tests — OpenMPI::MPI not available (build without --enable-distributed)")
+    # NOTE: This return() exits the entire CMakeLists.txt scope. Any targets
+    # added below this point will be silently skipped when OpenMPI is unavailable.
     return()
 endif()
 
