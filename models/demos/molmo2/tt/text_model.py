@@ -215,6 +215,7 @@ class TextModel(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         output_hidden_states: bool = False,
         rot_mats: Optional[List[ttnn.Tensor]] = None,
+        trace_id: int = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -247,7 +248,17 @@ class TextModel(LightweightModule):
                 all_hidden_states.append(x)
 
             kv_cache = kv_caches[layer_idx] if kv_caches else None
-            x, new_kv_cache = block(x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache)
+            x, new_kv_cache = block(
+                x,
+                rot_mats,
+                self.transformation_mats,
+                attn_mask,
+                start_pos,
+                kv_cache,
+                trace_id=trace_id,
+                layer_idx=layer_idx,
+            )
+
             new_kv_caches.append(new_kv_cache)
 
         # Final normalization
