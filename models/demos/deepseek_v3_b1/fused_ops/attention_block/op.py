@@ -1203,7 +1203,7 @@ class AttentionBlock:
         nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
         rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
-        # NCRISC sender compile-time args (QNOPE/QROPE -> SDPA Input) - matching gather pattern: NCRISC sender, BRISC receiver
+        # NCRISC compile-time args: all CreateQHeads data movement (sender + receiver) on NCRISC
         # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         create_q_heads_ncrisc_named_compile_time_args = [
@@ -1229,18 +1229,9 @@ class AttentionBlock:
             ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("cqh_qnope_cols", QNOPE_COLS),
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
-        ]
-
-        # BRISC receiver compile-time args (SDPA Input cores) - matching gather pattern: NCRISC sender, BRISC receiver
-        # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
-        # Prefixed with "cqh_" to avoid name collisions with other BRISC args
-        create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
-            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
-            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
+            # Receiver args (also on NCRISC, for sdpa input cores)
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
-            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
             ("cqh_out_cb", create_q_heads_out_cb),  # Output CB (backed by output tensor)
             ("cqh_nope_tiles", nope_tiles),  # 8 tiles per NOPE phase
             ("cqh_rope_tiles", rope_tiles),  # 2 tiles for ROPE phase
@@ -1604,7 +1595,7 @@ class AttentionBlock:
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
         num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
 
-        mla_brisc_named_compile_time_args = [
+        mla_ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -1633,7 +1624,7 @@ class AttentionBlock:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
         ]
-        mla_ncrisc_named_compile_time_args = [
+        mla_brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -1930,6 +1921,7 @@ class AttentionBlock:
         # CB descriptor creation (device-invariant, using reference tensors)
         # ========================================================================
         sdpa_out_interm_running_offset = 0
+        sdpa_out_interm_running_offset_kv_cache_update_offset = 0
         # CBs overlapped with sdpa_kv_cache L1 buffer (consumed before SDPA runs)
         sdpa_kv_cache_running_offset = 0
         # CBs overlapped with sdpa_kv_cache L1 buffer permanently allocated on the mcast core
@@ -1937,6 +1929,7 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset_mcast_core = 0
 
         sdpa_forwarder_scratch_running_offset = 0
+        input_running_offset = 0
 
         # Create circular buffer descriptors
         # CB: Input (created from sharded tensor)
@@ -2029,6 +2022,8 @@ class AttentionBlock:
             )
         ]
         sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
+
+        sdpa_out_interm_running_offset_kv_cache_update_offset = sdpa_out_interm_running_offset
 
         # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
         # at offset 0 B. This CB is consumed before SDPA runs.
@@ -2136,6 +2131,11 @@ class AttentionBlock:
             )
         ]
         sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
+
+        # Make sure mcast does not trample kv cache update data
+        sdpa_out_interm_running_offset_kv_cache_update_offset = max(
+            sdpa_out_interm_running_offset_kv_cache_update_offset, sdpa_out_interm_running_offset
+        )
 
         # CB 12: Matmul2 output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 12352 B. This CB is consumed before SDPA runs.
@@ -2299,8 +2299,8 @@ class AttentionBlock:
         create_q_heads_out_total_size = create_q_heads_out_page_size * q_tiles
         create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             create_q_heads_out_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_attention_block_output_tensor,  # Overlap with attn output since it's only on the mcast core
+            address_offset=0,
             total_size=create_q_heads_out_total_size,
             core_ranges=full_device_grid,
         )
@@ -2312,7 +2312,6 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
-        sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
         # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
@@ -2321,8 +2320,8 @@ class AttentionBlock:
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             dkv_matmul_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 37824 B
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_offset,
             total_size=dkv_matmul_output_page_size,
             core_ranges=dkv_matmul_weights_core_grid,
         )
@@ -2334,7 +2333,14 @@ class AttentionBlock:
                 tile=dkv_matmul_output_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
+        sdpa_out_interm_running_offset_kv_cache_update_offset += dkv_matmul_output_cb_descriptor.total_size
+
+        sdpa_out_interm_running_offset_kv_cache_update_rope_offset = (
+            sdpa_out_interm_running_offset_kv_cache_update_offset
+        )
+        sdpa_out_interm_running_offset_kv_cache_update_nope_offset = (
+            sdpa_out_interm_running_offset_kv_cache_update_offset
+        )
 
         # CB 25: KV RMSNorm input buffer — overlap with sdpa_kv_cache L1 buffer
         # at offset 37888 B. This CB is consumed before SDPA runs.
@@ -2347,8 +2353,8 @@ class AttentionBlock:
         kv_rmsnorm_page_size = TILE_16x32.get_tile_size(input_tensor_sample.dtype)
         kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_input_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 37888 B
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_nope_offset,
             total_size=1 * kv_rmsnorm_page_size,
             core_ranges=dkv_gather_sender_grid.merge(dkv_gather_receiver_core_grid),
         )
@@ -2360,15 +2366,15 @@ class AttentionBlock:
                 tile=kv_rmsnorm_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
+        sdpa_out_interm_running_offset_kv_cache_update_nope_offset += kv_rmsnorm_input_cb_descriptor.total_size
 
         # CB 27: KV RMSNorm output buffer — overlap with sdpa_kv_cache L1 buffer
         # at offset 38912 B. This CB is consumed before SDPA runs.
         # Shares CB ID with rmsnorm2_output_cb (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 38912 B
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_nope_offset,
             total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
             core_ranges=dkv_gather_receiver_core_grid,  # Only the nope core (BRISC) reads kv_rmsnorm_output_cb
         )
@@ -2380,7 +2386,7 @@ class AttentionBlock:
                 tile=kv_rmsnorm_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += kv_rmsnorm_output_cb_descriptor.total_size  # +1024 B
+        sdpa_out_interm_running_offset_kv_cache_update_nope_offset += kv_rmsnorm_output_cb_descriptor.total_size
         # CB 29: Cos (DRAM, read by NCRISC)
         krope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         krope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
@@ -2391,13 +2397,13 @@ class AttentionBlock:
         )
         krope_cos_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             qkv_rope_cos_sin_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_rope_offset,
             total_size=krope_Wt * krope_rope_tile_size * 2,
             core_ranges=krope_grid,
         )
         krope_cos_sin_cb_descriptor.format_descriptors = [krope_cos_sin_cb_format]
-        sdpa_kv_cache_running_offset += krope_cos_sin_cb_descriptor.total_size
+        sdpa_out_interm_running_offset_kv_cache_update_rope_offset += krope_cos_sin_cb_descriptor.total_size
 
         # CB 28: KRoPE output — overlap with sdpa_kv_cache L1 buffer
         # at offset 39936 B. This CB is consumed before SDPA runs.
@@ -2405,8 +2411,8 @@ class AttentionBlock:
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             krope_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 39936 B
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_rope_offset,
             total_size=1 * krope_tile_size,
             core_ranges=krope_grid,
         )
@@ -2418,7 +2424,12 @@ class AttentionBlock:
                 tile=ttnn.TileDescriptor(TILE_1x32),
             )
         ]
-        sdpa_kv_cache_running_offset += krope_output_cb_descriptor.total_size  # +64 B
+        sdpa_out_interm_running_offset_kv_cache_update_rope_offset += krope_output_cb_descriptor.total_size
+
+        sdpa_out_interm_running_offset_kv_cache_update_offset = max(
+            sdpa_out_interm_running_offset_kv_cache_update_nope_offset,
+            sdpa_out_interm_running_offset_kv_cache_update_rope_offset,
+        )
 
         TILE_32x32 = ttnn.Tile((32, 32))
         kv_cache_page_size = TILE_32x32.get_tile_size(k_df)
@@ -2429,30 +2440,22 @@ class AttentionBlock:
             page_size=kv_cache_page_size,
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        kv_cache_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            kv_cache_input_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
-            total_size=kv_cache_num_tiles * kv_cache_page_size,
-            core_ranges=full_device_grid,
-        )
-        kv_cache_input_cb_descriptor.format_descriptors = [kv_cache_input_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_input_cb_descriptor.total_size
         kv_cache_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_output_cb,
             data_format=k_df,
             page_size=kv_cache_page_size,
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        kv_cache_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            kv_cache_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
+        kv_cache_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            kv_cache_input_cb,
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_kv_cache_update_offset,
             total_size=kv_cache_num_tiles * kv_cache_page_size,
             core_ranges=full_device_grid,
         )
-        kv_cache_output_cb_descriptor.format_descriptors = [kv_cache_output_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_output_cb_descriptor.total_size
+        # Overlap the input and output CBs
+        kv_cache_input_output_cb_descriptor.format_descriptors = [kv_cache_input_cb_format, kv_cache_output_cb_format]
+        sdpa_out_interm_running_offset_kv_cache_update_offset += kv_cache_input_output_cb_descriptor.total_size
         kv_cache_intermed_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_intermed_cb,
             data_format=untilize_df,
@@ -2462,13 +2465,13 @@ class AttentionBlock:
         # One extra tile for syncing, can optimize to remove
         kv_cache_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_cache_intermed_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
+            ref_sdpa_forwarder_scratch,
+            address_offset=sdpa_forwarder_scratch_running_offset,
             total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
             core_ranges=full_device_grid,
         )
         kv_cache_intermed_cb_descriptor.format_descriptors = [kv_cache_intermed_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_intermed_cb_descriptor.total_size
+        sdpa_forwarder_scratch_running_offset += kv_cache_intermed_cb_descriptor.total_size
         # Flash MLA cb descriptors
         mla_cb_descriptors = []
 
@@ -2543,8 +2546,8 @@ class AttentionBlock:
         # cb_mask: Mask input
         mla_mask_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_mask_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=q_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2556,14 +2559,14 @@ class AttentionBlock:
                 tile=q_tile_descriptor,
             )
         ]
-        sdpa_forwarder_scratch_running_offset += mla_mask_cb_descriptor.total_size
+        input_running_offset += mla_mask_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_mask_cb_descriptor)
 
         # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
         mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_o_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=out0_t * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2571,7 +2574,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_o_cb_descriptor.total_size
+        input_running_offset += mla_out_o_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_o_cb_descriptor)
         # Uncomment to debug local FlashMLA output
         # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
@@ -2585,8 +2588,8 @@ class AttentionBlock:
         # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
         mla_out_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_ms_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=statistics_tiles * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2594,7 +2597,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_ms_cb_descriptor.total_size
+        input_running_offset += mla_out_ms_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_ms_cb_descriptor)
 
         # Post SDPA
@@ -2986,8 +2989,8 @@ class AttentionBlock:
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-            mla_ncrisc_per_core_args.append(
+            # BRISC per-core runtime args (common args: k_addr, pos_addr)
+            mla_brisc_per_core_args.append(
                 (
                     core,
                     [
@@ -3004,8 +3007,8 @@ class AttentionBlock:
             # Tree reduction partner coordinates
             tree_reduction_info = optimized_mla_grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # BRISC per-core runtime args (common args: pos_addr)
-            mla_brisc_args = [
+            # NCRISC per-core runtime args (common args: pos_addr)
+            mla_ncrisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_output_core,
@@ -3018,8 +3021,8 @@ class AttentionBlock:
                 mcast_end_y,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-            mla_brisc_per_core_args.append((core, mla_brisc_args))
+                mla_ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            mla_ncrisc_per_core_args.append((core, mla_ncrisc_args))
 
             is_sender_after_reduce = (
                 1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0
@@ -3075,7 +3078,6 @@ class AttentionBlock:
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
             + qrope_brisc_named_compile_time_args
-            + create_q_heads_brisc_named_compile_time_args
             + dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + kv_cache_brisc_named_compile_time_args
@@ -3274,9 +3276,8 @@ class AttentionBlock:
             krope_output_cb_descriptor,
             krope_cos_sin_cb_descriptor,
             create_q_heads_interm_cb_descriptor,
-            kv_cache_output_cb_descriptor,
+            kv_cache_input_output_cb_descriptor,
             kv_cache_intermed_cb_descriptor,
-            kv_cache_input_cb_descriptor,
             *mla_cb_descriptors,
             *post_sdpa_cb_list,
         ]
@@ -4118,6 +4119,6 @@ class AttentionBlock:
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
-
+        print("Run")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result

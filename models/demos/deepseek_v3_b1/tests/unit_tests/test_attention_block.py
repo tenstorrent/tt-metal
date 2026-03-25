@@ -199,7 +199,7 @@ def test_attention_block(
     # Matches flash_mla's cb_out_im sizing: 51 tiles of [8, 32] at bfloat16 = 26112 B per core.
     # Shard shape (24, 544) = 3 tile-rows x 17 tile-cols = 51 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 3
+    sdpa_out_interm_num_slots = 5
     sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 3 tile-rows of [8, 32]
     sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores

@@ -12,9 +12,9 @@
 //   Phase 2: Second 8 halves of QNOPE - shape [8, 256] → 8 tiles
 //   Phase 3: QROPE - shape [8, 64] → 2 tiles
 //
-// Standalone op pattern (matching pre_sdpa gather pattern):
-//   - NCRISC: All senders (always sender, never receiver)
-//   - BRISC: All receivers (always receiver, never sender)
+// Standalone op pattern:
+//   - NCRISC: All data movement (sender on qnope/qrope cores, receiver on sdpa input cores)
+//   - BRISC: Idle
 //   - TRISC: Tilization on receiver cores
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
@@ -31,12 +31,12 @@ struct Core {
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
-    // NCRISC: Sender args for QNOPE/QROPE cores (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
+    // NCRISC: All data movement — sender on qnope/qrope cores, receiver on sdpa input cores
     uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
+    using CreateQHeadsSenderCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
         get_named_compile_time_arg_val("qnope_data_size_bytes"),
         get_named_compile_time_arg_val("qrope_head_size_bytes")>;
-    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
+    deepseek_b1_ops::CreateQHeads::SenderArgs sender_args{
         get_named_compile_time_arg_val("sender_grid_start_x"),
         get_named_compile_time_arg_val("sender_grid_start_y"),
         get_named_compile_time_arg_val("head_stride_bytes"),
@@ -44,7 +44,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("qnope_cb"),
         get_named_compile_time_arg_val("qrope_cb"),
         get_named_compile_time_arg_val("src_num_pages"),
-        // 3 semaphores for race-free synchronization
         get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
         get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
         get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
@@ -61,10 +60,8 @@ void kernel_main() {
         receiver_data_addr,
     };
 
-#elif defined(COMPILE_FOR_BRISC)
-    // BRISC: Receiver args for SDPA input cores (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
-    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
+    deepseek_b1_ops::CreateQHeads::ReceiverArgs receiver_args{
         get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
         get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
         get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
@@ -78,8 +75,8 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC (Compute): Tilization args for receiver cores
-    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
-    deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_args{
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
+    deepseek_b1_ops::CreateQHeads::ComputeArgs receiver_args{
         get_named_compile_time_arg_val("receiver_in_cb"),
         get_named_compile_time_arg_val("out_cb"),
         get_named_compile_time_arg_val("nope_tiles"),
@@ -87,9 +84,16 @@ void kernel_main() {
     };
     deepseek_compute_kernel_init();
 #endif
-
-    using CreateQHeadsOp =
-        deepseek_b1_ops::CreateQHeads::Op<CreateQHeadsCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
-    CreateQHeadsOp create_q_heads;
-    create_q_heads(create_q_heads_args);
+#if defined(COMPILE_FOR_NCRISC)
+    using CreateQHeadsSenderOp = deepseek_b1_ops::CreateQHeads::
+        Op<CreateQHeadsSenderCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
+    CreateQHeadsSenderOp create_q_heads_sender;
+    create_q_heads_sender(sender_args);
+#endif
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
+    using CreateQHeadsReceiverOp = deepseek_b1_ops::CreateQHeads::
+        Op<CreateQHeadsReceiverCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
+    CreateQHeadsReceiverOp create_q_heads_receiver;
+    create_q_heads_receiver(receiver_args);
+#endif
 }
