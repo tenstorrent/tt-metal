@@ -258,7 +258,7 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
 template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t out_cb, uint32_t num_tiles>
 void softmax_mul_block_bcast_scalar() {
-    reconfig_data_format(in0_cb, in1_scalar_cb);
+    reconfig_data_format<false, true>(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
@@ -344,9 +344,15 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
 
     MATH((llk_math_deepseek_top32_rm_init<false>()));
     MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing)));
+    MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, false)));
+    MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
 
     for (uint32_t i = 64; i < row_elements; i += 64) {
-        num_faces = (i + 64 > row_elements) ? 2 : 4;
+        if (i + 64 > row_elements) {
+            num_faces = 2;
+        } else {
+            num_faces = 4;
+        }
 
         reconfig_data_format_srca(in_scores_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
@@ -360,10 +366,12 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
         MATH((llk_math_top32_rm_init(in_indices_cb)));
         MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
-        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, increasing)));
+        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing)));
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, false)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles + 1, increasing, true)));
 
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles)));
-        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing)));
+        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
+        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
 
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));

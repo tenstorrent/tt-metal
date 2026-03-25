@@ -135,10 +135,10 @@ void kernel_main() {
     if constexpr (SamplingComputeCTArgs::topk_k == 32) {
         deepseek_compute_kernel_hw_startup<true>(
             SamplingComputeCTArgs::topk_in_scores_cb,
-            SamplingComputeCTArgs::topk_in_indices_cb,
+            SamplingComputeCTArgs::topk_in_scores_cb,
             SamplingComputeCTArgs::topk_out_scores_cb);
     } else {
-        deepseek_compute_kernel_hw_startup<true>(0, 0, 0);
+        deepseek_compute_kernel_hw_startup<true>(SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_out_cb);
     }
 
     sampling_op(args);
