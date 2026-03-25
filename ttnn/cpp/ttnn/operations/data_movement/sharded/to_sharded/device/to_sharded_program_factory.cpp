@@ -90,28 +90,27 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
 
     // std::cout << "num_cores: " << num_cores << std::endl;
     // Creating CBs
-    uint32_t max_number_of_input_pages_overlapping_an_output_page = 1;
-    if (elements_per_input_page < elements_per_output_page) {
-        max_number_of_input_pages_overlapping_an_output_page =
-            static_cast<uint32_t>(elements_per_output_page / elements_per_input_page) +
-            2;  // +2 because the output page can overlap the end of the first input page and the beginning of the last
-                // input page
-    } else if (elements_per_input_page > elements_per_output_page) {
-        max_number_of_input_pages_overlapping_an_output_page =
-            2;  // 2 because the output page can overlap the end of the first input page and the beginning of the last
-                // input page
-    }
+    // uint32_t max_number_of_input_pages_overlapping_an_output_page = 1;
+    // if (elements_per_input_page < elements_per_output_page) {
+    //     max_number_of_input_pages_overlapping_an_output_page =
+    //         static_cast<uint32_t>(elements_per_output_page / elements_per_input_page) +
+    //         2;  // +2 because the output page can overlap the end of the first input page and the beginning of the
+    //         last
+    //             // input page
+    // } else if (elements_per_input_page > elements_per_output_page) {
+    //     max_number_of_input_pages_overlapping_an_output_page =
+    //         2;  // 2 because the output page can overlap the end of the first input page and the beginning of the
+    //         last
+    //             // input page
+    // }
 
     // Configuring the CB that store input pages
-    const auto aligned_input_page_size =
-        input.buffer()
-            ->aligned_page_size();  //  Input page size must be aligned to avoid alignment errors in the reader kernel
+    const auto input_page_size =
+        input.buffer()->page_size();  //  Input page size must be aligned to avoid alignment errors in the reader kernel
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::tt_metal::CircularBufferConfig input_pages_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            max_number_of_input_pages_overlapping_an_output_page * aligned_input_page_size,
-            {{input_pages_cb_index, input_cb_data_format}})
-            .set_page_size(input_pages_cb_index, aligned_input_page_size);
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{input_pages_cb_index, input_cb_data_format}})
+            .set_page_size(input_pages_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, ordered_cores_with_data_range, input_pages_cb_config);
 
     // Configuring the CB that stores output pages
