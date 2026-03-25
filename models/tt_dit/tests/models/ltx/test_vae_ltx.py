@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.ltx.vae_ltx import (
+from models.tt_dit.models.vae.vae_ltx import (
     LTXCausalConv3d,
     LTXDepthToSpaceUpsample,
     LTXResnetBlock3D,
