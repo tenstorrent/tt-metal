@@ -242,6 +242,7 @@ target_sources(
             sharded/to_sharded/device/to_sharded_device_operation.hpp
             sharded/to_sharded/device/to_sharded_device_operation_types.hpp
             sharded/to_sharded/device/to_sharded_row_major_sharded_program_factory.hpp
+            sharded/to_sharded/device/to_sharded_tilized_sharded_program_factory.hpp
             sharded/reshard/reshard_nanobind.hpp
             sharded/reshard/device/reshard_device_operation.hpp
             sharded/reshard/device/reshard_device_operation_types.hpp
@@ -439,6 +440,7 @@ target_sources(
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/to_sharded/device/to_sharded_device_operation.cpp
         sharded/to_sharded/device/to_sharded_row_major_sharded_program_factory.cpp
+        sharded/to_sharded/device/to_sharded_tilized_sharded_program_factory.cpp
         sharded/to_sharded/to_sharded.cpp
         sharded/reshard/device/reshard_device_operation.cpp
         sharded/reshard/device/reshard_program_factory_same_width.cpp

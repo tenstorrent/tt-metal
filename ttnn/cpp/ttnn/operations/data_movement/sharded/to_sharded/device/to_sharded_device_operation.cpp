@@ -11,6 +11,15 @@
 
 namespace ttnn::prim {
 
+ToShardedDeviceOperation::program_factory_t ToShardedDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    if (input_tensor.layout() == Layout::TILE) {
+        return ToShardedTilizedProgramFactory{};
+    }
+    return ToShardedRowMajorProgramFactory{};
+}
+
 void ToShardedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -44,6 +53,15 @@ void ToShardedDeviceOperation::validate_on_program_cache_miss(
             input_tensor.layout() == Layout::TILE,
             "Input tensor layout must be TILE when dtype conversion is needed but got {}",
             input_tensor.layout());
+    }
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto output_tile =
+            tensor_args.output_tensor.has_value()
+                ? tensor_args.output_tensor.value().tensor_spec().tile()
+                : TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config).get_tile();
+        TT_FATAL(
+            input_tensor.tensor_spec().tile().get_tile_shape() == output_tile.get_tile_shape(),
+            "Input and output tensors must have the same tile shape when layout is TILE");
     }
 }
 
@@ -87,7 +105,7 @@ ttsl::hash::hash_t ToShardedDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<ToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        operation_attributes.keep_l1_aligned,
+        // operation_attributes.keep_l1_aligned,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),

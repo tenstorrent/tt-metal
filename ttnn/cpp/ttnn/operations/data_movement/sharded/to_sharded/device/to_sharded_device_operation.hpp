@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "to_sharded_device_operation_types.hpp"
 #include "to_sharded_row_major_sharded_program_factory.hpp"
+#include "to_sharded_tilized_sharded_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -20,7 +21,10 @@ struct ToShardedDeviceOperation {
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
 
-    using program_factory_t = std::variant<ToShardedRowMajorProgramFactory>;
+    using program_factory_t = std::variant<ToShardedRowMajorProgramFactory, ToShardedTilizedProgramFactory>;
+    static program_factory_t select_program_factory(
+        const ::ttnn::prim::operation_attributes_t&, const ::ttnn::prim::tensor_args_t&);
+
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

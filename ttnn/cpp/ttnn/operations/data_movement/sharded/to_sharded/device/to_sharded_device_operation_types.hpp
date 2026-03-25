@@ -12,7 +12,7 @@ namespace ttnn::prim {
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
-    bool keep_l1_aligned{};
+    // bool keep_l1_aligned{};
 };
 
 struct tensor_args_t {
