@@ -32,7 +32,7 @@ class ModelArgs:
         self.mesh_device = mesh_device
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None
-
+        self.grid_size = mesh_device.compute_with_storage_grid_size() if mesh_device else None
         self.device_name = determine_device_name(self.mesh_device)
 
         self.cluster_shape = list(self.mesh_device.shape) if self.mesh_device is not None else None
