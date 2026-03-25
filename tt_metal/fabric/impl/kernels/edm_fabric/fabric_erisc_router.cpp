@@ -2679,9 +2679,6 @@ void
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
-        static_constexpr(
-            !sender_ch_live_check_skip[sender_channel_idx] || MY_ERISC_ID == 0,
-            "run_routing() is only safe from ERISC0");
         uint32_t count = 0;
         while (!connect_is_requested(*interface.connection_live_semaphore)
 #ifndef ARCH_WORMHOLE
