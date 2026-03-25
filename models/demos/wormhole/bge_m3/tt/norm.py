@@ -103,14 +103,12 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LayerNorm1DCo
     """
     Resolve input to a device tensor when provided as LazyWeight.
 
-    This LayerNorm module supports single-device execution only.
+    This LayerNorm module supports single-device execution and replicated mesh execution.
     """
     if isinstance(x, LazyWeight):
         mem_cfg = config.input_memcfg or ttnn.DRAM_MEMORY_CONFIG
         mesh_device = config.mesh_device
         assert mesh_device is not None, "mesh_device must be resolved before loading input tensors"
-        if mesh_device.get_num_devices() != 1:
-            raise ValueError("LayerNorm1D currently supports single-device execution only")
 
         resolved_x = resolve_lazy_weight(
             x,
@@ -172,11 +170,7 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
             packer_l1_acc=True,
         )
 
-    # --- Phase 4: resolve local LazyWeights for single-device path ---
-    num_devices = mesh_device.get_num_devices()
-    if num_devices != 1:
-        raise ValueError("LayerNorm1D currently supports single-device execution only")
-
+    # --- Phase 4: resolve local LazyWeights for replicated execution ---
     expected_shape = (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
 
     weight_source = config.weight.source
