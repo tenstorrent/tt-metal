@@ -74,8 +74,7 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
         if (mesh_mapper != nullptr) {
-            const bool must_construct_on_host =
-                device == nullptr || !fast_approx || preserve_nan_values || memory_config.is_sharded();
+            const bool must_construct_on_host = device == nullptr || !fast_approx || preserve_nan_values;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,

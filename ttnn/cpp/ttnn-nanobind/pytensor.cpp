@@ -133,6 +133,9 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     }
 
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
+    if (data_type == get_ttnn_datatype_from_dtype(py_tensor_dtype)) {
+        return {.contiguous_py_tensor = py_tensor, .data_type = data_type};
+    }
 
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
