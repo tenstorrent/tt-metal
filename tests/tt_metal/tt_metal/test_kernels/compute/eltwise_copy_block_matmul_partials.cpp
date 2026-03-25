@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-// #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/pack.h"
-// #include "api/compute/compute_kernel_api.h"
 #ifdef ARCH_QUASAR
 #include "experimental/dataflow_buffer.h"
 #else
