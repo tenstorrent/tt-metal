@@ -155,14 +155,22 @@ class Generator(WarmupForwardMixin):
         return tt_out
 
     def prefill_forward_text(
-        self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None, enable_trace=True
+        self,
+        tokens: torch.Tensor,
+        rot_mats,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace=True,
+        empty_slots=None,
     ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
-        # When batch < data_parallel (e.g. warmup with 1 user), route all to model 0
-        effective_dp = min(self.data_parallel, batch)
-        batch_per_dp = max(1, batch // effective_dp)
+        max_batch_size_per_model = self.model_args.max_batch_size
+
+        if empty_slots is None:
+            empty_slots = list(range(batch))
 
         if page_table is not None:
             assert isinstance(
@@ -184,30 +192,37 @@ class Generator(WarmupForwardMixin):
                     f" (DP={self.data_parallel})"
                 )
 
-        is_dp_kv_cache = isinstance(kv_cache, list)
+        is_dp_kv_cache = self.data_parallel > 1 and isinstance(kv_cache, list)
         first_kv_cache = kv_cache[0] if is_dp_kv_cache else kv_cache
         block_size = get_block_size(first_kv_cache) if first_kv_cache is not None else None
         num_blocks_padded = num_blocks_in_seq(batch_seq_len, block_size) if block_size is not None else None
         out_list = []
 
-        for user_id in range(batch):
-            model_id = user_id // batch_per_dp if effective_dp > 1 else 0
-            group_user_id = user_id % batch_per_dp if effective_dp > 1 else user_id
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // max_batch_size_per_model if self.data_parallel > 1 else 0
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
 
-            logger.info(f"Prefilling User {user_id + 1} (DP group {model_id}, local user {group_user_id})")
-            seq_len = int(prompt_lens[user_id])
+            logger.info(
+                f"Prefilling User {user_id + 1} slot={user_id} (DP group {model_id}, local user {group_user_id})"
+            )
+            seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
 
+            user_rot_mats = (
+                rot_mats[0][idx : idx + 1],
+                rot_mats[1][idx : idx + 1],
+            )
+
             if use_trace:
-                pt_user = page_table[user_id : user_id + 1, :num_blocks_padded]
-                rot_mats_user = (
-                    rot_mats[0][user_id : user_id + 1, :, :batch_seq_len, :],
-                    rot_mats[1][user_id : user_id + 1, :, :batch_seq_len, :],
+                pt_user = page_table[idx : idx + 1, :num_blocks_padded]
+                trace_rot_mats = (
+                    user_rot_mats[0][:, :, :batch_seq_len, :],
+                    user_rot_mats[1][:, :, :batch_seq_len, :],
                 )
                 tt_hidden = self._easy_trace_prefill(
-                    tokens[user_id : user_id + 1],
-                    rot_mats_user,
+                    tokens[idx : idx + 1],
+                    trace_rot_mats,
                     pt_user,
                     model_kv_cache,
                     batch_seq_len,
@@ -217,34 +232,30 @@ class Generator(WarmupForwardMixin):
                 out_list.append((logits.cpu(blocking=False), model_id))
             else:
                 if page_table is not None:
-                    if effective_dp > 1:
-                        dp_page_table = page_table[model_id * batch_per_dp : (model_id + 1) * batch_per_dp]
-                    else:
-                        dp_page_table = page_table
                     page_table_user = self._ttt_generator._get_prefill_user_page_table(
-                        dp_page_table, model_kv_cache, seq_len
+                        page_table[idx : idx + 1], model_kv_cache, seq_len
                     )
                 else:
                     page_table_user = None
 
                 logits = self.__prefill_forward_single_user_text(
-                    tokens[user_id : user_id + 1],
+                    tokens[idx : idx + 1],
                     page_table=page_table_user,
                     user_id=group_user_id,
                     last_token_idx=last_token_idx,
-                    rot_mats=rot_mats,
+                    rot_mats=user_rot_mats,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
                 )
-                output_logits[user_id] = logits
+                output_logits[idx] = logits
 
         if use_trace:
             ttnn.synchronize_device(self.mesh_device)
-            for user_id, (out, mid) in enumerate(out_list):
-                seq_len = int(prompt_lens[user_id])
+            for idx, (out, mid) in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
                 last_token_idx = seq_len - 1
                 model_inst = self._ttt_generator.model[mid]
-                output_logits[user_id] = model_inst.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+                output_logits[idx] = model_inst.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -282,6 +293,9 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        reset_batch=False,
+        prompt_tokens=None,
+        output_tokens=None,
     ):
         if not isinstance(kv_cache, list):
             kv_cache = [kv_cache]
@@ -293,6 +307,9 @@ class Generator(WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            reset_batch=reset_batch,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
         )
 
     def __prefill_forward_single_user_text(
@@ -350,7 +367,7 @@ class Generator(WarmupForwardMixin):
                 )
                 tt_logits = model_inst.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
+                    rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -375,7 +392,7 @@ class Generator(WarmupForwardMixin):
 
             tt_logits = model_inst.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[0:1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -397,7 +414,25 @@ class Generator(WarmupForwardMixin):
 
     # [INFO] this is called by vLLM
     def process_decode_output_host(self, tt_out, is_tokens=False):
-        return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
+        result = self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
+        if is_tokens:
+            # Device sampling produces UInt32 token IDs; PyTorch CPU lacks
+            # kernel support for UInt32 indexing, so cast to int32 here
+            # before the V0 model runner applies perm_table reordering.
+            def _safe_cast(t):
+                if (
+                    isinstance(t, torch.Tensor)
+                    and not t.is_floating_point()
+                    and t.dtype not in (torch.int32, torch.int64)
+                ):
+                    return t.to(torch.int32)
+                return t
+
+            if isinstance(result, tuple):
+                result = tuple(_safe_cast(t) for t in result)
+            else:
+                result = _safe_cast(result)
+        return result
 
     def warmup_model_prefill(
         self,
@@ -425,7 +460,7 @@ class Generator(WarmupForwardMixin):
         hidden_dim = self.model_args.dim
         head_dim = self.model_args.head_dim
 
-        is_dp_kv_cache = isinstance(kv_cache, list)
+        is_dp_kv_cache = self.data_parallel > 1 and isinstance(kv_cache, list)
         for model_id in range(self.data_parallel):
             model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
             logger.info(f"  Warming up DP group {model_id}")

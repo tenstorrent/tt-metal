@@ -293,6 +293,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         enable_trace,
         **kwargs,  # V1: pixel_values and image_grid_thw; V0: images
     ):
+        empty_slots = kwargs.pop("empty_slots", None)
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
@@ -411,6 +412,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
+            empty_slots=empty_slots,
         )
         prefill_time = time.perf_counter() - prefill_start
         batch_size = tokens.shape[0]
@@ -437,14 +439,32 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         self._decode_iteration += 1
         batch_size = 1
-        if len(args) > 0 and isinstance(args[0], torch.Tensor):
-            batch_size = args[0].shape[0] if len(args[0].shape) > 0 else 1
+        tokens_tensor = args[0] if len(args) > 0 else kwargs.get("tokens", None)
+        if isinstance(tokens_tensor, torch.Tensor) and tokens_tensor.ndim > 0:
+            batch_size = tokens_tensor.shape[0]
 
-        tok_s_per_user = 1.0 / decode_time if decode_time > 0 else 0
-        tok_s_throughput = tok_s_per_user * batch_size
-        logger.info(
-            f"[PERF] Decode iteration {self._decode_iteration}: {decode_time*1000:.0f}ms @ "
-            f"{tok_s_per_user:.1f} tok/s/user ({tok_s_throughput:.1f} tok/s throughput)"
-        )
+        # Step-to-step time gives the real per-iteration latency including
+        # device compute, D2H read, host processing, and vLLM scheduling.
+        # The dispatch-only time (decode_time) is misleading when
+        # read_from_device=False since it only measures async launch.
+        step_time = None
+        if hasattr(self, "_prev_decode_start"):
+            step_time = decode_start - self._prev_decode_start
+        self._prev_decode_start = decode_start
+
+        dispatch_tok_s = 1.0 / decode_time * batch_size if decode_time > 0 else 0
+        if step_time and step_time > 0 and self._decode_iteration > 2:
+            real_tok_s_user = 1.0 / step_time
+            real_tok_s = real_tok_s_user * batch_size
+            logger.info(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"step={step_time*1000:.0f}ms dispatch={decode_time*1000:.0f}ms | "
+                f"{real_tok_s_user:.1f} tok/s/user, {real_tok_s:.1f} tok/s throughput (batch={batch_size})"
+            )
+        else:
+            logger.info(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"dispatch={decode_time*1000:.0f}ms (batch={batch_size})"
+            )
 
         return result
