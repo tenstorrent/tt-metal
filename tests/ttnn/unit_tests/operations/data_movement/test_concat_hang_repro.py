@@ -16,10 +16,16 @@ def test_repeat_lowering_concat_exact_ir_repro(device):
     """
     Manual repro that mirrors the provided IR exactly:
     1xbf16 DRAM row-major -> to_layout(tile) -> concat 100 tiled inputs on dim 0.
+
+    ROOT CAUSE IDENTIFIED (2026-03-25):
+    - Hangs with ETH dispatch at 48+ inputs, passes with WORKER dispatch
+    - N300 clusters default to ETH dispatch via CreateDevice()/pytest fixtures
+    - Threshold: 47 inputs passes, 48+ hangs with ETH dispatch
+    - WORKER dispatch works at all tested input counts (up to 100+)
     """
 
     input_shape = (1,)
-    repeat_count = 100
+    repeat_count = 100  # Hangs at 48+ with ETH dispatch on N300
 
     torch_input_tensor = torch.zeros(input_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.concat([torch_input_tensor] * repeat_count, dim=0)
