@@ -25,7 +25,9 @@ ttnn::Tensor combine(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    bool init_zeros) {
+    bool init_zeros,
+    bool distributed_zero_init,
+    bool inline_zero_init) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -67,7 +69,9 @@ ttnn::Tensor combine(
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
-        init_zeros);
+        init_zeros,
+        distributed_zero_init,
+        inline_zero_init);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

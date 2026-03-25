@@ -43,6 +43,8 @@ void bind_combine(nb::module_& mod) {
             num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
             topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer. Defaults to True.
+            distributed_zero_init (bool, optional): When True, uses a distributed multi-core kernel for DRAM zero initialization. When False, uses the legacy single-core approach. Defaults to True.
+            inline_zero_init (bool, optional): When True, reuses existing sender cores and their c_0 CB for DRAM zero initialization. Mutually exclusive with distributed_zero_init. Defaults to False.
 
         Returns:
             ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
@@ -72,7 +74,9 @@ void bind_combine(nb::module_& mod) {
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
-            nb::arg("init_zeros") = true));
+            nb::arg("init_zeros") = true,
+            nb::arg("distributed_zero_init") = true,
+            nb::arg("inline_zero_init") = false));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

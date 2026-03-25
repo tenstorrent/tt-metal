@@ -31,6 +31,8 @@ class TtCombineModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         memory_config: ttnn.MemoryConfig = None,
         init_zeros: bool = True,
+        distributed_zero_init: bool = True,
+        inline_zero_init: bool = False,
     ):
         """
         Initialize combine module wrapper.
@@ -44,6 +46,7 @@ class TtCombineModule(LightweightModule):
             seq_len_per_chip: Sequence length per chip
             memory_config: Output memory configuration (L1 or DRAM interleaved)
             init_zeros: Whether to zero-initialize the output buffer
+            distributed_zero_init: Use distributed multi-core DRAM zero init (True) or legacy single-core (False)
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -57,6 +60,8 @@ class TtCombineModule(LightweightModule):
         self.topology = topology
         self.memory_config = memory_config
         self.init_zeros = init_zeros
+        self.distributed_zero_init = distributed_zero_init
+        self.inline_zero_init = inline_zero_init
 
     def forward(
         self,
@@ -88,5 +93,7 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            distributed_zero_init=self.distributed_zero_init,
+            inline_zero_init=self.inline_zero_init,
         )
         return output
