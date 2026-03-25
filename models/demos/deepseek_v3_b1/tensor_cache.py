@@ -39,6 +39,10 @@ import ttnn
 from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensor
 
 
+class CacheMiss(Exception):
+    """Raised by load-only methods when the requested artifact is not cached."""
+
+
 @dataclass(frozen=True)
 class Fingerprint:
     """Cache key for a single fusion group.
@@ -99,6 +103,101 @@ class TensorCache:
         prefix = artifact_id[:2]
         return self._root / "objects" / prefix / artifact_id
 
+    # ------------------------------------------------------------------
+    # Load-only methods (raise CacheMiss on miss)
+    # ------------------------------------------------------------------
+
+    def load(
+        self,
+        fingerprint: Fingerprint,
+        *,
+        device: ttnn.Device,
+    ) -> dict[str, OverlappedTensor]:
+        """Load cached overlapped views, raising :class:`CacheMiss` if absent."""
+        artifact_id = fingerprint.artifact_id()
+        path = self._artifact_dir(artifact_id) / "data.overlappedtensorbin"
+        if not path.exists():
+            raise CacheMiss(f"{fingerprint.group_name} layer {fingerprint.layer_idx} ({artifact_id[:12]})")
+        logger.debug("Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12])
+        return ttnn._ttnn.tensor.load_overlapped_tensors(str(path), device=device)
+
+    def load_tensor(
+        self,
+        fingerprint: Fingerprint,
+        *,
+        device: ttnn.Device,
+    ) -> ttnn.Tensor:
+        """Load cached standalone tensor, raising :class:`CacheMiss` if absent."""
+        artifact_id = fingerprint.artifact_id()
+        path = self._artifact_dir(artifact_id) / "data.tensorbin"
+        if not path.exists():
+            raise CacheMiss(f"{fingerprint.group_name} layer {fingerprint.layer_idx} ({artifact_id[:12]})")
+        logger.debug("Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12])
+        return ttnn.load_tensor(str(path), device=device)
+
+    _COMPLETE_MARKER = "_complete"
+
+    def load_routed_experts(
+        self,
+        fingerprint: Fingerprint,
+        *,
+        device,
+        num_experts: int,
+    ):
+        """Load cached MoE routed expert weights, raising :class:`CacheMiss` if absent.
+
+        Experts are read in projection-first order (all gates, then all ups,
+        then all downs) to guarantee contiguous DRAM allocation.
+        """
+        from models.demos.deepseek_v3_b1.prepare_weights import MoERoutedExpertWeights
+
+        artifact_id = fingerprint.artifact_id()
+        artifact_dir = self._artifact_dir(artifact_id)
+        marker = artifact_dir / self._COMPLETE_MARKER
+        if not marker.exists():
+            raise CacheMiss(f"{fingerprint.group_name} layer {fingerprint.layer_idx} ({artifact_id[:12]})")
+        logger.debug("Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12])
+        experts_dir = artifact_dir / "experts"
+        routed_gate_proj = []
+        routed_up_proj = []
+        routed_down_proj = []
+        for e in range(num_experts):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            routed_gate_proj.append(ttnn.load_tensor(str(expert_dir / "gate_proj.tensorbin"), device=device))
+        for e in range(num_experts):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            routed_up_proj.append(ttnn.load_tensor(str(expert_dir / "up_proj.tensorbin"), device=device))
+        for e in range(num_experts):
+            expert_dir = experts_dir / f"e_{e:03d}"
+            routed_down_proj.append(ttnn.load_tensor(str(expert_dir / "down_proj.tensorbin"), device=device))
+        result = MoERoutedExpertWeights(
+            routed_gate_proj=routed_gate_proj,
+            routed_up_proj=routed_up_proj,
+            routed_down_proj=routed_down_proj,
+        )
+        result.validate_contiguous_dram()
+        return result
+
+    # ------------------------------------------------------------------
+    # Existence checks
+    # ------------------------------------------------------------------
+
+    def exists(self, fingerprint: Fingerprint) -> bool:
+        """Return True if the overlapped-tensor artifact exists for *fingerprint*."""
+        return (self._artifact_dir(fingerprint.artifact_id()) / "data.overlappedtensorbin").exists()
+
+    def tensor_exists(self, fingerprint: Fingerprint) -> bool:
+        """Return True if the standalone-tensor artifact exists for *fingerprint*."""
+        return (self._artifact_dir(fingerprint.artifact_id()) / "data.tensorbin").exists()
+
+    def routed_experts_exist(self, fingerprint: Fingerprint) -> bool:
+        """Return True if the routed-experts sentinel exists for *fingerprint*."""
+        return (self._artifact_dir(fingerprint.artifact_id()) / self._COMPLETE_MARKER).exists()
+
+    # ------------------------------------------------------------------
+    # Get-or-create methods (create on miss, load on hit)
+    # ------------------------------------------------------------------
+
     def get_or_create(
         self,
         fingerprint: Fingerprint,
@@ -106,25 +205,15 @@ class TensorCache:
         fuse: Callable[[], dict[str, OverlappedTensor]],
         device: ttnn.Device,
     ) -> dict[str, OverlappedTensor]:
-        """Return cached overlapped views on hit, or fuse + store + return on miss.
-
-        Args:
-            fingerprint: The cache key identifying this fusion group.
-            fuse: A callable that produces the ``dict[str, OverlappedTensor]``
-                when invoked (only called on a cache miss).
-            device: The mesh device to load onto (hit path).
-        """
-        artifact_id = fingerprint.artifact_id()
-        path = self._artifact_dir(artifact_id) / "data.overlappedtensorbin"
-
-        if path.exists():
-            logger.debug(
-                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
-            )
-            return ttnn._ttnn.tensor.load_overlapped_tensors(str(path), device=device)
-
+        """Return cached overlapped views on hit, or fuse + store + return on miss."""
+        try:
+            return self.load(fingerprint, device=device)
+        except CacheMiss:
+            pass
         logger.debug("Cache miss for {} layer {} — fusing", fingerprint.group_name, fingerprint.layer_idx)
         views = fuse()
+        artifact_id = fingerprint.artifact_id()
+        path = self._artifact_dir(artifact_id) / "data.overlappedtensorbin"
         path.parent.mkdir(parents=True, exist_ok=True)
         ttnn._ttnn.tensor.dump_overlapped_tensors(str(path), views)
         return views
@@ -136,32 +225,18 @@ class TensorCache:
         create: Callable[[], ttnn.Tensor],
         device: ttnn.Device,
     ) -> ttnn.Tensor:
-        """Return cached standalone tensor on hit, or create + store + return on miss.
-
-        Uses ``ttnn.dump_tensor`` / ``ttnn.load_tensor`` for serialization.
-
-        Args:
-            fingerprint: The cache key identifying this tensor.
-            create: A callable that produces the ``ttnn.Tensor``
-                when invoked (only called on a cache miss).
-            device: The mesh device to load onto (hit path).
-        """
-        artifact_id = fingerprint.artifact_id()
-        path = self._artifact_dir(artifact_id) / "data.tensorbin"
-
-        if path.exists():
-            logger.debug(
-                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
-            )
-            return ttnn.load_tensor(str(path), device=device)
-
+        """Return cached standalone tensor on hit, or create + store + return on miss."""
+        try:
+            return self.load_tensor(fingerprint, device=device)
+        except CacheMiss:
+            pass
         logger.debug("Cache miss for {} layer {} — creating", fingerprint.group_name, fingerprint.layer_idx)
         tensor = create()
+        artifact_id = fingerprint.artifact_id()
+        path = self._artifact_dir(artifact_id) / "data.tensorbin"
         path.parent.mkdir(parents=True, exist_ok=True)
         ttnn.dump_tensor(str(path), tensor)
         return tensor
-
-    _COMPLETE_MARKER = "_complete"
 
     def get_or_create_routed_experts(
         self,
@@ -171,64 +246,22 @@ class TensorCache:
         device,
         num_experts: int,
     ):
-        """Return cached MoE routed expert weights on hit, or create + store on miss.
-
-        Stores 768 files (``num_experts`` x 3 projections) under
-        ``experts/e_NNN/{gate,up,down}_proj.tensorbin``.  A ``_complete``
-        sentinel file is written after all expert files to guard against
-        partial writes.
-
-        On load, experts are read in projection-first order (all gates,
-        then all ups, then all downs) to guarantee contiguous DRAM
-        allocation required by ``DRAMStreamingMatmul``.
-
-        Args:
-            fingerprint: Cache key for this layer's routed experts.
-            create: Callable returning a ``MoERoutedExpertWeights`` on miss.
-            device: Device to load onto (hit path).
-            num_experts: Expected number of experts (e.g. 256).
-        """
-        from models.demos.deepseek_v3_b1.prepare_weights import MoERoutedExpertWeights
-
-        artifact_id = fingerprint.artifact_id()
-        artifact_dir = self._artifact_dir(artifact_id)
-        marker = artifact_dir / self._COMPLETE_MARKER
-
-        if marker.exists():
-            logger.debug(
-                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
-            )
-            experts_dir = artifact_dir / "experts"
-            routed_gate_proj = []
-            routed_up_proj = []
-            routed_down_proj = []
-            for e in range(num_experts):
-                expert_dir = experts_dir / f"e_{e:03d}"
-                routed_gate_proj.append(ttnn.load_tensor(str(expert_dir / "gate_proj.tensorbin"), device=device))
-            for e in range(num_experts):
-                expert_dir = experts_dir / f"e_{e:03d}"
-                routed_up_proj.append(ttnn.load_tensor(str(expert_dir / "up_proj.tensorbin"), device=device))
-            for e in range(num_experts):
-                expert_dir = experts_dir / f"e_{e:03d}"
-                routed_down_proj.append(ttnn.load_tensor(str(expert_dir / "down_proj.tensorbin"), device=device))
-            result = MoERoutedExpertWeights(
-                routed_gate_proj=routed_gate_proj,
-                routed_up_proj=routed_up_proj,
-                routed_down_proj=routed_down_proj,
-            )
-            result.validate_contiguous_dram()
-            return result
-
+        """Return cached MoE routed expert weights on hit, or create + store on miss."""
+        try:
+            return self.load_routed_experts(fingerprint, device=device, num_experts=num_experts)
+        except CacheMiss:
+            pass
         logger.debug("Cache miss for {} layer {} — creating", fingerprint.group_name, fingerprint.layer_idx)
         result = create()
-        experts_dir = artifact_dir / "experts"
+        artifact_id = fingerprint.artifact_id()
+        experts_dir = self._artifact_dir(artifact_id) / "experts"
         for e in range(num_experts):
             expert_dir = experts_dir / f"e_{e:03d}"
             expert_dir.mkdir(parents=True, exist_ok=True)
             ttnn.dump_tensor(str(expert_dir / "gate_proj.tensorbin"), result.routed_gate_proj[e])
             ttnn.dump_tensor(str(expert_dir / "up_proj.tensorbin"), result.routed_up_proj[e])
             ttnn.dump_tensor(str(expert_dir / "down_proj.tensorbin"), result.routed_down_proj[e])
-        marker.touch()
+        (self._artifact_dir(artifact_id) / self._COMPLETE_MARKER).touch()
         return result
 
 
