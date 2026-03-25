@@ -145,16 +145,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         best_db = pernsb_best_db;
     }
 
-    // Allow overrides for parameter sweep benchmarking
-    if (attrs.override_kb > 0) {
-        best_kb = attrs.override_kb;
-    }
-    if (attrs.override_mb > 0) {
-        best_mb = attrs.override_mb;
-    }
-    if (attrs.override_db > 0) {
-        best_db = attrs.override_db;
-    }
     best_subs = (Mpc + best_mb - 1) / best_mb;
     use_per_nsb_reduction = use_per_nsb_reduction && (best_subs == 1);
 
