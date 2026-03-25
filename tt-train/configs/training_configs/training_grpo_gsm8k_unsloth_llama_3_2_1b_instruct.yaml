@@ -5,9 +5,9 @@ training_config:
 
   optimizer:
     type: MorehAdamW
-    lr: 0.0003
+    lr: 5.0e-6
     beta1: 0.9
-    beta2: 0.999
+    beta2: 0.99
     epsilon: 1.0e-8
     weight_decay: 0.01
     amsgrad: false
@@ -16,9 +16,13 @@ training_config:
 grpo_config:
   max_tokens_to_complete: 512
   group_size: 4
+  clip_eps: 0.2           # standard PPO/GRPO clip (currently code default, make explicit)
+  warmup_steps: 10        # shorter warmup (was 20); with small data you want to ramp up faster
+  micro_batch_size: 16    # keep at 16 (fits memory)
+  prompts_to_train: 1536  # keep the same
 
 eval_config:
-  temperature: 0.8
+  temperature: 0.9        # slightly higher for more diverse group completions (was 0.8)
 
 device_config:
   enable_ddp: false

@@ -130,7 +130,7 @@ def setup_grpo_config(yaml_config_path) -> GrpoConfig:
 
     grpo_config = GrpoConfig(
         clip_eps=float(grpo_cfg.get("clip_eps", 0.2)),
-        base_lr=float(grpo_cfg.get("base_lr", 1e-6)),
+        base_lr=float(training_cfg["optimizer"]["lr"]),
         warmup_steps=int(grpo_cfg.get("warmup_steps", 20)),
         micro_batch_size=int(grpo_cfg.get("micro_batch_size", 16)),
         prompts_to_train=int(grpo_cfg.get("prompts_to_train", 1536)),
