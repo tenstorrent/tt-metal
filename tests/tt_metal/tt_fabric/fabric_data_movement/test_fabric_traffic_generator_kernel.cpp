@@ -118,11 +118,11 @@ protected:
         }
 
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        
+
         // Use logical fabric nodes 0 and 1 as neighbors
         FabricNodeId src_node(MeshId{0}, 0);
         FabricNodeId dest_node(MeshId{0}, 1);
-        
+
         // Launch kernel on logical first device
         ChipId src_physical_chip = control_plane.get_physical_chip_id_from_fabric_node_id(src_node);
         mesh_device_ = get_device(src_physical_chip);
