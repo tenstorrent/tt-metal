@@ -96,3 +96,16 @@ class Qwen35RoPESetup:
         cos_ttnn = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         sin_ttnn = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         return cos_ttnn, sin_ttnn
+
+    def get_cos_sin_host(self, pos):
+        """Return cos/sin at position as host ttnn tensors for copy_host_to_device_tensor.
+
+        Returns tensors on HOST (no device= arg) for fast DMA to pre-allocated device buffers.
+        Shape: [1, 1, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
+        Layout: TILE_LAYOUT — must match device buffer layout for copy compatibility.
+        """
+        cos = self.cos_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        sin = self.sin_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        cos_host = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        sin_host = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        return cos_host, sin_host

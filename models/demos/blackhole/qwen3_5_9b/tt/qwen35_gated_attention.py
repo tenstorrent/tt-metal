@@ -92,6 +92,7 @@ class Qwen35GatedAttention:
         self.kv_cache_value = None
         self.cache_pos = 0
         self.use_preallocated_cache = False
+        self.use_paged_cache_trace = False
 
     def enable_preallocated_cache(self, batch_size=1):
         """Allocate fixed-size KV cache for trace-compatible decode."""
@@ -219,7 +220,7 @@ class Qwen35GatedAttention:
         ttnn.deallocate(combined)
         ttnn.deallocate(new_mask)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, position_tensor=None):
         T = x.shape[1]
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
