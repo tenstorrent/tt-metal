@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
     [128, 160],
@@ -58,24 +59,27 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 @pytest.mark.parametrize(
-    "ttnn_op, dtype",
+    "ttnn_op, torch_dtype, ttnn_dtype",
     [
-        (ttnn.abs, ttnn.bfloat16),
-        (ttnn.neg, ttnn.bfloat16),
+        (ttnn.relu, torch.bfloat16, ttnn.bfloat16),
+        (ttnn.square, torch.float32, ttnn.float32),
+        (ttnn.abs, torch.int32, ttnn.int32),
     ],
 )
-def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_op, dtype, device):
+def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_op, torch_dtype, ttnn_dtype, device):
     """Test unary_ng ops with all combinations of sharded/interleaved input and output."""
-    torch.manual_seed(42)
-    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    torch_input = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
+    torch.manual_seed(0)
+    if torch_dtype.is_floating_point:
+        torch_input = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
+    else:
+        torch_input = torch.randint(-100, 100, input_shape, dtype=torch_dtype)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output = golden_function(torch_input, device=device)
 
     ttnn_input = ttnn.from_torch(
         torch_input,
-        dtype=dtype,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_config,
@@ -88,17 +92,16 @@ def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_o
 @pytest.mark.parametrize(
     "input_shape",
     [
-        torch.Size([1, 1, 32, 64]),
         torch.Size([1, 1, 64, 128]),
     ],
 )
-@pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.neg])
+@pytest.mark.parametrize("ttnn_op", [ttnn.sinh])
 def test_unary_ng_row_major(input_shape, ttnn_op, device):
     """Test unary_ng ops with ROW_MAJOR layout on interleaved tensors."""
-    torch.manual_seed(42)
-    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    torch.manual_seed(0)
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-10, 10)
     golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output = golden_function(torch_input, device=device)
+    golden_tensor = golden_function(torch_input, device=device)
 
     ttnn_input = ttnn.from_torch(
         torch_input,
@@ -109,7 +112,7 @@ def test_unary_ng_row_major(input_shape, ttnn_op, device):
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input))
-    assert torch.equal(ttnn_output, torch_output)
+    assert_with_ulp(ttnn_output, golden_tensor, ulp_threshold=5.0)
 
 
 @pytest.mark.parametrize(
@@ -134,7 +137,7 @@ def test_unary_ng_row_major(input_shape, ttnn_op, device):
         ),
     ],
 )
-@pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.neg])
+@pytest.mark.parametrize("ttnn_op", [ttnn.cbrt])
 def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     """Test unary_ng ops with sub_core_grids on interleaved tensors."""
     torch.manual_seed(0)
@@ -152,10 +155,10 @@ def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, sub_core_grids=sub_core_grid))
-    assert torch.equal(ttnn_output, golden_tensor)
+    assert_with_ulp(ttnn_output, golden_tensor, ulp_threshold=1.0)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.neg])
+@pytest.mark.parametrize("ttnn_op", [ttnn.square])
 def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     """Test that uneven sharding falls back to interleaved path gracefully.
 
@@ -165,13 +168,10 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     """
     torch.manual_seed(42)
     input_shape = torch.Size([1, 1, 160, 96])
-    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
-
+    torch_input = torch.randint(0, 255, input_shape, dtype=torch.int32)
     golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output = golden_function(torch_input, device=device)
+    golden_tensor = golden_function(torch_input, device=device)
 
-    # Shard height 64 does not divide evenly into tensor height 160 (160 / 64 = 2.5),
-    # so the last core gets a partial shard → is_uneven returns true → fallback.
     uneven_shard_config = ttnn.create_sharded_memory_config(
         [64, 96],
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 2))}),
@@ -182,14 +182,16 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
 
     ttnn_input = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.uint16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=uneven_shard_config,
     )
 
-    ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, memory_config=uneven_shard_config))
-    assert torch.equal(ttnn_output, torch_output)
+    ttnn_output = ttnn_op(ttnn_input, memory_config=uneven_shard_config)
+    ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.uint32)
+    ttnn_output = ttnn.to_torch(ttnn_output, dtype=torch.int32)
+    assert torch.equal(ttnn_output, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -202,10 +204,16 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
             ttnn.ShardStrategy.HEIGHT,
         ),
         (
-            [2, 8, 8, 1280],
-            [8, 1280],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
+            [1, 1, 64, 512],
+            [64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 0))}),
+            ttnn.ShardStrategy.WIDTH,
+        ),
+        (
+            [1, 1, 256, 512],
+            [64, 128],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))}),
+            ttnn.ShardStrategy.BLOCK,
         ),
     ],
 )
@@ -242,4 +250,156 @@ def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strateg
     ttnn_input = ttnn.to_memory_config(ttnn_input, memory_config=shard_mem_config)
 
     ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
+    assert torch.equal(ttnn_output, torch_output)
+
+
+@pytest.mark.parametrize(
+    "strategy, shard_shape_rm, shard_shape_cm, core_grid",
+    [
+        (
+            ttnn.ShardStrategy.HEIGHT,
+            [256 // 4, 256],
+            [256, 256 // 4],
+            ttnn.CoreGrid(y=4, x=1),
+        ),
+        (
+            ttnn.ShardStrategy.WIDTH,
+            [256, 256 // 4],
+            [256 // 4, 256],
+            ttnn.CoreGrid(y=1, x=4),
+        ),
+        (
+            ttnn.ShardStrategy.BLOCK,
+            [256 // 2, 256 // 4],
+            [256 // 2, 256 // 4],
+            ttnn.CoreGrid(y=2, x=4),
+        ),
+    ],
+)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_unary_ng_shard_orientation(strategy, shard_shape_rm, shard_shape_cm, core_grid, shard_orientation, device):
+    """Test unary_ng with both ROW_MAJOR and COL_MAJOR shard orientations."""
+    torch.manual_seed(0)
+    input_shape = [1, 1, 256, 256]
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+
+    golden_function = ttnn.get_golden_function(ttnn.abs)
+    torch_output = golden_function(torch_input, device=device)
+
+    shard_shape = shard_shape_rm if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR else shard_shape_cm
+
+    shard_mem_config = ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=core_grid,
+        strategy=strategy,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=shard_mem_config,
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
+    assert torch.equal(ttnn_output, torch_output)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape, input_core_grid, input_strategy, output_memory_config",
+    [
+        (
+            [1, 1, 256, 128],
+            [64, 128],
+            ttnn.CoreGrid(y=4, x=1),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ),
+        (
+            [1, 1, 128, 256],
+            [128, 64],
+            ttnn.CoreGrid(y=1, x=4),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        ),
+        (
+            [1, 1, 256, 256],
+            [128, 64],
+            ttnn.CoreGrid(y=2, x=4),
+            ttnn.ShardStrategy.BLOCK,
+            ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        ),
+    ],
+)
+def test_unary_ng_generic_sharded_memory_config(
+    input_shape, input_shard_shape, input_core_grid, input_strategy, output_memory_config, device
+):
+    """Test unary_ng with generic sharded memory configs (no explicit shard spec).
+
+    When using L1_HEIGHT_SHARDED_MEMORY_CONFIG etc., the shard spec is inferred
+    from the input tensor. The output strategy must match the input strategy.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+
+    golden_function = ttnn.get_golden_function(ttnn.neg)
+    torch_output = golden_function(torch_input, device=device)
+
+    input_shard_config = ttnn.create_sharded_memory_config(
+        shape=input_shard_shape,
+        core_grid=input_core_grid,
+        strategy=input_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_shard_config,
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn.neg(ttnn_input, memory_config=output_memory_config))
+    assert torch.equal(ttnn_output, torch_output)
+
+
+def test_unary_ng_reshard(device):
+    """Test unary_ng where input is sharded on one grid and output on a different grid."""
+    torch.manual_seed(0)
+    input_shape = [1, 1, 64, 512]
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+
+    golden_function = ttnn.get_golden_function(ttnn.relu)
+    torch_output = golden_function(torch_input, device=device)
+
+    input_shard_config = ttnn.create_sharded_memory_config(
+        shape=[64, 64],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    output_shard_config = ttnn.create_sharded_memory_config(
+        shape=[64, 128],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_shard_config,
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn.relu(ttnn_input, memory_config=output_shard_config))
     assert torch.equal(ttnn_output, torch_output)
