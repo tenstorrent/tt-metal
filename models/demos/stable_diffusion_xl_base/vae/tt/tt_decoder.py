@@ -10,7 +10,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_GN_shape
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
 
 
 class TtDecoder(LightweightModule):
@@ -103,7 +103,7 @@ class TtDecoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = None  # auto slicing
+        self.conv_out_slice_config = get_DRAM_conv_slice_config("decoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
@@ -163,8 +163,8 @@ class TtDecoder(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # On Blackhole, disable Welford algorithm due to precision issues
-        use_welford_decoder = not is_blackhole()
+        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        use_welford_decoder = True
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
