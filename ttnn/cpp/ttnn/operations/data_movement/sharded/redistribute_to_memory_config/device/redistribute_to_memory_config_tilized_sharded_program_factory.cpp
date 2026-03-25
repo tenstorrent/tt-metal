@@ -120,7 +120,6 @@ RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
 
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     tt::tt_metal::UncompressedBufferPageMapping page_mapping;
-    std::vector<CoreCoord> mapped_cores;
     if (convert_df) {
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -128,14 +127,10 @@ RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
             ordered_cores_with_data_range,
             tt::tt_metal::ComputeConfig{});
         page_mapping = output_distribution_spec.compute_page_mapping();
-        mapped_cores = page_mapping.all_cores;
     }
 
     // Set runtime args
     uint32_t start_shard_id = 0;
-    std::vector<CoreCoord> ordered_memory_banks_with_data =
-        output_distribution_spec.cores_with_data();  // need this for the mapped_cores logic in the compute kernel
-                                                     // runtime args block to be valid for DRAM sharded tensors
     for (const auto& core : ordered_cores_with_data) {
         // Reader run-time args
         std::vector<uint32_t> reader_run_time_args = {
@@ -146,28 +141,24 @@ RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_run_time_args);
 
         if (convert_df) {
-            auto core_it =
-                std::find(mapped_cores.begin(), mapped_cores.end(), ordered_memory_banks_with_data[start_shard_id]);
             uint32_t num_tiles_to_process = 0;
 
-            if (core_it != mapped_cores.end()) {
-                const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
-                const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
+            const auto memory_bank_idx = start_shard_id;
+            const auto& host_page_indices = page_mapping.core_host_page_indices[memory_bank_idx];
 
-                // Iterate through device pages in blocks of num_tiles_per_input_block.
-                uint32_t page_offset = 0;
-                const uint32_t total_pages = host_page_indices.size();
+            // Iterate through device pages in blocks of num_tiles_per_input_block.
+            uint32_t page_offset = 0;
+            const uint32_t total_pages = host_page_indices.size();
 
-                while (page_offset < total_pages) {
-                    if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
-                        num_tiles_to_process++;
-                    } else if (page_offset == 0) {  // First page is PADDING means this core has no shards, no need to
-                                                    // iterate further. This should never happen, as we are iterating
-                                                    // over only cores with data.
-                        break;
-                    }
-                    page_offset++;
+            while (page_offset < total_pages) {
+                if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
+                    num_tiles_to_process++;
+                } else if (page_offset == 0) {  // First page is PADDING means this core has no shards, no need to
+                                                // iterate further. This should never happen, as we are iterating
+                                                // over only cores with data.
+                    break;
                 }
+                page_offset++;
             }
 
             std::vector<uint32_t> compute_run_time_args = {num_tiles_to_process};
