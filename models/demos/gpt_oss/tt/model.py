@@ -616,7 +616,7 @@ class Model:
 
         vocab_size = model_args.vocab_size if model_args else self.vocab_size
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
-        trace_key = "rsbp_" + str(max_padded_len)
+        trace_key = "rsbp_" + str(max_padded_len) + ("_nolm" if skip_lm else "_lm")
         enable_trace_current = enable_trace and model_args.can_enable_trace(max_padded_len, 0)
 
         tc_ids = trace_cache["ids"]
