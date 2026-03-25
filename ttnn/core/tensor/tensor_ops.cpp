@@ -153,7 +153,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
-    Tensor output = tensor_impl::to_layout(input_tensor, target_layout);
+    Tensor output = Tensor(tensor_impl::to_layout(input_tensor.host_tensor(), target_layout));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -337,7 +337,7 @@ Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape)
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     GraphTracker::instance().track_function_start("tt::tt_metal::to_dtype", input_tensor, dtype);
-    auto output_tensor = tensor_impl::to_dtype(input_tensor, dtype);
+    auto output_tensor = Tensor(tensor_impl::to_dtype(input_tensor.host_tensor(), dtype));
     GraphTracker::instance().track_function_end(output_tensor);
     return output_tensor;
 }

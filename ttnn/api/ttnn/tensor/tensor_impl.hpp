@@ -124,7 +124,7 @@ void copy_to_device(
 //                                  .to_layout()
 // ======================================================================================
 
-Tensor to_layout(const Tensor& tensor, Layout target_layout);
+HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
@@ -183,7 +183,7 @@ std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
