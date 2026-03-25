@@ -1,0 +1,31 @@
+name: "(triage) Cursor CLI smoke test"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cursor-cli-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure CURSOR_API_KEY is configured
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Run simple Cursor prompt
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          agent -p "Reply with exactly: CURSOR_CI_OK"
