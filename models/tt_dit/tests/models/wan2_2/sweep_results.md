@@ -19,22 +19,37 @@
 Swept on BH p150b LB (1x1 mesh, 12x10 grid). Brute-force exhaustive search over all valid
 (C_in_block, C_out_block, H_out_block, W_out_block) combinations. Results saved in `sweep_results_v2/`.
 
-| Layer | C_in→C_out | Kernel | Shape (T,H,W) | Count | Staged Blocking | Staged us | Best Blocking | Best us | Speedup |
-|-------|-----------|--------|---------------|-------|-----------------|-----------|---------------|---------|---------|
-| conv_in | 32→384 | (3,3,3) | (23,25,7) | x1 | (32,128,1,4,16) | 232 | **(32,128,1,16,2)** | **189** | 1.23x |
-| mid+up0 res | 384→384 | (3,3,3) | (23,25,7) | x10 | (128,64,1,8,2) | 1031 | **(128,64,1,8,4)** | **810** | 1.27x |
-| up0 time_conv | 384→768 | (3,1,1) | (22,23,5) | x1 | (96,256,1,16,2) | 307 | **(128,256,1,8,4)** | **279** | 1.10x |
-| up0 spatial | 384→192 | (1,3,3) | (41,48,12) | x1 | (96,96,1,16,8) | 783 | **(192,96,1,16,2)** | **605** | 1.29x |
-| up1 res0 | 192→384 | (3,3,3) | (43,48,12) | x1 | (96,128,1,16,2) | 2011 | **(96,128,1,16,2)** | **1986** | 1.01x |
-| up1 resblocks | 384→384 | (3,3,3) | (43,48,12) | x5 | (128,128,1,16,1) | 4859 | **(96,128,1,16,2)** | **3477** | **1.40x** |
-| up1 time_conv | 384→768 | (3,1,1) | (42,46,10) | x1 | (384,256,1,8,2) | 936 | pending | | |
-| up1 spatial | 384→192 | (1,3,3) | (81,94,22) | x1 | (128,96,1,32,8) | 4238 | pending | | |
-| up2 resblocks | 192→192 | (3,3,3) | (83,94,22) | x6 | (96,96,1,16,4) | 7314 | **(96,96,1,8,8)** | **6767** | 1.08x |
-| up2 spatial | 192→96 | (1,3,3) | (81,186,42) | x1 | (192,96,1,8,8) | 3388 | pending | | |
-| up3 resblocks | 96→96 | (3,3,3) | (83,186,42) | x6 | (96,96,1,8,8) | 7997 | **(96,96,1,8,8)** | **8117** | ~same |
-| conv_out | 96→3 | (3,3,3) | (83,186,42) | x1 | (96,32,1,16,8) | 5955 | pending | | |
+**Original** = blocking from main-branch `conv3d.py` (before any sweep work).
+**Best** = brute-force optimal found by exhaustive search.
 
-**Key improvement: up1 resblocks (384→384) 1.40x faster** — staged sweep missed C_in=96,C_out=128 because it was locked to baseline C_in=128,C_out=128 during spatial sweep. Saves ~6.9 ms/frame (5 calls x 1382 us).
+| Layer | C_in→C_out | Kernel | Shape (T,H,W) | Count | Original Blocking | Orig us | Best Blocking | Best us | vs Orig |
+|-------|-----------|--------|---------------|-------|-------------------|---------|---------------|---------|---------|
+| conv_in | 32→384 | (3,3,3) | (23,25,7) | x1 | (32,96,1,2,32) | — | **(32,128,1,16,2)** | **189** | — |
+| mid+up0 res | 384→384 | (3,3,3) | (23,25,7) | x10 | (96,96,1,8,4) | 828 | **(128,64,1,8,4)** | **810** | 1.02x |
+| up0 time_conv | 384→768 | (3,1,1) | (22,23,5) | x1 | (32,32,1,1,1) | 42,860 | **(128,256,1,8,4)** | **279** | **153x** |
+| up0 spatial | 384→192 | (1,3,3) | (41,48,12) | x1 | (192,96,1,32,4) | 861 | **(192,96,1,16,2)** | **605** | 1.42x |
+| up1 res0 | 192→384 | (3,3,3) | (43,48,12) | x1 | (64,128,1,8,4) | 2,683 | **(96,128,1,16,2)** | **1,986** | 1.35x |
+| up1 resblocks | 384→384 | (3,3,3) | (43,48,12) | x5 | (96,96,1,8,4) | 4,738 | **(96,128,1,16,2)** | **3,477** | **1.36x** |
+| up1 time_conv | 384→768 | (3,1,1) | (42,46,10) | x1 | (32,32,1,1,1) | — | pending | | |
+| up1 spatial | 384→192 | (1,3,3) | (81,94,22) | x1 | (192,96,1,32,4) | — | pending | | |
+| up2 resblocks | 192→192 | (3,3,3) | (83,94,22) | x6 | (96,96,1,8,4) | 9,597 | **(96,96,1,8,8)** | **6,767** | **1.42x** |
+| up2 spatial | 192→96 | (1,3,3) | (81,186,42) | x1 | (192,96,1,4,8) | — | pending | | |
+| up3 resblocks | 96→96 | (3,3,3) | (83,186,42) | x6 | (96,96,1,8,8) | 8,117 | **(96,96,1,8,8)** | **8,117** | 1.00x |
+| conv_out | 96→3 | (3,3,3) | (83,186,42) | x1 | (96,32,1,16,8) | — | pending | | |
+
+**Estimated total per uncached frame (completed layers only):**
+
+| Component | Original (us) | Brute-force (us) | Speedup |
+|-----------|--------------|-----------------|---------|
+| mid+up0 res (x10) | 8,280 | 8,100 | 1.02x |
+| up0 time_conv (x1) | 42,860 | 279 | **153x** |
+| up1 res0 (x1) | 2,683 | 1,986 | 1.35x |
+| up1 resblocks (x5) | 23,690 | 17,385 | 1.36x |
+| up2 resblocks (x6) | 57,582 | 40,602 | 1.42x |
+| up3 resblocks (x6) | 48,702 | 48,702 | 1.00x |
+| **Subtotal (8 layers)** | **183,797** | **117,054** | **1.57x** |
+
+The massive improvement comes from the time_conv baseline `(32,32,1,1,1)` which was the original default for unmapped 3x1x1 kernels — processing one output channel at a time.
 
 ### Uncached 480p
 
