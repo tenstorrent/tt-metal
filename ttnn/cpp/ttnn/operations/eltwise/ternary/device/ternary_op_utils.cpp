@@ -271,6 +271,38 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
      {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
 
+    // TTS configurations for MAC (a * b + scalar) - reuse same kernels as WHERE/LERP TTS
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
+    // TST configurations for MAC (a * scalar + c) - reuse same kernels as WHERE/LERP TST
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},

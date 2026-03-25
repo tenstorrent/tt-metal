@@ -286,15 +286,28 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
         R"doc(
             {2}
 
+        Supported call signatures (all return ``a * b + c``):
+
+        .. code-block:: python
+
+            # TTT — all tensors
+            ttnn.mac(a, b, c, *, memory_config=None, output_tensor=None, sub_core_grids=None)
+            # TTS — a * b + scalar
+            ttnn.mac(a, b, value, *, memory_config=None)
+            # TST — a * scalar + c
+            ttnn.mac(a, value, c, *, memory_config=None)
+            # TSS — a * scalar1 + scalar2
+            ttnn.mac(a, value1, value2, *, memory_config=None)
+
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ttnn.Tensor): the first input tensor (always a tensor).
+            input_tensor_b (ttnn.Tensor or float): the second input — tensor (TTT/TTS) or scalar (TST/TSS).
+            input_tensor_c (ttnn.Tensor or float): the third input — tensor (TTT/TST) or scalar (TTS/TSS).
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor to write into. Defaults to `None`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to this set of cores. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor to write into. TTT only. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to this set of cores. TTT only. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -312,9 +325,7 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT.
 
-            ``output_tensor`` and ``sub_core_grids`` are only used on the native LLK path.
-            When the op falls back to the composite path (unsupported broadcast or block-float
-            subtile broadcast), these arguments are ignored.
+            ``output_tensor`` and ``sub_core_grids`` are only supported on the TTT native LLK path.
         )doc",
         "mac",
         "ttnn.mac",

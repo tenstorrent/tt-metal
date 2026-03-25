@@ -436,30 +436,38 @@ Tensor mac(
         sub_core_grids);
 }
 
-// TTS: a * b + scalar
+// TTS: a * b + scalar — native LLK path via prim::ternary
 Tensor mac(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     float value,
     const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::add(
-        ttnn::multiply(input_tensor_a, input_tensor_b, std::nullopt, memory_config),
+    return ttnn::prim::ternary(
+        TernaryOpType::MAC,
+        input_tensor_a,
+        input_tensor_b,
         value,
+        ternary_utils::determine_output_dtype(std::nullopt, input_tensor_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
         std::nullopt,
-        memory_config);
+        std::nullopt);
 }
 
-// TST: a * scalar + c
+// TST: a * scalar + c — native LLK path via prim::ternary
 Tensor mac(
     const Tensor& input_tensor_a,
     float value,
     const Tensor& input_tensor_c,
     const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::add(
-        ttnn::multiply(input_tensor_a, value, std::nullopt, memory_config),
+    return ttnn::prim::ternary(
+        TernaryOpType::MAC,
+        input_tensor_a,
+        value,
         input_tensor_c,
+        ternary_utils::determine_output_dtype(std::nullopt, input_tensor_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
         std::nullopt,
-        memory_config);
+        std::nullopt);
 }
 
 // TSS: a * scalar1 + scalar2

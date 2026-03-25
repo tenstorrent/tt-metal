@@ -346,8 +346,7 @@ def test_mac_tts_ttnn(input_shapes, value, device):
     golden_tensor = (in_data1 * in_data2 + value).to(torch.bfloat16)
 
     output_torch = ttnn.to_torch(output_tensor)
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -368,5 +367,4 @@ def test_mac_tst_ttnn(input_shapes, value, device):
     golden_tensor = (in_data1 * value + in_data3).to(torch.bfloat16)
 
     output_torch = ttnn.to_torch(output_tensor)
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)

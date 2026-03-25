@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/eltwise_unary/mac.h"
 #include "api/compute/eltwise_unary/fill.h"
 
 void kernel_main() {
