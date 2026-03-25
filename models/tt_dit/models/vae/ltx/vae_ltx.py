@@ -28,7 +28,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.module import Module, ModuleList, Parameter
-from ....utils.conv3d import _ntuple, aligned_channels, get_conv3d_config, prepare_conv3d_weights
+from ....utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
 
 
 class LTXCausalConv3d(Module):
@@ -126,7 +126,7 @@ class LTXCausalConv3d(Module):
                 )
                 bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
-            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
+            state["weight"], state["bias"] = ttnn.experimental.prepare_conv3d_weights(weight, bias, self.conv_config)
 
     def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         """
