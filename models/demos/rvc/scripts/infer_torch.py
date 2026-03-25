@@ -48,6 +48,7 @@ def main() -> None:
     )
     end_time = time.time()
     print(f"Inference took {end_time - start_time:.2f} seconds.")
+    audio = audio.cpu().numpy()
     sf.write(args.output, audio, pipe.tgt_sr, subtype="PCM_16")
 
 

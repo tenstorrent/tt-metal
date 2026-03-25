@@ -9,7 +9,6 @@ import math
 import os
 
 import librosa
-import numpy as np
 import parselmouth
 import torch
 import torch.nn.functional as F
@@ -94,9 +93,7 @@ def _change_rms(source_audio, source_sr, target_audio, target_sr, rate):
     target_rms = torch.from_numpy(target_rms)
     target_rms = F.interpolate(target_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
     target_rms = torch.max(target_rms, torch.zeros_like(target_rms) + 1e-6)
-    target_audio *= (
-        torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
-    ).numpy()
+    target_audio *= torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
     return target_audio
 
 
@@ -182,24 +179,25 @@ class Pipeline:
                 )
                 .selected_array["frequency"]
             )
+            f0 = torch.from_numpy(f0)
             pad_size = (num_frames - len(f0) + 1) // 2
             if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
-                f0 = np.pad(f0, [[pad_size, num_frames - len(f0) - pad_size]], mode="constant")
+                f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
         else:
             raise ValueError("f0_method must be 'pm'.")
 
         f0 *= pow(2, f0_up_key / 12)
-        f0_continuous = f0.copy()
-        f0_mel = 1127 * np.log(1 + f0 / 700)
+        f0_continuous = f0.clone()
+        f0_mel = 1127 * torch.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
         f0_mel[f0_mel <= 1] = 1
         f0_mel[f0_mel > 255] = 255
-        f0_coarse = np.rint(f0_mel)
+        f0_coarse = torch.round(f0_mel)
 
         f0_coarse = f0_coarse[:num_frames]
         f0_continuous = f0_continuous[:num_frames]
-        f0_coarse = torch.tensor(f0_coarse, device=self.device).unsqueeze(0).long()
-        f0_continuous = torch.tensor(f0_continuous, device=self.device).unsqueeze(0).float()
+        f0_coarse = f0_coarse.unsqueeze(0).long()
+        f0_continuous = f0_continuous.unsqueeze(0).float()
         return f0_coarse, f0_continuous
 
     def _vc(
@@ -213,13 +211,9 @@ class Pipeline:
         index_rate,
         protect,
     ):
-        feats = torch.from_numpy(audio).float()
-        if feats.dim() == 2:
-            feats = feats.mean(-1)
-        assert feats.dim() == 1, feats.dim()
-        feats = feats.view(1, -1, 1)
+        assert audio.dim() == 1, audio.dim()
         hubert_input = ttnn.from_torch(
-            feats,
+            audio.view(1, -1, 1),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.tt_device,
@@ -238,12 +232,11 @@ class Pipeline:
         if index is not None and big_npy is not None and index_rate != 0:
             index_features = feats[0].cpu().numpy()
             scores, indices = index.search(index_features, k=8)
-            weights = np.square(1 / scores)
-            weights /= weights.sum(axis=1, keepdims=True)
-            index_features = np.sum(big_npy[indices] * np.expand_dims(weights, axis=2), axis=1)
-            feats = (
-                torch.from_numpy(index_features).unsqueeze(0).to(self.device) * index_rate + (1 - index_rate) * feats
-            )
+            scores, indices = torch.from_numpy(scores), torch.from_numpy(indices)
+            weights = torch.square(1 / scores)
+            weights /= weights.sum(dim=1, keepdim=True)
+            index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
+            feats = index_features * index_rate + (1 - index_rate) * feats
 
         feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
         if protect < 0.5 and pitch is not None and pitchf is not None:
@@ -296,7 +289,7 @@ class Pipeline:
                 tt_output = self.synthesizer(tt_feats, tt_speaker_id)
 
             output_torch = ttnn.to_torch(tt_output).to(torch.float32)
-            output = output_torch[0, :, 0].contiguous().cpu().numpy()
+            output = output_torch[0, :, 0].contiguous()
         return output
 
     def _run_pipeline(
@@ -312,25 +305,28 @@ class Pipeline:
         protect,
     ):
         index = big_npy = None
+        print(f"audio (before filtering): {type(audio)}")
         audio = signal.filtfilt(bh, ah, audio)
-        audio_padded = np.pad(audio, (self.window // 2, self.window // 2), mode="reflect")
+        audio = torch.from_numpy(audio.copy())
+        print(f"audio: {type(audio)}")
+        audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
         opt_ts = []
         if audio_padded.shape[0] > self.t_max:
-            audio_sum = np.zeros_like(audio)
+            audio_sum = torch.zeros_like(audio)
             for i in range(self.window):
-                audio_sum += np.abs(audio_padded[i : i - self.window])
+                audio_sum += torch.abs(audio_padded[i : i - self.window])
             for t in range(self.t_center, audio.shape[0], self.t_center):
                 opt_ts.append(
                     t
                     - self.t_query
-                    + np.where(
+                    + torch.where(
                         audio_sum[t - self.t_query : t + self.t_query]
                         == audio_sum[t - self.t_query : t + self.t_query].min()
                     )[0][0]
                 )
 
         audio_output = []
-        audio_padded = np.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
+        audio_padded = F.pad(audio.unsqueeze(0), (self.t_pad, self.t_pad), mode="reflect").squeeze(0)
         num_frames = audio_padded.shape[0] // self.window
         s = 0
         idx_list = []
@@ -360,16 +356,19 @@ class Pipeline:
                 )[self.t_pad_tgt : -self.t_pad_tgt]
             )
 
-        audio_output = np.concatenate(audio_output)
+        audio_output = torch.cat(audio_output)
         if rms_mix_rate != 1:
             audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, rms_mix_rate)
         if self.tgt_sr != resample_sr and resample_sr >= 16000:
-            audio_output = librosa.resample(audio_output, orig_sr=self.tgt_sr, target_sr=resample_sr)
-        audio_max = np.abs(audio_output).max() / 0.99
+            audio_output_np = audio_output.numpy()
+            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=resample_sr)
+            audio_output = torch.from_numpy(audio_output_np)
+        audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
         if audio_max > 1:
             max_int16 /= audio_max
-        audio_output = (audio_output * max_int16).astype(np.int16)
+        # use torch
+        audio_output = (audio_output * max_int16).to(torch.int16)
         return audio_output
 
     def infer(
@@ -388,7 +387,7 @@ class Pipeline:
             raise FileNotFoundError("input_audio_path not found.")
 
         audio = load_audio(audio_path, 16000)
-        audio_max = np.abs(audio).max() / 0.95
+        audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:
             audio /= audio_max
 

@@ -8,6 +8,7 @@ from io import BytesIO
 import av
 import librosa
 import numpy as np
+import torch
 
 
 def audio2(i, o, format, sr):
@@ -39,13 +40,15 @@ def load_audio(file, sr):
         with open(file, "rb") as f:
             with BytesIO() as out:
                 audio2(f, out, "f32le", sr)
-                return np.frombuffer(out.getvalue(), np.float32).flatten()
+                out = np.frombuffer(out.getvalue(), np.float32).flatten()
+                return torch.from_numpy(out)
 
     except AttributeError:
         audio = file[1] / 32768.0
         if len(audio.shape) == 2:
             audio = np.mean(audio, -1)
-        return librosa.resample(audio, orig_sr=file[0], target_sr=16000)
+            out = librosa.resample(audio, orig_sr=file[0], target_sr=16000)
+            return torch.from_numpy(out)
 
     # except Exception:
     #     raise RuntimeError(traceback.format_exc())
