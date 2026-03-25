@@ -124,7 +124,7 @@ def cause_hang_with_app(request):
 
         # Reset the device state after the hang if set in environment
         if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
-            subprocess.run(["tt-smi", "-r"], check=True)
+            subprocess.run(["tt-smi", "-r", "--use_luwen"], check=True)
 
 
 @pytest.mark.parametrize(
