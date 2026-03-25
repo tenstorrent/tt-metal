@@ -26,7 +26,7 @@ KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOpera
     // Output: [1, 1, padded_M, (grid_dim+1)*Mpc*TILE_W] — extra column for helper partials
     auto* device = ta.input_tensor.device();
     auto device_grid = device->compute_with_storage_grid_size();
-    uint32_t grid_dim = static_cast<uint32_t>(std::min({device_grid.x, device_grid.y, (std::size_t)10}));
+    uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
     uint32_t M_tiles = ta.input_tensor.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
     uint32_t Mpc = tt::round_up(M_tiles, grid_dim) / grid_dim;
     uint32_t padded_M = grid_dim * Mpc * tt::constants::TILE_HEIGHT;
