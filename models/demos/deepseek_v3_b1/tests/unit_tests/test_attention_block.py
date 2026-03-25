@@ -25,15 +25,10 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 @pytest.mark.parametrize(
@@ -44,8 +39,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -87,12 +80,11 @@ def test_attention_block(
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
+    device_params,
     noc_mode,
     num_internal_iterations,
 ):
@@ -101,6 +93,7 @@ def test_attention_block(
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
+    num_links = 1
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -112,7 +105,7 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh)
+    attention_block_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
 
     # ========================================================================
     # Configuration
@@ -888,16 +881,15 @@ def test_attention_block(
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
             attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links,
             epsilon,
             use_fp32,
             skip_ccl,
             noc_mode,
             num_iterations=num_internal_iterations,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 
