@@ -463,9 +463,14 @@ class SamplingOp:
         temp_cb = 8
         softmax_sub_cb = 9
         rand_cb = 10
+        topk_in_scores_cb = 11
+        topk_in_indices_cb = 12
+        topk_out_scores_cb = 13
+        topk_out_indices_cb = 14
         semaphore_id = 0
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
+        uint32_tile_size = 4 * 32 * 32  # 4096 bytes per uint32 32x32 tile
 
         logger.debug(f"Temperature: {temperature}")
         logger.debug(f"1.0 / temperature: {1.0 / temperature}")
@@ -510,6 +515,10 @@ class SamplingOp:
             ("sampling_scaler_cb", scaler_cb),
             ("sampling_temp_cb", temp_cb),
             ("sampling_inv_temp_bf16", inv_temp_bf16),
+            ("sampling_topk_in_scores_cb", topk_in_scores_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_in_indices_cb", topk_in_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
         ]
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
@@ -525,6 +534,11 @@ class SamplingOp:
             ("sampling_topk_k", k),
             ("sampling_mesh_mode", 0),
             ("sampling_stage2_receiver", 0),
+            ("sampling_num_values", num_values),
+            ("sampling_topk_in_scores_cb", topk_in_scores_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_in_indices_cb", topk_in_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
@@ -548,6 +562,7 @@ class SamplingOp:
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=True,
+                fp32_dest_acc_en=True,
             ),
             ncrisc_common_runtime_args=[
                 int(scores_tensor.buffer_address()),
@@ -688,6 +703,55 @@ class SamplingOp:
             ],
         )
 
+        llk_cbs = []
+        if k == 32:
+            max_row_elements = max(num_values, k * num_cores)
+            num_llk_input_tiles = (max_row_elements + 1023) // 1024
+            llk_cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=num_llk_input_tiles * bf16_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=topk_in_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                        )
+                    ],
+                )
+            )
+            llk_cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=num_llk_input_tiles * uint32_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=topk_in_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
+                        )
+                    ],
+                )
+            )
+            llk_cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=bf16_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=topk_out_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                        )
+                    ],
+                )
+            )
+            llk_cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=uint32_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=topk_out_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
+                        )
+                    ],
+                )
+            )
+
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
             core_ranges=all_cores,
@@ -708,7 +772,8 @@ class SamplingOp:
                 temp_cb_descriptor,
                 softmax_sub_cb_descriptor,
                 rand_cb_descriptor,
-            ],
+            ]
+            + llk_cbs,
             semaphores=[receiver_semaphore_descriptor],
         )
 

@@ -53,7 +53,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb"),
         get_named_compile_time_arg_val("sampling_temp_cb"),
-        get_named_compile_time_arg_val("sampling_inv_temp_bf16")>;
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
+        get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
         .scores_addr = get_common_arg_val<uint32_t>(0),
@@ -115,12 +119,28 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_seed"),
         get_named_compile_time_arg_val("sampling_topk_k"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
-        get_named_compile_time_arg_val("sampling_stage2_receiver")>;
+        get_named_compile_time_arg_val("sampling_stage2_receiver"),
+        get_named_compile_time_arg_val("sampling_num_values"),
+        get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
             sampling_op;
-    deepseek_compute_kernel_init();
+
+    MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
+    PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
+    if constexpr (SamplingComputeCTArgs::topk_k == 32) {
+        deepseek_compute_kernel_hw_startup<true>(
+            SamplingComputeCTArgs::topk_in_scores_cb,
+            SamplingComputeCTArgs::topk_in_indices_cb,
+            SamplingComputeCTArgs::topk_out_scores_cb);
+    } else {
+        deepseek_compute_kernel_hw_startup<true>(0, 0, 0);
+    }
+
     sampling_op(args);
 #endif
 }
