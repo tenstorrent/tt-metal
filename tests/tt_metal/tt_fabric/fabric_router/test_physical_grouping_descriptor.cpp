@@ -2029,9 +2029,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_32x4Quad) {
 
     // M0 mesh has device_topology [32, 4] = 128 chips
     // Should match meshes grouping with 4 hosts (4 * 32 = 128 ASICs, exact match)
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.at("MESH").find("M0") != valid_groupings.at("MESH").end())
-        << "Should have M0 mesh instance";
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
 
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
     const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
@@ -2070,9 +2069,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy) {
 
     // M0 mesh has device_topology [8, 4] = 32 chips
     // Should match meshes grouping with 1 host (32 ASICs, exact match)
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.at("MESH").find("M0") != valid_groupings.at("MESH").end())
-        << "Should have M0 mesh instance";
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
 
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
     const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
@@ -2111,9 +2109,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BhGlxSplit4x2) {
     // M0 mesh has device_topology [4, 2] = 8 chips
     // Should match meshes grouping with 1 tray (8 ASICs, exact match)
     // Note: This test has multiple mesh instances (M0 mesh_id 0-47), all with same topology
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.at("MESH").find("M0") != valid_groupings.at("MESH").end())
-        << "Should have M0 mesh instance";
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
 
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
     const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
@@ -2162,9 +2159,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual4x4) {
     // M0 mesh has device_topology [4, 4] = 16 chips
     // Should match meshes grouping with 2 trays (2 * 8 = 16 ASICs, exact match)
     // Note: This test has 2 mesh instances (M0 mesh_id 0 and 1), both with same topology
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.at("MESH").find("M0") != valid_groupings.at("MESH").end())
-        << "Should have M0 mesh instance";
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
 
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
     const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
@@ -2213,9 +2209,8 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     // M0 mesh has device_topology [8, 2] = 16 chips
     // Should match meshes grouping with 2 trays (2 * 8 = 16 ASICs, exact match)
     // Note: This test has 2 mesh instances (M0 mesh_id 0 and 1), both with same topology
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end()) << "Should have MESH type in results";
-    EXPECT_TRUE(valid_groupings.at("MESH").find("M0") != valid_groupings.at("MESH").end())
-        << "Should have M0 mesh instance";
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
 
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
     const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
