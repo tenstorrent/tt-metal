@@ -1036,7 +1036,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             max_seq_len=max_seq_len,
         )
 
-        # Create generator
+        # Create generator with paged attention enabled for vLLM
         generator = Molmo2Generator(
             mesh_device=mesh_device,
             model=model,
@@ -1044,6 +1044,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             num_layers=36,
             batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            use_paged_attention=True,  # Enable paged attention for vLLM compatibility
         )
 
         # Note: Trace warmup is handled by TTWorker.compile_or_warm_up_model()
@@ -1767,6 +1768,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
             # We need to reshape to [layer_idx][k, v] for our model
             warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
+            # CRITICAL: Set generator's kv_caches to vLLM's cache so run_prefill uses it
+            self.generator.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
         else:
             # Fall back to internal generator cache (for non-paged mode)
@@ -1826,6 +1829,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
             # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
             warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
+            # CRITICAL: Set generator's kv_caches to vLLM's cache so run_decode_step uses it
+            self.generator.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
         else:
             # Fall back to internal generator cache (for non-paged mode)
