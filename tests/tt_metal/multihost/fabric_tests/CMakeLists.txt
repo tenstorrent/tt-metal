@@ -59,7 +59,12 @@ set_target_properties(
 )
 
 # Link the object library to the executable
-target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric)
+target_link_libraries(
+    multi_host_fabric_tests
+    PRIVATE
+        multi_host_fabric
+        spdlog::spdlog
+)
 
 # Create separate executable for mesh socket tests
 add_executable(test_mesh_socket_main mesh_socket_test_main.cpp)

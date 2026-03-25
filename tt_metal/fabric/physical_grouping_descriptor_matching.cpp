@@ -741,7 +741,11 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
                 MappingConstraints<uint32_t, uint32_t> constraints;
                 constraints.add_required_constraint(0, 0);
-                log_info(tt::LogFabric, "Solving topology mapping for {} and {}", mgd_grouping_info.name, name);
+                log_info(
+                    tt::LogFabric,
+                    "Solving topology mapping for {} and {}",
+                    mgd_grouping_info.name,
+                    grouping_info.name);
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
                     grouping_info.adjacency_graph,
@@ -770,7 +774,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
         log_info(tt::LogFabric, "Found {} best matches", best_matches.size());
 
-        // Store all best matches (add all entries that are possible)
+        // Store all best matches
         if (best_matches.empty()) {
             // No match found - use the MGD grouping info itself
             result[instance_type][instance_name].push_back(mgd_grouping_info);

@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <set>
 #include <iostream>
+#include <sstream>
+#include <cstdlib>
 
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -300,7 +302,7 @@ TEST(PhysicalGroupingDescriptorTests, ParsesValidBasicConfiguration) {
 
 TEST(PhysicalGroupingDescriptorTests, ParsesFromTriple16x8QuadBhGalaxyFile) {
     const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto_file_path); });
 }
 
@@ -1057,7 +1059,7 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8File) {
     // Load the triple_16x8 groupings file
     const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
     // Get one of the MESH grouping infos - "8x16_Mesh" which has 4 hosts in a 2x2 grid
@@ -1100,7 +1102,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
 
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x4Mesh) {
     const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
     GroupingInfo mesh_4x4;
@@ -1133,7 +1135,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x4Mesh) {
 
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
     const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
     GroupingInfo mesh_2x8;
@@ -1166,22 +1168,22 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
 
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     const std::filesystem::path text_proto_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
     GroupingInfo mesh_halftray;
     bool found = false;
     for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
-        if (mesh.name == "2x2_Mesh_Halftray") {
+        if (mesh.name == "halftray_2x2") {
             mesh_halftray = mesh;
             found = true;
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find '2x2_Mesh_Halftray' grouping";
+    ASSERT_TRUE(found) << "Expected to find 'halftray_2x2' grouping";
 
-    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2_Mesh_Halftray should have 4 ASICs (1 halftray)";
-    EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2_Mesh_Halftray should have 1 instance (halftray)";
+    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "halftray_2x2 should have 4 ASICs (1 halftray)";
+    EXPECT_EQ(mesh_halftray.items.size(), 4u) << "halftray_2x2 should have 1 instance (halftray)";
 
     auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_halftray);
     ASSERT_FALSE(flattened_meshes.empty());
@@ -1266,7 +1268,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
 
 TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWithGalaxyGroupings) {
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
@@ -1363,7 +1365,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWi
 
 TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
@@ -1564,7 +1566,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidateGroupingWithPsd_PodAndSuperpodL
 TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
     // Test matching a 2x4 mesh MGD (8 ASICs) to the 2x4_Mesh grouping
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -1632,7 +1634,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_4x4Mesh) {
     // Test matching a 4x4 mesh MGD (16 ASICs) to the 4x4_Mesh grouping
     // Using dual_4x4_mesh_graph_descriptor which has 4x4 meshes in a graph
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto";
 
@@ -1688,7 +1690,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_2x8Mesh) {
     // Test matching a 2x8 mesh MGD (16 ASICs) to the 2x8_Mesh grouping
     // Using wh_galaxy_split_2x8_2x4_3_mesh which has a 2x8 mesh (MESH4)
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_2x8_2x4_3_mesh.textproto";
 
@@ -1743,7 +1745,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_2x8Mesh) {
 TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_8x16Mesh) {
     // Test matching an 8x16 mesh MGD (128 ASICs) to the 8x16_Mesh grouping
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -1789,7 +1791,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_SingleGalaxy4x8
     // Test matching a single galaxy mesh MGD (32 ASICs) to the 4x8_Mesh grouping
     // Using single_bh_galaxy_mesh_graph_descriptor which has 8x4 (32 ASICs, same count but different topology)
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path =
         "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto";
 
@@ -1836,7 +1838,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_DualGalaxy8x8) 
     // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
     // matching
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -2002,6 +2004,234 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_Phase3_HigherLa
     ASSERT_EQ(g2_groupings.size(), 1u) << "G2 should have exactly 1 matching grouping";
     EXPECT_EQ(g2_groupings[0].name, "super_pod_4_all_to_all")
         << "G2 has ALL_TO_ALL -> only all_to_all PGD grouping matches (not super_pod_4_mesh)";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_32x4Quad) {
+    // Load the physical grouping descriptor
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with 32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // M0 mesh has device_topology [32, 4] = 128 chips
+    // Should match meshes grouping with 4 hosts (4 * 32 = 128 ASICs, exact match)
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+    const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
+    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
+    EXPECT_EQ(m0_grouping.asic_count, 128u) << "M0 grouping should have 128 ASICs (4 hosts)";
+
+    // Verify it matches the 4 hosts grouping
+    EXPECT_EQ(m0_grouping.items.size(), 4u) << "Should have 4 items (4 hosts)";
+    if (!m0_grouping.items.empty()) {
+        EXPECT_EQ(m0_grouping.items[0].type, GroupingItemInfo::ItemType::GROUPING_REF)
+            << "First item should be a GROUPING_REF";
+        EXPECT_EQ(m0_grouping.items[0].grouping_name, "hosts") << "Should reference 'hosts' grouping";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy) {
+    // Load the physical grouping descriptor
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with bh_glx_split_4x2.textproto
+    const std::filesystem::path mgd_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto";
+
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // M0 mesh has device_topology [8, 4] = 32 chips
+    // Should match meshes grouping with 1 host (32 ASICs, exact match)
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+    const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
+    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
+    EXPECT_EQ(m0_grouping.asic_count, 32u) << "M0 grouping should have 32 ASICs (1 host)";
+
+    // Verify it matches the 1 host grouping
+    EXPECT_EQ(m0_grouping.items.size(), 1u) << "Should have 1 item (1 host)";
+    if (!m0_grouping.items.empty()) {
+        EXPECT_EQ(m0_grouping.items[0].type, GroupingItemInfo::ItemType::GROUPING_REF)
+            << "First item should be a GROUPING_REF";
+        EXPECT_EQ(m0_grouping.items[0].grouping_name, "hosts") << "Should reference 'hosts' grouping";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BhGlxSplit4x2) {
+    // Load the physical grouping descriptor
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with bh_glx_split_4x2.textproto
+    const std::filesystem::path mgd_file_path = "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
+
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // M0 mesh has device_topology [4, 2] = 8 chips
+    // Should match meshes grouping with 1 tray (8 ASICs, exact match)
+    // Note: This test has multiple mesh instances (M0 mesh_id 0-47), all with same topology
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+    const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
+    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
+    EXPECT_EQ(m0_grouping.asic_count, 8u) << "M0 grouping should have 8 ASICs (1 tray, exact match)";
+
+    // Verify it matches the 1 tray grouping exactly (not oversized)
+    EXPECT_EQ(m0_grouping.items.size(), 1u) << "Should have exactly 1 item (1 tray)";
+    EXPECT_TRUE(!m0_grouping.items.empty()) << "Should have at least one item";
+    EXPECT_EQ(m0_grouping.items[0].type, GroupingItemInfo::ItemType::GROUPING_REF)
+        << "First item should be a GROUPING_REF";
+    EXPECT_EQ(m0_grouping.items[0].grouping_name, "trays") << "Should reference 'trays' grouping";
+
+    // Verify all items reference trays (should be exactly 1 tray reference)
+    uint32_t tray_ref_count = 0;
+    for (const auto& item : m0_grouping.items) {
+        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "trays") {
+            tray_ref_count++;
+        }
+    }
+    EXPECT_EQ(tray_ref_count, 1u) << "Should reference exactly 1 tray";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual4x4) {
+    // Load the physical grouping descriptor
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with dual_4x4_mesh_graph_descriptor.textproto
+    // This is a dual mesh configuration with two 4x4 WORMHOLE_B0 meshes, each with host_topology [1, 1] (1 host)
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto";
+
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // M0 mesh has device_topology [4, 4] = 16 chips
+    // Should match meshes grouping with 2 trays (2 * 8 = 16 ASICs, exact match)
+    // Note: This test has 2 mesh instances (M0 mesh_id 0 and 1), both with same topology
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+    const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
+    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
+    EXPECT_EQ(m0_grouping.asic_count, 16u) << "M0 grouping should have 16 ASICs (2 trays, exact match)";
+
+    // Verify it matches the 2 trays grouping exactly (not oversized)
+    EXPECT_EQ(m0_grouping.items.size(), 2u) << "Should have exactly 2 items (2 trays)";
+    EXPECT_TRUE(!m0_grouping.items.empty()) << "Should have at least one item";
+    EXPECT_EQ(m0_grouping.items[0].type, GroupingItemInfo::ItemType::GROUPING_REF)
+        << "First item should be a GROUPING_REF";
+    EXPECT_EQ(m0_grouping.items[0].grouping_name, "trays") << "Should reference 'trays' grouping";
+
+    // Verify all items reference trays (should be exactly 2 tray references)
+    uint32_t tray_ref_count = 0;
+    for (const auto& item : m0_grouping.items) {
+        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "trays") {
+            tray_ref_count++;
+        }
+    }
+    EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
+    // Load the physical grouping descriptor
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with dual_8x2_mesh_graph_descriptor.textproto
+    // This is a dual mesh configuration with two 8x2 WORMHOLE_B0 meshes, each with host_topology [1, 1] (1 host)
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // M0 mesh has device_topology [8, 2] = 16 chips
+    // Should match meshes grouping with 2 trays (2 * 8 = 16 ASICs, exact match)
+    // Note: This test has 2 mesh instances (M0 mesh_id 0 and 1), both with same topology
+    EXPECT_TRUE(valid_groupings.contains("MESH")) << "Should have MESH type in results";
+    EXPECT_TRUE(valid_groupings.at("MESH").contains("M0")) << "Should have M0 mesh instance";
+
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty()) << "M0 should have at least one matching grouping";
+    const auto& m0_grouping = valid_groupings.at("MESH").at("M0").front();
+    EXPECT_EQ(m0_grouping.name, "meshes") << "M0 should match 'meshes' grouping";
+    EXPECT_EQ(m0_grouping.asic_count, 16u) << "M0 grouping should have 16 ASICs (2 trays, exact match)";
+
+    // Verify it matches the 2 trays grouping exactly (not oversized)
+    EXPECT_EQ(m0_grouping.items.size(), 2u) << "Should have exactly 2 items (2 trays)";
+    EXPECT_TRUE(!m0_grouping.items.empty()) << "Should have at least one item";
+    EXPECT_EQ(m0_grouping.items[0].type, GroupingItemInfo::ItemType::GROUPING_REF)
+        << "First item should be a GROUPING_REF";
+    EXPECT_EQ(m0_grouping.items[0].grouping_name, "trays") << "Should reference 'trays' grouping";
+
+    // Verify all items reference trays (should be exactly 2 tray references)
+    uint32_t tray_ref_count = 0;
+    for (const auto& item : m0_grouping.items) {
+        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF && item.grouping_name == "trays") {
+            tray_ref_count++;
+        }
+    }
+    EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
