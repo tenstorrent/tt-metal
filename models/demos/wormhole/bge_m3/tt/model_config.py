@@ -187,8 +187,7 @@ class ModelArgs:
             max_length=self.max_seq_len,
         )
         max_prompt_length = max(len(prompt_input_ids) for prompt_input_ids in tokenized["input_ids"])
-        pad_multiple = 2048 if max_prompt_length > 2048 else 128
-        padded_length = ((max_prompt_length + pad_multiple - 1) // pad_multiple) * pad_multiple
+        padded_length = get_padded_sequence_length(max_prompt_length)
 
         if padded_length > self.max_seq_len:
             raise ValueError(
@@ -202,6 +201,23 @@ class ModelArgs:
             max_length=padded_length,
             return_tensors="pt",
         )
+
+
+def get_padded_sequence_length(seq_len: int) -> int:
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+
+    # Attention accepts 128-wide tiles for short sequences, but the long-sequence
+    # output projection path requires 1024 alignment and the QKV path requires
+    # 2048 alignment once those kernels are used.
+    if seq_len <= 1024:
+        pad_multiple = 128
+    elif seq_len <= 2048:
+        pad_multiple = 1024
+    else:
+        pad_multiple = 2048
+
+    return ((seq_len + pad_multiple - 1) // pad_multiple) * pad_multiple
 
 
 def num_to_coregrid(x):
