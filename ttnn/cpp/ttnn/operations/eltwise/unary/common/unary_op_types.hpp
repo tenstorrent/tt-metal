@@ -122,6 +122,7 @@ enum class UnaryOpType {
     HARDSIGMOID,
     HARDSWISH,
     WHERE_TSS,
+    MAC_TSS,
     SOFTSIGN,
     CELU,
     CLAMP_TSS,

@@ -50,3 +50,22 @@ Tensor unary_impl(
 }
 
 }  // namespace ttnn::detail
+
+namespace ttnn {
+
+Tensor mac_tss(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::detail::unary_impl(
+        input_tensor_a,
+        {EltwiseUnaryWithParam{UnaryOpType::MAC_TSS, std::vector<float>{value1, value2}}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+}  // namespace ttnn

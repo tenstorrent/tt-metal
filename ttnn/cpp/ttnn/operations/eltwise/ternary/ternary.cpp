@@ -470,10 +470,9 @@ Tensor mac(
         std::nullopt);
 }
 
-// TSS: a * scalar1 + scalar2
+// TSS: a * scalar1 + scalar2 — native unary SFPU kernel (single pass, no intermediate tensor)
 Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::add(
-        ttnn::multiply(input_tensor_a, value1, std::nullopt, memory_config), value2, std::nullopt, memory_config);
+    return ttnn::mac_tss(input_tensor_a, value1, value2, memory_config);
 }
 
 }  // namespace ttnn

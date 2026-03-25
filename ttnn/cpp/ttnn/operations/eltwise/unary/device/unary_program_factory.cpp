@@ -131,6 +131,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
             case UnaryOpType::WHERE_TSS:
+            case UnaryOpType::MAC_TSS:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
@@ -383,6 +384,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
             case UnaryOpType::WHERE_TSS:
+            case UnaryOpType::MAC_TSS:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
