@@ -33,27 +33,6 @@ ToShardedTilizedProgramFactory::cached_program_t ToShardedTilizedProgramFactory:
 
     const auto& output_distribution_spec = output.buffer()->buffer_distribution_spec().value();
     const auto num_output_shards = output_distribution_spec.num_shards();
-    // const auto bytes_per_element = input.element_size();
-    // const auto elements_per_tensor_row = input.logical_shape()[-1];
-    // uint32_t num_input_pages_in_row = 1;
-    // uint32_t num_output_pages_in_row = 1;
-    // uint32_t elements_per_output_page = output.logical_shape()[-1];
-    // uint32_t elements_per_input_page = input.logical_shape()[-1];
-
-    // if (input.is_sharded() && input.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-    //     uint32_t input_shard_width =
-    //         (input.shard_spec().has_value() ? input.shard_spec().value().shape[1]
-    //                                         : input.nd_shard_spec().value().shard_shape[-1]);
-    //     num_input_pages_in_row = tt::div_up(elements_per_tensor_row, input_shard_width);
-    //     elements_per_input_page = input_shard_width;
-    // }
-    // if (output.is_sharded() && output.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-    //     uint32_t output_shard_width =
-    //         (output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
-    //                                          : output.nd_shard_spec().value().shard_shape[-1]);
-    //     num_output_pages_in_row = tt::div_up(elements_per_tensor_row, output_shard_width);
-    //     elements_per_output_page = output_shard_width;
-    // }
 
     // computation of core_grid. To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452 once
     // that is merged

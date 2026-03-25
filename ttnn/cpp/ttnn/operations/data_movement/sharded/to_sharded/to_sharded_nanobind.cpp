@@ -21,76 +21,44 @@ namespace ttnn::operations::data_movement {
 void bind_to_sharded(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Converts a tensor to a specified sharded memory layout
+        Converts a tensor to a specified memory layout
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-            * :attr:`shard_shape` (List(int[2])): Sharding shape.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
-            * :attr:`sharded_memory_config` (MemoryConfig): Instead of shard_shape, shard_scheme and orientation you can provide a single MemoryConfig representing the sharded tensor.
+            * :attr:`memory_config` (MemoryConfig): Memory config for the output tensor.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input. If it is different from the input, then the tensor must be tilized.
 
-        Example 1 (using grid, shape, scheme, orienttion):
-
-            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, ttnn.CoreGrid(3,3), [32,32], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
-
-
-        Example 2 (using sharded memory config):
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
+        Example:
+            >>> # Let's say we have an input_tensor with shape [3, 160, 160], and we want to convert it to an ND sharded tensor with shard shape [2, 64, 64] sharded over 4 cores:
+            >>> shard_shape = [2, 64, 64]
+            >>> grid = ttnn.CoreRangeSet(
                     {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 2)),
                     }
                 ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, shard_memory_config)
-
+            >>> shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+            >>> nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+            >>> nd_sharded_memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+            >>> nd_sharded_tensor = ttnn.to_sharded(input_tensor, nd_sharded_memory_config)
         )doc";
 
     ttnn::bind_function<"to_sharded">(
         mod,
         doc,
-
-        // // Overload 1: Using grid, shard_shape, shard_scheme, shard_orientation (detailed)
-        // ttnn::overload_t(
-        //     nb::overload_cast<
-        //         const ttnn::Tensor&,
-        //         const std::variant<CoreCoord, CoreRangeSet>&,
-        //         std::array<uint32_t, 2>,
-        //         TensorMemoryLayout,
-        //         tt::tt_metal::ShardOrientation,
-        //         const std::optional<ttnn::DataType>&,
-        //         const std::optional<bool>&>(&ttnn::interleaved_to_sharded),
-        //     nb::arg("input_tensor").noconvert(),
-        //     nb::arg("grid"),
-        //     nb::arg("shard_shape"),
-        //     nb::arg("shard_scheme"),
-        //     nb::arg("shard_orientation"),
-        //     nb::arg("output_dtype") = nb::none(),
-        //     nb::kw_only(),
-        //     nb::arg("keep_l1_aligned") = false),
-
         // Using MemoryConfig (simple)
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
                 const MemoryConfig&,
                 const std::optional<ttnn::DataType>&,
-                // const std::optional<bool>&,
                 const std::optional<ttnn::Tensor>&>(&ttnn::to_sharded),
             nb::arg("input_tensor").noconvert(),
-            nb::arg("sharded_memory_config"),
+            nb::arg("memory_config"),
             nb::arg("output_dtype") = nb::none(),
             nb::kw_only(),
-            // nb::arg("keep_l1_aligned") = false,
             nb::arg("preallocated_output") = nb::none()));
 }
 

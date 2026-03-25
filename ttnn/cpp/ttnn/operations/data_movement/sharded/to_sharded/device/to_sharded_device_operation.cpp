@@ -39,15 +39,10 @@ void ToShardedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
     }
 
-    TT_FATAL(output_mem_config.is_sharded(), "Output memory config must be sharded");
+    TT_FATAL(
+        output_mem_config.is_sharded(),
+        "Output memory config must be sharded");  // TODO: Add path to support interleaved output in subsequent PR
 
-    // AL: The way I wrote the kernel should work with unaligned sizes too
-    // if (input_tensor.layout() == Layout::ROW_MAJOR) {
-    //     TT_FATAL(
-    //         0 == (*output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
-    //                  tt::tt_metal::hal::get_l1_alignment(),
-    //         "Shard page size must currently have L1 aligned page size");
-    // }
     if (input_tensor.dtype() != output_dtype) {
         TT_FATAL(
             input_tensor.layout() == Layout::TILE,
@@ -105,7 +100,6 @@ ttsl::hash::hash_t ToShardedDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<ToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        // operation_attributes.keep_l1_aligned,
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),
@@ -116,7 +110,6 @@ Tensor to_sharded(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
-    // bool keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
     return ttnn::device_operation::launch<ToShardedDeviceOperation>(
         operation_attributes_t{output_mem_config, output_dtype},  // keep_l1_aligned},
