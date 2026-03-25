@@ -374,7 +374,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
     uint32_t input_data_size_bytes = input_tensor.buffer()->size();
     uint32_t num_workers_per_direction =
-        num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::default_workers(
+        num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::reduce_scatter_default_workers(
             *mesh_device,
             sub_device_id,
             topology,
@@ -456,8 +456,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         tt::constants::TILE_WIDTH);
 
     const auto [normalized_dim, input_tensor_C, input_tensor_B] =
-        (input_tensor_shape.rank() == 2) ? ttnn::experimental::ccl::map_2d_to_4d(dim)
-                                         : ttnn::experimental::ccl::map_nd_to_4d(input_tensor_shape, dim);
+        (input_tensor_shape.rank() == 2)
+            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
+            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
@@ -756,7 +757,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
                 auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
-                    ttnn::experimental::ccl::get_tile_offsets(
+                    ttnn::experimental::ccl::reduce_scatter_get_tile_offsets(
                         worker_id,
                         num_workers,
                         output_batch_num_pages,
@@ -770,7 +771,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t tiles_to_process_per_slice =
                     (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
                 uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or(ttnn::experimental::ccl::default_chunks_per_sync(
+                    chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
                         topology, tiles_to_process_per_slice, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
@@ -995,7 +996,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     uint32_t num_mux_cores_per_direction_per_link = 1;
     uint32_t input_data_size_bytes = input_tensor.buffer()->size();
     uint32_t num_workers_per_direction =
-        num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::default_workers(
+        num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::reduce_scatter_default_workers(
             *mesh_device,
             sub_device_id,
             topology,
@@ -1111,8 +1112,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         tt::constants::TILE_WIDTH);
 
     const auto [normalized_dim, input_tensor_C, input_tensor_B] =
-        (input_tensor_shape.rank() == 2) ? ttnn::experimental::ccl::map_2d_to_4d(dim)
-                                         : ttnn::experimental::ccl::map_nd_to_4d(input_tensor_shape, dim);
+        (input_tensor_shape.rank() == 2)
+            ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(dim)
+            : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
@@ -1396,7 +1398,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 const uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 const uint32_t num_workers = num_links * num_workers_per_direction;
                 const auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
-                    ttnn::experimental::ccl::get_tile_offsets(
+                    ttnn::experimental::ccl::reduce_scatter_get_tile_offsets(
                         worker_id,
                         num_workers,
                         output_batch_num_pages,
@@ -1410,7 +1412,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 uint32_t tiles_to_process_per_slice =
                     (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
                 uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or(ttnn::experimental::ccl::default_chunks_per_sync(
+                    chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
                         topology, tiles_to_process_per_slice, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 

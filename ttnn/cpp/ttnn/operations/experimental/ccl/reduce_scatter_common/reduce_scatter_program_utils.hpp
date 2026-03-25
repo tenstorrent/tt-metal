@@ -26,7 +26,7 @@ uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_mux_cores_per_direction_per_link);
 
 // Selects the default number of workers per direction based on data size heuristics.
-uint32_t default_workers(
+uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     ttnn::ccl::Topology topology,
@@ -37,18 +37,18 @@ uint32_t default_workers(
     uint32_t num_mux_cores_per_direction_per_link);
 
 // Returns the default chunks_per_sync value for the given topology and tile counts.
-uint32_t default_chunks_per_sync(
+uint32_t reduce_scatter_default_chunks_per_sync(
     ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity);
 
 // Maps an ND tensor shape + dim to a canonical 4D (normalized_dim, C, B) representation.
 // Requires rank >= 3.
-std::tuple<uint32_t, uint32_t, uint32_t> map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim);
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim);
 
 // Maps a 2D tensor dim to the canonical 4D representation (normalized_dim=2 or 3, C=1, B=1).
-std::tuple<uint32_t, uint32_t, uint32_t> map_2d_to_4d(uint32_t dim);
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t dim);
 
 // Computes per-worker tile read start/end offsets for the scatter dimension.
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_tile_offsets(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offsets(
     uint32_t worker_id,
     uint32_t num_workers,
     uint32_t output_batch_num_pages,
