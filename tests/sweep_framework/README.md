@@ -327,6 +327,7 @@ python tests/sweep_framework/sweeps_runner.py \
 | `FAIL_CRASH_HANG` | Test timed out (assumed hang) |
 | `FAIL_L1_OUT_OF_MEM` | L1 memory allocation failure |
 | `FAIL_WATCHER` | Watcher-raised exception (requires `--watcher`) |
+| `FAIL_UNSUPPORTED_DEVICE_PERF` | Device perf requested (`--device-perf`) but no profiler data available |
 | `NOT_RUN` | Skipped due to `invalidate_vector` |
 | `XFAIL` | Expected failure (suite name starts with `xfail`) |
 | `XPASS` | Unexpected pass in an xfail suite |
