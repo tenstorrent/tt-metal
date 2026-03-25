@@ -411,14 +411,14 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     return programs;
 }
 
-std::vector<std::shared_ptr<Program>> create_benchmark_programs(
+std::vector<std::unique_ptr<Program>> create_benchmark_programs(
     uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program) {
     uint32_t MAX_LOOP = 100;
 
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);
 
-    std::vector<std::shared_ptr<Program>> programs;
+    std::vector<std::unique_ptr<Program>> programs;
     programs.reserve(num_programs);
 
     std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
@@ -437,7 +437,7 @@ std::vector<std::shared_ptr<Program>> create_benchmark_programs(
     uint32_t num_common_rtargs = common_rtargs.size();
 
     for (uint32_t i = 0; i < num_programs; i++) {
-        Program& program = *programs.emplace_back(std::make_shared<Program>());
+        Program& program = *programs.emplace_back(std::make_unique<Program>());
 
         // Create CBs
         for (uint32_t j = 0; j < NUM_CBS; j++) {

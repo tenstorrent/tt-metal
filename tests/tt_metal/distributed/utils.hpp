@@ -38,7 +38,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 // Each program has 3 kernels (BRISC, NCRISC, TRISC) with fixed loop counts.
 // If unique_per_program is true, each program gets a unique compile-time arg (program_id),
 // forcing recompilation. If false, all programs are identical (same binary can be reused).
-std::vector<std::shared_ptr<Program>> create_benchmark_programs(
+std::vector<std::unique_ptr<Program>> create_benchmark_programs(
     uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program = true);
 
 // RAII guard for managing a single environment variable

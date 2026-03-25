@@ -9,6 +9,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -190,7 +191,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // since 1 program can span multiple devices on different PCIe links.
     // For 1:1 program-to-device mapping, this loop is empty.
     for (size_t i = 1; i < local_devices.size(); i++) {
-        tt_metal::detail::DispatchCompiledProgramToDevice(local_devices[i], program);
+        tt_metal::experimental::DispatchCompiledProgramToDevice(local_devices[i], program);
     }
 
     if (blocking) {

@@ -393,13 +393,13 @@ TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
         devices.emplace_back(MeshCoordinate{d / 8, d % 8});
     }
 
-    std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
+    MeshWorkload workload;
     for (uint32_t d = 0; d < num_devices; d++) {
-        workload->add_program(devices[d], std::move(*programs[d]));
+        workload.add_program(devices[d], std::move(*programs[d]));
     }
 
     auto t0 = std::chrono::steady_clock::now();
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
     auto t1 = std::chrono::steady_clock::now();
     Finish(mesh_device_->mesh_command_queue());
     auto t2 = std::chrono::steady_clock::now();
