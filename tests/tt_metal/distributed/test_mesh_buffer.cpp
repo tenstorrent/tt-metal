@@ -926,7 +926,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
 
     distributed::MeshCoordinate coord(0, 0);
     {
-        HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+        HostBuffer host_buffer(
+            tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
         auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
