@@ -43,5 +43,7 @@ ttnn::Tensor prefill_combine(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool init_zeros);
+    bool init_zeros,
+    bool distributed_zero_init,
+    bool inline_zero_init);
 }  // namespace ttnn::prim

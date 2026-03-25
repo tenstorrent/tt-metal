@@ -23,6 +23,8 @@ struct CombineParams {
     MemoryConfig output_mem_config;
     CoreRangeSet worker_core_range_set;
     bool init_zeros;
+    bool distributed_zero_init;
+    bool inline_zero_init;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -34,7 +36,9 @@ struct CombineParams {
         "topology",
         "output_mem_config",
         "worker_core_range_set",
-        "init_zeros");
+        "init_zeros",
+        "distributed_zero_init",
+        "inline_zero_init");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -47,7 +51,9 @@ struct CombineParams {
             topology,
             output_mem_config,
             worker_core_range_set,
-            init_zeros);
+            init_zeros,
+            distributed_zero_init,
+            inline_zero_init);
     };
 };
 

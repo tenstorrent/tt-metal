@@ -19,16 +19,6 @@
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
-void zero_page_async(uint64_t noc_addr, uint32_t page_size) {
-    uint32_t bytes = page_size;
-    while (bytes > 0) {
-        uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
-        noc_async_write(MEM_ZEROS_BASE, noc_addr, curr_bytes);
-        noc_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-}
-
 #if defined(IS_L1_OUTPUT) && IS_L1_OUTPUT && defined(L1_BANK_NOC_X_START) && defined(NUM_L1_BANKS)
 #define USE_L1_MULTICAST_ZERO 1
 #else
@@ -109,16 +99,21 @@ void kernel_main() {
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_address = get_semaphore(zero_init_barrier_semaphore_id);
+#if defined(DRAM_ZERO_INIT_EXTERNAL)
+    uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
+#endif
 
     DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
-    // Only core 0 (expert_start_idx == 0) performs zero-init to avoid race between cores
+    constexpr uint32_t read_batch_size = 8;
+
 #if INIT_ZEROS
-    if (expert_start_idx == 0) {
 #if USE_L1_MULTICAST_ZERO
+    if (expert_start_idx == 0) {
         constexpr uint32_t per_bank_bytes = OUTPUT_BYTES_PER_BANK;
         for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
             uint32_t chunk_size = ((uint32_t)MEM_ZEROS_SIZE < (per_bank_bytes - offset)) ? (uint32_t)MEM_ZEROS_SIZE
@@ -128,14 +123,66 @@ void kernel_main() {
             noc_async_write_multicast_loopback_src(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS);
         }
         noc_async_write_barrier();
-#else
-        for (uint32_t page = 0; page < output_pages; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-            zero_page_async(page_noc_addr, aligned_output_page_size);
+    }
+#elif defined(DRAM_ZERO_INIT_EXTERNAL)
+    {
+        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
+        noc_semaphore_wait(zi_done_sem_ptr, NUM_ZERO_INIT_CORES);
+        noc_semaphore_set(zi_done_sem_ptr, 0);
+    }
+#elif defined(DRAM_ZERO_INIT_INLINE)
+    {
+        uint32_t inline_page_start = get_arg_val<uint32_t>(rt_args++);
+        uint32_t inline_page_end = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_semaphore_id_inline = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_sem_address_inline = get_semaphore(zi_done_semaphore_id_inline);
+
+        constexpr uint32_t zi_cb_id = INLINE_ZI_CB_ID;
+        cb_reserve_back(zi_cb_id, 1);
+        uint32_t zero_buf = get_write_ptr(zi_cb_id);
+        uint64_t zeros_noc = get_noc_addr(NOC_X(my_x[0]), NOC_Y(my_y[0]), MEM_ZEROS_BASE);
+        for (uint32_t off = 0; off < NOC_MAX_BURST_SIZE; off += MEM_ZEROS_SIZE) {
+            uint32_t chunk = ((uint32_t)MEM_ZEROS_SIZE < (NOC_MAX_BURST_SIZE - off)) ? (uint32_t)MEM_ZEROS_SIZE
+                                                                                     : (NOC_MAX_BURST_SIZE - off);
+            noc_async_read(zeros_noc, zero_buf + off, chunk);
         }
-        noc_async_write_barrier();
+        noc_async_read_barrier();
+
+        const auto zi_output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+        for (uint32_t page = inline_page_start; page < inline_page_end; page++) {
+            uint64_t page_noc_addr = get_noc_addr(page, zi_output_addr_gen);
+            uint32_t remaining = aligned_output_page_size;
+            while (remaining > 0) {
+                uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
+                noc_async_write(zero_buf, page_noc_addr, curr);
+                page_noc_addr += curr;
+                remaining -= curr;
+            }
+        }
+
+#if INLINE_ZI_NUM_IDLE_CORES > 0
+        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr_inline =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address_inline);
+        noc_semaphore_wait(zi_done_sem_ptr_inline, INLINE_ZI_NUM_IDLE_CORES);
+        noc_semaphore_set(zi_done_sem_ptr_inline, 0);
 #endif
     }
+#else
+    if (expert_start_idx == 0) {
+        for (uint32_t page = 0; page < output_pages; page++) {
+            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
+            uint32_t bytes = aligned_output_page_size;
+            while (bytes > 0) {
+                uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
+                noc_async_write(MEM_ZEROS_BASE, page_noc_addr, curr_bytes);
+                page_noc_addr += curr_bytes;
+                bytes -= curr_bytes;
+            }
+        }
+        noc_async_write_barrier();
+    }
+#endif
 #endif
 
     // Signal writer that zero-init is complete (or skipped for non-core-0)
@@ -165,7 +212,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr);
 
     // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
