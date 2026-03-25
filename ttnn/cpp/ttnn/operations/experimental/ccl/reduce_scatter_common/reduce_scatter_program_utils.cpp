@@ -28,7 +28,7 @@ uint32_t reduce_scatter_core_count_per_link(
     return num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 }
 
-uint32_t default_workers(
+uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     ttnn::ccl::Topology topology,
@@ -96,7 +96,7 @@ uint32_t default_workers(
         num_links);
 }
 
-uint32_t default_chunks_per_sync(
+uint32_t reduce_scatter_default_chunks_per_sync(
     ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity) {
     // For Line, as early as 20 chunks per sync we get statistically significant performance improvements.
     // For Ring there is no statistically significant performance improvement until 80 chunks per sync.
@@ -109,7 +109,7 @@ uint32_t default_chunks_per_sync(
     return std::min(default_value, total_chunks);
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {
     TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
 
     auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, shape.rank());
@@ -133,14 +133,14 @@ std::tuple<uint32_t, uint32_t, uint32_t> map_nd_to_4d(const ttnn::Shape& shape, 
     return {normalized_dim, input_tensor_C, input_tensor_B};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> map_2d_to_4d(uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t dim) {
     constexpr auto RANK_2D = 2;
     TT_FATAL(dim == 0 || dim == 1, "Expected dim 0 or 1");
     const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, RANK_2D));
     return {normalized_dim, /*input_tensor_C=*/1, /*input_tensor_B=*/1};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_tile_offsets(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offsets(
     uint32_t worker_id,
     uint32_t num_workers,
     uint32_t output_batch_num_pages,
