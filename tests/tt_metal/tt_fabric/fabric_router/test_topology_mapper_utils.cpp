@@ -4473,7 +4473,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 // Closest match for 2x1 is 2x2
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_N300) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
-    // Single BH galaxy (32 ASICs): p300 (1x2) matches PGD 2x2_Mesh_Halftray (4 ASICs), 32/4 = 8 meshes
+    // Single BH galaxy (32 ASICs): p300 (1x2) matches PGD halftray_2x2 (4 ASICs), 32/4 = 8 meshes
     using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");

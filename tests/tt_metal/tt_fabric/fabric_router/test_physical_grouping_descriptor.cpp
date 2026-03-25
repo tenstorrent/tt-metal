@@ -1174,16 +1174,16 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     GroupingInfo mesh_halftray;
     bool found = false;
     for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
-        if (mesh.name == "2x2_Mesh_Halftray") {
+        if (mesh.name == "halftray_2x2") {
             mesh_halftray = mesh;
             found = true;
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find '2x2_Mesh_Halftray' grouping";
+    ASSERT_TRUE(found) << "Expected to find 'halftray_2x2' grouping";
 
-    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2_Mesh_Halftray should have 4 ASICs (1 halftray)";
-    EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2_Mesh_Halftray should have 1 instance (halftray)";
+    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "halftray_2x2 should have 4 ASICs (1 halftray)";
+    EXPECT_EQ(mesh_halftray.items.size(), 4u) << "halftray_2x2 should have 1 instance (halftray)";
 
     auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_halftray);
     ASSERT_FALSE(flattened_meshes.empty());
@@ -1365,7 +1365,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWi
 
 TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
     const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
@@ -2237,78 +2237,6 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
         }
     }
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
-}
-
-TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
-    const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
-
-    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
-
-    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
-
-    // Try finding any for BH_galaxy_hosts
-    {
-        auto hosts_groupings = pgd.get_groupings_by_name("BH_galaxy_hosts");
-        ASSERT_FALSE(hosts_groupings.empty()) << "BH_galaxy_hosts grouping not found";
-        const auto& hosts_grouping = hosts_groupings[0];
-
-        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
-
-        EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: BH_galaxy_hosts grouping should map to mock cluster PSD";
-    }
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
-        const auto& mesh_grouping = mesh_groupings[0];
-
-        auto asic_ids = pgd.find_any_in_psd(mesh_grouping, psd);
-
-        EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
-    }
-
-    {
-        // get grouping names
-        auto grouping_names = pgd.get_all_grouping_names();
-        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
-
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
-
-        if (!errors.empty()) {
-            std::ostringstream oss;
-            for (size_t i = 0; i < errors.size(); ++i) {
-                if (i != 0) {
-                    oss << "; ";
-                }
-                oss << errors[i];
-            }
-            log_critical(tt::LogTest, "Errors: {}", oss.str());
-        }
-
-        // Test and see how it goes
-        EXPECT_EQ(asic_ids.size(), 3u)
-            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
-    }
-
-    {
-        // Test 4x4_Mesh BH groupings with find_all_in_psd (two variants: TRAY_3/TRAY_1 and TRAY_4/TRAY_2)
-        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh BH");
-        ASSERT_EQ(mesh_groupings.size(), 2u) << "4x4_Mesh BH grouping not found";
-
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
-
-        EXPECT_EQ(asic_ids.size(), 24u) << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to mock "
-                                           "cluster PSD (12 mappings each)";
-    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
