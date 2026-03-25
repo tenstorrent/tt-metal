@@ -19,51 +19,50 @@
 Swept on BH p150b LB (1x1 mesh, 12x10 grid). Brute-force exhaustive search over all valid
 (C_in_block, C_out_block, H_out_block, W_out_block) combinations. Results saved in `sweep_results_v2/`.
 
-Three blocking sets compared:
-- **Original** = main-branch `conv3d.py` before any sweep (single blocking table, no mesh awareness).
-  Original had no (3,1,1) entry so time convs used default `(C_in, 32, 1, 1, 1)`.
-- **Staged** = v2 staged sweep (spatial → C_out → C_in greedy search, correct shapes + 12x10 grid).
-  Wall-clock timing with `time.perf_counter`.
-- **Brute-force** = exhaustive search over all valid (C_in_block, C_out_block, H_out_block, W_out_block).
-  Wall-clock timing, single device, in-process. Results in `sweep_results_v2/`.
+Three blocking sets compared. **All us values measured in the same environment** (brute-force
+in-process sweep, single device, wall-clock, 2 warmup + 4 timed runs, mean).
 
-"Orig us" = original blocking measured on the same shape by the brute-force sweep (apples-to-apples).
-"—" = original blocking not yet measured on this shape (brute-force filtered `W_out_block <= W`
-for safety, but the op may accept larger values). Will be measured in a follow-up pass.
+- **Original** = main-branch `conv3d.py` before any sweep (no mesh awareness, no (3,1,1) entry).
+- **Staged** = blocking found by the greedy staged sweep (spatial → C_out → C_in).
+- **Best** = global optimum from exhaustive brute-force search.
 
-| Layer | C_in→C_out | Kernel | (T,H,W) | Cnt | Original | Orig us | Staged | Staged us | Brute-force | BF us | BF vs Orig | BF vs Staged |
-|-------|-----------|--------|---------|-----|----------|---------|--------|-----------|-------------|-------|------------|--------------|
-| conv_in | 32→384 | (3,3,3) | (23,25,7) | x1 | (32,96,1,2,32) | — | (32,128,1,4,16) | 232 | **(32,128,1,16,2)** | **189** | — | 1.23x |
-| mid+up0 res | 384→384 | (3,3,3) | (23,25,7) | x10 | (96,96,1,8,4) | 828 | (128,64,1,8,2) | 1,031 | **(128,64,1,8,4)** | **810** | 1.02x | 1.27x |
-| up0 time_conv | 384→768 | (3,1,1) | (22,23,5) | x1 | (384,32,1,1,1) | 2,533 | (96,256,1,16,2) | 307 | **(128,256,1,8,4)** | **279** | **9.1x** | 1.10x |
-| up0 spatial | 384→192 | (1,3,3) | (41,48,12) | x1 | (192,96,1,32,4) | 861 | (96,96,1,16,8) | 783 | **(192,96,1,16,2)** | **605** | 1.42x | 1.29x |
-| up1 res0 | 192→384 | (3,3,3) | (43,48,12) | x1 | (64,128,1,8,4) | 2,683 | (96,128,1,16,2) | 2,011 | **(96,128,1,16,2)** | **1,986** | 1.35x | 1.01x |
-| up1 resblocks | 384→384 | (3,3,3) | (43,48,12) | x5 | (96,96,1,8,4) | 4,738 | (128,128,1,16,1) | 4,859 | **(96,128,1,16,2)** | **3,477** | **1.36x** | **1.40x** |
-| up1 time_conv | 384→768 | (3,1,1) | (42,46,10) | x1 | (384,32,1,1,1) | — | (384,256,1,8,2) | 936 | pending | | | |
-| up1 spatial | 384→192 | (1,3,3) | (81,94,22) | x1 | (192,96,1,32,4) | — | (128,96,1,32,8) | 4,238 | pending | | | |
-| up2 resblocks | 192→192 | (3,3,3) | (83,94,22) | x6 | (96,96,1,8,4) | 9,597 | (96,96,1,16,4) | 7,314 | **(96,96,1,8,8)** | **6,767** | **1.42x** | 1.08x |
-| up2 spatial | 192→96 | (1,3,3) | (81,186,42) | x1 | (192,96,1,4,8) | — | (192,96,1,8,8) | 3,388 | pending | | | |
-| up3 resblocks | 96→96 | (3,3,3) | (83,186,42) | x6 | (96,96,1,8,8) | 8,117 | (96,96,1,8,8) | 7,997 | **(96,96,1,8,8)** | **8,117** | 1.00x | 0.99x |
-| conv_out | 96→3 | (3,3,3) | (83,186,42) | x1 | (96,32,1,16,8) | — | (96,32,1,16,8) | 5,955 | pending | | | |
+"—" = blocking not in brute-force search space (e.g. W_out_block > W was filtered). Needs follow-up.
+
+| Layer | C_in→C_out | Kernel | (T,H,W) | Cnt | Original | Orig us | Staged | Staged us | Best | Best us | vs Orig | vs Staged |
+|-------|-----------|--------|---------|-----|----------|---------|--------|-----------|------|---------|---------|-----------|
+| conv_in | 32→384 | (3,3,3) | (23,25,7) | x1 | (32,96,1,2,32) | — | (32,128,1,4,16) | — | **(32,128,1,16,2)** | **189** | — | — |
+| mid+up0 res | 384→384 | (3,3,3) | (23,25,7) | x10 | (96,96,1,8,4) | 828 | (128,64,1,8,2) | 1,013 | **(128,64,1,8,4)** | **810** | 1.02x | 1.25x |
+| up0 time_conv | 384→768 | (3,1,1) | (22,23,5) | x1 | (384,32,1,1,1) | 2,533 | (96,256,1,16,2) | 279 | **(128,256,1,8,4)** | **279** | **9.1x** | 1.00x |
+| up0 spatial | 384→192 | (1,3,3) | (41,48,12) | x1 | (192,96,1,32,4) | 861 | (96,96,1,16,8) | 778 | **(192,96,1,16,2)** | **605** | 1.42x | 1.29x |
+| up1 res0 | 192→384 | (3,3,3) | (43,48,12) | x1 | (64,128,1,8,4) | 2,683 | (96,128,1,16,2) | 1,986 | **(96,128,1,16,2)** | **1,986** | 1.35x | 1.00x |
+| up1 resblocks | 384→384 | (3,3,3) | (43,48,12) | x5 | (96,96,1,8,4) | 4,738 | (128,128,1,16,1) | 5,020 | **(96,128,1,16,2)** | **3,477** | **1.36x** | **1.44x** |
+| up1 time_conv | 384→768 | (3,1,1) | (42,46,10) | x1 | (384,32,1,1,1) | 19,841 | (384,256,1,8,2) | 1,099 | **(192,384,1,16,2)** | **791** | **25.1x** | 1.39x |
+| up1 spatial | 384→192 | (1,3,3) | (81,94,22) | x1 | (192,96,1,32,4) | — | (128,96,1,32,8) | — | pending | | | |
+| up2 resblocks | 192→192 | (3,3,3) | (83,94,22) | x6 | (96,96,1,8,4) | 9,597 | (96,96,1,16,4) | 8,881 | **(96,96,1,8,8)** | **6,767** | **1.42x** | **1.31x** |
+| up2 spatial | 192→96 | (1,3,3) | (81,186,42) | x1 | (192,96,1,4,8) | — | (192,96,1,8,8) | — | pending | | | |
+| up3 resblocks | 96→96 | (3,3,3) | (83,186,42) | x6 | (96,96,1,8,8) | 8,117 | (96,96,1,8,8) | 8,117 | **(96,96,1,8,8)** | **8,117** | 1.00x | 1.00x |
+| conv_out | 96→3 | (3,3,3) | (83,186,42) | x1 | (96,32,1,16,8) | — | (96,32,1,16,8) | — | pending | | | |
 
 **Estimated total per uncached frame (layers with all 3 measurements):**
 
-| Component | Original (us) | Staged (us) | Brute-force (us) | BF vs Orig | BF vs Staged |
-|-----------|--------------|-------------|-----------------|------------|--------------|
-| mid+up0 res (x10) | 8,280 | 10,310 | 8,100 | 1.02x | 1.27x |
-| up0 time_conv (x1) | 2,533 | 307 | 279 | **9.1x** | 1.10x |
-| up0 spatial (x1) | 861 | 783 | 605 | 1.42x | 1.29x |
-| up1 res0 (x1) | 2,683 | 2,011 | 1,986 | 1.35x | 1.01x |
-| up1 resblocks (x5) | 23,690 | 24,295 | 17,385 | **1.36x** | **1.40x** |
-| up2 resblocks (x6) | 57,582 | 43,884 | 40,602 | **1.42x** | 1.08x |
-| up3 resblocks (x6) | 48,702 | 47,982 | 48,702 | 1.00x | 0.99x |
-| **Subtotal (7 layers)** | **144,331** | **129,572** | **117,659** | **1.23x** | **1.10x** |
+| Component | Original (us) | Staged (us) | Best (us) | vs Orig | vs Staged |
+|-----------|--------------|-------------|-----------|---------|-----------|
+| mid+up0 res (x10) | 8,280 | 10,130 | 8,100 | 1.02x | 1.25x |
+| up0 time_conv (x1) | 2,533 | 279 | 279 | **9.1x** | 1.00x |
+| up0 spatial (x1) | 861 | 778 | 605 | 1.42x | 1.29x |
+| up1 res0 (x1) | 2,683 | 1,986 | 1,986 | 1.35x | 1.00x |
+| up1 resblocks (x5) | 23,690 | 25,100 | 17,385 | **1.36x** | **1.44x** |
+| up1 time_conv (x1) | 19,841 | 1,099 | 791 | **25.1x** | 1.39x |
+| up2 resblocks (x6) | 57,582 | 53,286 | 40,602 | **1.42x** | **1.31x** |
+| up3 resblocks (x6) | 48,702 | 48,702 | 48,702 | 1.00x | 1.00x |
+| **Subtotal (8 layers)** | **164,172** | **141,360** | **118,450** | **1.39x** | **1.19x** |
 
 Notes:
 - Original blockings were not mesh-aware (single table for all mesh configs).
-- The original→staged improvement comes mainly from the time_conv default `(384,32,1,1,1)`.
-- The staged→brute-force improvement comes mainly from up1 resblocks where the greedy staged search
-  was locked to C_in=128 from baseline but C_in=96,C_out=128 is optimal.
+- The original→best improvement comes from time convs (9-25x, original default was catastrophically slow)
+  and up2 resblocks (1.42x).
+- The staged→best improvement comes mainly from up1 resblocks (1.44x: greedy search missed C_in=96,C_out=128)
+  and up2 resblocks (1.31x).
 
 ### Uncached 480p
 
