@@ -986,10 +986,10 @@ class DeepseekMinimalAllReduce:
         skip_local_push=False,
         skip_ccl=False,
         dual_core_sender=False,
-        dual_sender_ncrisc_link_index=0,
-        dual_sender_ncrisc_signal_local_ready=1,
-        dual_sender_brisc_link_index=1,
-        dual_sender_brisc_signal_local_ready=0,
+        dual_sender_ncrisc_link_index=1,
+        dual_sender_ncrisc_signal_local_ready=0,
+        dual_sender_brisc_link_index=0,
+        dual_sender_brisc_signal_local_ready=1,
     ):
         if skip_ccl:
             return BypassAllReduceConfig(
@@ -1062,10 +1062,10 @@ class DeepseekMinimalAllReduce:
         persistent_output_tensor=None,
         residual_tensor_mesh=None,
         dual_core_sender=False,
-        dual_sender_ncrisc_link_index=0,
-        dual_sender_ncrisc_signal_local_ready=1,
-        dual_sender_brisc_link_index=1,
-        dual_sender_brisc_signal_local_ready=0,
+        dual_sender_ncrisc_link_index=1,
+        dual_sender_ncrisc_signal_local_ready=0,
+        dual_sender_brisc_link_index=0,
+        dual_sender_brisc_signal_local_ready=1,
     ):
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -1195,7 +1195,7 @@ class DeepseekMinimalAllReduce:
                             brisc_args=[(sender_core, []), (receiver_core, [])],
                             trisc_args=[(receiver_core, [])],
                         ),
-                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                        # noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                     )
                     kernel_result = unified_kernel.get_kernel_descriptors()
                     sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)

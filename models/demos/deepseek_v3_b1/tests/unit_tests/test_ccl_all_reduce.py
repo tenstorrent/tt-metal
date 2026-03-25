@@ -25,8 +25,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 
 # Tensor shard placement for dual-core all-reduce tests (op derives sender/receiver from these grids).
-DUAL_CORE_TEST_SENDER = ttnn.CoreCoord(0, 1)
-DUAL_CORE_TEST_RECEIVER = ttnn.CoreCoord(0, 0)
+DUAL_CORE_TEST_SENDER = ttnn.CoreCoord(10, 9)
+DUAL_CORE_TEST_RECEIVER = ttnn.CoreCoord(11, 9)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -629,14 +629,14 @@ def test_ccl_all_reduce_dual_core_sender(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(50, 20)])
 @pytest.mark.parametrize("fuse_residual_add", [True])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(2048),
+            "fabric_router_config": create_fabric_router_config(4096),
             "trace_region_size": 573440,
         }
     ],

@@ -216,25 +216,26 @@ public:
 private:
     void impl([[maybe_unused]] const ReceiverArgs& a) {
 #if defined(COMPILE_FOR_BRISC)
+        // push residual to unblock TRISC
+        if constexpr (CT::has_residual) {
+            cb_reserve_back(CT::residual_cb_id, CT::total_num_tiles);
+            cb_push_back(CT::residual_cb_id, CT::total_num_tiles);
+        }
+
+        cb_reserve_back(CT::local_data_cb_id, CT::total_num_tiles);
+        cb_reserve_back(CT::remote_data_cb_id, CT::total_num_tiles);
+        constexpr uint32_t local_payload_bytes = CT::total_num_tiles * CT::page_size_bytes;
+        const uint64_t local_data_src_noc =
+            safe_get_noc_addr(a.sender_noc_x, a.sender_noc_y, a.sender_local_data_l1_addr, 0);
+        const uint32_t local_data_dst = get_write_ptr(CT::local_data_cb_id);
+
         volatile tt_l1_ptr uint32_t* local_ready_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a.local_ready_sem_bank_addr);
         noc_semaphore_wait_min(local_ready_ptr, 1);
         unified_kernels::semaphore_dec(local_ready_ptr, 1);
 
-        const uint32_t local_payload_bytes = CT::total_num_tiles * CT::page_size_bytes;
-        const uint64_t src_noc = safe_get_noc_addr(a.sender_noc_x, a.sender_noc_y, a.sender_local_data_l1_addr, 0);
-
-        if constexpr (!CT::skip_local_push) {
-            cb_reserve_back(CT::local_data_cb_id, CT::total_num_tiles);
-            uint32_t dst = get_write_ptr(CT::local_data_cb_id);
-            noc_async_read(src_noc, dst, local_payload_bytes);
-            noc_async_read_barrier();
-            cb_push_back(CT::local_data_cb_id, CT::total_num_tiles);
-        }
-        if constexpr (CT::has_residual) {
-            cb_reserve_back(CT::residual_cb_id, CT::total_num_tiles);
-            cb_push_back(CT::residual_cb_id, CT::total_num_tiles);
-        }
+        // Issue the read for local data as early as possible
+        noc_async_read(local_data_src_noc, local_data_dst, local_payload_bytes);
 
         const std::array<uint32_t, MAX_NUM_LINKS> sem_addrs = {a.sem_bank_addr_0, a.sem_bank_addr_1};
         std::array<volatile tt_l1_ptr uint32_t*, CT::num_links> sem_ptrs;
@@ -244,13 +245,16 @@ private:
             sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addrs[link_idx]);
         }
 
+        // block for read to finish
+        noc_async_read_barrier();
+        cb_push_back(CT::local_data_cb_id, CT::total_num_tiles);
+
         uint32_t current_link = 0;
         for (uint32_t chunk_idx = 0; chunk_idx < CT::num_chunks; chunk_idx++) {
+            const uint32_t tiles = (chunk_idx < CT::num_chunks - 1) ? CT::tiles_per_chunk : CT::last_chunk_tiles;
+
             link_counters[current_link]++;
             noc_semaphore_wait_min(sem_ptrs[current_link], link_counters[current_link]);
-
-            const uint32_t tiles = (chunk_idx < CT::num_chunks - 1) ? CT::tiles_per_chunk : CT::last_chunk_tiles;
-            cb_reserve_back(CT::remote_data_cb_id, tiles);
             cb_push_back(CT::remote_data_cb_id, tiles);
 
             if (++current_link == CT::num_links) {
