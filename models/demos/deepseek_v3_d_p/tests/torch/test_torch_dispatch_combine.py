@@ -89,7 +89,7 @@ def test_torch_dispatch_combine(
     )
 
     # Compute gate outputs before dispatch
-    expert_offsets, expert_token_counts, cum_sum = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,

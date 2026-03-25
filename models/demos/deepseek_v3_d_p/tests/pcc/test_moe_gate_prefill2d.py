@@ -258,6 +258,17 @@ def test_forward_pass(
         per_group_offsets[group] = offsets.long()
         per_group_totals[group] = cum_sum[-1:].long()
 
+    expert_offsets, _, _ = get_gate_outputs(
+        indices=indices_for_gate,
+        dispatch_group_size=n_sp_devices,
+        num_routed_experts=n_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len_per_device,
+        num_experts_per_tok=config.n_activated_experts,
+    )
+
+    reference_offsets = expert_offsets.long()
+
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
         tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
