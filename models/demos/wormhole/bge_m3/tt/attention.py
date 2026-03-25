@@ -29,6 +29,7 @@ class BgeM3AttentionConfig:
     # Optional weights
     bqkv: LazyWeight | None = None
     wo_bias: LazyWeight | None = None
+    mesh_device: ttnn.MeshDevice | None = None
 
     # Attention
     attention_scale: float | None = None
@@ -332,7 +333,14 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     ]
     if param_devices and any(device != param_devices[0] for device in param_devices):
         raise ValueError("All attention parameters must target the same device")
-    mesh_device = param_devices[0] if param_devices else ttnn.GetDefaultDevice()
+    if config.mesh_device is not None and param_devices and param_devices[0] != config.mesh_device:
+        raise ValueError("All attention parameters must target the configured mesh_device")
+
+    mesh_device = (
+        config.mesh_device
+        if config.mesh_device is not None
+        else (param_devices[0] if param_devices else ttnn.GetDefaultDevice())
+    )
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for BgeM3Attention")
 
