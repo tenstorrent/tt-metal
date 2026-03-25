@@ -1,4 +1,5 @@
-from __future__ import annotations
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -21,7 +22,7 @@ class BgeM3Model(LightweightModule):
         super().__init__()
         self.pad_token_id = int(args.pad_token_id)
 
-        embedding_weights = build_embedding_weights(state_dict, dtype)
+        embedding_weights = build_embedding_weights(state_dict, ttnn.bfloat16)
         self.embeddings = BgeM3Embedding.from_config(
             BgeM3EmbeddingsConfig(
                 word_embeddings_weight=embedding_weights.word_embeddings_weight,
@@ -31,6 +32,8 @@ class BgeM3Model(LightweightModule):
                 max_position_embeddings=args.max_context_len,
                 hidden_size=args.dim,
                 pad_token_id=args.pad_token_id,
+                mesh_device=mesh_device,
+                embedding_dtype=ttnn.bfloat16,
             )
         )
         self.embedding_norm = _build_optional_layer_norm(
