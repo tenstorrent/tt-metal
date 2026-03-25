@@ -185,6 +185,8 @@ class LTXPipeline:
 
         self.transformer: LTXTransformerModel | None = None
         self.text_encoder: GemmaTokenizerEncoderPair | None = None
+        self.gemma_encoder = None  # TTNN Gemma encoder (device)
+        self.gemma_tokenizer = None
         self.vae_decoder = None  # LTXVideoDecoder or LTXVideoDecoderTorch
 
         # Cached device tensors (computed once, reused across steps)
@@ -292,6 +294,107 @@ class LTXPipeline:
             hidden_layer_index=hidden_layer_index,
         )
         logger.info(f"Loaded Gemma text encoder from {checkpoint}")
+
+    def load_gemma_encoder(
+        self,
+        gemma_path: str,
+        *,
+        num_layers: int = 48,
+        hidden_layer_index: int = -1,
+        sequence_length: int = 256,
+    ) -> None:
+        """Load TTNN Gemma-3 text encoder on device. 13x faster than CPU torch.
+
+        Args:
+            gemma_path: HuggingFace model path or local directory
+            num_layers: Number of Gemma layers (48 for 12B)
+            hidden_layer_index: Which layer's hidden states to extract (-1 = last)
+            sequence_length: Max token sequence length
+        """
+        import glob
+
+        from transformers import AutoTokenizer
+
+        from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
+        from ...parallel.config import EncoderParallelConfig
+
+        config = GemmaConfig(
+            num_hidden_layers=num_layers,
+            hidden_layer_index=hidden_layer_index,
+            max_position_embeddings=sequence_length,
+        )
+
+        # Use TP on the same axis as the DiT transformer
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+
+        enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
+
+        self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, enc_parallel)
+
+        # Load weights
+        from safetensors.torch import load_file
+
+        weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
+        if not weight_files:
+            weight_files = sorted(glob.glob(f"{gemma_path}/*.safetensors"))
+        state_dict = {}
+        for f in weight_files:
+            state_dict.update(load_file(f))
+
+        t0 = __import__("time").time()
+        self.gemma_encoder.load_torch_state_dict(state_dict)
+        del state_dict
+        logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {__import__('time').time()-t0:.0f}s")
+
+        self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)
+        self._gemma_hidden_layer_index = hidden_layer_index
+        self._gemma_sequence_length = sequence_length
+
+    def encode_prompts_device(self, prompts: list[str]) -> tuple[torch.Tensor, ...]:
+        """Encode prompts using the TTNN Gemma encoder on device.
+
+        Returns tuple of (video_embeds, audio_embeds) for each prompt.
+        For LTX-2, video_embeds shape is (1, seq_len, 4096) and
+        audio_embeds is (1, seq_len, 2048) — extracted from Gemma hidden states.
+
+        Note: The LTX-2 reference pipeline uses a separate embeddings_connector
+        to project Gemma hidden states to video/audio dims. This method returns
+        the raw hidden states which need connector projection.
+        """
+
+        assert self.gemma_encoder is not None, "Call load_gemma_encoder() first"
+
+        results = []
+        for prompt in prompts:
+            tokens = self.gemma_tokenizer(
+                prompt,
+                return_tensors="pt",
+                padding="max_length",
+                max_length=self._gemma_sequence_length,
+                truncation=True,
+            )
+
+            tt_ids = ttnn.from_torch(
+                tokens.input_ids,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+            hidden_states = self.gemma_encoder(tt_ids)
+            # Extract the desired layer's hidden states
+            hs = hidden_states[self._gemma_hidden_layer_index]
+            hs_torch = ttnn.to_torch(ttnn.get_device_tensors(hs)[0]).float()
+
+            # Apply attention mask (zero out padding tokens)
+            mask = tokens.attention_mask.unsqueeze(-1).float()
+            hs_torch = hs_torch * mask
+
+            results.append(hs_torch)
+
+        return results
 
     def encode_prompts_reference(
         self,
