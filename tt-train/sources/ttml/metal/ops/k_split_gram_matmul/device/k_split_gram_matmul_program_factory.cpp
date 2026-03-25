@@ -782,7 +782,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         }
     }
 
-    return {std::move(program), shared_variables_t{0}};
+    return {std::move(program), shared_variables_t{}};
 }
 
 void KSplitGramMatmulProgramFactory::override_runtime_arguments(

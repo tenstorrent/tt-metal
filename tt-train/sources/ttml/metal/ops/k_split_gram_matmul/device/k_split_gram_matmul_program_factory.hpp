@@ -11,9 +11,7 @@
 namespace ttml::metal::ops::k_split_gram_matmul::device {
 
 struct KSplitGramMatmulProgramFactory {
-    struct shared_variables_t {
-        uint32_t dummy{};
-    };
+    struct shared_variables_t {};
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
