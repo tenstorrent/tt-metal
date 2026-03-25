@@ -169,6 +169,9 @@ void kernel_main() {
     // Each worker handles every 'effective_advance_by_tiles'-th tile, starting from offset 'effective_worker_id'.
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
+    // Upper bound on tiles any single worker processes per chunk piece.
+    // effective_advance_by_tiles >= 2, so this is a safe compile-time ceiling.
+    constexpr uint32_t max_tiles_per_worker = mm_block_ht * chunk_width_in_tiles * mm_cores_y / 2 + 1;
 
     // Snapshot the semaphore's value at startup
     uint32_t out_ready_sem_target = 0;
@@ -194,6 +197,41 @@ void kernel_main() {
                 mm_sem_target += sem_increment;
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
 #endif
+                // Pre-walk the tile-coordinate sequence once for this (m_block_iter, chunk_idx).
+                // The walk is identical across all ring steps; only cols_before_actual_slice
+                // (derived from actual_slice_idx) differs per step.
+                TileCoord tile_coord_cache[max_tiles_per_worker];
+                uint32_t num_tiles_cached;
+                {
+                    uint32_t tr = 0, tc = 0, mc = 0;
+                    get_next_tile_coordinates(
+                        tr,
+                        tc,
+                        mc,
+                        effective_worker_id,
+                        effective_subchunk_size,
+                        effective_chunk_width_in_tiles,
+                        current_mm_block_ht);
+                    num_tiles_cached = how_many_tiles_to_read_formula(
+                        tr,
+                        tc,
+                        mc,
+                        effective_advance_by_tiles,
+                        last_mm_core_idx,
+                        effective_subchunk_size,
+                        effective_chunk_width_in_tiles);
+                    for (uint32_t k = 0; k < num_tiles_cached; ++k) {
+                        tile_coord_cache[k] = {tr, tc, mc};
+                        get_next_tile_coordinates(
+                            tr,
+                            tc,
+                            mc,
+                            effective_advance_by_tiles,
+                            effective_subchunk_size,
+                            effective_chunk_width_in_tiles,
+                            current_mm_block_ht);
+                    }
+                }
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
@@ -220,26 +258,8 @@ void kernel_main() {
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                          chunk_piece_idx++) {
-                        uint32_t tile_row_in_mm_M_unit_block = 0;
-                        uint32_t chunk_col_in_tiles = 0;
-                        uint32_t mm_core_idx = 0;
-                        // Get the first tile coordinates for the current chunk piece
-                        get_next_tile_coordinates(
-                            tile_row_in_mm_M_unit_block,
-                            chunk_col_in_tiles,
-                            mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
-                            effective_chunk_width_in_tiles,
-                            current_mm_block_ht);
-                        uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                            tile_row_in_mm_M_unit_block,
-                            chunk_col_in_tiles,
-                            mm_core_idx,
-                            effective_advance_by_tiles,
-                            last_mm_core_idx,
-                            effective_subchunk_size,
-                            effective_chunk_width_in_tiles);
+                        uint32_t tile_cache_idx = 0;
+                        uint32_t tiles_to_read = num_tiles_cached;
 
                         while (tiles_to_read > 0) {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
@@ -265,9 +285,9 @@ void kernel_main() {
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
                                 const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
-                                    tile_row_in_mm_M_unit_block,
-                                    chunk_col_in_tiles,
-                                    mm_core_idx,
+                                    tile_coord_cache[tile_cache_idx].row,
+                                    tile_coord_cache[tile_cache_idx].col,
+                                    tile_coord_cache[tile_cache_idx].core,
                                     chunk_piece_idx,
                                     m_block_iter,
                                     chunk_idx,
@@ -275,6 +295,7 @@ void kernel_main() {
                                     tiles_ht_per_core,
                                     mm_block_ht,
                                     chunk_width_in_tiles);
+                                ++tile_cache_idx;
 
                                 if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
                                     slice_col < cols_before_actual_slice + slice_Wt) {
@@ -318,15 +339,6 @@ void kernel_main() {
                                     addcmul_b_l1_write_addr += page_size;
                                 }
 #endif
-
-                                get_next_tile_coordinates(
-                                    tile_row_in_mm_M_unit_block,
-                                    chunk_col_in_tiles,
-                                    mm_core_idx,
-                                    effective_advance_by_tiles,
-                                    effective_subchunk_size,
-                                    effective_chunk_width_in_tiles,
-                                    current_mm_block_ht);
                             }
                             noc_async_read_barrier();
                             cb_push_back(cb_in0, tile_granularity);

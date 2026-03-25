@@ -250,6 +250,9 @@ void kernel_main() {
         const uint32_t tiles_ht_per_core = slice_Ht_per_core;
         const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
+        // Upper bound on tiles any single worker processes per chunk piece.
+        // effective_advance_by_tiles >= 2, so this is a safe compile-time ceiling.
+        constexpr uint32_t max_tiles_per_worker = mm_block_ht * chunk_width_in_tiles * mm_cores_y / 2 + 1;
 
         for (uint32_t b = 0; b < batch_size; b++) {
             const uint32_t output_tile_id_start = b * output_batch_num_pages;
@@ -263,6 +266,41 @@ void kernel_main() {
                     const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+                    // Pre-walk the tile-coordinate sequence once for this (m_block_iter, chunk_idx).
+                    // The walk is identical across all ring steps; only cols_before_actual_slice
+                    // (derived from actual_slice_idx) differs per step.
+                    TileCoord tile_coord_cache[max_tiles_per_worker];
+                    uint32_t num_tiles_cached;
+                    {
+                        uint32_t tr = 0, tc = 0, mc = 0;
+                        get_next_tile_coordinates(
+                            tr,
+                            tc,
+                            mc,
+                            effective_worker_id,
+                            effective_subchunk_size,
+                            effective_chunk_width_in_tiles,
+                            current_mm_block_ht);
+                        num_tiles_cached = how_many_tiles_to_read_formula(
+                            tr,
+                            tc,
+                            mc,
+                            effective_advance_by_tiles,
+                            last_mm_core_idx,
+                            effective_subchunk_size,
+                            effective_chunk_width_in_tiles);
+                        for (uint32_t k = 0; k < num_tiles_cached; ++k) {
+                            tile_coord_cache[k] = {tr, tc, mc};
+                            get_next_tile_coordinates(
+                                tr,
+                                tc,
+                                mc,
+                                effective_advance_by_tiles,
+                                effective_subchunk_size,
+                                effective_chunk_width_in_tiles,
+                                current_mm_block_ht);
+                        }
+                    }
                     // Ring reduce-scatter loop for this chunk.
                     // i=0: consume reader_output_cb, send to neighbor's intermediate buffer.
                     // i=1..R-2: consume output_cb (from compute), send to neighbor's intermediate.
@@ -276,25 +314,8 @@ void kernel_main() {
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                              chunk_piece_idx++) {
-                            uint32_t tile_row_in_mm_M_unit_block = 0;
-                            uint32_t chunk_col_in_tiles = 0;
-                            uint32_t mm_core_idx = 0;
-                            get_next_tile_coordinates(
-                                tile_row_in_mm_M_unit_block,
-                                chunk_col_in_tiles,
-                                mm_core_idx,
-                                effective_worker_id,
-                                effective_subchunk_size,
-                                effective_chunk_width_in_tiles,
-                                current_mm_block_ht);
-                            uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                                tile_row_in_mm_M_unit_block,
-                                chunk_col_in_tiles,
-                                mm_core_idx,
-                                effective_advance_by_tiles,
-                                last_mm_core_idx,
-                                effective_subchunk_size,
-                                effective_chunk_width_in_tiles);
+                            uint32_t tile_cache_idx = 0;
+                            uint32_t tiles_to_read = num_tiles_cached;
 
                             while (tiles_to_read > 0) {
                                 const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
@@ -303,67 +324,47 @@ void kernel_main() {
                                 cb_wait_front(cb_output_id, tile_granularity);
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                                uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
-                                while (tiles_remaining_in_step > 0) {
-                                    const uint32_t tiles_to_put_in_current_packet =
-                                        (i < (ring_size - 1))
-                                            ? std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet)
-                                            : 1;
-                                    tiles_remaining_in_step -= tiles_to_put_in_current_packet;
+                                if (i < ring_size - 1) {
+                                    // Packet-based send to neighbor's intermediate buffer.
+                                    // CB slot k corresponds to iteration tile k; l1_read_addr always
+                                    // advances by page_size per slot regardless of bounds.
+                                    uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
+                                    while (tiles_remaining_in_step > 0) {
+                                        const uint32_t tiles_to_put_in_current_packet =
+                                            std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet);
+                                        tiles_remaining_in_step -= tiles_to_put_in_current_packet;
 
-                                    // Gather phase: compute tile indices for every slot in this packet.
-                                    // The reader always advances l1_write_addr regardless of validity,
-                                    // so CB slot i corresponds to iteration tile i. We track valid_l1_addrs
-                                    // per valid tile because ghost tiles can appear mid-packet (e.g. VGVV)
-                                    // when chunk_col_in_tiles wraps within a batch.
-                                    uint32_t global_tile_idxs[num_tiles_to_write_per_packet];
-                                    uint32_t valid_l1_addrs[num_tiles_to_write_per_packet];
-                                    uint32_t slice_tile_idx_first = 0;
-                                    uint32_t num_in_bounds_tiles = 0;
-                                    for (uint32_t packet_slot = 0; packet_slot < tiles_to_put_in_current_packet;
-                                         ++packet_slot) {
-                                        const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
-                                            tile_row_in_mm_M_unit_block,
-                                            chunk_col_in_tiles,
-                                            mm_core_idx,
-                                            chunk_piece_idx,
-                                            m_block_iter,
-                                            chunk_idx,
-                                            N_full_block_wt,
-                                            tiles_ht_per_core,
-                                            mm_block_ht,
-                                            chunk_width_in_tiles);
-                                        if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
-                                            slice_col < cols_before_actual_slice + slice_Wt) {
-                                            global_tile_idxs[num_in_bounds_tiles] =
-                                                slice_coordinates_to_global_tile_index(
-                                                    slice_row,
-                                                    slice_col - cols_before_actual_slice,
-                                                    actual_slice_idx,
-                                                    slice_Wt,
-                                                    input_tensor_Wt);
-                                            valid_l1_addrs[num_in_bounds_tiles] =
-                                                l1_read_addr + packet_slot * page_size;
-                                            if (num_in_bounds_tiles == 0) {
-                                                slice_tile_idx_first = slice_coordinates_to_slice_tile_index(
-                                                    slice_row, slice_col - cols_before_actual_slice, slice_Wt);
+                                        uint32_t global_tile_idxs[num_tiles_to_write_per_packet];
+                                        uint32_t valid_l1_addrs[num_tiles_to_write_per_packet];
+                                        uint32_t num_in_bounds_tiles = 0;
+                                        for (uint32_t packet_slot = 0; packet_slot < tiles_to_put_in_current_packet;
+                                             ++packet_slot) {
+                                            const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+                                                tile_coord_cache[tile_cache_idx].row,
+                                                tile_coord_cache[tile_cache_idx].col,
+                                                tile_coord_cache[tile_cache_idx].core,
+                                                chunk_piece_idx,
+                                                m_block_iter,
+                                                chunk_idx,
+                                                N_full_block_wt,
+                                                tiles_ht_per_core,
+                                                mm_block_ht,
+                                                chunk_width_in_tiles);
+                                            ++tile_cache_idx;
+                                            if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
+                                                slice_col < cols_before_actual_slice + slice_Wt) {
+                                                global_tile_idxs[num_in_bounds_tiles] =
+                                                    slice_coordinates_to_global_tile_index(
+                                                        slice_row,
+                                                        slice_col - cols_before_actual_slice,
+                                                        actual_slice_idx,
+                                                        slice_Wt,
+                                                        input_tensor_Wt);
+                                                valid_l1_addrs[num_in_bounds_tiles] =
+                                                    l1_read_addr + packet_slot * page_size;
+                                                ++num_in_bounds_tiles;
                                             }
-                                            ++num_in_bounds_tiles;
                                         }
-                                        get_next_tile_coordinates(
-                                            tile_row_in_mm_M_unit_block,
-                                            chunk_col_in_tiles,
-                                            mm_core_idx,
-                                            effective_advance_by_tiles,
-                                            effective_subchunk_size,
-                                            effective_chunk_width_in_tiles,
-                                            current_mm_block_ht);
-                                    }
-
-                                    // Dispatch phase. All CB slots are consumed regardless of bounds,
-                                    // so l1_read_addr always advances by tiles_to_put_in_current_packet.
-                                    if (i < (ring_size - 1)) {
-                                        // Send tile(s) to the intermediate buffer on the neighboring device.
                                         switch (num_in_bounds_tiles) {
                                             case 2: {
                                                 const auto noc_address0 =
@@ -381,7 +382,7 @@ void kernel_main() {
                                                         valid_l1_addrs[0],
                                                         NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                                                 } else {
-                                                    // Valid tiles are non-contiguous in L1; write each individually.
+                                                    // Valid tiles are non-contiguous in L1; send individually.
                                                     fabric_unicast_noc_unicast_write_with_state<
                                                         UnicastWriteUpdateMask::DstAddr>(
                                                         &mux_connection_handle,
@@ -412,16 +413,37 @@ void kernel_main() {
                                             default: break;  // all ghost tiles, nothing to send
                                         }
                                         noc_async_writes_flushed();
-                                    } else {
-                                        // Write the tile to the output buffer on this device.
-                                        if (num_in_bounds_tiles > 0) {
-                                            const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx_first;
-                                            const uint64_t local_noc_addr =
-                                                get_noc_addr(output_tile_id, output_addrgen);
-                                            noc_async_write(valid_l1_addrs[0], local_noc_addr, page_size);
+                                        l1_read_addr += page_size * tiles_to_put_in_current_packet;
+                                    }
+                                } else {
+                                    // Final step: write reduced tiles directly to local output.
+                                    // Flat loop avoids the packet-dispatch overhead (no fabric headers,
+                                    // no packet-slot arrays); a single barrier follows the whole batch.
+                                    for (uint32_t k = 0; k < tiles_to_read_in_this_step; ++k) {
+                                        const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+                                            tile_coord_cache[tile_cache_idx].row,
+                                            tile_coord_cache[tile_cache_idx].col,
+                                            tile_coord_cache[tile_cache_idx].core,
+                                            chunk_piece_idx,
+                                            m_block_iter,
+                                            chunk_idx,
+                                            N_full_block_wt,
+                                            tiles_ht_per_core,
+                                            mm_block_ht,
+                                            chunk_width_in_tiles);
+                                        ++tile_cache_idx;
+                                        if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
+                                            slice_col < cols_before_actual_slice + slice_Wt) {
+                                            const uint32_t col_in_slice = slice_col - cols_before_actual_slice;
+                                            const uint32_t output_tile_id =
+                                                output_tile_id_start + slice_coordinates_to_slice_tile_index(
+                                                                           slice_row, col_in_slice, slice_Wt);
+                                            noc_async_write(
+                                                l1_read_addr + k * page_size,
+                                                get_noc_addr(output_tile_id, output_addrgen),
+                                                page_size);
                                         }
                                     }
-                                    l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 }
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, tile_granularity);

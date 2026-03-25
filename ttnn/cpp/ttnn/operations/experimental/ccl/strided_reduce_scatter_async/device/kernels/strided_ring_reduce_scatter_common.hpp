@@ -12,6 +12,15 @@
  */
 
 /**
+ * Per-tile coordinates within the MM output layout.
+ * Cached once per (m_block_iter, chunk_idx) so the ring loop can reuse the
+ * walk across all ring steps instead of recomputing it each time.
+ */
+struct TileCoord {
+    uint32_t row, col, core;
+};
+
+/**
  * Given the index of the slice being processed in this ring iteration, compute:
  *   - mm_N_full_blocks_per_slice: the number of mm_N_full_block_wt-wide N-blocks that
  *     cover the slice (may be more than 1 when the slice straddles an N-block boundary, or

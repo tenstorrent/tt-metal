@@ -196,6 +196,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     [
         "fused",
         "comparison",
+        "original",
     ],
 )
 @pytest.mark.parametrize(
