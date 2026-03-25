@@ -35,9 +35,8 @@ runs:
         if-no-files-found: ignore
 
     - name: Upload full triage output
-      if: ${{ env.TT_TRIAGE_OUTPUT_PATH != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: "triage_output_${{ steps.generate-artifact-name.outputs.artifact-name }}"
-        path: ${{ env.TT_TRIAGE_OUTPUT_PATH }}
+        path: /work/generated/triage_output.txt
         if-no-files-found: ignore

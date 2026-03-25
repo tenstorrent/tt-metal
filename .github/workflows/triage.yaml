@@ -47,7 +47,6 @@ jobs:
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-        TT_TRIAGE_OUTPUT_PATH: /work/generated/triage_output.txt
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -89,13 +88,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Upload full triage output
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: "triage_output_${{ inputs.runner-label }}"
-          path: /work/generated/triage_output.txt
-          if-no-files-found: ignore
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
