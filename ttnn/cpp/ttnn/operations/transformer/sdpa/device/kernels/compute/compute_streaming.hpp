@@ -357,81 +357,100 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
 }
 
 /**
- * SALAD sum correction: out_cb[row] += in0_cb[row] * bcast_cols(in1_cb[row])
- * with L1 accumulate at explicit offset.
- */
-inline void mul_bcast_cols_l1_acc(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock, uint32_t sbh) {
-    const uint32_t tiles_per_row = sbh;
-    const uint32_t read_row_base = q_subblock * tiles_per_row;
-    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
-
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
-    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
-
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        uint32_t src_tile_index = read_row_base + i;
-        mul_tiles_bcast_cols(in0_cb, in1_cb, src_tile_index, src_tile_index, i);
-    }
-    tile_regs_commit();
-
-    tile_regs_wait();
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        pack_tile<true>(i, out_cb, write_row_base + i);
-    }
-    tile_regs_release();
-}
-
-/**
- * SALAD output correction: block multiply with bcast_cols and L1 accumulate.
+ * Fused SALAD correction: output correction + sum correction in one init cycle.
+ * Folds the sum correction tile(s) into the output correction's last DEST batch
+ * when there's room, or appends a minimal extra batch otherwise.
+ * Eliminates the separate init + acquire/release overhead for sum correction.
  */
 template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
-void mul_block_bcast_cols_acc(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock) {
+void salad_correct_fused(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t q_subblock,
+    uint32_t write_q_subblock) {
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
-    // Process columns in batches that fit sbh_t rows in DST.
     constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
+    constexpr uint32_t last_out_cols = (sbw_t % col_batch == 0) ? col_batch : (sbw_t % col_batch);
+    constexpr bool can_fuse_last = (last_out_cols * sbh_t + sbh_t <= dst_size);
+
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
 
-    cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
-    cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
+    mul_bcast_cols_init_short(out_in_cb, bcast_cb);
 
+    cb_wait_front(out_in_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
+    cb_wait_front(sum_in_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(bcast_cb, (q_subblock + 1) * tiles_per_row);
+
+    constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
-        const uint32_t last_batch = tiles_per_column % col_batch;
         const uint32_t cur_cols =
-            (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch > 0 ? last_batch : col_batch);
+            (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch_rem > 0 ? last_batch_rem : col_batch);
+        const bool is_last_out_batch = (col_base + cur_cols >= tiles_per_column);
+        const bool fuse_sum_here = can_fuse_last && is_last_out_batch;
+
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < cur_cols; j++) {
                 uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + col_base + j;
-                mul_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, read_row_base + i, dst_index++);
+                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, read_row_base + i, dst_index++);
+            }
+        }
+        if (fuse_sum_here) {
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, dst_index++);
             }
         }
         tile_regs_commit();
         tile_regs_wait();
         dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_mop_config<false, false, false>(out_cb, cur_cols)));
+        PACK((llk_pack_mop_config<false, false, false>(out_out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
-            pack_tile<true>(dst_index, out_cb, out_tile_index);
+            pack_tile<true>(dst_index, out_out_cb, out_tile_index);
             dst_index += cur_cols;
         }
-        PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
 #else
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < cur_cols; j++) {
                 uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base + j;
-                pack_tile<true>(dst_index++, out_cb, out_tile_index);
+                pack_tile<true>(dst_index++, out_out_cb, out_tile_index);
             }
         }
 #endif
+        if (fuse_sum_here) {
+#ifdef ARCH_BLACKHOLE
+            PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
+#endif
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
+            }
+        }
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_mop_config<false, false, false>(out_out_cb, 1)));
+#endif
+        tile_regs_release();
+    }
+
+    if constexpr (!can_fuse_last) {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
+#endif
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            pack_tile<true>(i, sum_out_cb, write_row_base + i);
+        }
         tile_regs_release();
     }
 }
@@ -925,26 +944,18 @@ static void sdpa_inner_loop_step(
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "S_SUM_CORR");
-                mul_bcast_cols_l1_acc(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad, sbh);
-            }
-            {
-                MaybeDeviceZoneScopedN(profiling_enabled, "S_OUT_CORR");
+                MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
                 if constexpr (has_qktv_remainder) {
-                    // Two instantiations: full subblock height and remainder height.
-                    // The runtime branch selects the correct template instantiation;
-                    // the compiler can eliminate the dead path per call site.
-                    if (sbh != qktv_h) {
-                        static_assert(qktv_remainder_h == 1, "Remainder pack addressing assumes remainder_h == 1");
-                        mul_block_bcast_cols_acc<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
+                    if (sbh == qktv_remainder_h) {
+                        salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
+                            prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
                     } else {
-                        mul_block_bcast_cols_acc<qktv_h, vDHt, dst_size>(
-                            prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
+                        salad_correct_fused<qktv_h, vDHt, dst_size>(
+                            prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
                     }
                 } else {
-                    mul_block_bcast_cols_acc<qktv_h, vDHt, dst_size>(
-                        prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
+                    salad_correct_fused<qktv_h, vDHt, dst_size>(
+                        prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
                 }
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1014,10 +1025,36 @@ static void sdpa_inner_loop_step(
 
             // SALAD corrections for previous group (always full, h=qktv_h)
             if (!is_first_iter) {
-                salad_correct_row(salad_row, w_salad, qktv_h);
-            }
-            // Per-row normalization on last K chunk
-            if (is_last_iter) {
+                // Last main-loop iteration: hoist drain's sub_exp so both salads
+                // (current row and drain row) chain back-to-back with one FPU init.
+                if (q_subblock == total_v_row_groups - 1) {
+                    constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
+                    const uint32_t drain_salad_row =
+                        has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
+
+                    cb_reserve_back(cb_exp_max_diff, drain_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                    cb_push_back(cb_exp_max_diff, drain_h);
+
+                    salad_correct_row(salad_row, w_salad, qktv_h);
+                    if (is_last_iter) {
+                        normalize_row(pushed_rows, qktv_h);
+                    }
+
+                    const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
+                                                                : (qktv_q_num_subblocks - 1 - pushed_rows);
+                    salad_correct_row(drain_salad_row, drain_w, drain_h);
+                    if (is_last_iter) {
+                        normalize_row(pushed_rows, drain_h);
+                    }
+                } else {
+                    salad_correct_row(salad_row, w_salad, qktv_h);
+                    if (is_last_iter) {
+                        normalize_row(pushed_rows, qktv_h);
+                    }
+                }
+            } else if (is_last_iter) {
                 normalize_row(pushed_rows, qktv_h);
             }
 
@@ -1026,29 +1063,28 @@ static void sdpa_inner_loop_step(
         }
 
         // Pipeline drain: SALAD for the last group
-        // When has_remainder, the last group is the remainder (h=qktv_remainder_h).
-        // Otherwise, it's the last full subblock (h=qktv_h).
         {
             constexpr uint32_t drain_h = has_qktv_remainder ? qktv_remainder_h : qktv_h;
-            // For remainder: convert to tile-row index so functions compute correct offsets
-            // when drain_h < qktv_h. For full: use group index as before.
-            const uint32_t drain_row_idx = has_qktv_remainder
-                                               ? (qktv_q_num_subblocks * qktv_h)  // tile-row index for remainder
-                                               : (qktv_q_num_subblocks - 1);      // group index for full subblock
-            const uint32_t w_salad_tile =
-                has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)  // tile offset after pushes
-                                   : (qktv_q_num_subblocks - 1 - pushed_rows);        // group offset after pushes
-
-            if (!is_first_iter) {
-                cb_reserve_back(cb_exp_max_diff, drain_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, drain_row_idx, drain_h);
-                cb_push_back(cb_exp_max_diff, drain_h);
-
-                salad_correct_row(drain_row_idx, w_salad_tile, drain_h);
-            }
-            if (is_last_iter) {
-                normalize_row(pushed_rows, drain_h);
+            if constexpr (total_v_row_groups == 1) {
+                // Single row group: the main loop never ran, so the drain must
+                // perform the full SALAD correction (sub_exp + correct) here.
+                if (!is_first_iter) {
+                    constexpr uint32_t drain_salad_row = 0;
+                    cb_reserve_back(cb_exp_max_diff, drain_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                    cb_push_back(cb_exp_max_diff, drain_h);
+                    salad_correct_row(drain_salad_row, 0, drain_h);
+                }
+                if (is_last_iter) {
+                    normalize_row(pushed_rows, drain_h);
+                }
+            } else {
+                // Drain was hoisted into the last main-loop iteration above.
+                // Only first-K-chunk normalize remains.
+                if (is_first_iter && is_last_iter) {
+                    normalize_row(pushed_rows, drain_h);
+                }
             }
         }
 

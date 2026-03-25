@@ -17,8 +17,14 @@ constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(5);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
 
-using SenderKernelConfigType = SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
+// Select the EDM sender adapter type based on VC_ID:
+// VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+using EdmSenderType = std::conditional_t<VC_ID == 2, WorkerToFabricEdmSenderVC2, WorkerToFabricEdmSender>;
+
+using SenderKernelConfigType =
+    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES, EdmSenderType>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(
@@ -64,7 +70,7 @@ void kernel_main() {
 
     auto send_packets_stateful = [&](){
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
-        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_);
+        auto* conn = static_cast<EdmSenderType*>(traffic_config->connection_ptr_);
         const uint32_t num_packets = traffic_config->metadata.num_packets;
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 

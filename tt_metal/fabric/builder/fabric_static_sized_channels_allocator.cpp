@@ -337,8 +337,10 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         }};
 
-    auto get_num_buffer_slots =
-        [](Topology topology, size_t arch_index, size_t num_active_vcs) -> const std::vector<PerVcBufferSlots>& {
+    auto get_num_buffer_slots = [](Topology topology,
+                                   size_t arch_index,
+                                   bool vc1_present,
+                                   bool vc2_present) -> const std::vector<PerVcBufferSlots>& {
         // Architecture-specific buffer slot configurations per VC, split by active VC count
         // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver, vc2_sender, vc2_receiver}
 
@@ -408,6 +410,29 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 {1, 1, 1, 1, 1, 1}   // Option 6: supports VC0+VC1+VC2, smallest
             }};
 
+        // VC0+VC2 mesh options (no VC1): vc1 slots = 0, vc2 mirrors vc0-only reduced values
+        static const std::vector<std::vector<PerVcBufferSlots>> vc0_vc2_mesh_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {7, 11, 0, 0, 2, 4},  // Option 1: supports VC0+VC2
+                {4, 8, 0, 0, 2, 4},   // Option 2: supports VC0+VC2, smaller VC0
+                {4, 8, 0, 0, 2, 2},   // Option 3: supports VC0+VC2, smaller VC2 receiver
+                {2, 4, 0, 0, 2, 2},   // Option 4: supports VC0+VC2, smaller overall
+                {2, 4, 0, 0, 1, 1},   // Option 5: supports VC0+VC2, smaller overall
+                {2, 2, 0, 0, 1, 1},   // Option 6: supports VC0+VC2, smaller overall
+                {1, 1, 0, 0, 1, 1}    // Option 7: supports VC0+VC2, smallest
+            },
+            // BLACKHOLE
+            {
+                {7, 11, 0, 0, 2, 4},  // Option 1: supports VC0+VC2
+                {4, 8, 0, 0, 2, 4},   // Option 2: supports VC0+VC2, smaller VC0
+                {4, 8, 0, 0, 2, 2},   // Option 3: supports VC0+VC2, smaller VC2 receiver
+                {2, 4, 0, 0, 2, 2},   // Option 4: supports VC0+VC2, smaller overall
+                {2, 4, 0, 0, 1, 1},   // Option 5: supports VC0+VC2, smaller overall
+                {2, 2, 0, 0, 1, 1},   // Option 6: supports VC0+VC2, smaller overall
+                {1, 1, 0, 0, 1, 1}    // Option 7: supports VC0+VC2, smallest
+            }};
+
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
             {{16, 16, 0, 0, 0, 0},  // Only VC0 for non-mesh topologies.
@@ -436,16 +461,22 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             vc0_only_mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_mesh_slots(
             vc0_vc1_mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc2_mesh_slots(
+            vc0_vc2_mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_vc2_mesh_slots(
             vc0_vc1_vc2_mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
             other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
-            if (num_active_vcs >= 3) {
+            // Select table based on which VCs are actually active
+            if (vc1_present && vc2_present) {
                 return vc0_vc1_vc2_mesh_slots.get()[arch_index];
             }
-            if (num_active_vcs >= 2) {
+            if (vc2_present) {
+                return vc0_vc2_mesh_slots.get()[arch_index];
+            }
+            if (vc1_present) {
                 return vc0_vc1_mesh_slots.get()[arch_index];
             }
             return vc0_only_mesh_slots.get()[arch_index];
@@ -518,6 +549,32 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         // Validate that we found a valid option
         if (!found_valid_option) {
+            // Debug: print topology and table info
+            log_warning(tt::LogFabric, "  buffer_slot_options.size(): {}", buffer_slot_options.size());
+            // Debug: print all options tried
+            for (size_t idx = 0; idx < buffer_slot_options.size(); ++idx) {
+                auto& opt = buffer_slot_options[idx];
+                auto total = (num_vc0_sender_channels * opt.vc0_sender_slots +
+                              num_vc0_receiver_channels * opt.vc0_receiver_slots +
+                              num_vc1_sender_channels * opt.vc1_sender_slots +
+                              num_vc1_receiver_channels * opt.vc1_receiver_slots +
+                              num_vc2_sender_channels * opt.vc2_sender_slots +
+                              num_vc2_receiver_channels * opt.vc2_receiver_slots) *
+                             this->channel_buffer_size_bytes;
+                log_warning(
+                    tt::LogFabric,
+                    "  Option {}: vc0({},{}) vc1({},{}) vc2({},{}) = {} bytes (avail: {}, buf_size: {})",
+                    idx,
+                    opt.vc0_sender_slots,
+                    opt.vc0_receiver_slots,
+                    opt.vc1_sender_slots,
+                    opt.vc1_receiver_slots,
+                    opt.vc2_sender_slots,
+                    opt.vc2_receiver_slots,
+                    total,
+                    this->available_channel_buffering_space,
+                    this->channel_buffer_size_bytes);
+            }
             TT_THROW(
                 "Failed to find suitable buffer slot configuration. VC1 needed: {}, VC2 needed: {}, VC0 channels: {} "
                 "senders/{} "
@@ -593,18 +650,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
     size_t vc2_sender_buffer_slots, vc2_receiver_buffer_slots;
 
-    // Determine how many VCs are active based on channel usage
-    size_t num_active_vcs = 1;
-    if (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0) {
-        num_active_vcs = 2;
-    }
-    if (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0) {
-        num_active_vcs = 3;
-    }
+    // Determine which VCs are active based on channel usage
+    bool vc1_present = (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0);
+    bool vc2_present = (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0);
 
-    // Get optimal buffer slots considering all VCs
+    // Get optimal buffer slots considering active VCs
     get_optimal_num_slots_per_vc(
-        get_num_buffer_slots(topology, arch_index, num_active_vcs),
+        get_num_buffer_slots(topology, arch_index, vc1_present, vc2_present),
         num_used_sender_channels_per_vc[0],
         num_used_receiver_channels_per_vc[0],
         num_used_sender_channels_per_vc[1],
