@@ -198,9 +198,10 @@ void MeshBuffer::initialize_device_buffers() {
         }
     }
 
-    // In HYBRID mode, mirror the lockstep allocation into each device's lockstep allocator
+    // In HYBRID mode, mirror the lockstep L1 allocation into each device's lockstep allocator
     // so that per-core allocations on individual devices avoid this address range.
-    if (std::holds_alternative<OwnedBufferState>(state_)) {
+    // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
+    if (std::holds_alternative<OwnedBufferState>(state_) && device_local_config_.buffer_type == BufferType::L1) {
         auto* mesh_allocator = mesh_device->allocator_impl().get();
         if (mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID) {
             auto* backing = get_backing_buffer();
@@ -268,8 +269,9 @@ void MeshBuffer::deallocate() {
         auto* mesh_allocator = mesh_device->allocator_impl().get();
         bool is_hybrid = mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
 
-        if (std::holds_alternative<OwnedBufferState>(state_) && is_hybrid) {
-            // Unmirror lockstep allocation from each device's lockstep allocator
+        if (std::holds_alternative<OwnedBufferState>(state_) && is_hybrid &&
+            device_local_config_.buffer_type == BufferType::L1) {
+            // Unmirror lockstep L1 allocation from each device's lockstep allocator
             for (const auto& [coord, device_buffer] : buffers_) {
                 if (mesh_device->impl().is_local(coord)) {
                     auto* device = mesh_device->impl().get_device(coord);
