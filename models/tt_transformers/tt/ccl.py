@@ -2,55 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
-
 import ttnn
-
-
-def _get_local_num_devices(mesh_device: Optional[ttnn.MeshDevice]) -> int:
-    """Return the number of devices visible to the current host process."""
-    if mesh_device is None:
-        raise ValueError("mesh_device is required to determine CCL link counts")
-
-    try:
-        local_device_ids = mesh_device.get_device_ids()
-    except Exception as exc:
-        raise ValueError("CCL link detection requires at least one host-local device") from exc
-    if not local_device_ids:
-        raise ValueError("CCL link detection requires at least one host-local device")
-
-    return len(local_device_ids)
-
-
-def _determine_ccl_device_name(mesh_device):
-    """Determine the CCL device class using the host-local device count."""
-    num_devices = _get_local_num_devices(mesh_device)
-    arch_name = ttnn.get_arch_name()
-    dram_grid_size = mesh_device.dram_grid_size()
-
-    if "blackhole" in arch_name:
-        dict_device_names = {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-            32: "BHGLX",
-        }
-    elif "wormhole_b0" in arch_name:
-        dict_device_names = {
-            1: "N150",
-            2: "N300",
-            4: "N150x4",
-            8: "T3K",
-            32: "TG",
-        }
-    else:
-        raise ValueError(f"Unsupported architecture: {arch_name}")
-
-    if num_devices in dict_device_names:
-        return dict_device_names[num_devices]
-
-    raise ValueError(f"Unsupported number of local devices: {num_devices} for {arch_name}")
+from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
 
 def get_num_links(mesh_device, cluster_axis=None):
@@ -74,31 +27,7 @@ def get_num_links(mesh_device, cluster_axis=None):
         >>> num_links = get_num_links(mesh_device)
         >>> num_links_axis0 = get_num_links(mesh_device, cluster_axis=0)
     """
-    # Per-axis link counts as (axis0_links, axis1_links) tuples, classified by
-    # the devices visible to the current host process in multihost runs.
-    device_name = _determine_ccl_device_name(mesh_device)
-    link_dict = {
-        "P100": (0, 0),
-        "P150": (0, 0),
-        "N150": (0, 0),
-        "N300": (1, 1),
-        "T3K": (1, 1),
-        "P150x4": (2, 2),
-        "P150x8": (2, 2),
-        "P300": (2, 2),
-        "BHGLX": (2, 2),
-        "TG": (4, 4),
-        "N150x4": (1, 1),
-    }
-    device_links = link_dict[device_name]
-    # When cluster_axis is None, query links across all axes and return the minimum.
-    if cluster_axis is None:
-        return min(device_links)
-    # For explicit cluster_axis values, return the corresponding axis link count
-    # where 0 -> vertical axis and 1 -> horizontal axis.
-    if cluster_axis in (0, 1):
-        return device_links[cluster_axis]
-    raise ValueError(f"Unsupported cluster_axis: {cluster_axis}")
+    return get_common_num_links(mesh_device, cluster_axis)
 
 
 class TT_CCL:
