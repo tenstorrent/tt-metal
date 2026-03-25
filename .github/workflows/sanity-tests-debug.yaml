@@ -170,6 +170,7 @@ jobs:
       platform: "Ubuntu 24.04"
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
+      enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
       schedule-runs-all-tests: false
       run-profiler-regression: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-24.outputs.dev-docker-image }}
