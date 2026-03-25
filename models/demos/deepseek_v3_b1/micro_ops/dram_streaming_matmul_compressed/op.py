@@ -272,13 +272,17 @@ def create_dram_streaming_metadata(
     meta_entries = per_core_N * num_subblocks_k
     meta_tensors = upload_per_core_uint32_tensor(device, all_compute_cores, per_core_block_sizes, meta_entries)
     meta_l1_addr_core_values = [
-        (all_compute_cores[i], meta_tensors[i].buffer_address()) for i in range(num_total_cores)
+        (all_compute_cores[i], meta_tensors[i].per_core_buffer_address(all_compute_cores[i]))
+        for i in range(num_total_cores)
     ]
 
     # Upload per-tile format metadata to L1 (read by TRISC)
     num_tile_entries = subblock_k * num_subblocks_k * per_core_N
     fmt_tensors = upload_per_core_uint32_tensor(device, all_compute_cores, per_core_fmt_pairs, num_tile_entries)
-    fmt_l1_addr_core_values = [(all_compute_cores[i], fmt_tensors[i].buffer_address()) for i in range(num_total_cores)]
+    fmt_l1_addr_core_values = [
+        (all_compute_cores[i], fmt_tensors[i].per_core_buffer_address(all_compute_cores[i]))
+        for i in range(num_total_cores)
+    ]
 
     per_core_values = {
         "bank_id": bank_id_core_values,

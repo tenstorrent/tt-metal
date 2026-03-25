@@ -243,7 +243,10 @@ class MatmulCustomCompressed:
             per_core_descriptors.append(
                 PerCoreCompileTimeDescriptor(
                     named_compile_time_arg="fmt_l1_addr",
-                    core_values=[(all_cores[i], fmt_tensors[i].buffer_address()) for i in range(len(all_cores))],
+                    core_values=[
+                        (all_cores[i], fmt_tensors[i].per_core_buffer_address(all_cores[i]))
+                        for i in range(len(all_cores))
+                    ],
                     other_value=0,
                 )
             )
