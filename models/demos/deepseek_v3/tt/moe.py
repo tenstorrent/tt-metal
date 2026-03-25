@@ -56,7 +56,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert state_dict is not None
 
         return {
-            "moe_gate": MoEGate.convert_weights((state_dict,), output_path / "moe_gate", mesh_device, "gate."),
+            "moe_gate": MoEGate.convert_weights(
+                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
+            ),
             "moe_experts": MoEExperts.convert_weights(
                 hf_config, (state_dict,), output_path / "moe_experts", mesh_device
             ),
