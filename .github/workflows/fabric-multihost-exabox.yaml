@@ -57,7 +57,7 @@ jobs:
           spec: |
             allocationType: MGD
             matchLabels:
-              exabox.tenstorrent.com/purpose: ci-quads
+              exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
               - exabox.tenstorrent.com/quad-id
             mgd: |-
