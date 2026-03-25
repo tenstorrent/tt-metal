@@ -65,6 +65,8 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/binary_ops_fw_test.cpp
+    ops/binary_ops_bw_test.cpp
     utils/memory_utils_test.cpp
 )
 

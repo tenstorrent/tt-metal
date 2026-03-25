@@ -5,6 +5,7 @@
 #include "binary_ops.hpp"
 
 #include <memory>
+#include <stdexcept>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
 #include <ttnn/tensor/tensor.hpp>
@@ -112,10 +113,30 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting
-        a->add_grad(out->get_grad());
-        b->add_grad(ttnn::neg(out->get_grad()));
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(ttnn::moreh_sum(
+                out->get_grad(),
+                get_broadcast_dimensions(a, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+
+        auto neg_grad = ttnn::neg(out->get_grad());
+        if (was_broadcasted(b, neg_grad)) {
+            b->add_grad(ttnn::moreh_sum(
+                neg_grad,
+                get_broadcast_dimensions(b, neg_grad),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(neg_grad);
+        }
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
@@ -131,8 +152,6 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         b->get_value(),
         /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting (or not)
         auto a_grad = ttnn::multiply(
             out->get_grad(),
             b->get_value(),
@@ -142,8 +161,29 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
             a->get_value(),
             /* fast_and_approximate_mode*/ true);
 
-        a->add_grad(a_grad);
-        b->add_grad(b_grad);
+        if (was_broadcasted(a, a_grad)) {
+            a->add_grad(ttnn::moreh_sum(
+                a_grad,
+                get_broadcast_dimensions(a, a_grad),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(a_grad);
+        }
+
+        if (was_broadcasted(b, b_grad)) {
+            b->add_grad(ttnn::moreh_sum(
+                b_grad,
+                get_broadcast_dimensions(b, b_grad),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(b_grad);
+        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
@@ -167,6 +207,9 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
+        if (was_broadcasted(a, out->get_grad()) || was_broadcasted(b, out->get_grad())) {
+            throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");
+        }
         auto res = ttnn::div_bw(out->get_grad(), a->get_value(), b->get_value());
         a->add_grad(res[0].value());
         b->add_grad(res[1].value());
