@@ -284,6 +284,30 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "compute_fabric_connection_rt_args",
+        &tt::tt_fabric::compute_fabric_connection_rt_args,
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("teardown_sem_ids"),
+        nb::arg("buffer_index_sem_ids"),
+        R"(
+            Compute fabric connection RT args without any PD mutation.
+            Pure computation — resolves routing and assembles the flat RT args vector
+            using caller-provided semaphore IDs. No PD needed.
+
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips
+                connection_link_indices: List of link indices (empty for auto-select)
+                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
+                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
+
+            Returns:
+                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
+        )");
+
+    mod.def(
         "get_tt_fabric_packet_header_size_bytes",
         &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
         R"(
