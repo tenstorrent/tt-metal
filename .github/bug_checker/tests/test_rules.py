@@ -1,6 +1,5 @@
 """Tests for rule loading and targeting."""
 
-import pytest
 from bug_checker.rules import Rule, group_rules, load_manifest, load_rules, select_rules
 
 
