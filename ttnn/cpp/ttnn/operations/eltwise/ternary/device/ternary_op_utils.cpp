@@ -256,6 +256,21 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
      {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
 
+    // TTT configurations for MAC - same kernels as LERP, different compute operation
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for MAC
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
@@ -477,6 +492,11 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
+            break;
+        case TernaryOpType::MAC:
+            defines["TERNARY_SFPU_OP_INIT"] = "mac_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] =
+                (dtype == DataType::FLOAT32) ? "mac_tile<DataFormat::Float32>" : "mac_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

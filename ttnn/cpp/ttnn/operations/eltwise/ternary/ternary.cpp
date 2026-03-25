@@ -394,4 +394,42 @@ Tensor lerp(
         std::nullopt);
 }
 
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto broadcast_type = get_broadcast_type(
+        input_tensor_a.logical_shape(), input_tensor_b.logical_shape(), input_tensor_c.logical_shape());
+
+    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_b.dtype()) ||
+                                     is_block_float(input_tensor_c.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+        log_debug(tt::LogOp, "Mac Fallback - TTT");
+        return _mac(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::MAC,
+        input_tensor_a,
+        input_tensor_b,
+        input_tensor_c,
+        ternary_utils::determine_output_dtype(output, input_tensor_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
+        output,
+        sub_core_grids);
+}
+
+Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::add(
+        ttnn::multiply(input_tensor_a, value1, std::nullopt, memory_config), value2, std::nullopt, memory_config);
+}
+
 }  // namespace ttnn

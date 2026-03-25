@@ -146,37 +146,12 @@ Tensor _lerp(
 
     return result;
 }
+
 }  // namespace operations::ternary
 
-// Function: MAC
-// compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
-// being a scalar or tensor
-Tensor mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
-    bool a_is_scalar = a.is_scalar();
-    bool b_is_scalar = b.is_scalar();
-    bool c_is_scalar = c.is_scalar();
-
-    // When 'a' is a tensor, compute a * b + c regardless of whether b and c are scalars or tensors
-    if (!a_is_scalar) {
-        return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    }
-    if (a_is_scalar && !b_is_scalar) {
-        // a - scalar, b - tensor, c - scalar or tensor
-        return ttnn::add(ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    }
-    if (a_is_scalar && b_is_scalar && !c_is_scalar) {
-        // a - scalar, b - scalar, c - is tensor
-        return ttnn::add(c, ttnn::multiply(a, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    }
-
-    // all scalars
-    // a - scalar, b - scalar, c - is scalar
-    TT_ASSERT(a_is_scalar && b_is_scalar && c_is_scalar);
-    return ttnn::add(ttnn::multiply(a, b), c);
-}
-
-// y = a * b + c
-Tensor mac(const Tensor& a, float b, float c, const std::optional<MemoryConfig>& output_mem_config) {
+// Fallback composite implementation for mac (TTT)
+// compute multiply-accumulate: y = a * b + c
+Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 

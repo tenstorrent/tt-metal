@@ -62,4 +62,18 @@ Tensor lerp(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 }  // namespace ttnn

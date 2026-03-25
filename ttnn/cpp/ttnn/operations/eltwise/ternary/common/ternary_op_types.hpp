@@ -22,6 +22,7 @@ enum class TernaryOpType {
     LERP,     // linear interpolation: out = input + weight * (end - input)
     ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
     ADDCDIV,  // fused divide-add: out = input_a + value * input_b / input_c
+    MAC,      // multiply-accumulate: out = a * b + c
 };
 
 // Variant types for ternary operations

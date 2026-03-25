@@ -318,13 +318,20 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-                &ttnn::mac),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<const Tensor&, float, float, const std::optional<MemoryConfig>&>(&ttnn::mac),
             nb::arg("input_tensor_a"),
