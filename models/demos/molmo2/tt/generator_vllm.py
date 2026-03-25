@@ -39,9 +39,9 @@ except ImportError:
 # This bypasses vLLM's multimodal batching which can't handle the irregular shape
 _image_token_pooling_cache = {"last": None}
 
-# Module-level cache for video processing state
-# This is needed because vLLM creates new processor instances for each method call
-_video_processing_cache = {"tokens_expanded": False, "video_data": None}
+# Note: Video processing now uses vLLM's standard multimodal pattern
+# with <|video|> placeholder and _get_prompt_updates() for token replacement.
+# No module-level cache needed.
 
 
 def compute_image_token_pooling(
@@ -181,7 +181,6 @@ from models.demos.molmo2.demo.demo import (
     Molmo2Generator,
     arange_for_pooling,
     create_model,
-    get_video_tokens,
     load_model_weights,
     load_processor,
     normalize_image,
@@ -516,61 +515,44 @@ class Molmo2ProcessorWrapper:
                 num_images = 1 if not isinstance(images, list) else len(images)
                 image_outputs["image_num_crops"] = np.array([1] * num_images)
         elif self._video_data is not None:
-            # For video: create image outputs from our processed video data
+            # For video: create video-specific outputs
+            # vLLM will handle token replacement via _get_prompt_updates
             n_frames = self._video_data["n_frames"]
             pooled_h = self._video_data["pooled_h"]
             pooled_w = self._video_data["pooled_w"]
             image_outputs = {
-                "pixel_values": self._video_data["pixel_values"].numpy(),  # [n_frames, 3, H, W]
-                # Single "image" for vLLM modality tracking (one video = one item)
-                "image_grids": np.array([[pooled_h, pooled_w, 0, 0]]),  # Single entry for video
-                "image_num_crops": np.array([n_frames]),  # All frames as crops of one "image"
+                # Video-specific fields for vLLM multimodal pipeline
+                "pixel_values_videos": self._video_data["pixel_values"].numpy(),  # [n_frames, 3, H, W]
+                "video_grid_thw": np.array([[n_frames, pooled_h, pooled_w]]),  # [1, 3] for 1 video
+                "video_token_pooling": self._video_data["image_token_pooling"].numpy(),  # [n_frames, N_out, K_pool]
             }
-            logger.info(f"    Video image_outputs: pixel_values={image_outputs['pixel_values'].shape}")
+            logger.info(
+                f"    Video outputs: pixel_values_videos={image_outputs['pixel_values_videos'].shape}, "
+                f"video_grid_thw={image_outputs['video_grid_thw']}"
+            )
         else:
             image_outputs = {}
 
-        # Handle text - for video, expand tokens at STRING level like demo
+        # Handle text - keep placeholders, vLLM will handle token replacement
         if text is not None:
             if self._is_video_input and self._video_data is not None:
-                # VIDEO FLOW: Replace <|video|> with demo-style token string BEFORE tokenization
-                n_frames = self._video_data["n_frames"]
-                timestamps = self._video_data["timestamps"]
-                pooled_h = self._video_data["pooled_h"]
-                pooled_w = self._video_data["pooled_w"]
+                # VIDEO FLOW: Keep <|video|> placeholder, vLLM will replace via _get_prompt_updates
+                # Ensure placeholder exists
+                if "<|video|>" not in text and "<|image|>" not in text:
+                    text = "<|video|>" + text
+                    logger.info(f"    Added <|video|> placeholder")
+                elif "<|image|>" in text and "<|video|>" not in text:
+                    # Replace first <|image|> with <|video|> for video input
+                    text = text.replace("<|image|>", "<|video|>", 1)
+                    logger.info(f"    Replaced <|image|> with <|video|> for video input")
 
-                # Generate video token string using demo's get_video_tokens
-                video_tokens_str = get_video_tokens(n_frames, pooled_h, pooled_w, timestamps)
-                logger.info(f"    Generated video_tokens_str (first 100 chars): {video_tokens_str[:100]}...")
-
-                # Replace placeholder at STRING level (demo approach)
-                if "<|video|>" in text:
-                    text = text.replace("<|video|>", video_tokens_str)
-                    logger.info(f"    Replaced <|video|> with video tokens string")
-                elif "<|image|>" in text:
-                    text = text.replace("<|image|>", video_tokens_str, 1)
-                    logger.info(f"    Replaced first <|image|> with video tokens string")
-                else:
-                    # No placeholder, prepend video tokens
-                    text = video_tokens_str + " " + text
-                    logger.info(f"    Prepended video tokens string")
-
-                # Tokenize the expanded string (tokens already expanded)
                 text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
                 logger.info(
-                    f"    Tokenized video prompt: input_ids len={text_inputs['input_ids'].shape if hasattr(text_inputs.get('input_ids', None), 'shape') else 'N/A'}"
+                    f"    Tokenized video prompt (with <|video|> placeholder): "
+                    f"input_ids len={text_inputs['input_ids'].shape if hasattr(text_inputs.get('input_ids', None), 'shape') else 'N/A'}"
                 )
-
-                # For video, we DON'T need vLLM's PromptReplacement - tokens are already expanded
-                # Mark this in module-level cache so _get_mm_fields_config can detect it
-                # (vLLM creates new processor instances for each method call)
-                _video_processing_cache["tokens_expanded"] = True
-                _video_processing_cache["video_data"] = self._video_data
             else:
-                # IMAGE FLOW: Keep placeholder for vLLM's _get_prompt_updates
-                # Clear video cache to ensure proper modality detection
-                _video_processing_cache["tokens_expanded"] = False
-                _video_processing_cache["video_data"] = None
+                # IMAGE FLOW: Keep <|image|> placeholder, vLLM will replace via _get_prompt_updates
                 num_images = 0
                 if images is not None:
                     num_images = len(images) if isinstance(images, list) else 1
@@ -618,22 +600,12 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         """
         Check if HF processor already applied token expansion.
 
-        For VIDEO: Returns True because we expand tokens at string level BEFORE tokenization
-                   (matching demo flow with frame markers and timestamps).
-        For IMAGE: Returns False so vLLM applies prompt updates via _get_prompt_updates.
+        Always returns False - vLLM handles token replacement via _get_prompt_updates
+        for both images (<|image|>) and videos (<|video|>).
         """
         from loguru import logger
 
-        # Check module-level cache for video processing state
-        # (vLLM creates new processor instances for each method call, so instance attrs don't persist)
-        if _video_processing_cache.get("tokens_expanded", False):
-            logger.info("  _hf_processor_applies_updates: True (video tokens already expanded)")
-            # Reset the flag for next request
-            _video_processing_cache["tokens_expanded"] = False
-            return True
-
-        # For images, let vLLM handle token replacement
-        logger.info("  _hf_processor_applies_updates: False (image - vLLM will apply prompt updates)")
+        logger.info("  _hf_processor_applies_updates: False (vLLM will apply prompt updates)")
         return False
 
     def _get_mm_fields_config(
@@ -667,9 +639,9 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             else:
                 logger.info(f"  {key}: type={type(value)}")
 
-        # Check if this is video data (tokens already expanded by processor)
-        # Use module-level cache since vLLM creates new processor instances for each call
-        is_video = _video_processing_cache.get("video_data") is not None
+        # Check if this is video data by looking for video-specific fields in hf_inputs
+        # Video uses pixel_values_videos or video_grid_thw fields
+        is_video = "pixel_values_videos" in hf_inputs or "video_grid_thw" in hf_inputs
 
         # Molmo2 uses image_num_crops instead of num_crops
         num_crops_raw = hf_inputs.get("image_num_crops", None)
@@ -704,17 +676,17 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             logger.info(f"  Cached image_token_pooling: shape={image_token_pooling.shape}")
 
         if is_video:
-            # VIDEO: Use flat_from_sizes to tell vLLM this is 1 video with n_frames
-            # pixel_values: [n_frames, 3, H, W] -> n_frames entries for 1 video
-            # image_grids: [1, 4] -> 1 entry for 1 video
-            # image_num_crops: [1] -> 1 entry for 1 video
-            pixel_values = hf_inputs.get("pixel_values")
-            n_frames = pixel_values.shape[0] if pixel_values is not None else 8
-            logger.info(f"  VIDEO mode: flat_from_sizes config (n_frames={n_frames})")
+            # VIDEO: Use video-specific fields
+            # pixel_values_videos: [n_frames, 3, H, W] -> batched by video
+            # video_grid_thw: [[n_frames, pooled_h, pooled_w]] -> batched by video
+            # video_token_pooling: [n_frames, N_out, K_pool] -> batched by video
+            pixel_values_videos = hf_inputs.get("pixel_values_videos")
+            n_frames = pixel_values_videos.shape[0] if pixel_values_videos is not None else 8
+            logger.info(f"  VIDEO mode: batched config (n_frames={n_frames})")
             return dict(
-                pixel_values=MultiModalFieldConfig.flat_from_sizes("video", np.array([n_frames])),
-                image_grids=MultiModalFieldConfig.flat_from_sizes("video", np.array([1])),
-                image_num_crops=MultiModalFieldConfig.flat_from_sizes("video", np.array([1])),
+                pixel_values_videos=MultiModalFieldConfig.batched("video"),
+                video_grid_thw=MultiModalFieldConfig.batched("video"),
+                video_token_pooling=MultiModalFieldConfig.batched("video"),
             )
         else:
             # IMAGE: Use flat_from_sizes for multi-crop images
@@ -756,10 +728,10 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         hf_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
         tokenizer = self.info.get_tokenizer()
 
-        # Get the <|image|> placeholder token ID
-        # Molmo2 uses "<|image|>" as the placeholder
-        image_placeholder = "<|image|>"
-        image_placeholder_id = tokenizer.convert_tokens_to_ids(image_placeholder)
+        # Get placeholder token IDs
+        # Molmo2 uses "<|image|>" for images and "<|video|>" for videos
+        image_placeholder_id = tokenizer.convert_tokens_to_ids("<|image|>")
+        video_placeholder_id = tokenizer.convert_tokens_to_ids("<|video|>")
 
         def get_replacement_molmo2(item_idx: int) -> list:
             """Generate the replacement tokens for image at item_idx.
@@ -827,64 +799,51 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             )
         ]
 
-        # Also register for video modality - video frames use same replacement
-        # since they're processed as images with <|image|> placeholders
+        # Register video modality replacement if video is present
+        # Video uses <|video|> placeholder which gets replaced with tokens for all frames
         mm_counts = mm_items.get_all_counts()
         if mm_counts.get("video", 0) > 0:
             logger.info(f"  Registering video modality replacement (video count={mm_counts['video']})")
 
             def get_replacement_video(item_idx: int) -> list:
-                """Generate replacement tokens for video frame at item_idx.
+                """Generate replacement tokens for video at item_idx.
 
-                For video, each frame is processed as an image, so we use
-                the same logic as get_replacement_molmo2 but access video frames
-                from out_mm_kwargs["video"] (or "image" as fallback).
+                Video: 8 frames × 196 tokens each = 1568 tokens total.
+                Each frame is 14×14 pooled patches.
                 """
-                import numpy as np
+                # Try to get video data from out_mm_kwargs
+                video_data = out_mm_kwargs.get("video", [])
+                logger.info(f"  get_replacement_video[{item_idx}]: video_data len={len(video_data)}")
 
-                # Video frames are stored in out_mm_kwargs["video"] (after modality fix)
-                # Fallback to "image" for backwards compatibility
-                video_frames = out_mm_kwargs.get("video", out_mm_kwargs.get("image", []))
-                num_frames = len(video_frames)
-                logger.info(f"  get_replacement_video[{item_idx}]: num_frames={num_frames}")
-
-                # For video, we return ALL frame tokens for a single replacement
-                # since the text has one <|image|> placeholder and mm_items has 1 video
-                all_tokens = []
-                for frame_idx in range(num_frames):
-                    try:
-                        out_item = video_frames[frame_idx]
-                        image_grids = out_item.get("image_grids")
-
-                        if image_grids is None:
-                            frame_tokens = 392
+                if len(video_data) > 0 and item_idx < len(video_data):
+                    video_item = video_data[item_idx]
+                    # Check for video_grid_thw which contains [n_frames, pooled_h, pooled_w]
+                    video_grid = video_item.get("video_grid_thw")
+                    if video_grid is not None:
+                        if hasattr(video_grid, "tolist"):
+                            grid = video_grid.tolist()
                         else:
-                            if hasattr(image_grids, "data"):
-                                grid = image_grids.data
-                            else:
-                                grid = image_grids
-                            if isinstance(grid, torch.Tensor):
-                                grid = grid.numpy()
-                            grid = np.array(grid).flatten()
-                            if len(grid) >= 4:
-                                resized_h, resized_w, h, w = int(grid[0]), int(grid[1]), int(grid[2]), int(grid[3])
-                                frame_tokens = resized_h * resized_w + h * w
-                            else:
-                                frame_tokens = 392
+                            grid = list(video_grid)
+                        if len(grid) >= 3:
+                            n_frames, pooled_h, pooled_w = int(grid[0]), int(grid[1]), int(grid[2])
+                            total_tokens = n_frames * pooled_h * pooled_w
+                            logger.info(
+                                f"  get_replacement_video[{item_idx}]: "
+                                f"n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, total={total_tokens}"
+                            )
+                            return [hf_processor.image_patch_id] * total_tokens
 
-                        all_tokens.extend([hf_processor.image_patch_id] * frame_tokens)
-                        logger.info(f"  get_replacement_video: frame {frame_idx} = {frame_tokens} tokens")
-                    except Exception as e:
-                        logger.error(f"  get_replacement_video: Error processing frame {frame_idx}: {e}")
-                        all_tokens.extend([hf_processor.image_patch_id] * 392)
-
-                logger.info(f"  get_replacement_video: total = {len(all_tokens)} tokens")
-                return all_tokens
+                # Default: 8 frames × 196 tokens (14×14 pooled) = 1568 tokens
+                num_frames = 8
+                tokens_per_frame = 196  # 14×14 pooled
+                total_tokens = num_frames * tokens_per_frame
+                logger.info(f"  get_replacement_video[{item_idx}]: using default {total_tokens} tokens")
+                return [hf_processor.image_patch_id] * total_tokens
 
             prompt_replacements.append(
                 PromptReplacement(
                     modality="video",
-                    target=[image_placeholder_id],  # Video uses <|image|> placeholders for each frame
+                    target=[video_placeholder_id],  # Video uses <|video|> placeholder
                     replacement=get_replacement_video,
                 )
             )
@@ -1197,12 +1156,17 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         kv_cache=None,
         prompt_lens=None,
         cross_page_table: Optional[torch.Tensor] = None,
-        enable_trace: bool = False,  # Disabled for vLLM: trace causes hang after multiple runs
+        enable_trace: bool = True,  # Enable traces by default
         sampling_params=None,
+        # Image kwargs
         pixel_values: Optional[List] = None,
         image_token_pooling: Optional[List] = None,
         image_grids: Optional[List] = None,
         image_num_crops: Optional[List] = None,
+        # Video kwargs (NEW)
+        pixel_values_videos: Optional[List] = None,
+        video_grid_thw: Optional[List] = None,
+        video_token_pooling: Optional[List] = None,
         **kwargs,
     ):
         """
@@ -1217,30 +1181,48 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             cross_page_table: Cross-attention page table (not used for Molmo2)
             enable_trace: Whether to use tracing
             sampling_params: Sampling parameters (not used)
-            pixel_values: Pre-processed pixel values from vLLM multimodal processor
-            image_token_pooling: Token pooling indices from vLLM multimodal processor
-            image_grids: Grid info from vLLM multimodal processor
+            pixel_values: Pre-processed pixel values from vLLM (images)
+            image_token_pooling: Token pooling indices for images
+            image_grids: Grid info for images
             image_num_crops: Number of crops per image
-            **kwargs: Additional keyword arguments (ignored)
+            pixel_values_videos: Pre-processed pixel values from vLLM (videos) [n_frames, 3, H, W]
+            video_grid_thw: Video grid info [[n_frames, pooled_h, pooled_w]]
+            video_token_pooling: Token pooling indices for video frames
+            **kwargs: Additional keyword arguments
 
         Returns:
             Logits tensor
         """
         batch_size = tokens.shape[0]
 
+        # NOTE: DO NOT reset KV cache here! vLLM may call prefill_forward for
+        # a new request while a previous request is still decoding. Resetting
+        # would corrupt the in-progress decode state.
+        #
+        # The demo.py's run_prefill already handles position reset internally:
+        # - Prefill always starts at position 0 (writes to KV cache 0..seq_len-1)
+        # - run_prefill calls reset_kv_cache(original_seq_len) after completing
+        # - Decode continues from position original_seq_len
+        #
+        # For proper multi-request support, Molmo2 would need paged attention.
+
         # Debug logging for multimodal kwargs
         logger.info(f"prefill_forward called: batch_size={batch_size}, tokens.shape={tokens.shape}")
         logger.info(f"  pixel_values type: {type(pixel_values)}, len: {len(pixel_values) if pixel_values else 0}")
         logger.info(
-            f"  image_token_pooling type: {type(image_token_pooling)}, len: {len(image_token_pooling) if image_token_pooling else 0}"
+            f"  pixel_values_videos type: {type(pixel_values_videos)}, len: {len(pixel_values_videos) if pixel_values_videos else 0}"
         )
+        logger.info(f"  video_grid_thw: {video_grid_thw}")
         logger.info(f"  image_grids type: {type(image_grids)}, len: {len(image_grids) if image_grids else 0}")
         logger.info(f"  other kwargs: {list(kwargs.keys())}")
-        if "image_grid_thw" in kwargs:
-            logger.info(f"  image_grid_thw: {kwargs['image_grid_thw']}")
         if pixel_values and len(pixel_values) > 0:
             pv0 = pixel_values[0]
             logger.info(f"  pixel_values[0] type: {type(pv0)}, shape: {pv0.shape if hasattr(pv0, 'shape') else 'N/A'}")
+        if pixel_values_videos and len(pixel_values_videos) > 0:
+            pvv0 = pixel_values_videos[0]
+            logger.info(
+                f"  pixel_values_videos[0] type: {type(pvv0)}, shape: {pvv0.shape if hasattr(pvv0, 'shape') else 'N/A'}"
+            )
 
         # vLLM might pass image_grids as None but provide data in kwargs
         # Try to extract from kwargs if not provided directly
@@ -1254,8 +1236,39 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         if prompt_lens is None:
             prompt_lens = torch.tensor([tokens.shape[1]] * batch_size)
 
-        # Check if we have pre-processed pixel_values from vLLM
+        # Convert page_table to ttnn tensor if provided
+        # For traced prefill, pad to match trace tensor shape
+        page_table_tt = None
+        if page_table is not None:
+            page_table_padded = page_table
+            # Check if we need to pad to match trace tensor shape
+            if hasattr(self.generator, "prefill_traces") and self.generator.prefill_traces is not None:
+                # Get trace tensor shape from any prefill trace
+                for seq_len, (trace_id, trace_tensors, trace_output) in self.generator.prefill_traces.items():
+                    if "page_table" in trace_tensors:
+                        trace_page_table_shape = list(trace_tensors["page_table"].shape)
+                        trace_num_blocks = trace_page_table_shape[-1]
+                        actual_num_blocks = page_table.shape[-1]
+                        if actual_num_blocks < trace_num_blocks:
+                            # Pad with zeros to match trace tensor shape
+                            pad_size = trace_num_blocks - actual_num_blocks
+                            page_table_padded = torch.nn.functional.pad(page_table, (0, pad_size), value=0)
+                            logger.debug(f"Padded page_table from {page_table.shape} to {page_table_padded.shape}")
+                        break
+
+            page_table_tt = ttnn.from_torch(
+                page_table_padded,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            logger.info(f"Converted page_table to ttnn: shape={page_table_padded.shape} (original: {page_table.shape})")
+
+        # Check if we have pre-processed data from vLLM
         has_vllm_images = pixel_values is not None and len(pixel_values) > 0
+        has_vllm_videos = pixel_values_videos is not None and len(pixel_values_videos) > 0
 
         # Handle images default for standalone mode
         if images is None:
@@ -1265,8 +1278,83 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         output_logits = []
 
         for user_id in range(batch_size):
-            # Check for vLLM-style pre-processed images first
-            if has_vllm_images and user_id < len(pixel_values) and pixel_values[user_id] is not None:
+            # Check for VIDEO first (new vLLM multimodal flow)
+            if has_vllm_videos and user_id < len(pixel_values_videos) and pixel_values_videos[user_id] is not None:
+                # VIDEO PATH: vLLM provides pixel_values_videos [n_frames, 3, H, W]
+                pvv = pixel_values_videos[user_id]
+                if isinstance(pvv, list) and len(pvv) > 0:
+                    pvv = pvv[0]
+                if isinstance(pvv, torch.Tensor):
+                    pv_tensor = pvv
+                elif hasattr(pvv, "__array__"):
+                    pv_tensor = torch.from_numpy(pvv)
+                else:
+                    pv_tensor = torch.tensor(pvv)
+
+                n_frames = pv_tensor.shape[0]
+                logger.info(f"  prefill_forward[user={user_id}]: VIDEO with {n_frames} frames, shape={pv_tensor.shape}")
+
+                # Get video_token_pooling - shape [n_frames, N_out, K_pool]
+                pooling = None
+                if video_token_pooling is not None and len(video_token_pooling) > user_id:
+                    vtp = video_token_pooling[user_id]
+                    if isinstance(vtp, list) and len(vtp) > 0:
+                        vtp = vtp[0]
+                    if isinstance(vtp, torch.Tensor):
+                        pooling = vtp
+                    elif hasattr(vtp, "__array__"):
+                        pooling = torch.from_numpy(vtp)
+                    else:
+                        pooling = torch.tensor(vtp)
+                    logger.info(f"    video_token_pooling shape: {pooling.shape}")
+
+                    # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
+                    if pooling.dim() == 3:
+                        n_frames_p, n_out, k_pool = pooling.shape
+                        pooling = pooling.reshape(n_frames_p * n_out, k_pool).unsqueeze(0)
+                        logger.info(f"    Reshaped pooling for prefill: {pooling.shape}")
+
+                if pooling is None:
+                    # Generate default pooling for video frames
+                    # Each frame: 14×14 = 196 pooled tokens, pool_size = 2×2 = 4
+                    import numpy as np
+
+                    pooled_h, pooled_w = 14, 14
+                    pool_h, pool_w = 2, 2
+                    patches_per_frame = 27 * 27  # 729
+
+                    all_pooling_idx = []
+                    for frame_idx in range(n_frames):
+                        resize_idx = np.arange(patches_per_frame).reshape(27, 27)
+                        resize_idx = arange_for_pooling(resize_idx, pool_h, pool_w)
+                        resize_idx_flat = resize_idx.reshape(-1, pool_h * pool_w)[: pooled_h * pooled_w, :]
+                        offset = frame_idx * patches_per_frame
+                        frame_pooling = np.where(resize_idx_flat >= 0, resize_idx_flat + offset, resize_idx_flat)
+                        all_pooling_idx.append(frame_pooling)
+
+                    pooling = torch.from_numpy(np.concatenate(all_pooling_idx, axis=0)).long().unsqueeze(0)
+                    logger.info(f"    Generated default video pooling: {pooling.shape}")
+
+                # Run prefill with video data
+                user_tokens = tokens[user_id : user_id + 1]
+                user_prompt_len = (
+                    prompt_lens[user_id].item() if hasattr(prompt_lens[user_id], "item") else prompt_lens[user_id]
+                )
+
+                # Run vision + prefill using generator's run_prefill
+                logits, _ = self.generator.run_prefill(
+                    input_ids=user_tokens,
+                    pixel_values=pv_tensor,
+                    pooled_patches_idx=pooling,
+                    use_trace=enable_trace,
+                    use_vision_trace=enable_trace,
+                    page_table=page_table_tt,
+                )
+                output_logits.append(logits)
+                continue
+
+            # Check for vLLM-style pre-processed images
+            elif has_vllm_images and user_id < len(pixel_values) and pixel_values[user_id] is not None:
                 # vLLM provides pre-processed pixel_values
                 # Two formats:
                 # 1. Demo-style VIDEO: pixel_values[0] is combined tensor [n_frames, 3, H, W]
@@ -1357,6 +1445,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_trace=enable_trace,
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
+                    page_table=page_table_tt,
                 )
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
             else:
@@ -1378,6 +1467,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         use_trace=enable_trace,
                         use_vision_trace=True,  # Vision trace accuracy bug fixed
                         use_unified_trace=False,
+                        page_table=page_table_tt,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
                 else:
@@ -1388,6 +1478,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         pooled_patches_idx=None,
                         use_trace=enable_trace,
                         use_vision_trace=False,
+                        page_table=page_table_tt,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
 
@@ -1425,6 +1516,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logits = logits.unsqueeze(0).unsqueeze(1)  # [vocab] -> [1, 1, vocab]
         elif logits.dim() == 2:
             logits = logits.unsqueeze(1)  # [batch, vocab] -> [batch, 1, vocab]
+
+        # Deallocate page_table_tt if allocated
+        if page_table_tt is not None:
+            ttnn.deallocate(page_table_tt)
 
         logger.info(f"prefill_forward returning: shape={logits.shape}")
         return logits
@@ -1472,6 +1567,35 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Convert page_table to ttnn tensor if provided
+        # For traced decode, pad to match trace tensor shape
+        page_table_tt = None
+        if page_table is not None:
+            page_table_padded = page_table
+            # Check if we need to pad to match trace tensor shape
+            if (
+                hasattr(self.generator, "decode_trace_tensors")
+                and self.generator.decode_trace_tensors is not None
+                and "page_table" in self.generator.decode_trace_tensors
+            ):
+                trace_page_table_shape = list(self.generator.decode_trace_tensors["page_table"].shape)
+                trace_num_blocks = trace_page_table_shape[-1]
+                actual_num_blocks = page_table.shape[-1]
+                if actual_num_blocks < trace_num_blocks:
+                    # Pad with zeros to match trace tensor shape
+                    pad_size = trace_num_blocks - actual_num_blocks
+                    page_table_padded = torch.nn.functional.pad(page_table, (0, pad_size), value=0)
+                    logger.debug(f"Padded page_table from {page_table.shape} to {page_table_padded.shape}")
+
+            page_table_tt = ttnn.from_torch(
+                page_table_padded,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         # Embed tokens
         hidden_states = self.generator.model.text_model.embed_tokens(token_id_ttnn)
 
@@ -1483,12 +1607,24 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         has_trace_tensors = (
             hasattr(self.generator, "decode_trace_tensors") and self.generator.decode_trace_tensors is not None
         )
-        use_traced_decode = enable_trace and has_trace_id and has_trace_tensors
+
+        # Check batch size compatibility - vLLM uses variable batch sizes
+        # Only use trace if batch size matches the trace tensor shape
+        batch_size = tokens.shape[0]
+        trace_batch_compatible = True
+        if has_trace_tensors and "hidden_states" in self.generator.decode_trace_tensors:
+            trace_shape = list(self.generator.decode_trace_tensors["hidden_states"].shape)
+            # trace_shape is [1, 1, trace_batch_size, hidden_dim]
+            trace_batch_size = trace_shape[2] if len(trace_shape) >= 3 else 1
+            if batch_size != trace_batch_size:
+                trace_batch_compatible = False
+
+        use_traced_decode = enable_trace and has_trace_id and has_trace_tensors and trace_batch_compatible
 
         # Log only on first decode to avoid spam
         if not hasattr(self, "_logged_trace_status"):
             logger.info(
-                f"decode_forward trace status: enable_trace={enable_trace}, has_trace_id={has_trace_id}, has_trace_tensors={has_trace_tensors}, use_traced_decode={use_traced_decode}"
+                f"decode_forward trace status: enable_trace={enable_trace}, has_trace_id={has_trace_id}, has_trace_tensors={has_trace_tensors}, batch_compatible={trace_batch_compatible}, use_traced_decode={use_traced_decode}"
             )
             self._logged_trace_status = True
 
@@ -1497,6 +1633,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Copy hidden states into trace input tensor
             ttnn.copy(hidden_states, self.generator.decode_trace_tensors["hidden_states"])
             ttnn.deallocate(hidden_states)
+
+            # Copy page_table to trace tensor if provided (paged attention)
+            if page_table_tt is not None and "page_table" in self.generator.decode_trace_tensors:
+                ttnn.copy(page_table_tt, self.generator.decode_trace_tensors["page_table"])
+                ttnn.deallocate(page_table_tt)
 
             # Execute the captured trace
             ttnn.execute_trace(self.mesh_device, self.generator.decode_trace_id, cq_id=0, blocking=False)
@@ -1509,15 +1650,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 self.generator.rot_mat_idxs
             )
 
+            # Use vLLM's KV cache if provided (paged), otherwise fall back to internal cache
+            if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
+                decode_kv_cache = kv_cache[0]  # Use first data parallel shard
+            else:
+                decode_kv_cache = self.generator.kv_caches
+
             # Run forward_decode directly to get logits (not argmax like run_decode_step)
             logits_ttnn = self.generator.model.text_model.forward_decode(
                 hidden_states=hidden_states,
-                kv_caches=self.generator.kv_caches,
+                kv_caches=decode_kv_cache,
                 current_pos=self.generator.current_pos,
                 rot_mats=rot_mats,
+                page_table=page_table_tt,
             )
             # Deallocate intermediate tensor (only when not using trace)
             ttnn.deallocate(hidden_states)
+            # Deallocate page_table_tt if allocated
+            if page_table_tt is not None:
+                ttnn.deallocate(page_table_tt)
 
         # Increment position counters (must happen OUTSIDE trace for traced decode)
         ttnn.plus_one(self.generator.current_pos)
@@ -1590,6 +1741,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         enable_trace: bool,
         can_sample_on_device: bool = False,
         non_greedy_decoding_on_device: bool = False,
+        num_blocks: int = 64,
+        **kwargs,
     ) -> None:
         """
         Warmup prefill path for Molmo2.
@@ -1597,10 +1750,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         This method is called by tt-inference-server to capture prefill traces.
 
         Args:
-            kv_cache: KV cache tensors (not used - Molmo2 manages its own)
+            kv_cache: KV cache tensors from vLLM (paged format)
             enable_trace: Whether to capture prefill trace
             can_sample_on_device: Whether sampling can happen on device
             non_greedy_decoding_on_device: Whether non-greedy decoding is on device
+            num_blocks: Number of KV cache blocks
         """
         if not enable_trace:
             logger.info("Prefill trace disabled - skipping warmup_model_prefill")
@@ -1608,22 +1762,33 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         logger.info("Warmup: Capturing prefill trace...")
 
-        # Ensure generator is initialized with KV cache
-        if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
-            logger.info("Warmup: Initializing KV cache...")
-            self.generator.init_kv_cache()
+        # Use vLLM's paged KV cache if provided, otherwise fall back to internal cache
+        if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
+            # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
+            # We need to reshape to [layer_idx][k, v] for our model
+            warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
+            logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
+        else:
+            # Fall back to internal generator cache (for non-paged mode)
+            if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
+                logger.info("Warmup: Initializing internal KV cache...")
+                self.generator.init_kv_cache()
+            warmup_kv_cache = self.generator.kv_caches
+            logger.info("Warmup: Using internal KV cache (non-paged mode)")
 
         # Allocate prefill trace tensors for a typical sequence length
         # Use bucket size 256 as default (covers most short prompts)
         warmup_seq_len = 256
         hidden_dim = 4096
 
-        logger.info(f"Warmup: Allocating prefill trace tensors for seq_len={warmup_seq_len}")
-        prefill_trace_tensors = self._allocate_prefill_trace_tensors(warmup_seq_len, hidden_dim)
+        logger.info(f"Warmup: Allocating prefill trace tensors for seq_len={warmup_seq_len}, num_blocks={num_blocks}")
+        prefill_trace_tensors = self._allocate_prefill_trace_tensors(
+            warmup_seq_len, hidden_dim, max_num_blocks=num_blocks
+        )
 
-        # Capture prefill trace
+        # Capture prefill trace with appropriate KV cache
         logger.info("Warmup: Capturing prefill trace...")
-        trace_id, trace_output = self._capture_prefill_trace(prefill_trace_tensors)
+        trace_id, trace_output = self._capture_prefill_trace(prefill_trace_tensors, kv_cache=warmup_kv_cache)
 
         # Store trace for reuse
         if not hasattr(self.generator, "prefill_traces"):
@@ -1646,7 +1811,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         This method is called by tt-inference-server to capture decode traces.
 
         Args:
-            kv_cache: KV cache tensors (not used - Molmo2 manages its own)
+            kv_cache: KV cache tensors from vLLM (paged format)
             enable_trace: Whether to capture decode trace
             max_batch_size: Maximum batch size
             num_blocks: Number of KV cache blocks
@@ -1657,20 +1822,28 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         logger.info("Warmup: Capturing decode trace...")
 
-        # Ensure generator is initialized with KV cache
-        if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
-            logger.info("Warmup: Initializing KV cache...")
-            self.generator.init_kv_cache()
+        # Use vLLM's paged KV cache if provided, otherwise fall back to internal cache
+        if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
+            # vLLM provides kv_cache as [data_parallel_idx][layer_idx][k_or_v]
+            warmup_kv_cache = kv_cache[0]  # Use first data parallel shard
+            logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
+        else:
+            # Fall back to internal generator cache (for non-paged mode)
+            if not hasattr(self.generator, "kv_caches") or self.generator.kv_caches is None:
+                logger.info("Warmup: Initializing internal KV cache...")
+                self.generator.init_kv_cache()
+            warmup_kv_cache = self.generator.kv_caches
+            logger.info("Warmup: Using internal KV cache (non-paged mode)")
 
         # Initialize position tensors if not present
         if not hasattr(self.generator, "current_pos") or self.generator.current_pos is None:
             logger.info("Warmup: Initializing position tensors...")
             self._init_decode_position_tensors()
 
-        # Allocate decode trace tensors
+        # Allocate decode trace tensors with num_blocks matching the KV cache
         hidden_dim = 4096
-        logger.info("Warmup: Allocating decode trace tensors...")
-        decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim)
+        logger.info(f"Warmup: Allocating decode trace tensors (num_blocks={num_blocks})...")
+        decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim, max_num_blocks=num_blocks)
 
         # Create dummy hidden states for trace capture
         dummy_hidden = ttnn.allocate_tensor_on_device(
@@ -1683,9 +1856,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.copy(dummy_hidden, decode_trace_tensors["hidden_states"])
         ttnn.deallocate(dummy_hidden)
 
-        # Capture decode trace
+        # Capture decode trace with appropriate KV cache
         logger.info("Warmup: Capturing decode trace...")
-        trace_id, trace_output = self._capture_decode_trace(decode_trace_tensors)
+        trace_id, trace_output = self._capture_decode_trace(decode_trace_tensors, kv_cache=warmup_kv_cache)
 
         # Store trace for reuse
         self.generator.decode_trace_id = trace_id
@@ -1720,13 +1893,14 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         self.generator.decode_position = 0
 
-    def _allocate_prefill_trace_tensors(self, seq_len: int, hidden_dim: int = 4096) -> dict:
+    def _allocate_prefill_trace_tensors(self, seq_len: int, hidden_dim: int = 4096, max_num_blocks: int = 64) -> dict:
         """
         Pre-allocate all tensors needed for traced prefill.
 
         Args:
             seq_len: Sequence length for this trace bucket
             hidden_dim: Hidden dimension (default 4096 for Molmo2-8B)
+            max_num_blocks: Maximum number of blocks per sequence for page_table
 
         Returns:
             Dict with allocated trace tensors
@@ -1768,25 +1942,42 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.deallocate(rot_mats[0])
         ttnn.deallocate(rot_mats[1])
 
+        # Allocate page_table trace tensor for paged attention
+        # Shape: [batch_size=1, max_num_blocks]
+        trace_page_table = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, max_num_blocks]),
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         return {
             "hidden_states": trace_hidden_states,
             "cos": trace_cos,
             "sin": trace_sin,
             "seq_len": seq_len,
+            "page_table": trace_page_table,
         }
 
-    def _capture_prefill_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+    def _capture_prefill_trace(self, trace_tensors: dict, kv_cache=None) -> Tuple[int, ttnn.Tensor]:
         """
         Capture trace for text model prefill phase.
 
         Args:
             trace_tensors: Dict with pre-allocated trace tensors
+            kv_cache: KV cache tensors to use (paged vLLM cache or internal cache)
 
         Returns:
             Tuple of (trace_id, logits_trace_output)
         """
         logger.info("Capturing text model prefill trace...")
         rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+        page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors
+
+        # Use provided kv_cache or fall back to internal cache
+        if kv_cache is None:
+            kv_cache = self.generator.kv_caches
 
         # CRITICAL: Run a warmup forward pass BEFORE trace capture
         # This ensures all lazy tensor allocations and weight transfers happen
@@ -1796,8 +1987,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             hidden_states=trace_tensors["hidden_states"],
             start_pos=0,
             attn_mask=None,
-            kv_caches=self.generator.kv_caches,
+            kv_caches=kv_cache,
             rot_mats=rot_mats,
+            page_table=page_table,  # Compile paged attention ops
         )
         ttnn.deallocate(warmup_logits)
         logger.info("Warmup forward pass complete")
@@ -1808,21 +2000,23 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             hidden_states=trace_tensors["hidden_states"],
             start_pos=0,
             attn_mask=None,
-            kv_caches=self.generator.kv_caches,
+            kv_caches=kv_cache,
             rot_mats=rot_mats,
+            page_table=page_table,  # Capture with paged attention ops
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        logger.info("Text model prefill trace captured")
+        logger.info("Text model prefill trace captured with paged attention")
 
         return trace_id, logits_trace
 
-    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096) -> dict:
+    def _allocate_decode_trace_tensors(self, hidden_dim: int = 4096, max_num_blocks: int = 64) -> dict:
         """
         Allocate tensors needed for traced decode.
 
         Args:
             hidden_dim: Hidden dimension (default 4096 for Molmo2-8B)
+            max_num_blocks: Maximum number of blocks per sequence for page_table
 
         Returns:
             Dict with allocated trace tensors
@@ -1835,11 +2029,22 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Allocate page_table trace tensor for paged attention
+        # Shape: [batch_size=1, max_num_blocks]
+        trace_page_table = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, max_num_blocks]),
+            ttnn.int32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         return {
             "hidden_states": trace_hidden_states,
+            "page_table": trace_page_table,
         }
 
-    def _capture_decode_trace(self, trace_tensors: dict) -> Tuple[int, ttnn.Tensor]:
+    def _capture_decode_trace(self, trace_tensors: dict, kv_cache=None) -> Tuple[int, ttnn.Tensor]:
         """
         Capture trace for decode phase (single token generation).
 
@@ -1847,13 +2052,23 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.plus_one outside the trace). KV cache position reads from
         self.generator.current_pos (also managed via ttnn.plus_one outside the trace).
 
+        The trace includes paged attention operations with page_table as an input.
+        Before each trace execution, the actual page_table values are copied to
+        the trace_tensors["page_table"] tensor.
+
         Args:
             trace_tensors: Dict with pre-allocated trace tensors
+            kv_cache: KV cache tensors to use (paged vLLM cache or internal cache)
 
         Returns:
             Tuple of (trace_id, logits_trace_output)
         """
         logger.info("Capturing decode trace...")
+        page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors
+
+        # Use provided kv_cache or fall back to internal cache
+        if kv_cache is None:
+            kv_cache = self.generator.kv_caches
 
         # CRITICAL: Run a warmup forward pass BEFORE trace capture
         # This ensures all lazy tensor allocations and weight transfers happen
@@ -1865,9 +2080,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         warmup_logits = self.generator.model.text_model.forward_decode(
             hidden_states=trace_tensors["hidden_states"],
-            kv_caches=self.generator.kv_caches,
+            kv_caches=kv_cache,
             current_pos=self.generator.current_pos,
             rot_mats=warmup_rot_mats,
+            page_table=page_table,  # Compile paged attention ops
         )
         ttnn.deallocate(warmup_logits)
         logger.info("Warmup decode forward pass complete")
@@ -1876,15 +2092,17 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         rot_mats = self.generator.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.generator.rot_mat_idxs)
 
+        # Capture trace WITH paged attention - page_table is a trace input tensor
         logits_trace = self.generator.model.text_model.forward_decode(
             hidden_states=trace_tensors["hidden_states"],
-            kv_caches=self.generator.kv_caches,
+            kv_caches=kv_cache,
             current_pos=self.generator.current_pos,
             rot_mats=rot_mats,
+            page_table=page_table,  # Capture with paged attention ops
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        logger.info("Decode trace captured")
+        logger.info("Decode trace captured with paged attention support")
 
         return trace_id, logits_trace
 
