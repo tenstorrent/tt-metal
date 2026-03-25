@@ -19,6 +19,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
@@ -411,7 +412,11 @@ def test_pre_sdpa(
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    position_ids = torch.tensor([position_id])  # [batch]
+    metadata = DeepseekMetadata(position_id=position_id)
+    metadata_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # Create cos/sin matrices in Meta-style format
     base = 10000.0
@@ -614,24 +619,6 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
     # KV Cache tensor in DRAM sharded
     # Create KV cache (non-paged) based on max seq len
     program_config = FlashMLADecode.ProgramConfig(
@@ -701,7 +688,7 @@ def test_pre_sdpa(
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
             position_id,
-            ttnn_position_ids,
+            ttnn_metadata_tensor,
             scale,
             ttnn_output,
             sdpa_kv_cache_buffer,

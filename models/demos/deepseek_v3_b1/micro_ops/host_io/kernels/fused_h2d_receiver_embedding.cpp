@@ -19,10 +19,10 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t num_whole_fabric_packets_per_link = get_compile_time_arg_val(8);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(9);
 constexpr bool use_fabric = get_compile_time_arg_val(10);
-constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(11);
-constexpr uint32_t embedding_page_size = get_compile_time_arg_val(12);
-constexpr uint32_t embedding_addr = get_compile_time_arg_val(13);
-constexpr uint32_t downstream_socket_page_size = get_compile_time_arg_val(14);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(11);
+constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(12);
+constexpr uint32_t embedding_page_size = get_compile_time_arg_val(13);
+constexpr uint32_t embedding_addr = get_compile_time_arg_val(14);
 // TensorAccessorArgs for embedding tensor at CT arg index 15
 constexpr auto embedding_args = TensorAccessorArgs<15>();
 
@@ -201,12 +201,15 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
+    DPRINT << "TOKEN PAGE SIZE: " << token_page_size << ENDL();
+
     while (true) {
         // Wait for pages in H2D socket
-        DPRINT << ">wspwt" << ENDL();
+        DPRINT << "H2D RECEIVER WAIT FOR PAGES" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D RECEIVER WAIT FOR PAGES DONE" << ENDL();
         if constexpr (pull_from_host) {
             DPRINT << ">rw" << ENDL();
             // Pages available in H2D socket - read over PCIe
@@ -220,6 +223,7 @@ void kernel_main() {
             noc_async_read_barrier();
             DPRINT << "<rw" << ENDL();
         }
+        DPRINT << "H2D RECEIVER READ OVER PCIe DONE" << ENDL();
 
         // TODO: Add and assert that token id is within vocab size
         volatile tt_l1_ptr uint32_t* token_id_ptr =
@@ -228,7 +232,16 @@ void kernel_main() {
         // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
-        noc_async_read(noc_addr, l1_write_addr, 14336);
+        noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
+
+        volatile tt_l1_ptr uint32_t* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr + embedding_page_size);
+        uint32_t num_metadata_words = metadata_size_bytes / sizeof(uint32_t);
+
+        for (uint32_t md_idx = 0; md_idx < num_metadata_words; ++md_idx) {
+            metadata_ptr[md_idx] = token_id_ptr[md_idx];
+        }
+
         noc_async_read_barrier();
 
         if constexpr (loopback_mode) {

@@ -16,6 +16,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
 
@@ -143,22 +144,11 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
     )
 
     device_grid_size = device.compute_with_storage_grid_size()
-    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
+    metadata = DeepseekMetadata(position_id=position_id)
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=pos_mem_config,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(device, metadata_core_grid, metadata)
 
     # Create output tensor with same sharded memory config and tiny tile as input
     torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
@@ -177,7 +167,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
         tt_cos,
         tt_sin,
         tt_trans_replicated,
-        ttnn_position_ids,
+        ttnn_metadata_tensor,
         tt_out,
     )
 
@@ -320,22 +310,11 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tile=trans_tile,
     )
     device_grid_size = device.compute_with_storage_grid_size()
-    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
+    metadata = DeepseekMetadata(position_id=position_id)
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=pos_mem_config,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(device, metadata_core_grid, metadata)
 
     # Create output tensor with same sharded memory config and tiny tile as input
     torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
@@ -354,7 +333,7 @@ def test_rope_decode_yarn(device, batch, num_heads, head_dim, position_id, pcc):
         tt_cos,
         tt_sin,
         tt_trans,
-        ttnn_position_ids,
+        ttnn_metadata_tensor,
         tt_out,
     )
 

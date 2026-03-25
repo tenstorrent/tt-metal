@@ -14,6 +14,7 @@
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rope.hpp"
+#include "../../../metadata/metadata.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -36,7 +37,6 @@ void kernel_main() {
     constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
     constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
     constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
-    constexpr uint32_t position_ids_tensor_address = get_named_compile_time_arg_val("position_ids_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
 
     unified_kernels::setup_sharded_buffer(in_cb, Wt);
@@ -47,7 +47,7 @@ void kernel_main() {
         .cos_sin_cb = cos_sin_cb,
         .cos_tensor_address = cos_tensor_address,
         .sin_tensor_address = sin_tensor_address,
-        .position_ids_tensor_address = position_ids_tensor_address,
+        .global_pos = 0,
     };
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -87,6 +87,15 @@ void kernel_main() {
     // RoPE operation
     // CTArgs, IsActiveCore
     // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+    volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+        reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+    uint32_t cur_pos = metadata_ptr->position_id;
+#endif
     deepseek_b1_ops::Rope::Op<RopeCTArgs, Core::is_active_core> rope;
+#if defined(COMPILE_FOR_NCRISC)
+    rope.set_global_pos(rope_args, cur_pos);
+#endif
     rope(rope_args);
 }

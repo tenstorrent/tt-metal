@@ -10,6 +10,7 @@
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/kv_cache_update.hpp"
+#include "../../../metadata/metadata.hpp"
 
 struct Core {
     static constexpr bool is_nope_core = get_named_compile_time_arg_val("is_nope_core") == 1;
@@ -29,6 +30,7 @@ void kernel_main() {
     deepseek_b1_ops::KVCacheUpdate::WriterArgs args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
         .local_cur_pos = 0,
+        .slot_id = 0,
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
@@ -46,6 +48,7 @@ void kernel_main() {
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
         .local_cur_pos = 0,
+        .slot_id = 0,
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
     };
@@ -62,9 +65,10 @@ void kernel_main() {
     deepseek_b1_ops::KVCacheUpdate::Op<Core::is_nope_core, Core::is_rope_core> op;
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
     {
-        uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
-        volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
-        op.set_local_cur_pos(args, pos_ptr[0]);
+        uint32_t metadata_addr = get_common_arg_val<uint32_t>(1);
+        volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+        op.set_pos_and_slot(args, metadata_ptr->position_id, metadata_ptr->slot_id);
     }
 #endif
     op(args);

@@ -32,10 +32,11 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_br
 TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
+FIFO_PAGE_SIZE = 1
 
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
-PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * FIFO_PAGE_SIZE
+PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 # Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
 EMBEDDING_H2D_CORE_COORD = ttnn.CoreCoord(12, 0)
@@ -101,23 +102,31 @@ class StageKind(ABC):
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
 
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, *, d2h_page_size: int | None = None) -> None:
+    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, forward_metadata: bool = True) -> None:
         self._weights = weights
+        self._forward_metadata = forward_metadata
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] EmbeddingStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
+
+        activation_fifo_size = ACTIVATION_W_METADATA_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
+        activation_page_size = (
+            ACTIVATION_W_METADATA_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
+        )
+
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
             upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_fifo_size=activation_fifo_size,
+            upstream_d2d_socket_page_size=TOKEN_FIFO_SIZE,
+            downstream_d2d_socket_page_size=activation_page_size,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
+            forward_metadata=self._forward_metadata,
         )
 
 
@@ -125,7 +134,7 @@ class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
     TOKEN_META = "token_meta"
-    ACTIVATION_W_TOKEN_META = "activation_w_token_meta"
+    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = "activation_w_token_meta"
 
 
 class PassthroughStage(StageKind):
@@ -141,7 +150,7 @@ class PassthroughStage(StageKind):
         if self._payload == PassthroughPayload.ACTIVATION:
             up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
             up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
-        elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META:
+        elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES:
             up_fifo = down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
             up_page = down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         elif self._payload == PassthroughPayload.TOKEN_META:
@@ -1008,7 +1017,7 @@ class _CombinedPipelineBlock:
 
     Wires three independent socket paths on the same mesh:
     - H2D (token from host) -> fused embedding -> exit D2D (activation to P1)
-    - Entry D2D (ACTIVATION_W_TOKEN_META from P3) -> SpecLMHead input (LMHEAD_INPUT_CORE)
+    - Entry D2D (ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES from P3) -> SpecLMHead input (LMHEAD_INPUT_CORE)
     - SpecLMHead output (ARGMAX_FINAL_CORE) -> D2H (TOKEN_META to host)
 
     The broadcast sender and argmax final device are co-located with the
@@ -1038,7 +1047,10 @@ class _CombinedPipelineBlock:
         next_stage_entry_coord = pipeline_config[my_mesh_id + 1].entry_node_coord
         prev_stage_exit_coord = pipeline_config[num_procs - 1].exit_node_coord
 
-        print(f"[COMBINED P{my_mesh_id}] h2d_device_coord={h2d_device_coord} exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}", flush=True)
+        print(
+            f"[COMBINED P{my_mesh_id}] h2d_device_coord={h2d_device_coord} exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}",
+            flush=True,
+        )
 
         embedding_size_bytes = embedding_tensor.shape[-1] * 2  # bfloat16
         assert ACTIVATION_PAGE_SIZE_BYTES == embedding_size_bytes
@@ -1061,6 +1073,7 @@ class _CombinedPipelineBlock:
             h2d_downstream_core=ttnn.MeshCoreCoord(exit_node_coord, PIPELINE_CORE_COORD),
             embedding_tensor=embedding_tensor,
             downstream_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 
         self.exit_socket_interface = SocketInterface(
@@ -1079,7 +1092,7 @@ class _CombinedPipelineBlock:
         self.spec_entry_coord = spec_root_device_coord
         self.entry_socket_interface = SocketInterface(
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
-            ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             ttnn.MeshCoreCoord(prev_stage_exit_coord, PIPELINE_CORE_COORD),
             ttnn.MeshCoreCoord(loopback_entry_coord, PIPELINE_CORE_COORD),
@@ -1105,6 +1118,7 @@ class _CombinedPipelineBlock:
             TOKEN_META_PAGE_SIZE_BYTES,
             core_to_core_socket_buffer_size=TOKEN_META_FIFO_SIZE,
             d2h_upstream_core=ttnn.MeshCoreCoord(spec_exit_device_coord, argmax_final_core),
+            metadata_size_bytes=TOKEN_META_PAGE_SIZE_BYTES,
         )
 
         print(

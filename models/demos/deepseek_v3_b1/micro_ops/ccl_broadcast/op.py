@@ -78,6 +78,7 @@ class BroadcastConfig:
         num_links=1,
         fabric_config=None,
         broadcast_topology_override=None,
+        tensor_size_bytes=None,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
@@ -123,9 +124,9 @@ class BroadcastConfig:
                 f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
             )
         self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
-        print(f"[BroadcastConfig] num_pages_to_read={self.num_pages_to_read}", flush=True)
-        self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
-        print(f"[BroadcastConfig] tensor_size_bytes={self.tensor_size_bytes}", flush=True)
+        self.tensor_size_bytes = (
+            tensor_size_bytes if tensor_size_bytes is not None else self.tensor0_page_size * self.num_pages_to_read
+        )
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
         if self.socket is not None:
@@ -499,6 +500,7 @@ class DeepseekMinimalBroadcast:
         *,
         fabric_config=None,
         broadcast_topology_override=None,
+        tensor_size_bytes=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -524,6 +526,7 @@ class DeepseekMinimalBroadcast:
             num_links=num_links,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
+            tensor_size_bytes=tensor_size_bytes,
         )
 
     @staticmethod

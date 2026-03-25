@@ -296,6 +296,8 @@ bool socket_wait_for_pages(
             return false;
         }
     } while (bytes_recv < num_bytes);
+    DPRINT << "Bytes received: " << bytes_recv << " Bytes sent: " << *bytes_sent_ptr
+           << " Bytes acknowledged: " << socket.bytes_acked << " Num bytes: " << num_bytes << ENDL();
     return true;
 #endif
     return true;

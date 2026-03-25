@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 )
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
@@ -58,6 +59,7 @@ from models.demos.deepseek_v3_b1.utils import generate_mm_weights
         pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -85,6 +87,8 @@ def test_attention_block(
     num_iters,
     max_seq_len,
     position_id,
+    slot_id,
+    num_slots,
     device_params,
     noc_mode,
     num_internal_iterations,
@@ -117,6 +121,7 @@ def test_attention_block(
 
     per_device_max_seq_len = max_seq_len // mesh_rows
     assert position_id < max_seq_len, f"Position ID {position_id} must be less than max sequence length {max_seq_len}"
+    assert slot_id < num_slots, f"Slot ID {slot_id} must be less than number of slots {num_slots}"
 
     # Head configuration
     NUM_QNOPE_HEADS = 64
@@ -311,7 +316,11 @@ def test_attention_block(
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    position_ids = torch.tensor([position_id])  # [batch]
+    metadata = DeepseekMetadata(position_id=position_id, slot_id=slot_id)
+    metadata_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
     # Create cos/sin matrices in Meta-style format
     base = 10000.0
@@ -533,24 +542,6 @@ def test_attention_block(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
-    pos_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    pos_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        position_replicated,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
     # KV Cache tensor in DRAM sharded
     # Create KV cache (non-paged) based on max seq len
     program_config = FlashMLADecode.ProgramConfig(
@@ -559,7 +550,7 @@ def test_attention_block(
     )
     logger.info(f"Creating KV cache with per-device seq_len={per_device_max_seq_len}, total_seq_len={max_seq_len}...")
     kvpe_dim = KNOPE_DIM + KROPE_DIM
-    cache_shape = (1, 1, max_seq_len, kvpe_dim)
+    cache_shape = (num_slots, 1, max_seq_len, kvpe_dim)
 
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
@@ -596,7 +587,9 @@ def test_attention_block(
         memory_config=kv_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None)),
     )
-    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_bfp8_before_op = ttnn.to_torch(
+        ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
     # Post-SDPA setup
     # Set up sub-device (not supported in slow dispatch mode)
@@ -863,7 +856,7 @@ def test_attention_block(
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
-            ttnn_position_ids,
+            ttnn_metadata_tensor,
             scale,
             ttnn_output,
             sdpa_kv_cache_buffer,
@@ -894,7 +887,10 @@ def test_attention_block(
         )
     ttnn.synchronize_device(submesh)
 
-    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_output_torch_flat = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim
+    )
 
     # If True, validate the local FlashMLA output before SDPA AllReduce
     # Need to uncomment and use ttnn_output_tensor as the backing buffer for mla_out_o_cb
@@ -928,7 +924,7 @@ def test_attention_block(
         torch_matmul3_weights,
         torch_sin,
         torch_cos,
-        position_ids,
+        metadata,
         torch_dkv_matmul_weights,
         torch_dkv_rmsnorm_gamma,
         torch_kv_cache,
@@ -973,7 +969,7 @@ def test_attention_block(
             if local_len == 0:
                 return None, 0
             shard_offset = sp_idx * per_device_max_seq_len
-            local_kv = torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+            local_kv = torch_kv_cache_shuffled[slot_id : slot_id + 1, :, shard_offset : shard_offset + local_len, :]
             return local_kv, local_len
 
         pre_sdpa_golden_args = dict(
@@ -1035,14 +1031,25 @@ def test_attention_block(
 
         # ---- KV Cache: old positions must be unchanged ----
         assert torch.equal(
-            kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
-            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+            kv_cache_bfp8_before_op[device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
         ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
         logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
+        # ---- KV Cache: other slots must be completely unchanged ----
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                kv_cache_bfp8_before_op[device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
+
         # ---- KV Cache new-position check (owning device only) ----
         if sp_group == owning_sp_device:
-            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
             expected_nope = golden_new_kv[..., :KNOPE_DIM]
             expected_rope = golden_new_kv[..., KNOPE_DIM:]
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]

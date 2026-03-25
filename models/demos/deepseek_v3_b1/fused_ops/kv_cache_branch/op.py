@@ -69,7 +69,7 @@ class KVCacheBranch:
         trans_mat_tensor,
         output_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -83,7 +83,7 @@ class KVCacheBranch:
             cos_tensor: Cos tensor (must be sharded)
             sin_tensor: Sin tensor (must be sharded)
             kv_cache_tensor: Optional KV cache tensor in DRAM (interleaved) to write results to
-            position_ids_tensor: Sequence position index to write to in KV cache
+            metadata_tensor: Metadata tensor containing position and slot info
             epsilon: Epsilon for RMSNorm
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -126,7 +126,7 @@ class KVCacheBranch:
         # KV Cache tensor setup
         # Tile size is now derived from output CB in kernel using get_tile_size()
         kv_cache_buffer_addr = kv_cache_tensor.buffer_address()
-        position_ids_tensor_addr = position_ids_tensor.buffer_address()
+        metadata_tensor_addr = metadata_tensor.buffer_address()
         kv_cache_tile = kv_cache_tensor.get_tile()
         # Calculate starting tile ID based on write index
         # KV cache shape is [1, 1, seq_len, kv_dim], tiles are [32, 32]
@@ -278,7 +278,6 @@ class KVCacheBranch:
             ("cos_sin_cb", cos_sin_cb),
             ("cos_tensor_address", cos_tensor_address),
             ("sin_tensor_address", sin_tensor_address),
-            ("position_ids_tensor_address", position_ids_tensor_addr),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", krope_Wt),
             ("Ht", krope_Ht),
@@ -441,6 +440,9 @@ class KVCacheBranch:
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
             + krope_ncrisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[
+                metadata_tensor_addr,
+            ],
             # BRISC named compile-time args
             brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
@@ -448,7 +450,7 @@ class KVCacheBranch:
             # BRISC common runtime args: KV cache buffer address and write position
             brisc_common_runtime_args=[
                 kv_cache_buffer_addr,
-                position_ids_tensor_addr,
+                metadata_tensor_addr,
             ],
             # TRISC named compile-time args
             trisc_named_compile_time_args=kv_rmsnorm_trisc_named_compile_time_args

@@ -129,6 +129,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
+    DPRINT << "D2D EXCHANGE KERNEL START" << ENDL();
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
@@ -148,6 +149,7 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     DPRINT << "Starting d2d exchange kernel" << ENDL();
+    DPRINT << "PAGE SIZE: " << page_size << ENDL();
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,

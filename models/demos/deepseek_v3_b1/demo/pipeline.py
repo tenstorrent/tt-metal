@@ -162,7 +162,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
             weights=weight_provider.load_lm_head(device),
-            embedding_weights=weight_provider.load_embedding(device),
+            embedding_weights=weight_provider.load_embedding(device, True),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
@@ -209,10 +209,7 @@ def create_single_pod_pipeline_configuration(
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(
-            weight_provider.load_embedding(device),
-            d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
-        )
+        return EmbeddingStage(weight_provider.load_embedding(device, True), forward_metadata=True)
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         mtp_weights = weight_provider.load_mtp_weights(device) if enable_mtp else None
@@ -228,12 +225,14 @@ def create_single_pod_pipeline_configuration(
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
@@ -269,7 +268,7 @@ def create_sp4_pipeline_configuration(
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
-            weight_provider.load_embedding(device),
+            weight_provider.load_embedding(device, True),
             d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
         )
 
@@ -285,14 +284,16 @@ def create_sp4_pipeline_configuration(
 
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)

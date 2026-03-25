@@ -39,6 +39,7 @@
 #include "../../../unified_kernels/kv_cache_update.hpp"
 #include "../../../unified_kernels/flash_mla.hpp"
 #include "../../../micro_ops/flash_mla/kernels/rt_args_common.hpp"
+#include "../../../metadata/metadata.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -184,7 +185,8 @@ if constexpr (!Core::skip_ccl) {
         .cos_sin_cb = get_named_compile_time_arg_val("qrope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address")};
+        .global_pos = 0,
+    };
 
     // NCRISC: All CreateQHeads data movement (sender on qnope/qrope cores, receiver on sdpa input cores)
     constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
@@ -267,11 +269,13 @@ if constexpr (!Core::skip_ccl) {
         .cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address")};
+        .global_pos = 0,
+    };
 
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(5),
-        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
+        .local_cur_pos = 0,  // set via kv_cache_update.set_pos_and_slot() below
+        .slot_id = 0,        // set via kv_cache_update.set_pos_and_slot() below
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
         .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
@@ -303,7 +307,8 @@ if constexpr (!Core::skip_ccl) {
         per_core_rta_arg_idx += num_tree_reduction_steps * 4;
 
         flash_mla_args = {
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
+            .slot_id = 0,        // set via flash_mla.set_pos_and_slot() below
             .cur_batch = cur_batch,
             .core_num_in_reduce = core_num_in_reduce,
             .is_output_core = is_output_core,
@@ -473,7 +478,8 @@ if constexpr (!Core::skip_ccl) {
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
-        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
+        .local_cur_pos = 0,  // set via kv_cache_update.set_pos_and_slot() below
+        .slot_id = 0,        // set via kv_cache_update.set_pos_and_slot() below
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
     };
@@ -482,7 +488,8 @@ if constexpr (!Core::skip_ccl) {
     if constexpr (Core::is_mla_core) {
         flash_mla_args = {
             .k_addr = get_common_arg_val<uint32_t>(0),
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
+            .slot_id = 0,        // set via flash_mla.set_pos_and_slot() below
             .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -698,9 +705,10 @@ if constexpr (!Core::skip_ccl) {
         per_core_rta_arg_idx += num_tree_reduction_steps * 2;
 
         flash_mla_args = {
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
             .do_reduce = do_reduce,
             .do_output = do_output,
+            .slot_id = 0,  // set via flash_mla.set_pos_and_slot() below
             .cur_batch = cur_batch,
             .core_num_in_reduce = core_num_in_reduce,
             .is_sender_after_reduce = is_sender_after_reduce,
@@ -794,11 +802,11 @@ if constexpr (!Core::skip_ccl) {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(6);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(6);
 #elif defined(COMPILE_FOR_TRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(7);
 #endif
 
     // ========================================================================
@@ -844,8 +852,9 @@ if constexpr (!Core::skip_ccl) {
     // work / owns the current KV-cache slot. The normalized (device-local)
     // local_cur_pos is used for kv cache update and flash mla.
     // ========================================================================
-    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
-    uint32_t cur_pos = pos_ptr[0];
+    volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+        reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(cur_metadata_addr);
+    uint32_t cur_pos = metadata_ptr->position_id;
 
     const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
         cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
@@ -932,6 +941,7 @@ if constexpr (!Core::skip_ccl) {
             {
                 DeviceZoneScopedN("QROPE");
                 deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+                rope.set_global_pos(qrope_args, cur_pos);
                 rope(qrope_args);
             }
 
@@ -967,7 +977,7 @@ if constexpr (!Core::skip_ccl) {
         // KV-cache-ready semaphore so FlashMLA can proceed.
         // ====================================================================
         deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
-        kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
+        kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
         if (!skip_kv_cache_update) {
             DeviceZoneScopedN("KV CACHE");
             // ================================================================
@@ -1005,6 +1015,7 @@ if constexpr (!Core::skip_ccl) {
             {
                 DeviceZoneScopedN("K_ROPE");
                 deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
+                krope.set_global_pos(krope_args, cur_pos);
                 krope(krope_args);
             }
 
@@ -1028,7 +1039,7 @@ if constexpr (!Core::skip_ccl) {
         {
             DeviceZoneScopedN("FLASH_MLA");
             deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core> flash_mla;
-            flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
+            flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
             flash_mla(flash_mla_args);
         }
     }
