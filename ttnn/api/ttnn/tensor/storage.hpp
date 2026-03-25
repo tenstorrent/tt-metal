@@ -73,6 +73,12 @@ public:
 
     bool is_allocated() const;
 
+    // Returns true if the mesh_buffer exists (non-null), regardless of allocation state.
+    // Use this for cases where you need to check buffer existence without the stricter
+    // is_allocated() check (which also validates the MeshDevice weak_ptr).
+    // This is a hack to preserve mesh_device_ even when the buffer is deallocated.
+    bool has_mesh_buffer() const;
+
     distributed::MeshDevice* get_device() const;
 
     // Returns true if the tensor spans across all devices in a mesh.

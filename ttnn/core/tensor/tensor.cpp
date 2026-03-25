@@ -112,7 +112,10 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (device_storage().is_allocated()) {
+    // Use has_mesh_buffer() instead of is_allocated() to preserve mesh_device_
+    // even when the buffer is deallocated. This prevents nullptr device propagation
+    // when operations like reshape create new tensors from existing DeviceStorage.
+    if (device_storage().has_mesh_buffer()) {
         mesh_device_ = device_storage().get_device();
     }
 }
