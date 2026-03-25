@@ -407,15 +407,15 @@ class LTXPipeline:
         Uses the official LTX-2 VideoLatentPatchifier for positions, matching the reference
         pipeline's precompute_freqs_cis with SPLIT rotation. No trans_mat needed.
         """
+        from ...models.transformers.ltx.rope_ltx import precompute_freqs_cis
         from ...utils.ltx import VideoLatentShape, get_pixel_coords, video_get_patch_grid_bounds
-        from ..models.transformers.ltx.rope_ltx import precompute_freqs_cis
 
         v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
         v_coords = video_get_patch_grid_bounds(v_shape)
         v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
         v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
 
-        from ..models.transformers.ltx.rope_ltx import LTXRopeType
+        from ...models.transformers.ltx.rope_ltx import LTXRopeType
 
         cos_freq, sin_freq = precompute_freqs_cis(
             v_positions.bfloat16(),
@@ -605,8 +605,8 @@ class LTXPipeline:
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Compute audio RoPE using AudioPatchifier time-in-seconds positions with SPLIT rotation."""
 
+        from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
         from ...utils.ltx import AudioLatentShape, audio_get_patch_grid_bounds
-        from ..models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 
         a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
         a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
