@@ -436,6 +436,33 @@ Tensor mac(
         sub_core_grids);
 }
 
+// TTS: a * b + scalar
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float value,
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::add(
+        ttnn::multiply(input_tensor_a, input_tensor_b, std::nullopt, memory_config),
+        value,
+        std::nullopt,
+        memory_config);
+}
+
+// TST: a * scalar + c
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::add(
+        ttnn::multiply(input_tensor_a, value, std::nullopt, memory_config),
+        input_tensor_c,
+        std::nullopt,
+        memory_config);
+}
+
+// TSS: a * scalar1 + scalar2
 Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
     return ttnn::add(
         ttnn::multiply(input_tensor_a, value1, std::nullopt, memory_config), value2, std::nullopt, memory_config);

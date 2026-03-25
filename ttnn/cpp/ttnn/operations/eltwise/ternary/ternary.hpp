@@ -70,6 +70,21 @@ Tensor mac(
     const std::optional<Tensor>& output = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
+// TTS: a * b + scalar
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+// TST: a * scalar + c
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+// TSS: a * scalar1 + scalar2
 Tensor mac(
     const Tensor& input_tensor_a,
     float value1,
