@@ -30,11 +30,12 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     constexpr bool is_std = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(6);
 
     constexpr auto cb_partial = tt::CBIndex::c_21;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
@@ -52,33 +53,39 @@ void kernel_main() {
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr, out_tile_size_bytes);
 
-    for (uint32_t nc = 0; nc < NC_per_core; ++nc) {
-        // Combine all Wt partial tile pairs into a single scalar.
+    // NC_per_core is the total number of NC slices assigned to this core.
+    // Each output element is produced by combining reduce_batch_size
+    // consecutive NC slices (each contributing Wt partial tile pairs).
+    uint32_t num_outputs = NC_per_core / reduce_batch_size;
+
+    for (uint32_t out = 0; out < num_outputs; ++out) {
         WelfordStats<float> running = {0.0f, 0.0f, 0};
 
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            cb_partial_obj.wait_front(2);
+        for (uint32_t b = 0; b < reduce_batch_size; ++b) {
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                cb_partial_obj.wait_front(2);
 
-            auto means_addr = get_read_ptr(cb_partial);
-            auto vars_addr = means_addr + partial_tile_size_bytes;
+                auto means_addr = get_read_ptr(cb_partial);
+                auto vars_addr = means_addr + partial_tile_size_bytes;
 
-            // cb_partial is Float32: each element is 4 bytes.
-            auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
-            auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
+                // cb_partial is Float32: each element is 4 bytes.
+                auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
+                auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
-            uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
-            for (uint32_t c = 0; c < num_cols; ++c) {
-                // In tile row format, columns 0-15 are in Face 0 and
-                // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
-                uint32_t idx = (c < FACE_C) ? c : (FACE_ELEMENTS + c - FACE_C);
-                WelfordStats<float> partial;
-                partial.mean = means_ptr[idx];
-                partial.variance = vars_ptr[idx];
-                partial.count = H;
-                running = combine(running, partial);
+                uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
+                for (uint32_t c = 0; c < num_cols; ++c) {
+                    // In tile row format, columns 0-15 are in Face 0 and
+                    // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
+                    uint32_t idx = (c < FACE_C) ? c : (FACE_ELEMENTS + c - FACE_C);
+                    WelfordStats<float> partial;
+                    partial.mean = means_ptr[idx];
+                    partial.variance = vars_ptr[idx];
+                    partial.count = H;
+                    running = combine(running, partial);
+                }
+
+                cb_partial_obj.pop_front(2);
             }
-
-            cb_partial_obj.pop_front(2);
         }
 
         float final_var = running.variance;
@@ -103,7 +110,7 @@ void kernel_main() {
 
         // NOC-write the output tile to DRAM.
         cb_out_obj.wait_front(1);
-        uint32_t out_tile_id = output_tile_start_id + nc;
+        uint32_t out_tile_id = output_tile_start_id + out;
         noc.async_write(cb_out_obj, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
         cb_out_obj.pop_front(1);

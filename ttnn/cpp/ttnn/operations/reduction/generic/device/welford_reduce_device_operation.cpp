@@ -42,6 +42,23 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
     if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
         output_shape[-2] = 1;
         output_shape[-1] = 1;
+        // When reduce_batch_size > 1, extra reduction dims (between the kept
+        // dims and H/W) were permuted to positions just before H and W by the
+        // host dispatch.  Collapse them to 1 so the output volume matches the
+        // number of output tiles the program will produce.
+        if (operation_attributes.reduce_batch_size > 1) {
+            uint32_t remaining = operation_attributes.reduce_batch_size;
+            for (int i = static_cast<int>(output_shape.rank()) - 3; i >= 0 && remaining > 1; --i) {
+                TT_FATAL(
+                    remaining % output_shape[i] == 0,
+                    "reduce_batch_size {} is not divisible by dim {} size {}",
+                    operation_attributes.reduce_batch_size,
+                    i,
+                    output_shape[i]);
+                remaining /= output_shape[i];
+                output_shape[i] = 1;
+            }
+        }
     } else if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         output_shape[-2] = 1;
     } else {
@@ -98,6 +115,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
         operation_attributes.correction,
+        operation_attributes.reduce_batch_size,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
@@ -113,7 +131,8 @@ ttnn::Tensor welford_reduce(
     const std::optional<DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    uint32_t reduce_batch_size) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
@@ -130,7 +149,8 @@ ttnn::Tensor welford_reduce(
             output_dtype.value_or(input_tensor.dtype()),
             config,
             sub_core_grids,
-            correction},
+            correction,
+            reduce_batch_size},
         input_tensor);
 }
 

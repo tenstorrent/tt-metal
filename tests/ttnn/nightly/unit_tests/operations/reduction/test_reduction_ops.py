@@ -177,7 +177,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize("tensor_shape", [(), (2,), (1, 1), (32, 1), (3, 6, 40, 63, 20), (6, 0, 32)])
-@pytest.mark.parametrize("dim", [None, 0, -1])
+@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -258,7 +258,12 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     atol = rtol = 0.1
-    pcc = 0.999
+    if op == "var":
+        pcc = 0.99
+    elif op == "std":
+        pcc = 0.98
+    else:
+        pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 

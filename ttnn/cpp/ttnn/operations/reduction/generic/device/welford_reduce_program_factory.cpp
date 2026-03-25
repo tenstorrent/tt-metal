@@ -81,11 +81,12 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     //   the tile grid (NC * Wt work units).
     //   Each core processes one or more complete columns of Ht tiles → 1 output tile per column.
     //
-    // - HW-reduce: Work is split by NC slices (NC work units).
-    //   Each core processes one or more complete HW slices (Ht * Wt tiles each) → 1 output tile per slice.
+    // - HW-reduce: Work is split by output elements (NC / reduce_batch_size work units).
+    //   Each core processes one or more groups of reduce_batch_size NC slices → 1 output tile per group.
 
+    const uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_work_units = reduce_w ? NC * Ht : (reduce_hw ? NC : NC * Wt);
+    auto num_work_units = reduce_w ? NC * Ht : (reduce_hw ? NC / reduce_batch_size : NC * Wt);
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
@@ -218,7 +219,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             tile_width,
             H,
             static_cast<uint32_t>(operation_attributes.correction),
-            static_cast<uint32_t>(is_std)};
+            static_cast<uint32_t>(is_std),
+            reduce_batch_size};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -338,24 +340,30 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             output_tiles_offset += num_output_tiles_per_core;
         }
     } else if (reduce_hw) {
-        // HW-reduce: each work unit is one full NC slice (Ht * Wt tiles).
-        // Reader uses the column-partitioned reader with num_cols = Wt * NC_per_core.
+        // HW-reduce: each work unit is one output element, produced from
+        // reduce_batch_size consecutive NC slices (Ht * Wt tiles each).
+        // Reader uses the column-partitioned reader with
+        // num_cols = Wt * num_outputs_per_core * reduce_batch_size.
         TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
-        uint32_t nc_offset = 0;
+        TT_FATAL(
+            NC % reduce_batch_size == 0, "NC ({}) must be divisible by reduce_batch_size ({})", NC, reduce_batch_size);
+        uint32_t nc_slice_offset = 0;
+        uint32_t output_offset = 0;
         for (uint32_t i = 0; i < num_cores; ++i) {
             const CoreCoord& core = cores[i];
-            uint32_t nc_per_core = 0;
+            uint32_t num_outputs_per_core = 0;
             if (core_group_1.contains(core)) {
-                nc_per_core = num_work_units_per_core_group_1;
+                num_outputs_per_core = num_work_units_per_core_group_1;
             } else if (core_group_2.contains(core)) {
-                nc_per_core = num_work_units_per_core_group_2;
+                num_outputs_per_core = num_work_units_per_core_group_2;
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
+            // Total NC slices this core will process
+            uint32_t nc_slices_per_core = num_outputs_per_core * reduce_batch_size;
             // Reader: read all columns for all NC slices assigned to this core.
-            // Each NC slice has Wt columns, so total columns = Wt * nc_per_core.
-            uint32_t num_cols = Wt * nc_per_core;
-            uint32_t col_start_tile_id = nc_offset * HtWt;
+            uint32_t num_cols = Wt * nc_slices_per_core;
+            uint32_t col_start_tile_id = nc_slice_offset * HtWt;
             tt_metal::SetRuntimeArgs(
                 program,
                 reader_kernel_id,
@@ -364,16 +372,22 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
                  col_start_tile_id,
                  /*curr_col_in_batch=*/0u,
                  num_cols});
-            // Compute: runtime arg is NC_per_core.
+            // Compute: runtime arg is total NC slices (not num_outputs).
             tt_metal::SetRuntimeArgs(
                 program,
                 core_group_1.contains(core) ? compute_kernel_id_group_1 : compute_kernel_id_group_2,
                 core,
-                {nc_per_core});
+                {nc_slices_per_core});
             // Writer: runtime args are {dst_addr, NC_per_core, output_tile_start_id}.
+            // NC_per_core is total NC slices; the writer uses reduce_batch_size
+            // (compile-time) to determine how many to group per output.
             tt_metal::SetRuntimeArgs(
-                program, writer_kernel_id, core, {tensor_return_value.buffer()->address(), nc_per_core, nc_offset});
-            nc_offset += nc_per_core;
+                program,
+                writer_kernel_id,
+                core,
+                {tensor_return_value.buffer()->address(), nc_slices_per_core, output_offset});
+            nc_slice_offset += nc_slices_per_core;
+            output_offset += num_outputs_per_core;
         }
     } else {
         // H-reduce: each work unit is one column of Ht tiles
