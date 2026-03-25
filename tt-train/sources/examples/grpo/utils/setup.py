@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
-from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import initialize_device, set_seed, get_tt_metal_home
-from ttml.common.config import load_config
+from ttml.common.utils import initialize_device, set_seed, get_tt_metal_runtime_root
+from ttml.common.config import TransformerConfig, load_config
 from ttml.optimizers import create_optimizer
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
@@ -60,7 +59,7 @@ class TrainingCtx:
 
 
 def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
-    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
+    yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
 
     # training_config -> model_config path
     model_config = load_config(yaml_config["training_config"]["model_config"])
@@ -80,9 +79,8 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
     if pad_token is None:
         pad_token = tokenizer.eos_token_id
 
-    tt_model_factory = TransformerModelFactory(model_config)
-    tt_model_factory.transformer_config.vocab_size = len(tokenizer)
-    transformer_config = tt_model_factory.transformer_config
+    transformer_config = TransformerConfig(model_config)
+    transformer_config.vocab_size = len(tokenizer)
 
     rope_scaling = LlamaRopeScalingConfig(
         scaling_factor=getattr(transformer_config, "scaling_factor", 0.0) or 0.0,
@@ -136,7 +134,7 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
 
 
 def setup_grpo_config(yaml_config_path) -> GrpoConfig:
-    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
+    yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
 
     grpo_cfg = yaml_config.get("grpo_config", {})
     training_cfg = yaml_config["training_config"]
@@ -155,7 +153,7 @@ def setup_grpo_config(yaml_config_path) -> GrpoConfig:
 
 
 def setup_training_optimizer(yaml_config_path, tt_model):
-    yaml_config = load_config(yaml_config_path, get_tt_metal_home())
+    yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
     return create_optimizer(
         yaml_config["training_config"]["optimizer"],
         tt_model.parameters(),

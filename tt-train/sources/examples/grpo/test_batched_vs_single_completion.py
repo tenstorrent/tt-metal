@@ -43,7 +43,7 @@ def test_capitals_one_by_one_equals_single_batch():
     user_prompts = [
         "The capital of France is",
         "The capital of Portugal is",
-        "The capital of United Kingdom of Great Britain and Northern Ireland is",
+        "The capital of United Kingdom is",
         "The capital of Czech Republic is",
     ]
     prompts = [to_chat_prompt(ctx.tokenizer, p) for p in user_prompts]

@@ -8,7 +8,7 @@ import os
 import argparse
 import ttnn
 from safetensors.numpy import save_file
-from ttml.common.utils import get_tt_metal_home
+from ttml.common.utils import get_tt_metal_runtime_root
 
 
 @dataclass
@@ -31,7 +31,7 @@ class RunContext:
 
 def setup_training_run() -> RunContext:
     args = _parse_args()
-    repo_root = get_tt_metal_home()
+    repo_root = get_tt_metal_runtime_root()
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = os.path.join(repo_root, "generated/tt-train/grpo_training_runs", f"{args.run_name}_{timestamp}")
@@ -136,7 +136,7 @@ class TrainingMetricsTracker:
 
 def setup_accuracy_run() -> RunContext:
     args = _parse_args(default_run_name="grpo_model_accuracy")
-    repo_root = get_tt_metal_home()
+    repo_root = get_tt_metal_runtime_root()
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = os.path.join(repo_root, "generated/tt-train/grpo_model_accuracy_runs", f"{args.run_name}_{timestamp}")
