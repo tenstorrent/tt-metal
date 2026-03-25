@@ -117,7 +117,10 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
+                        DPRINT << "SOCKET_WAIT_FOR_PAGES: " << args.socket_num_pages
+                               << " SOCKET_PAGE_SIZE: " << args.socket_page_size << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
+                        DPRINT << "SOCKET_WAIT_FOR_PAGES_DONE" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
                         noc_async_read(
@@ -126,6 +129,7 @@ struct Broadcast {
                             args.socket_page_size,
                             1 - noc_index);
                         noc_async_read_barrier(1 - noc_index);
+                        DPRINT << "PUSH" << CTArgs::num_pages_to_read << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
@@ -228,13 +232,17 @@ struct Broadcast {
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
 
                 if constexpr (CTArgs::is_root) {
+                    DPRINT << "WAIT" << CTArgs::num_pages_to_read << ENDL();
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
-                    constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
+                    constexpr uint32_t tensor_size_bytes =
+                        (CTArgs::num_chunks - 1) * CTArgs::chunk_size_bytes + CTArgs::last_chunk_size_bytes;
+                    DPRINT << "WRITE" << tensor_size_bytes << ENDL();
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    DPRINT << "POP" << ENDL();
                 } else {
                     const uint32_t src = args.tensor_address0;
                     auto sem_wait = [&](uint32_t link_idx, uint32_t link_threshold) {

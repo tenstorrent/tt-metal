@@ -16,6 +16,7 @@ void kernel_main() {
     deepseek_b1_ops::FlashMLADecode::ReaderArgs args{
         .k_addr = get_common_arg_val<uint32_t>(0),
         .local_cur_pos = 0,
+        .slot_id = 0,
         .cur_batch = get_arg_val<uint32_t>(arg_idx++),
         .core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++),
         .is_mcast_sender = get_arg_val<uint32_t>(arg_idx++),
@@ -59,6 +60,7 @@ void kernel_main() {
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs args{
         .local_cur_pos = 0,
+        .slot_id = 0,
         .cur_batch = cur_batch,
         .core_num_in_reduce = core_num_in_reduce,
         .is_output_core = is_output_core,
@@ -117,6 +119,7 @@ void kernel_main() {
         .local_cur_pos = 0,
         .do_reduce = do_reduce,
         .do_output = do_output,
+        .slot_id = 0,
         .cur_batch = cur_batch,
         .core_num_in_reduce = core_num_in_reduce,
         .is_sender_after_reduce = is_sender_after_reduce,
@@ -155,6 +158,6 @@ void kernel_main() {
 
     deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, true> op;
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
-    op.set_local_cur_pos(args, pos_ptr[0]);
+    op.set_pos_and_slot(args, pos_ptr[0], 0);
     op(args);
 }

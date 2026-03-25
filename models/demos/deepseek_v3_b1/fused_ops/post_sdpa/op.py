@@ -1238,11 +1238,11 @@ class PostSDPA:
                     sdpa_bwd_ring_idx = bwd_row if sdpa_cluster_axis == 0 else bwd_col
                     sdpa_num_ring_devices = mesh_shape[0] if sdpa_cluster_axis == 0 else mesh_shape[1]
 
-                    # Position tensor address (0 if position disabled)
-                    sdpa_pos_addr = 0
+                    # Metadata tensor address (for position validity)
+                    sdpa_metadata_addr = 0
                     if sdpa_position_enabled:
-                        sdpa_position_device = ttnn.get_device_tensors(sdpa_position_id_tensor_mesh)[device_idx]
-                        sdpa_pos_addr = sdpa_position_device.buffer_address()
+                        sdpa_metadata_device = ttnn.get_device_tensors(sdpa_position_id_tensor_mesh)[device_idx]
+                        sdpa_metadata_addr = sdpa_metadata_device.buffer_address()
 
                     # SDPA worker runtime args (per-core)
                     sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
@@ -1400,9 +1400,8 @@ class PostSDPA:
                             r2_pair_min = min(pos_r2_neighbor_idx, pos_r2_neighbor_r1_idx)
                             swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
 
-                            # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            # TRISC args: device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                             sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
-                                sdpa_pos_addr,
                                 sdpa_ring_idx,
                                 pos_r1_neighbor_idx,
                                 pos_r2_neighbor_idx,
@@ -1411,10 +1410,9 @@ class PostSDPA:
                                 swap_r2_reduction_order,
                             ]
 
-                            # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            # Extend NCRISC args: r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                             sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y].extend(
                                 [
-                                    sdpa_pos_addr,
                                     pos_r1_neighbor_idx,
                                     pos_r2_neighbor_idx,
                                     pos_r2_neighbor_r1_idx,
@@ -1442,6 +1440,7 @@ class PostSDPA:
                         "worker_ncrisc_rt_args": sdpa_worker_ncrisc_rt_args,
                         "worker_brisc_rt_args": sdpa_worker_brisc_rt_args,
                         "worker_trisc_rt_args": sdpa_worker_trisc_rt_args,
+                        "worker_metadata_addr": sdpa_metadata_addr,
                         "forwarder_brisc_base_args": sdpa_forwarder_brisc_base_args,
                         "forwarder_ncrisc_base_args": sdpa_forwarder_ncrisc_base_args,
                         "fabric_node_id": sdpa_fabric_node_id,
@@ -1637,6 +1636,10 @@ class PostSDPA:
                             program.kernels[group.trisc_kernel_index].runtime_args = _filter_runtime_args(
                                 sdpa["worker_trisc_rt_args"], crs
                             )
+                        if sdpa["worker_metadata_addr"]:
+                            metadata_common_args = [sdpa["worker_metadata_addr"]]
+                            program.kernels[group.ncrisc_kernel_index].common_runtime_args = metadata_common_args
+                            program.kernels[group.trisc_kernel_index].common_runtime_args = metadata_common_args
 
                 sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
                 sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()

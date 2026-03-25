@@ -127,6 +127,7 @@ struct FlashMLADecode {
     struct ReaderArgs {
         uint32_t k_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_mcast_sender;
@@ -150,6 +151,7 @@ struct FlashMLADecode {
 
     struct WriterArgs {
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_output_core;
@@ -191,6 +193,7 @@ struct FlashMLADecode {
         uint32_t local_cur_pos;
         uint32_t do_reduce;
         uint32_t do_output;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_sender_after_reduce;
@@ -214,7 +217,10 @@ struct FlashMLADecode {
             }
         }
 
-        void set_local_cur_pos(RTArgs& args, uint32_t local_cur_pos) { args.local_cur_pos = local_cur_pos; }
+        void set_pos_and_slot(RTArgs& args, uint32_t local_cur_pos, uint32_t slot_id) {
+            args.local_cur_pos = local_cur_pos;
+            args.slot_id = slot_id;
+        }
 
         /**
          * Push dummy tiles into the hand-off CBs (cb_out_o, cb_out_ms) so that
@@ -292,10 +298,8 @@ struct FlashMLADecode {
             const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                 args.mcast_start_x, args.mcast_start_y, args.receiver_ready_semaphore_addr, ATOMIC_NOC_INDEX);
 
-            constexpr uint32_t kv_batch = 0;
-
             if (is_mcast_sender) {
-                const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk_start;
+                const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk_start;
                 uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
                 noc_async_read_one_packet_set_state<true>(k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
                 // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
@@ -313,7 +317,7 @@ struct FlashMLADecode {
 
                     if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;

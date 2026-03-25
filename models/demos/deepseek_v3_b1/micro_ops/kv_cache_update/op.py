@@ -39,7 +39,7 @@ class KVCacheUpdate:
         nope_cache_tensor,
         rope_cache_tensor,
         full_kv_cache_tensor,
-        position_ids_tensor: ttnn.Tensor,
+        metadata_tensor: ttnn.Tensor,
         output_tensor,  # not used
     ):
         """
@@ -73,12 +73,17 @@ class KVCacheUpdate:
         full_grid_mcast_num_dests = full_device_grid.grid_size().x * full_device_grid.grid_size().y
 
         # CB indices passed as named compile-time args; kernel uses get_named_compile_time_arg_val
+        kv_tile_h, kv_tile_w = full_kv_cache_tensor.get_tile().tile_shape
+        kv_cache_pages_per_slot = (full_kv_cache_tensor.padded_shape[-2] // kv_tile_h) * (
+            full_kv_cache_tensor.padded_shape[-1] // kv_tile_w
+        )
         ncrisc_named = [
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
             ("kv_cache_intermed_cb", KV_CACHE_INTERMED_CB),
             ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
             ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
             ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
             ("full_grid_mcast_end_x", full_grid_mcast_end_core.x),
@@ -89,6 +94,7 @@ class KVCacheUpdate:
         brisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
         ]
         trisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
@@ -150,9 +156,9 @@ class KVCacheUpdate:
             core_ranges=kv_cache_core_grid,
             initial_value=0,
         )
-        pos_addr = position_ids_tensor.buffer_address()
-        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
-        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
+        metadata_addr = metadata_tensor.buffer_address()
+        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), metadata_addr]
+        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), metadata_addr]
 
         kernel_desc = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/kv_cache_update/kernels/kv_cache_update_kernel.cpp",
@@ -186,7 +192,7 @@ class KVCacheUpdate:
             cbs=cbs,
             semaphores=[mla_kv_cache_cur_pos_ready_semaphore_descriptor],
         )
-        io_tensors = [nope_cache_tensor, rope_cache_tensor, position_ids_tensor, output_tensor]
+        io_tensors = [nope_cache_tensor, rope_cache_tensor, metadata_tensor, output_tensor]
 
         output = ttnn.generic_op(io_tensors, program_descriptor)
 

@@ -52,6 +52,7 @@ struct KVCacheUpdate {
     struct WriterArgs {
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t kv_cache_intermed_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_rmsnorm_output_cb;
@@ -67,6 +68,7 @@ struct KVCacheUpdate {
     struct ReaderArgs {
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t kv_cache_input_cb;
         uint32_t grid_start_y;
     };
@@ -86,9 +88,11 @@ struct KVCacheUpdate {
     public:
         void operator()([[maybe_unused]] const RTArgs& args) { impl(args); }
 
-        void set_local_cur_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t local_cur_pos) {
+        void set_pos_and_slot(
+            [[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t local_cur_pos, [[maybe_unused]] uint32_t slot_id) {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             args.local_cur_pos = local_cur_pos;
+            args.slot_id = slot_id;
 #endif
         }
 
@@ -121,13 +125,15 @@ struct KVCacheUpdate {
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
                 constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
+                constexpr uint32_t pages_per_slot = get_named_compile_time_arg_val("kv_cache_pages_per_slot");
 
                 uint32_t cur_pos = args.local_cur_pos;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
                 auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
 
-                uint32_t kv_cache_page_id_start = cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
+                uint32_t kv_cache_page_id_start =
+                    args.slot_id * pages_per_slot + cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
                 if constexpr (IsRopeCore) {
                     uint32_t grid_offset_pages = 1 * (get_absolute_logical_y() - args.grid_start_y);
                     kv_cache_page_id_start += grid_offset_pages;

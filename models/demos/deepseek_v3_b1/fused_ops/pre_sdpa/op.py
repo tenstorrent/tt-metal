@@ -193,7 +193,7 @@ class PreSDPA:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_id,
-        position_ids_tensor,
+        metadata_tensor,
         scale,
         output_tensor,
         sdpa_kv_cache_buffer,
@@ -223,7 +223,7 @@ class PreSDPA:
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
-            position_ids_tensor: Position IDs tensor (sharded tensor for RoPE)
+            metadata_tensor: Metadata tensor (sharded tensor with position and slot info)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
             semaphores: List of global semaphores. In CCL mode, first num_links are broadcast semaphores.
@@ -262,7 +262,7 @@ class PreSDPA:
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
-        position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
+        metadata_tensors_per_device = ttnn.get_device_tensors(metadata_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
@@ -1076,10 +1076,15 @@ class PreSDPA:
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
         flash_mla_program_config = FlashMLADecode.ProgramConfig()
         device_chunk_size = flash_mla_program_config.device_chunk_size
+        kv_tile_h, kv_tile_w = kv_cache_tensor.get_tile().tile_shape
+        kv_cache_pages_per_slot = (kv_cache_tensor.padded_shape[-2] // kv_tile_h) * (
+            kv_cache_tensor.padded_shape[-1] // kv_tile_w
+        )
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
             ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
             ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
@@ -1090,6 +1095,7 @@ class PreSDPA:
         kv_cache_brisc_named_compile_time_args = [
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1297,7 +1303,7 @@ class PreSDPA:
                 output_tensor_device = output_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
-                position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
+                metadata_tensor_device = metadata_tensors_per_device[device_idx]
                 kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
                 sdpa_kv_cache_buffer_device = sdpa_kv_cache_buffers_per_device[device_idx]
                 sdpa_out_interm_buffer_device = sdpa_out_interm_buffers_per_device[device_idx]
@@ -2030,7 +2036,7 @@ class PreSDPA:
                 qrope_sin_tensor_address = qrope_sin_tensor_device.buffer_address()
                 krope_cos_tensor_address = krope_cos_tensor_device.buffer_address()
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
-                position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
+                metadata_tensor_addr = metadata_tensor_device.buffer_address()
 
                 kv_cache_sp_named_compile_time_args = [
                     ("kv_cache_device_chunk_size", device_chunk_size),
@@ -2047,18 +2053,16 @@ class PreSDPA:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
+                    metadata_tensor_addr,  # idx 7
                 ]
 
                 qrope_ncrisc_addr_args = [
                     ("qrope_cos_tensor_address", qrope_cos_tensor_address),
                     ("qrope_sin_tensor_address", qrope_sin_tensor_address),
-                    ("qrope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
                 krope_ncrisc_addr_args = [
                     ("krope_cos_tensor_address", krope_cos_tensor_address),
                     ("krope_sin_tensor_address", krope_sin_tensor_address),
-                    ("krope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
 
                 # Per-core start_tile_offset for QRoPE (all cores read full head_dim, offset=0)
@@ -2093,7 +2097,7 @@ class PreSDPA:
                 )
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
                     k_addr,
-                    position_ids_tensor_addr,
+                    metadata_tensor_addr,
                 ]
 
                 brisc_named_compile_time_args = (
@@ -2111,7 +2115,7 @@ class PreSDPA:
                     + kv_cache_sp_named_compile_time_args
                     + mla_brisc_named_compile_time_args
                 )
-                brisc_common_runtime_args = [k_addr, position_ids_tensor_addr]
+                brisc_common_runtime_args = [k_addr, metadata_tensor_addr]
 
                 trisc_named_compile_time_args = (
                     bcast_trisc_named_compile_time_args
@@ -2304,7 +2308,7 @@ class PreSDPA:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_id,
-        position_ids_tensor,
+        metadata_tensor,
         scale,
         output_tensor,
         sdpa_kv_cache_buffer,
@@ -2331,7 +2335,7 @@ class PreSDPA:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -2354,7 +2358,7 @@ class PreSDPA:
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
             position_id,
-            position_ids_tensor,
+            metadata_tensor,
             scale,
             output_tensor,
             sdpa_kv_cache_buffer,

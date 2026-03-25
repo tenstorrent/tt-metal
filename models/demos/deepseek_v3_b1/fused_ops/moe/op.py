@@ -3188,7 +3188,6 @@ class MoeOp:
           - False: dense MLP mode (single expert 0 with unit scale)
           - list[int]: hardcoded expert indices; weights come from gate scores for those experts
         """
-        print("MoEOp golden")
         import torch
 
         def _as_2d(t: torch.Tensor) -> torch.Tensor:
@@ -3249,7 +3248,6 @@ class MoeOp:
         else:
             logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
             scores = torch.sigmoid(logits)
-            print("golden all scores", scores)
             scores_flat = scores.reshape(1, -1)
             bias_flat = bias_tensor.reshape(1, -1).to(scores_flat.dtype)
             # Hardware gate produces top-k slots; both expert-index selection and
@@ -3260,8 +3258,6 @@ class MoeOp:
             topk_scores, topk_indices = gate_topk_scores, gate_topk_indices
             selected_experts = [int(i) for i in topk_indices[0].tolist()]
             selected_scales = [topk_scores[0, i] for i in range(len(selected_experts))]
-            print("golden selected experts", selected_experts)
-            print("golden selected scales", selected_scales)
 
         routed_sum = torch.zeros_like(shared_output)
         for expert_idx, expert_scale in zip(selected_experts, selected_scales, strict=True):
@@ -4037,6 +4033,7 @@ class MoeOp:
                 ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
+                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
             ]
         )
@@ -4146,6 +4143,7 @@ class MoeOp:
             worker_agg_sem_addr = 0
             worker_agg_noc_x = 0
             worker_agg_noc_y = 0
+            worker_metadata_addr = 0
 
             if device_role == MESH_ROOT1:
                 worker_agg_sem_addr = agg_sem_addr
@@ -4153,6 +4151,8 @@ class MoeOp:
                 worker_agg_noc_y = persistent_core_noc_y
                 if self.downstream_sockets is not None:
                     socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
+                if self._metadata_l1_addr != 0:
+                    worker_metadata_addr = self._metadata_l1_addr
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
 
@@ -4169,6 +4169,7 @@ class MoeOp:
                         out_tensor.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        worker_metadata_addr,
                         worker_agg_sem_addr,
                         worker_agg_noc_x,
                         worker_agg_noc_y,
@@ -4467,11 +4468,15 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        forward_metadata_size_bytes=0,
+        metadata_l1_addr=0,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_sockets = downstream_sockets
+        self._forward_metadata_size_bytes = forward_metadata_size_bytes
+        self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]

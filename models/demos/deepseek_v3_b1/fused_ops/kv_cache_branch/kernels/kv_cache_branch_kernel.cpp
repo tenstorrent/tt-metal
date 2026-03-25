@@ -18,6 +18,7 @@
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/rope.hpp"
+#include "../../../metadata/metadata.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -70,7 +71,6 @@ void kernel_main() {
     constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
     constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
     constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
-    constexpr uint32_t position_ids_tensor_address = get_named_compile_time_arg_val("position_ids_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
 
     deepseek_b1_ops::Rope::ReaderArgs k_rope_args{
@@ -78,7 +78,7 @@ void kernel_main() {
         .cos_sin_cb = cos_sin_cb,
         .cos_tensor_address = cos_tensor_address,
         .sin_tensor_address = sin_tensor_address,
-        .position_ids_tensor_address = position_ids_tensor_address,
+        .global_pos = 0,
     };
 
 // ============================================================================
@@ -222,7 +222,16 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("K_ROPE");
+#if defined(COMPILE_FOR_NCRISC)
+        uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+        volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+        uint32_t cur_pos = metadata_ptr->position_id;
+#endif
         deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
+#if defined(COMPILE_FOR_NCRISC)
+        k_rope.set_global_pos(k_rope_args, cur_pos);
+#endif
         k_rope(k_rope_args);
     }
     // ========================================================================
@@ -236,10 +245,11 @@ void kernel_main() {
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
-    uint32_t position_ids_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t metadata_addr = get_common_arg_val<uint32_t>(1);
 
-    volatile tt_l1_ptr uint32_t* position_ids_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_ids_addr);
-    uint32_t kv_cache_start_tile_id = position_ids_ptr[0];
+    volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+        reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+    uint32_t kv_cache_start_tile_id = metadata_ptr->position_id;
 
     // Create TensorAccessor for DRAM interleaved tensor
     auto kv_cache_addr_gen = TensorAccessor(

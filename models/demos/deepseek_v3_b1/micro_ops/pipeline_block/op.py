@@ -36,6 +36,7 @@ There are four distinct stage configurations:
 """
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -58,6 +59,7 @@ class PipelineBlock:
         exit_upstream_page_size=None,
         embedding_tensor=None,
         initialize_loopback=True,
+        forward_metadata=False,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -103,6 +105,7 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 embedding_tensor,
+                forward_metadata,
             )
         elif self.is_last_stage and not initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -129,6 +132,7 @@ class PipelineBlock:
                 entry_node_downstream,
                 exit_node_upstream,
                 exit_upstream_page_size,
+                DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
             )
 
     def _init_first_stage(
@@ -145,6 +149,7 @@ class PipelineBlock:
         d2h_socket_fifo_size,
         d2h_socket_page_size,
         embedding_tensor,
+        forward_metadata,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
         assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
@@ -153,13 +158,17 @@ class PipelineBlock:
 
         embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
+        if forward_metadata:
+            assert downstream_d2d_socket_page_size == embedding_size_bytes + DeepseekMetadata.aligned_size_bytes()
+        else:
+            assert downstream_d2d_socket_page_size == embedding_size_bytes
+
         if self.initialize_loopback:
             assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
             assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
             assert d2h_socket_fifo_size >= d2h_socket_page_size
 
         assert h2d_socket_fifo_size >= token_size_bytes
-        assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
         self.h2d_socket = ttnn.H2DSocket(
@@ -187,6 +196,7 @@ class PipelineBlock:
             ),
             d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
             embedding_tensor=embedding_tensor,
+            metadata_size_bytes=downstream_d2d_socket_page_size - embedding_size_bytes,
         )
 
         self.exit_socket_interface = SocketInterface(
@@ -275,6 +285,7 @@ class PipelineBlock:
         entry_node_downstream,
         exit_node_upstream,
         exit_upstream_page_size=None,
+        forward_metadata_size_bytes=0,
     ):
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
@@ -303,6 +314,7 @@ class PipelineBlock:
                 receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
                 upstream_core_coords=exit_node_upstream,
                 upstream_page_size=exit_upstream_page_size,
+                forward_metadata_size_bytes=forward_metadata_size_bytes,
             )
         else:
             self.exit_socket_interface = SocketInterface(
