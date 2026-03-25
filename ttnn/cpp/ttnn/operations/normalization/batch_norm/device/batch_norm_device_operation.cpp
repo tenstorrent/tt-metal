@@ -41,14 +41,9 @@ void BatchNormOperation::validate_tensors(
     check_tensor_BN(batch_mean, "batch_mean_shape", C);
     check_tensor_BN(batch_var, "batch_mean_shape", C);
 
-    // output (N, C, H, W) — must have the same dtype as input
+    // output (N, C, H, W)
     if (output.has_value()) {
         check_tensor_BN(output.value(), "output_shape", C);
-        TT_FATAL(
-            output->dtype() == input.dtype(),
-            "batch_norm: output dtype ({}) must match input dtype ({})",
-            output->dtype(),
-            input.dtype());
     }
 
     // weight (1, C, 1, 1)
@@ -176,7 +171,6 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::normalization::BatchNormOperation;
-
     OperationType::operation_attributes_t operation_attributes{
         eps,
         memory_config.value_or(input.memory_config()),
