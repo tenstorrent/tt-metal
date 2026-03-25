@@ -162,7 +162,7 @@ def get_matmul_config(M, K, N, core_grid):
             config_tuple = config_tuple[:3]
 
     if config_tuple is None:
-        M_block_size, K_block_size, N_block_size = default_block_size if default_block_size is not None else (8, 8, 8)
+        M_block_size, K_block_size, N_block_size = (8, 8, 8)
 
         M_tiles = math.ceil(M / 32)
         N_tiles = math.ceil(N / 32)
