@@ -14,43 +14,38 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
 void kernel_main() {
-    constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t DHt = get_compile_time_arg_val(2);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
-    constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t L = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(17);
+    constexpr uint32_t NH = get_compile_time_arg_val(0);
+    constexpr uint32_t DHt = get_compile_time_arg_val(1);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(2);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t local_padded_N = get_compile_time_arg_val(4);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(7);
+    constexpr uint32_t Lt = get_compile_time_arg_val(8);
+    constexpr uint32_t L = get_compile_time_arg_val(9);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(12);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(18);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(19);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(21);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(22);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(23);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(24);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(27);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(28);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(29);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(13);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(14);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(15);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(16);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(17);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(18);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(19);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(22);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(23);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(24);
 
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(31) == 1;
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(32);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(25);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(27);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(28);
+    constexpr bool uniform_dataformat = get_compile_time_arg_val(29) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -140,7 +135,6 @@ void kernel_main() {
 
         // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);

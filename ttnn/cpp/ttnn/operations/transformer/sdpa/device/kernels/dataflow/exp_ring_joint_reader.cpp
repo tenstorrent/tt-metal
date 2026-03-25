@@ -14,22 +14,21 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
-    constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t L = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(17);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(18);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t padded_Nt = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t Lt = get_compile_time_arg_val(9);
+    constexpr uint32_t L = get_compile_time_arg_val(10);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(17);
 
-    constexpr auto q_args = TensorAccessorArgs<19>();
+    constexpr auto q_args = TensorAccessorArgs<18>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -412,7 +411,6 @@ void kernel_main() {
         }
 
         if (KV_chunks_processed_in_iter % 2 == 0) {
-            DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);

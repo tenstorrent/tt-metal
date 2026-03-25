@@ -418,7 +418,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        local_padded_N,
         local_padded_Nt,
         padded_Nt,
         static_cast<uint32_t>(args.logical_n),
@@ -464,7 +463,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         Sk_chunk_t,
         local_padded_N,
         local_padded_Nt,
-        padded_Nt,
         args.logical_n,
         logical_nt,
         Lt,
@@ -498,23 +496,18 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          q_df_early == mask_df_early && q_df_early == im_df_early);
 
     std::vector<uint32_t> compute_compile_time_args = {
-        B,
         NH,
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
         local_padded_Nt,
-        padded_Nt,
         args.logical_n,
         logical_nt,
         Lt,
         L,
-        num_local_q_chunks,
-        num_joint_q_chunks,
         num_local_k_chunks,
         num_joint_k_chunks,
-        num_q_chunks,
         args.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
@@ -761,7 +754,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
-        bool use_mcast = false;
         uint32_t mcast_num_dests = 0;
         uint32_t mcast_sender_wait = 0;
     };
@@ -1097,7 +1089,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
 
                 auto& injector_chain = core_chain_info[injector_idx];
-                injector_chain.use_mcast = true;
                 injector_chain.prev_physical = rect_start;
                 injector_chain.next_physical = rect_end;
                 injector_chain.mcast_num_dests = mcast_num_dests;
@@ -1109,7 +1100,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                         continue;
                     }
                     auto& receiver_chain = core_chain_info[ci];
-                    receiver_chain.use_mcast = true;
                     receiver_chain.prev_physical = core_work[injector_idx].physical_core;
                     receiver_chain.next_physical = CoreCoord{0, 0};
                     receiver_chain.next_core_q_chunks = 0;
@@ -1218,9 +1208,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     writer_fabric_compile_time_args.push_back(ag_page_size);
     writer_fabric_compile_time_args.push_back(ag_pkt_hdr_cb_id);
     writer_fabric_compile_time_args.push_back(ag_kv_scratch_cb_id);
-    writer_fabric_compile_time_args.push_back(num_targets_forward);
-    writer_fabric_compile_time_args.push_back(num_targets_backward);
-    writer_fabric_compile_time_args.push_back(static_cast<uint32_t>(args.topology));
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
@@ -1586,10 +1573,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .writer_fabric_ag_rt_offset = writer_fabric_ag_rt_offset,
          .reader_fused_op_sem_rt_offset = reader_fused_op_sem_rt_offset,
          .reader_per_link_sem_rt_offset = reader_per_link_sem_rt_offset,
-         .num_links = args.num_links,
-         .ccl_mux_kernel_id = ccl_mux_kernel_id,
-         .ccl_mux_backward_cores = mux_backward_logical_cores,
-         .ccl_mux_forward_cores = mux_forward_logical_cores}};
+         .num_links = args.num_links}};
 }
 
 void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
