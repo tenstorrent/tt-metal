@@ -13,7 +13,6 @@ from loguru import logger
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     determinate_min_batch_size,
     prepare_device,
@@ -212,15 +211,12 @@ def run_demo_inference(
     [
         (
             {
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
         ),
         (
-            {
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
-            },
+            {},
             False,
         ),
     ],
