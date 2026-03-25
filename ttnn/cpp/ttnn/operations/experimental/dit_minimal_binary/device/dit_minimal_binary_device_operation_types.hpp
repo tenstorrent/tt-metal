@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
@@ -19,6 +21,7 @@ struct DitMinimalRmBinaryParams {
 struct DitMinimalRmBinaryInputs {
     const Tensor& input_a;
     const Tensor& input_b;
+    std::optional<Tensor> preallocated_output;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -39,6 +39,7 @@ Tensor dit_minimal_binary(
     const Tensor& input_b,
     ttnn::experimental::prim::BinaryOpType op_type,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config);
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

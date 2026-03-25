@@ -19,7 +19,8 @@ struct DitMinimalRmBinaryOperation {
         const Tensor& input_a,
         const Tensor& input_b,
         const std::string& op = "add",
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace operations::experimental

@@ -245,6 +245,7 @@ void DitMinimalRmBinaryProgramFactory::override_runtime_arguments(
     const DitMinimalRmBinaryInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     auto& program = cached_program.program;
     auto& shared = cached_program.shared_variables;
@@ -253,15 +254,56 @@ void DitMinimalRmBinaryProgramFactory::override_runtime_arguments(
     auto* src_b_buffer = tensor_args.input_b.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
-    for (const auto& core : corerange_to_cores(shared.all_cores, std::nullopt, true)) {
+    // Recompute work distribution — total_rows may differ from the first `create` call
+    // if the same last-dim is reused with a different spatial resolution (same program
+    // cache key, different number of sticks).
+    const uint64_t num_elements_total = tensor_args.input_a.physical_volume();
+    const uint32_t last_dim = tensor_args.input_a.padded_shape()[-1];
+    const uint32_t total_rows = static_cast<uint32_t>(num_elements_total / last_dim);
+    const uint32_t ntiles_per_row = last_dim / TILE_WIDTH;
+
+    auto* device = tensor_args.input_a.device();
+    auto grid = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_cg1, rows_per_cg2] =
+        split_work_to_cores(grid, total_rows);
+
+    uint32_t start_stick_id = 0;
+
+    auto update_core = [&](const CoreCoord& core, uint32_t num_sticks_per_core) {
         auto& reader_rt = GetRuntimeArgs(program, shared.reader_kernel_id)[core.x][core.y];
         reader_rt[0] = src_a_buffer->address();
         reader_rt[1] = src_b_buffer->address();
+        reader_rt[2] = num_sticks_per_core;
+        reader_rt[3] = start_stick_id;
 
         auto& writer_rt = GetRuntimeArgs(program, shared.writer_kernel_id)[core.x][core.y];
         writer_rt[0] = src_b_buffer->address();
         writer_rt[1] = dst_buffer->address();
-    }
+        writer_rt[2] = num_sticks_per_core;
+        writer_rt[3] = start_stick_id;
+
+        auto& compute_rt = GetRuntimeArgs(program, shared.compute_kernel_id)[core.x][core.y];
+        compute_rt[0] = num_sticks_per_core;
+        compute_rt[1] = ntiles_per_row;
+
+        start_stick_id += num_sticks_per_core;
+    };
+
+    auto update_group = [&](const CoreRangeSet& group, uint32_t num_sticks_per_core) {
+        if (num_sticks_per_core == 0) {
+            return;
+        }
+        for (const auto& range : group.ranges()) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    update_core(CoreCoord{x, y}, num_sticks_per_core);
+                }
+            }
+        }
+    };
+
+    update_group(core_group_1, rows_per_cg1);
+    update_group(core_group_2, rows_per_cg2);
 }
 
 }  // namespace ttnn::experimental::prim

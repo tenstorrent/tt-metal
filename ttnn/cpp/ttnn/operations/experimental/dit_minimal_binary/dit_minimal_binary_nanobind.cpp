@@ -30,6 +30,9 @@ void bind_dit_minimal_binary(nb::module_& mod) {
         Keyword Args:
             op (str): Operation to perform — "add" (default) or "mul".
             memory_config (ttnn.MemoryConfig, optional): Output memory config. Defaults to input memory config.
+            preallocated_output (ttnn.Tensor, optional): Pre-allocated output tensor. If provided, the result is
+                written into this buffer instead of allocating a new one. Pre-allocating before intermediate
+                tensors are created prevents DRAM INTERLEAVED bank aliasing between the output and the inputs.
 
         Returns:
             ttnn.Tensor: Output in ROW_MAJOR_LAYOUT, same dtype as inputs.
@@ -43,7 +46,8 @@ void bind_dit_minimal_binary(nb::module_& mod) {
             nb::arg("input_a").noconvert(),
             nb::arg("input_b").noconvert(),
             nb::arg("op") = "add",
-            nb::arg("memory_config") = nb::none()));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("preallocated_output") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::dit_minimal_binary::detail

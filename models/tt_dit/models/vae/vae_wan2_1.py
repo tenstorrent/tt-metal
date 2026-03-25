@@ -572,8 +572,8 @@ class WanResidualBlock(Module):
         assert (
             h_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         ), f"WanResidualBlock expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         x_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        # x_BTHWC = ttnn.to_layout(x_norm_silu_row_major_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
         if feat_cache is not None:
@@ -611,16 +611,13 @@ class WanResidualBlock(Module):
         else:
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h)
 
-        # Add residual (row-major path to avoid tilize+add+untilize)
-
-        print(f"h_tile_BTHWC.padded_shape: {h_BTHWC.padded_shape}")
-        print(f"x_conv_BTHWC.padded_shape: {x_conv_BTHWC.padded_shape}")
-
-        assert (
-            h_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
-        ), f"WanResidualBlock expects ROW_MAJOR input, got {h_BTHWC.layout}"
-
-        residual_rm_BTHWC = ttnn.experimental.dit_minimal_binary(h_BTHWC, x_conv_BTHWC, op="add")
+        # Write result into x_conv_BTHWC's buffer (preallocated_output=x_conv_BTHWC).
+        # NCRISC reads x_conv block-k then writes result to x_conv block-k (sequential,
+        # no overlap); BRISC reads h_BTHWC (different buffer). No new DRAM allocation,
+        # so the free-pool aliasing bug cannot occur.
+        residual_rm_BTHWC = ttnn.experimental.dit_minimal_binary(
+            h_BTHWC, x_conv_BTHWC, op="add", preallocated_output=x_conv_BTHWC
+        )
         return residual_rm_BTHWC
 
 

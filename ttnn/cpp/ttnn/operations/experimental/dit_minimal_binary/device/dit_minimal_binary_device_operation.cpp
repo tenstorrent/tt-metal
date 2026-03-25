@@ -62,6 +62,9 @@ DitMinimalRmBinaryDeviceOperation::spec_return_value_t DitMinimalRmBinaryDeviceO
 
 DitMinimalRmBinaryDeviceOperation::tensor_return_value_t DitMinimalRmBinaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_a.device());
 }
 
@@ -83,7 +86,8 @@ Tensor dit_minimal_binary(
     const Tensor& input_b,
     ttnn::experimental::prim::BinaryOpType op_type,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::experimental::prim::DitMinimalRmBinaryDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -94,6 +98,7 @@ Tensor dit_minimal_binary(
     auto tensor_args = OperationType::tensor_args_t{
         .input_a = input_a,
         .input_b = input_b,
+        .preallocated_output = preallocated_output,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

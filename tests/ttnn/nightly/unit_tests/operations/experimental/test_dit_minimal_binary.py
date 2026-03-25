@@ -118,8 +118,8 @@ def test_minimal_binary(device, shape, op, dtype):
     torch.manual_seed(0)
 
     # Generate random inputs; keep values small to avoid large fp32/bf16 errors
-    A_torch = torch.rand(shape, dtype=tdtype) * 2.0 - 1.0
-    B_torch = torch.rand(shape, dtype=tdtype) * 2.0 - 1.0
+    A_torch = torch.randn(shape, dtype=tdtype)
+    B_torch = torch.randn(shape, dtype=tdtype)
 
     # A_torch = torch.randint(0, 10, shape, dtype=tdtype)
     # B_torch = torch.randint(0, 10, shape, dtype=tdtype)
@@ -195,8 +195,8 @@ def test_minimal_binary_add_single_stick(device, dtype):
     # A_torch = torch.randn(shape, dtype=tdtype)
     # B_torch = torch.randn(shape, dtype=tdtype)
 
-    A_torch = torch.full(shape, 1.0, dtype=tdtype)
-    B_torch = torch.full(shape, 2.0, dtype=tdtype)
+    A_torch = torch.randn(shape, dtype=tdtype)
+    B_torch = torch.randn(shape, dtype=tdtype)
 
     C_ref = A_torch + B_torch
 
@@ -241,8 +241,8 @@ def test_minimal_binary_mul_large(device, dtype):
 
     torch.manual_seed(0)
 
-    A_torch = torch.randint(0, 10, shape, dtype=torch_dtype)
-    B_torch = torch.randint(0, 10, shape, dtype=torch_dtype)
+    A_torch = torch.randn(shape, dtype=torch_dtype)
+    B_torch = torch.randn(shape, dtype=torch_dtype)
 
     C_ref = A_torch * B_torch
 
@@ -313,7 +313,7 @@ def test_minimal_binary_wan_residual_add(device, shape, dtype):
     """
     tdtype = _torch_dtype(dtype)
     A_torch = torch.randn(shape, dtype=tdtype)
-    B_torch = torch.randn(shape, dtype=tdtype) * 2.0 - 1.0
+    B_torch = torch.randn(shape, dtype=tdtype)
     C_ref = A_torch + B_torch
 
     A_rm = ttnn.from_torch(
@@ -344,4 +344,83 @@ def test_minimal_binary_wan_residual_add(device, shape, dtype):
     #     f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
     # )
 
+    assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
+
+
+# ---------------------------------------------------------------------------
+# preallocated_output tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["bf16", "fp32"])
+def test_minimal_binary_preallocated_output_input_b(device, dtype):
+    """preallocated_output=input_b: result written in-place into input_b's buffer.
+
+    NCRISC reads input_b[block k] then writes result[block k] back to the same
+    buffer — sequential within each block, safe. BRISC reads input_a independently.
+    This is the approach used by WanResidualBlock to avoid DRAM free-pool aliasing.
+    """
+    shape = (1, 1, 60, 104, 512)  # encoder mid-block shape at 480p
+    tdtype = _torch_dtype(dtype)
+    torch.manual_seed(42)
+
+    A_torch = torch.randn(shape, dtype=tdtype)
+    B_torch = torch.randn(shape, dtype=tdtype)
+    C_ref = A_torch + B_torch
+
+    A_rm = ttnn.from_torch(
+        A_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    B_rm = ttnn.from_torch(
+        B_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out = ttnn.experimental.dit_minimal_binary(A_rm, B_rm, op="add", preallocated_output=B_rm)
+
+    assert out.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert out.dtype == dtype
+    assert out.padded_shape == A_rm.padded_shape
+
+    C_out = ttnn.to_torch(out)
+    C_ref_cast = C_ref.to(C_out.dtype)
+    assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=["bf16", "fp32"])
+def test_minimal_binary_preallocated_output_separate(device, dtype):
+    """preallocated_output is a fresh pre-allocated tensor distinct from both inputs.
+
+    Verifies that result is correctly written when output, input_a, and input_b are
+    all distinct DRAM buffers.
+    """
+    shape = (1, 1, 60, 104, 512)  # encoder mid-block shape at 480p
+    tdtype = _torch_dtype(dtype)
+    torch.manual_seed(7)
+
+    A_torch = torch.randn(shape, dtype=tdtype)
+    B_torch = torch.randn(shape, dtype=tdtype)
+    C_ref = A_torch + B_torch
+
+    A_rm = ttnn.from_torch(
+        A_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    B_rm = ttnn.from_torch(
+        B_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    C_pre = ttnn.from_torch(
+        torch.zeros(shape, dtype=tdtype),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    out = ttnn.experimental.dit_minimal_binary(A_rm, B_rm, op="add", preallocated_output=C_pre)
+
+    assert out.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert out.dtype == dtype
+    assert out.padded_shape == A_rm.padded_shape
+
+    C_out = ttnn.to_torch(out)
+    C_ref_cast = C_ref.to(C_out.dtype)
     assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
