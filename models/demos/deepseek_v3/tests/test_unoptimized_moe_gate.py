@@ -160,7 +160,7 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate=force_recalculate_weight_config,
-        test_name="test_moe_gate",
+        test_name="test_unoptimized_moe_gate",
         real_weights=weight_type == "real",
         layer_id=module_path,
     )

@@ -143,7 +143,7 @@ class MoEGate(AbstractModule):
         """
 
         if mode == "decode":
-            memory_config = ttnn.L1_MEMORY_CONFIG
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
 
             return {
                 "gate_proj": LinearConfig(
@@ -240,7 +240,7 @@ class MoEGate(AbstractModule):
         # in order to save time, we need to reuse bias, input_tensor, output indices and output tensor
         # we pad the logits to make the shape of above three are always the same
         num_iters = (total_batch_size + num_device_cores - 1) // num_device_cores
-        padding_shape = num_iters - (total_batch_size % num_iters)
+        padding_shape = (num_iters - (total_batch_size % num_iters)) % num_iters
         batch_size_per_iter = (total_batch_size + padding_shape) // num_iters
         if padding_shape != 0:
             logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, padding_shape), (0, 0)], 0)
