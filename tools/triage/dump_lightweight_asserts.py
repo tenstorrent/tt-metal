@@ -211,16 +211,21 @@ def dump_lightweight_asserts(
                     if template_params:
                         arguments_and_locals += "\nTemplate arguments:\n"
                         for param_name, param_value in template_params:
-                            display_name = param_name or "?"
-                            if display_name in assert_code:
-                                arguments_and_locals += f"- [info]{display_name}[/] = [command]{param_value}[/]\n"
+                            if param_name and param_name in assert_code:
+                                arguments_and_locals += f"- [info]{param_name}[/] = [command]{param_value}[/]\n"
                             else:
-                                arguments_and_locals += f"- {display_name} = {param_value}\n"
+                                arguments_and_locals += f"- {param_name or '?'} = {param_value}\n"
                         for param_name, _ in template_params:
-                            if param_name is not None:
+                            if param_name:
                                 assert_code = assert_code.replace(param_name, f"[info]{param_name}[/]")
-            except Exception:
-                pass
+            except Exception as e:
+                if os.getenv("TT_TRIAGE_DEBUG_TEMPLATES"):
+                    log_check_risc(
+                        risc_name,
+                        location,
+                        False,
+                        f"[warning]Template arguments unavailable: {e}[/]",
+                    )
             if len(top_frame.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
                 arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)

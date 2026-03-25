@@ -130,10 +130,15 @@ def get_callstack(
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
-def get_function_die(entry: CallstackEntry):
+def get_function_die(entry: CallstackEntry) -> "ElfDie | None":
     """Navigate from a callstack entry's argument/local dies to the parent function die."""
+    from ttexalens.elf.die import ElfDie
+
     for var in entry.arguments + entry.locals:
-        current = var.die.parent
+        die = getattr(var, "die", None)
+        if die is None:
+            continue
+        current = getattr(die, "parent", None)
         while current is not None:
             if current.tag == "DW_TAG_subprogram":
                 return current
@@ -159,8 +164,8 @@ def extract_template_params(function_die) -> list[tuple[str | None, str]]:
         if child.tag == "DW_TAG_template_type_param":
             param_name = child.name
             type_die = child.resolved_type
-            type_name = type_die.name if type_die and type_die is not child else "?"
-            template_params.append((param_name, type_name))
+            type_name = type_die.name if type_die and type_die is not child else None
+            template_params.append((param_name, type_name or "?"))
         elif child.tag == "DW_TAG_template_value_param":
             param_name = child.name
             value = child.value
@@ -169,9 +174,8 @@ def extract_template_params(function_die) -> list[tuple[str | None, str]]:
             for pack_child in child.iter_children():
                 if pack_child.tag == "DW_TAG_template_type_param":
                     type_die = pack_child.resolved_type
-                    template_params.append(
-                        (pack_child.name, type_die.name if type_die and type_die is not pack_child else "?")
-                    )
+                    type_name = type_die.name if type_die and type_die is not pack_child else None
+                    template_params.append((pack_child.name, type_name or "?"))
                 elif pack_child.tag == "DW_TAG_template_value_param":
                     value = pack_child.value
                     template_params.append((pack_child.name, f"{value}" if value is not None else "?"))
