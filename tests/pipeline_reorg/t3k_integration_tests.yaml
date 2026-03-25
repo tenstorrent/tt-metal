@@ -37,32 +37,32 @@
   team: models
   model-name: falcon40b
 
-#- name: t3k_llama3.2-vision_tests
-#  cmd: run_t3000_llama3.2-11b-vision_freq_tests
-#  skus:
-#    wh_llmbox:
-#      timeout: 20
-#  owner_id: U03FJB5TM5Y # Colman Glagovich
-#  team: models
-#  model-name: llama3.2-vision
+# - name: t3k_llama3.2-vision_tests
+#   cmd: run_t3000_llama3.2-11b-vision_freq_tests
+#   skus:
+#     wh_llmbox:
+#       timeout: 20
+#   owner_id: U03FJB5TM5Y # Colman Glagovich
+#   team: models
+#   model-name: llama3.2-vision
 
-#- name: t3k_n300_mesh_llama3.2-vision_tests
-#  cmd: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-#  skus:
-#    wh_llmbox:
-#      timeout: 20
-#  owner_id: U03FJB5TM5Y # Colman Glagovich
-#  team: models
-#  model-name: n300 mesh llama3.2-vision
+# - name: t3k_n300_mesh_llama3.2-vision_tests
+#   cmd: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
+#   skus:
+#     wh_llmbox:
+#       timeout: 20
+#   owner_id: U03FJB5TM5Y # Colman Glagovich
+#   team: models
+#   model-name: n300 mesh llama3.2-vision
 
-#- name: t3k_llama3.2-90b-vision_tests
-#  cmd: run_t3000_llama3.2-90b-vision_freq_tests
-#  skus:
-#    wh_llmbox:
-#      timeout: 20
-#  owner_id: U07RY6B5FLJ # Gongyu Wang
-#  team: models
-#  model-name: llama3.2-90b-vision
+- name: t3k_llama3.2-90b-vision_tests
+  cmd: run_t3000_llama3.2-90b-vision_freq_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  model-name: llama3.2-90b-vision
 
 - name: t3k_llama3_tests
   cmd: run_t3000_llama3_tests
@@ -171,3 +171,15 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
+
+- name: t3k_deepseek_module_tests
+  cmd: |
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=T3K
+    pytest models/demos/deepseek_v3/tests/t3k_compat --durations=0
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U04N3GWH8F9 # Kartik Paigwar
+  team: models
+  model-name: deepseek-modules

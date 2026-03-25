@@ -31,7 +31,7 @@ namespace ttnn::device_operation::detail {
  * Factored out of the template pipeline to reduce per-operation template instantiation cost.
  */
 std::pair<
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,

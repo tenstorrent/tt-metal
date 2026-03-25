@@ -20,7 +20,6 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/device.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -50,9 +49,18 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    // Transitional constructor: use Tensor(HostTensor) instead.
+    //
+    // Accepts a pre-transition HostStorage (constructed without TensorSpec and
+    // TensorTopology) and assigns them during Tensor construction.
+    // Overrides any existing spec/topology in the HostStorage.
+    //
+    // TODO(#40348): Remove this.
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
     [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
+    [[nodiscard]] explicit Tensor(HostTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -78,7 +86,7 @@ public:
     // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
     [[nodiscard]] static Tensor from_span(
-        tt::stl::Span<const T> buffer,
+        ttsl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
@@ -98,11 +106,11 @@ public:
     // void* mmap_addr = mmap(...);
     // MemoryPin memory_pin(std::shared_ptr<void>(mmap_addr, [](void* addr) { munmap(addr, ...); }));
     // Tensor tensor = Tensor::from_borrowed_data(
-    //     tt::stl::Span<T>(reinterpret_cast<T*>(mmap_addr), buffer_size), shape, memory_pin);
+    //     ttsl::Span<T>(reinterpret_cast<T*>(mmap_addr), buffer_size), shape, memory_pin);
     //
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
-        tt::stl::Span<T> buffer,
+        ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         tt::tt_metal::MemoryPin buffer_pin,
         const std::optional<Tile>& tile = std::nullopt);
@@ -110,7 +118,7 @@ public:
     // Overload that takes `on_creation_callback` and `on_destruction_callback` as separate arguments.
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
-        tt::stl::Span<T> buffer,
+        ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
@@ -126,7 +134,7 @@ public:
         distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
-        return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
+        return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
 
     // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
@@ -236,9 +244,13 @@ public:
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
+    // Returns the associated HostTensor.
+    const HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.

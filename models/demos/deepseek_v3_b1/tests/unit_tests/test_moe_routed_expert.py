@@ -950,22 +950,28 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
 
-    # Create 3 intermediate tensors for 3 reduction rounds
-    # Same shape as final_output_tensor (which is the input to reduce)
-    intermediate_tensors = []
-    for _ in range(3):
-        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
-    logger.info(f"Created 3 intermediate tensors for reduce rounds")
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    logger.info(f"Created single intermediate tensor with 3x shard width for reduce rounds")
 
     # Create reduce output tensor (single-core sharded on each device)
     # Only ROOT1 device will have the final reduced result

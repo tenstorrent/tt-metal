@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <string>
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
@@ -91,6 +92,11 @@ public:
 
     // static method for clearing all core info to clear stale entries
     static void clear_all_core_info();
+
+    // Helper function to get ELF path from watcher kernel id, used for resolving format strings in dprint server
+    // If data is available, returns ELF path. If data is not available (e.g. inspector disabled, or no kernel data for
+    // the given id), returns empty string.
+    static std::string get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id);
 
     static inspector::RpcServer& get_rpc_server();
 

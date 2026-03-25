@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
+#include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
 #include <cctype>
@@ -20,6 +21,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <system_mesh.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -90,6 +92,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
     TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
     TT_METAL_FORCE_REINIT,                     // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
@@ -97,7 +100,6 @@ enum class EnvVarID {
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
     TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
     TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,                // Enable ERISC IRAM (inverted logic)
     RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
     TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
@@ -174,10 +176,12 @@ enum class EnvVarID {
     TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
     TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
     TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
+    TT_METAL_DPRINT_MESH_COORDS,               // Global system mesh (row,col) coordinates for debug printing
     TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
     TT_METAL_DPRINT_FILE,                      // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
+    TT_METAL_DEVICE_PRINT,                     // Use new DEVICE_PRINT instead of legacy DPRINT
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -203,7 +207,8 @@ enum class EnvVarID {
     // ========================================
     // JIT BUILD CONFIGURATION
     // ========================================
-    TT_METAL_BACKEND_DUMP_RUN_CMD,  // Dump JIT build commands to stdout
+    TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 };
 
 // Environment variable name for TT-Metal root directory
@@ -574,6 +579,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->fabric_trimming_override_path = std::string(value);
             break;
 
+        // TT_METAL_ENABLE_FABRIC_VC2
+        // Enables the third virtual channel (VC2) for single-hop neighbour exchange traffic.
+        // Only effective when intermesh VC is also enabled (2D + multi-mesh + Blackhole + no UDM/mux).
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
+
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
@@ -670,17 +682,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_DMA_OPS=1
         case EnvVarID::TT_METAL_DISABLE_DMA_OPS: this->disable_dma_ops = is_env_enabled(value); break;
 
-        // TT_METAL_ENABLE_ERISC_IRAM
-        // Enable ERISC IRAM functionality (inverted: 0=disabled, 1=enabled).
-        // Default: 1 (enabled)
-        // Usage: export TT_METAL_ENABLE_ERISC_IRAM=0  # to disable
-        case EnvVarID::TT_METAL_ENABLE_ERISC_IRAM: {
-            bool disabled = (value[0] == '0');
-            this->erisc_iram_enabled = !disabled;
-            this->erisc_iram_enabled_env_var = !disabled;
-            break;
-        }
-
         // TT_METAL_DISABLE_SFPLOADMACRO
         // Disable use of SFPLOADMACRO instructions.
         // Default: 0 (use SFPLOADMACRO instructions)
@@ -767,15 +768,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //   1  (1 << 0) - FPU counters
         //   2  (1 << 1) - PACK counters
         //   4  (1 << 2) - UNPACK counters
-        //   8  (1 << 3) - L1 counters
-        //   16 (1 << 4) - INSTRN (instruction) counters
-        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //   8  (1 << 3) - L1 bank 0 counters (ring0 NOC, L1 arbitration)
+        //   16 (1 << 4) - L1 bank 1 counters (ring1 NOC, TDMA extended)
+        //   32 (1 << 5) - INSTRN (instruction) counters
+        //   63 (0x3F)   - All counter groups (fpu|pack|unpack|l1_0|l1_1|instrn)
         //
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
-        // Note: Currently, only FPU counters are supported
+        // Note: L1 bank 0 and L1 bank 1 cannot be enabled simultaneously (they share
+        //       the same hardware registers and are selected via MUX_CTRL bit 4).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
+                constexpr uint32_t L1_0_BIT = (1 << 3);
+                constexpr uint32_t L1_1_BIT = (1 << 4);
+                if ((this->profiler_perf_counter_mode & L1_0_BIT) && (this->profiler_perf_counter_mode & L1_1_BIT)) {
+                    TT_THROW(
+                        "L1 bank 0 and L1 bank 1 perf counter groups cannot be enabled simultaneously. "
+                        "They share the same hardware registers (selected via MUX_CTRL bit 4). "
+                        "Please choose one: l1_0 (bit 3) or l1_1 (bit 4).");
+                }
                 this->profiler_enabled = true;
             }
             break;
@@ -1245,6 +1256,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_DPRINT_CHIPS
         // Specifies chip IDs for debug printing. Supports 'all' or comma-separated list of chip IDs.
+        // Mutually exclusive with TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_MESH_COORDS.
         // Default: all chips
         // Usage: export TT_METAL_DPRINT_CHIPS=0,1,2
         case EnvVarID::TT_METAL_DPRINT_CHIPS:
@@ -1253,10 +1265,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_DPRINT_NODES
         // Specifies fabric node IDs for debug printing. Supports 'all' or comma-separated list of node IDs.
-        // Cannot specify both TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_CHIPS.
+        // Mutually exclusive with TT_METAL_DPRINT_MESH_COORDS and TT_METAL_DPRINT_CHIPS.
         // Default: all nodes
         // Usage: export TT_METAL_DPRINT_NODES="(M0,D0),(M0,D1)"
         case EnvVarID::TT_METAL_DPRINT_NODES:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
+        // TT_METAL_DPRINT_MESH_COORDS
+        // Specifies devices by (row,col) in the global system mesh.
+        // Mutually exclusive with TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES.
+        // Default: all chips
+        // Usage: export TT_METAL_DPRINT_MESH_COORDS="(0,0),(1,3)"
+        case EnvVarID::TT_METAL_DPRINT_MESH_COORDS:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
@@ -1369,6 +1390,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
         case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
+
+        // TT_METAL_DISABLE_PRECOMPILED_FW
+        // Disable use of pre-compiled firmware and force JIT compilation instead.
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
+        case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
+
+        // TT_METAL_DEVICE_PRINT
+        // Use new DEVICE_PRINT system instead of legacy DPRINT.
+        // Default: false (legacy DPRINT is used)
+        // Usage: export TT_METAL_DEVICE_PRINT=1
+        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
     }
 }
 
@@ -1555,6 +1588,12 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     fabric_telemetry_settings = parsed_settings;
 }
 
+void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+    }
+}
+
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
     std::string feature_env_prefix("TT_METAL_");
     feature_env_prefix += RunTimeDebugFeatureNames[feature];
@@ -1563,13 +1602,16 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
     bool chips_specified = ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     bool nodes_specified = ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
-    if (nodes_specified && chips_specified) {
+    bool mesh_coords_specified = ParseFeatureMeshCoords(feature, feature_env_prefix + "_MESH_COORDS");
+    int num_chip_filters_specified =
+        static_cast<int>(chips_specified) + static_cast<int>(nodes_specified) + static_cast<int>(mesh_coords_specified);
+    if (num_chip_filters_specified > 1) {
         TT_THROW(
-            "Cannot specify both TT_METAL_{}_CHIPS and TT_METAL_{}_NODES",
-            RunTimeDebugFeatureNames[feature],
+            "TT_METAL_{0}_CHIPS, TT_METAL_{0}_NODES, and TT_METAL_{0}_MESH_COORDS are mutually exclusive; "
+            "specify at most one.",
             RunTimeDebugFeatureNames[feature]);
-    } else if (!nodes_specified && !chips_specified) {
-        // All chips are enabled if neither chips nor nodes are specified
+    } else if (num_chip_filters_specified == 0) {
+        // All chips are enabled if none of the chip filter env vars are set
         feature_targets[feature].all_chips = true;
     }
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
@@ -1728,6 +1770,62 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
     return specified;
 }
 
+bool RunTimeOptions::ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const std::string& env_var) {
+    char* env_var_str = std::getenv(env_var.c_str());
+    bool specified = env_var_str != nullptr;
+    // Clear stale state so repeated parses (e.g. on MetalContext re-init) are deterministic.
+    feature_targets[feature].mesh_coords.clear();
+    while (env_var_str != nullptr && *env_var_str != '\0') {
+        // Skip leading whitespace and quotes
+        while (*env_var_str == ' ' || *env_var_str == '"') {
+            env_var_str++;
+        }
+        if (*env_var_str == '\0') {
+            break;
+        }
+        // "all" maps to the same all_chips flag used by the other filters
+        if (strcmp(env_var_str, "all") == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
+        uint32_t row, col;
+        if (sscanf(env_var_str, "(%u,%u)", &row, &col) != 2 && sscanf(env_var_str, "(%u, %u)", &row, &col) != 2 &&
+            sscanf(env_var_str, "(%u , %u)", &row, &col) != 2) {
+            TT_THROW(
+                "Invalid format for {}: '{}'. Expected (row,col) tuples or 'all'. "
+                "Example: (0,0),(1,3)",
+                env_var,
+                env_var_str);
+        }
+        auto coord = std::make_pair(row, col);
+        auto& coords = feature_targets[feature].mesh_coords;
+        if (std::find(coords.begin(), coords.end(), coord) != coords.end()) {
+            log_warning(
+                tt::LogMetal,
+                "{}: coordinate ({},{}) specified more than once, ignoring duplicate.",
+                env_var,
+                row,
+                col);
+        } else {
+            coords.emplace_back(coord);
+        }
+        env_var_str = strchr(env_var_str, ')');
+        if (env_var_str != nullptr) {
+            env_var_str++;  // Skip ')'
+            while (*env_var_str == ',') {
+                env_var_str++;
+            }
+        }
+    }
+    if (specified && !feature_targets[feature].all_chips && feature_targets[feature].mesh_coords.empty()) {
+        TT_THROW(
+            "{} is set but contains no valid coordinates. "
+            "Expected (row,col) tuples or 'all'. Example: (0,0),(1,3)",
+            env_var);
+    }
+    return specified;
+}
+
 void RunTimeOptions::ParseFeatureRiscvMask(
     RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal) {
     const char* env_var_str = std::getenv(env_var.c_str());
@@ -1779,6 +1877,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
+    hash_str += std::to_string(get_llk_asserts());
     return hash_str;
 }
 
@@ -1817,6 +1916,55 @@ void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::Co
                     target.chip_ids.push_back(chip_id_int);
                     fmt::print("Resolved fabric node ID {} to chip ID {}\n", node_id, chip_id_int);
                 }
+            }
+        }
+    }
+}
+
+void RunTimeOptions::resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh) {
+    for (auto& target : feature_targets) {
+        if (target.mesh_coords.empty()) {
+            continue;
+        }
+
+        // Explicit coord list overrides the "all chips" mode.
+        target.all_chips = false;
+
+        const tt::tt_metal::distributed::MeshShape& mesh_shape = system_mesh.shape();
+        const tt::tt_metal::distributed::SystemMesh::MappedDevices mapped =
+            system_mesh.get_mapped_devices(std::nullopt);
+
+        target.chip_ids.clear();
+        std::unordered_set<int> seen_chip_ids;
+
+        for (const auto& [row, col] : target.mesh_coords) {
+            // Bounds check — done here because we didn't have the shape at parse time.
+            TT_FATAL(
+                row < mesh_shape[0] && col < mesh_shape[1],
+                "TT_METAL_DPRINT_MESH_COORDS ({},{}) is out of bounds for system mesh shape {}x{}",
+                row,
+                col,
+                mesh_shape[0],
+                mesh_shape[1]);
+
+            tt::tt_metal::distributed::MeshCoordinate coord(row, col);
+            size_t linear_index = coord.to_linear_index(mapped.mesh_shape);
+            const auto& maybe_device_id = mapped.device_ids[linear_index];
+
+            if (!maybe_device_id.is_local()) {
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT_MESH_COORDS ({},{}) corresponds to a device on a remote host; "
+                    "skipping for this process.",
+                    row,
+                    col);
+                continue;
+            }
+
+            int chip_id = *maybe_device_id;
+            if (seen_chip_ids.insert(chip_id).second) {
+                target.chip_ids.push_back(chip_id);
+                log_info(tt::LogMetal, "Resolved DPRINT_MESH_COORDS ({},{}) to chip ID {}", row, col, chip_id);
             }
         }
     }

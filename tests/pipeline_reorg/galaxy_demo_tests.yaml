@@ -17,11 +17,12 @@
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
     pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
     pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-1-prefix-caching-pcc" --timeout 1000
     pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
   model: llama3
   skus:
     wh_galaxy:
-      timeout: 22
+      timeout: 32
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -128,7 +129,7 @@
 
 - name: Galaxy DeepSeek v3 demo tests
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
     pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress" --timeout 900
   model: deepseek_v3
   skus:
@@ -156,7 +157,7 @@
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
   model: qwen3_32b
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -169,7 +170,7 @@
     pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
   model: qwen3_32b_long_context
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
