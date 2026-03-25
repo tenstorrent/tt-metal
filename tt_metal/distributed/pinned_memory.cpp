@@ -33,7 +33,10 @@ PinnedMemoryImpl::PinnedMemoryImpl(
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
 
-PinnedMemoryImpl::~PinnedMemoryImpl() { device_buffers_.clear(); }
+PinnedMemoryImpl::~PinnedMemoryImpl() {
+    drain_barrier_events();
+    device_buffers_.clear();
+}
 
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
     buffer_size_(other.buffer_size_),
@@ -266,12 +269,16 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
 
 bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
 
-void* PinnedMemoryImpl::lock() {
+void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
         distributed::EventSynchronize(event);
         barrier_events_.pop_front();
     }
+}
+
+void* PinnedMemoryImpl::lock() {
+    drain_barrier_events();
     return get_host_ptr();
 }
 
