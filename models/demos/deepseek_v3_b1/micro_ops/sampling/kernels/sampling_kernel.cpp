@@ -46,7 +46,6 @@ void kernel_main() {
         0,
         0xFFFFFFFF,
         0,
-        get_named_compile_time_arg_val("sampling_gather_cb"),
         get_named_compile_time_arg_val("sampling_winner_cb"),
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
@@ -57,7 +56,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
         get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
         get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
-        get_named_compile_time_arg_val("sampling_topk_out_indices_cb")>;
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb"),
+        get_named_compile_time_arg_val("sampling_phase2_scores_byte_offset"),
+        get_named_compile_time_arg_val("sampling_phase2_indices_byte_offset")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
         .scores_addr = get_common_arg_val<uint32_t>(0),
@@ -68,7 +69,6 @@ void kernel_main() {
         .scratch_addr = get_common_arg_val<uint32_t>(5),
         .global_sem_addr = get_common_arg_val<uint32_t>(6),
         .global_stage2_sem_addr = get_common_arg_val<uint32_t>(7),
-        .gather_addr = 0,
     };
 
     deepseek_b1_ops::TopKSampling::
@@ -121,6 +121,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage2_receiver"),
         get_named_compile_time_arg_val("sampling_num_values"),
+        get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
         get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
         get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),

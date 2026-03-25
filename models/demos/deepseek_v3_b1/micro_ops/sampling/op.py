@@ -453,7 +453,6 @@ class SamplingOp:
         expected_remote_incs = num_cores - 1 if final_is_sender else num_cores
 
         winner_cb = 0
-        gather_cb = 1
         softmax_in_cb = 2
         softmax_out_cb = 3
         max_cb = 4
@@ -484,6 +483,12 @@ class SamplingOp:
         topk_indices_stride = _round_up(k * 4, l1_alignment)
         winner_page_bytes = topk_scores_stride + topk_indices_stride
 
+        phase1_tiles = (num_values + 1023) // 1024 if k == 32 else 0
+        phase2_tiles = (k * num_cores + 1023) // 1024
+        total_input_tiles = phase1_tiles + phase2_tiles
+        phase2_scores_byte_offset = phase1_tiles * bf16_tile_size
+        phase2_indices_byte_offset = phase1_tiles * uint32_tile_size
+
         ncrisc_named_compile_time_args = [
             ("sampling_num_values", num_values),
             ("sampling_topk_k", k),
@@ -491,7 +496,6 @@ class SamplingOp:
             ("sampling_num_senders", num_cores),
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
-            ("sampling_gather_cb", gather_cb),
             ("sampling_receiver_semaphore_id", semaphore_id),
             ("sampling_local_ready_semaphore_id", 1),
             ("sampling_mesh_mode", 0),
@@ -515,10 +519,12 @@ class SamplingOp:
             ("sampling_scaler_cb", scaler_cb),
             ("sampling_temp_cb", temp_cb),
             ("sampling_inv_temp_bf16", inv_temp_bf16),
-            ("sampling_topk_in_scores_cb", topk_in_scores_cb if k == 32 else 0xFFFFFFFF),
-            ("sampling_topk_in_indices_cb", topk_in_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_in_scores_cb", topk_in_scores_cb),
+            ("sampling_topk_in_indices_cb", topk_in_indices_cb),
             ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
             ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_phase2_scores_byte_offset", phase2_scores_byte_offset),
+            ("sampling_phase2_indices_byte_offset", phase2_indices_byte_offset),
         ]
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
@@ -535,8 +541,9 @@ class SamplingOp:
             ("sampling_mesh_mode", 0),
             ("sampling_stage2_receiver", 0),
             ("sampling_num_values", num_values),
-            ("sampling_topk_in_scores_cb", topk_in_scores_cb if k == 32 else 0xFFFFFFFF),
-            ("sampling_topk_in_indices_cb", topk_in_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_num_senders", num_cores if k == 32 else 0),
+            ("sampling_topk_in_scores_cb", topk_in_scores_cb),
+            ("sampling_topk_in_indices_cb", topk_in_indices_cb),
             ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
             ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
         ]
@@ -620,17 +627,6 @@ class SamplingOp:
             core_ranges=all_cores,
             format_descriptors=[winner_cb_format],
         )
-        gather_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=gather_cb,
-            data_format=ttnn.uint32,
-            page_size=winner_page_bytes,
-        )
-        gather_cb_descriptor = ttnn.CBDescriptor(
-            total_size=winner_page_bytes * num_cores,
-            core_ranges=all_cores,
-            format_descriptors=[gather_cb_format],
-        )
-
         final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
         softmax_in_cb_descriptor = ttnn.CBDescriptor(
             total_size=bf16_tile_size,
@@ -703,33 +699,28 @@ class SamplingOp:
             ],
         )
 
-        llk_cbs = []
+        topk_cbs = [
+            ttnn.CBDescriptor(
+                total_size=total_input_tiles * bf16_tile_size,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=topk_in_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                    )
+                ],
+            ),
+            ttnn.CBDescriptor(
+                total_size=total_input_tiles * uint32_tile_size,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=topk_in_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
+                    )
+                ],
+            ),
+        ]
         if k == 32:
-            max_row_elements = max(num_values, k * num_cores)
-            num_llk_input_tiles = (max_row_elements + 1023) // 1024
-            llk_cbs.append(
-                ttnn.CBDescriptor(
-                    total_size=num_llk_input_tiles * bf16_tile_size,
-                    core_ranges=all_cores,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=topk_in_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
-                        )
-                    ],
-                )
-            )
-            llk_cbs.append(
-                ttnn.CBDescriptor(
-                    total_size=num_llk_input_tiles * uint32_tile_size,
-                    core_ranges=all_cores,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=topk_in_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
-                        )
-                    ],
-                )
-            )
-            llk_cbs.append(
+            topk_cbs.append(
                 ttnn.CBDescriptor(
                     total_size=bf16_tile_size,
                     core_ranges=all_cores,
@@ -740,7 +731,7 @@ class SamplingOp:
                     ],
                 )
             )
-            llk_cbs.append(
+            topk_cbs.append(
                 ttnn.CBDescriptor(
                     total_size=uint32_tile_size,
                     core_ranges=all_cores,
@@ -762,7 +753,6 @@ class SamplingOp:
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 winner_cb_descriptor,
-                gather_cb_descriptor,
                 softmax_in_cb_descriptor,
                 softmax_out_cb_descriptor,
                 max_cb_descriptor,
@@ -773,7 +763,7 @@ class SamplingOp:
                 softmax_sub_cb_descriptor,
                 rand_cb_descriptor,
             ]
-            + llk_cbs,
+            + topk_cbs,
             semaphores=[receiver_semaphore_descriptor],
         )
 
@@ -846,7 +836,6 @@ class SamplingOp:
         global_stage2_sem_addr = int(ttnn.get_global_semaphore_address(global_stage2_semaphore))
 
         winner_cb = 0
-        gather_cb = 1
         softmax_in_cb = 2
         softmax_out_cb = 3
         max_cb = 4
@@ -856,10 +845,15 @@ class SamplingOp:
         temp_cb = 8
         softmax_sub_cb = 9
         rand_cb = 10
+        topk_in_scores_cb = 11
+        topk_in_indices_cb = 12
+        topk_out_scores_cb = 13
+        topk_out_indices_cb = 14
         semaphore_id = 0
         local_ready_semaphore_id = 1
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32
+        uint32_tile_size = 4 * 32 * 32
 
         inv_temp_bf16 = float_to_bfloat16_packed(1.0 / temperature)
         p_uint32_cast = float_to_uint32(p)
@@ -936,6 +930,10 @@ class SamplingOp:
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     sender_link_idx = 0
 
+                phase2_tiles_mesh = (k * num_cores + 1023) // 1024
+                phase2_scores_byte_offset_mesh = 0
+                phase2_indices_byte_offset_mesh = 0
+
                 ncrisc_named_compile_time_args = [
                     ("sampling_num_values", num_values),
                     ("sampling_topk_k", k),
@@ -943,7 +941,6 @@ class SamplingOp:
                     ("sampling_num_senders", num_cores),
                     ("sampling_expected_remote_incs", expected_remote_incs),
                     ("sampling_winner_cb", winner_cb),
-                    ("sampling_gather_cb", gather_cb),
                     ("sampling_receiver_semaphore_id", semaphore_id),
                     ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
                     ("sampling_mesh_mode", 1),
@@ -966,6 +963,12 @@ class SamplingOp:
                     ("sampling_scaler_cb", scaler_cb if is_final_mesh_device else 0),
                     ("sampling_temp_cb", temp_cb if is_final_mesh_device else 0),
                     ("sampling_inv_temp_bf16", inv_temp_bf16),
+                    ("sampling_topk_in_scores_cb", topk_in_scores_cb),
+                    ("sampling_topk_in_indices_cb", topk_in_indices_cb),
+                    ("sampling_topk_out_scores_cb", 0xFFFFFFFF),
+                    ("sampling_topk_out_indices_cb", 0xFFFFFFFF),
+                    ("sampling_phase2_scores_byte_offset", phase2_scores_byte_offset_mesh),
+                    ("sampling_phase2_indices_byte_offset", phase2_indices_byte_offset_mesh),
                 ]
                 trisc_named_compile_time_args = [
                     ("sampling_softmax_in_cb", softmax_in_cb if is_final_mesh_device else 0),
@@ -981,6 +984,12 @@ class SamplingOp:
                     ("sampling_topk_k", k),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage2_receiver", 1 if is_stage2_receiver else 0),
+                    ("sampling_num_values", 0),
+                    ("sampling_num_senders", 0),
+                    ("sampling_topk_in_scores_cb", topk_in_scores_cb),
+                    ("sampling_topk_in_indices_cb", topk_in_indices_cb),
+                    ("sampling_topk_out_scores_cb", 0xFFFFFFFF),
+                    ("sampling_topk_out_indices_cb", 0xFFFFFFFF),
                 ]
                 rand_output_addr = 0
                 if rand_per_device is not None and is_final_mesh_device:
@@ -1095,12 +1104,21 @@ class SamplingOp:
                         )
                     ],
                 )
-                gather_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=winner_page_bytes * num_cores,
+                topk_in_scores_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=phase2_tiles_mesh * bf16_tile_size,
                     core_ranges=all_cores,
                     format_descriptors=[
                         ttnn.CBFormatDescriptor(
-                            buffer_index=gather_cb, data_format=ttnn.uint32, page_size=winner_page_bytes
+                            buffer_index=topk_in_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                        )
+                    ],
+                )
+                topk_in_indices_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=phase2_tiles_mesh * uint32_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=topk_in_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
                         )
                     ],
                 )
@@ -1114,7 +1132,7 @@ class SamplingOp:
                     core_ranges=all_cores,
                     initial_value=0,
                 )
-                cbs = [winner_cb_descriptor, gather_cb_descriptor]
+                cbs = [winner_cb_descriptor, topk_in_scores_cb_descriptor, topk_in_indices_cb_descriptor]
 
                 if is_final_mesh_device:
                     final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
