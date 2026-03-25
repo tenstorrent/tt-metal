@@ -412,7 +412,7 @@ Before merging new or modified sweep tests, verify locally and also run the [ttn
 ```bash
 python tests/sweep_framework/validate_sweep_pipeline.py \
   --model-trace /path/to/model_trace.json \
-  --module-name model_traced.all_gather \
+  --module-name model_traced.all_gather_async_model_traced \
   --suite model_traced \
   --mesh-shape 4x8
 ```
