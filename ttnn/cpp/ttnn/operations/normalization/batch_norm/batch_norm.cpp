@@ -101,6 +101,11 @@ Tensor batch_norm(
 
     Tensor batch_mean, batch_var;
     if (training) {
+        // TODO: These generic TTNN ops use the compute_kernel_config as-is. In mixed precision,
+        // the highest-precision accumulation is only enforced inside the batch_norm and
+        // running_statistics prims (via any_float32). If required in the future, we may need to
+        // propagate the precision requirement here so these reductions also accumulate in fp32
+        // when params are fp32.
         batch_mean = operations::normalization::mean_NHW(input, memory_config, compute_kernel_config);
         auto mean_sq = operations::normalization::mean_NHW(
             ttnn::square(input, memory_config), memory_config, compute_kernel_config);
