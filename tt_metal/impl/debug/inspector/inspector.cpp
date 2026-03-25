@@ -33,7 +33,11 @@ inspector::Data* get_inspector_data() {
 // Inspector is not used on mock devices
 bool Inspector::is_enabled() {
     if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).rtoptions().get_inspector_enabled();
+        auto& ctx = tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID);
+        if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+            return false;
+        }
+        return ctx.rtoptions().get_inspector_enabled();
     }
     return false;
 }
@@ -366,8 +370,11 @@ void Inspector::mesh_workload_set_operation_name_and_parameters(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
         auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
         mesh_workload_data.name = std::string(operation_name);
