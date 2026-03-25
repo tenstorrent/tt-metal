@@ -167,6 +167,7 @@ class InspectorRpcSerialized(InspectorData):
 
 # Default port from docopt; when this is used and rank env is set, effective port = base + rank (match C++ rtoptions).
 _DEFAULT_INSPECTOR_RPC_PORT = 50051
+_MAX_PORT = 65535
 
 
 def _get_rank_from_env() -> int:
@@ -190,11 +191,11 @@ def run(args, context) -> InspectorData:
     rpc_host = args["--inspector-rpc-host"]
     try:
         rpc_port_int = int(rpc_port)
-        if rpc_port_int <= 0 or rpc_port_int > 65535:
+        if rpc_port_int <= 0 or rpc_port_int > _MAX_PORT:
             raise ValueError(f"port out of range: {rpc_port_int}")
     except Exception as exc:
         raise ValueError(
-            f"Invalid --inspector-rpc-port value '{rpc_port}'. Expected integer in range 1-65535."
+            f"Invalid --inspector-rpc-port value '{rpc_port}'. Expected integer in range 1-{_MAX_PORT}."
         ) from exc
 
     # When default port was used (not explicitly overridden), use rank-aware port so timeout-invoked
@@ -203,9 +204,9 @@ def run(args, context) -> InspectorData:
         rank = _get_rank_from_env()
         if rank >= 0:
             effective_port = _DEFAULT_INSPECTOR_RPC_PORT + rank
-            if effective_port > 65535:
+            if effective_port > _MAX_PORT:
                 raise ValueError(
-                    f"Inspector RPC port overflow: base_port={_DEFAULT_INSPECTOR_RPC_PORT} + rank={rank} exceeds 65535. "
+                    f"Inspector RPC port overflow: base_port={_DEFAULT_INSPECTOR_RPC_PORT} + rank={rank} exceeds {_MAX_PORT}. "
                     "Set --inspector-rpc-port to a lower base port or reduce rank count."
                 )
             rpc_port_int = effective_port
