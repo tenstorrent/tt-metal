@@ -168,7 +168,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t block_sz = K_block_tiles * M_block;
     uint32_t cb_size = db_factor * block_sz;
     uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per nsb pass
-    uint32_t padded_out_tiles = padded_M_tiles;
+    // Output tensor is logical [M, M] — width in tiles matches logical_M_tiles
+    uint32_t padded_out_tiles = logical_M_tiles;
     uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per nsb pass
 
     // CB for sender output: c_3 (per-msb) or c_5 (per-nsb)
@@ -724,7 +725,12 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                 uint32_t M_start_tile = y * Mpc;
                 uint32_t N_start_tile = x * Mpc;
                 std::vector<uint32_t> rt = {
-                    (uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, out_addr, M_start_tile, N_start_tile};
+                    (uint32_t)row_sender_p.x,
+                    (uint32_t)row_sender_p.y,
+                    out_addr,
+                    M_start_tile,
+                    N_start_tile,
+                    logical_M_tiles};
                 if (mirror_active) {
                     rt.push_back(N_start_tile);  // mirror_M_start = N_start (swapped)
                     rt.push_back(M_start_tile);  // mirror_N_start = M_start (swapped)

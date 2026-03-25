@@ -58,6 +58,7 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t logical_M_tiles = get_arg_val<uint32_t>(argidx++);
 #ifdef MIRROR_OUTPUT
     const uint32_t mirror_M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t mirror_N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -121,21 +122,28 @@ void kernel_main() {
         for (uint32_t m = 0; m < current_M_block; m++) {
             cb_wait_front(cb_out, Mpc);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
+            uint32_t row = M_start_tile + M_start + m;
             for (uint32_t n = 0; n < Mpc; n++) {
-                uint32_t tile_id = (M_start_tile + M_start + m) * padded_out_tiles + (N_start_tile + n);
-                noc_async_write_tile(tile_id, out_writer, l1_read_addr + n * out_tile_size);
+                uint32_t col = N_start_tile + n;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tile_id = row * padded_out_tiles + col;
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + n * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, Mpc);
         }
 #ifdef MIRROR_OUTPUT
-        // Mirror write: c_4 has transposed tiles in column-major (Mpc pushes of M_block)
         for (uint32_t n = 0; n < Mpc; n++) {
             cb_wait_front(mirror_cb, current_M_block);
             uint32_t l1_read_addr = get_read_ptr(mirror_cb);
+            uint32_t col = mirror_N_start_tile + n;
             for (uint32_t m = 0; m < current_M_block; m++) {
-                uint32_t tile_id = (mirror_M_start_tile + M_start + m) * padded_out_tiles + (mirror_N_start_tile + n);
-                noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                uint32_t row = mirror_M_start_tile + M_start + m;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tile_id = row * padded_out_tiles + col;
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(mirror_cb, current_M_block);
@@ -146,23 +154,29 @@ void kernel_main() {
         for (uint32_t n = 0; n < Mpc; n++) {
             cb_wait_front(cb_out, current_M_block);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
+            uint32_t col = N_start_tile + n;
             for (uint32_t m = 0; m < current_M_block; m++) {
-                uint32_t tile_id = (M_start_tile + M_start + m) * padded_out_tiles + (N_start_tile + n);
-                noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                uint32_t row = M_start_tile + M_start + m;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tile_id = row * padded_out_tiles + col;
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, current_M_block);
         }
 
 #ifdef MIRROR_OUTPUT
-        // Mirror write: c_4 has transposed tiles in column-major (N_cols pushes of M_rows)
-        // Write to swapped position: mirror_M_start, mirror_N_start
         for (uint32_t n = 0; n < Mpc; n++) {
             cb_wait_front(mirror_cb, current_M_block);
             uint32_t l1_read_addr = get_read_ptr(mirror_cb);
+            uint32_t col = mirror_N_start_tile + n;
             for (uint32_t m = 0; m < current_M_block; m++) {
-                uint32_t tile_id = (mirror_M_start_tile + M_start + m) * padded_out_tiles + (mirror_N_start_tile + n);
-                noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                uint32_t row = mirror_M_start_tile + M_start + m;
+                if (row < logical_M_tiles && col < logical_M_tiles) {
+                    uint32_t tile_id = row * padded_out_tiles + col;
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + m * out_tile_size);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(mirror_cb, current_M_block);
