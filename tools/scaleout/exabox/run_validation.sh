@@ -22,6 +22,8 @@ Optional:
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
+    --volume <host-path>                    Extra volume mount for Docker containers (can be repeated)
+                                            The host path is mounted at the same path inside the container
     --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --help                                  Display this help message and exit
 
@@ -41,6 +43,7 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
+EXTRA_VOLUMES=(/data/scaleout_configs)
 RERUN_ON_RETRAIN=false
 
 while [[ $# -gt 0 ]]; do
@@ -105,6 +108,14 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --volume)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --volume requires a non-empty value"
+                exit 1
+            fi
+            EXTRA_VOLUMES+=("$2")
+            shift 2
+            ;;
         --rerun-on-retrain)
             if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
                 echo "Error: --rerun-on-retrain does not accept a value"
@@ -148,6 +159,11 @@ run_cluster_validation() {
         local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
     fi
 
+    local volume_args=()
+    for vol in "${EXTRA_VOLUMES[@]}"; do
+        volume_args+=(--volume "$vol")
+    done
+
     if [[ $DOCKER_IMAGE == "none" ]]; then
         mpirun --host "$HOSTS" \
             --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
@@ -159,6 +175,7 @@ run_cluster_validation() {
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            "${volume_args[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
