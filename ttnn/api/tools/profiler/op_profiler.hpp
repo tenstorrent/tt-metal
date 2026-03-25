@@ -237,8 +237,6 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     // Deduplicate by source file: ops with per-core compile-time args produce one
     // Kernel object per core (all sharing the same source), which would otherwise
     // emit hundreds of identical entries and blow past Tracy's 64KiB message limit.
-    std::unordered_set<std::string_view> seenComputeSources;
-    std::unordered_set<std::string_view> seenDMSources;
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
@@ -548,18 +546,20 @@ inline std::string op_meta_data_serialized_json(
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
         }
         if (msg.size() > tracy_limit) {
-            // kernel_info is the largest field. Drop it to fit within the limit;
-            // process_ops_logs.py guards all kernel_info accesses with "if in".
             j.erase("kernel_info");
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+        }
+        if (msg.size() > tracy_limit) {
             log_warning(
                 tt::LogMetal,
                 "Tracy op profiler message for op '{}' (call {}, device {}) exceeded the {} byte limit even after "
-                "compacting JSON. kernel_info was dropped from the perf report for this op.",
+                "dropping kernel_info ({} bytes). Message discarded.",
                 j.value("op_code", "?"),
                 operation_id,
                 device_id,
-                tracy_limit);
+                tracy_limit,
+                msg.size());
+            return {};
         }
         return msg;
     }

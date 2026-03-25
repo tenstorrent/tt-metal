@@ -254,7 +254,8 @@ void populateZoneSrcLocations(
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
-                "Skipping zone source location with invalid line number '{}': {}",
+                "Skipping zone source location entry '{}' with invalid line number '{}': {}",
+                zone_src_location,
                 line_num_str,
                 e.what());
             continue;
