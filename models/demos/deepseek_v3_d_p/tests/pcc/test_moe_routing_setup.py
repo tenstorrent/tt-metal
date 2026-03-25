@@ -22,20 +22,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_fabric_router_config,
     extract_mesh_config,
-    get_ep_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoERoutingSetup
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
-    compare_exact,
-    validate_composed,
-    validate_replication,
-)
-from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table
 
 
 @pytest.mark.parametrize(
@@ -77,7 +71,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             },
             1,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
         ),
     ],
@@ -176,58 +170,52 @@ def test_prep_dispatch_combine(
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
-        expert_dispatch_table=expert_dispatch_table,
     )
 
-    tt_gate_outputs = TtMoERoutingSetup(
+    tt_gate_outputs = MoERoutingSetup(
         mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
     )
 
     tt_expert_offsets, tt_expert_token_counts, tt_per_device_expert_counter = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
+        dispatch_group_size=dispatch_group_size,
         num_routed_experts=num_routed_experts,
+        experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    # Both TTNN and reference outputs are now in sparse format:
-    # Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
-    # Compose across cols (dispatch groups) and rows (dispatch_group_size)
+    # tt_expert_offsets and tt_expert_token_counts are replicated across columns; and sparse across rows;
+    # expert_offsets, and expert_token_counts on torch are dense acrros rows;
+
+    # Compose across cols and rows
+    # - Validate replication on cols
+    # - Sparse -> dense on rows to validate everything
     tt_expert_offsets = ttnn.unsqueeze_to_4D(tt_expert_offsets)
     tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
 
-    ep_composer = get_ep_mesh_composer(mesh_device)
-    # squeeze(2) removes only the singleton dim from unsqueeze_to_4D, preserving [groups, chips, experts]
-    host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=ep_composer).squeeze(2)
-    host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=ep_composer).squeeze(2)
+    composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+    host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=composer)
+    host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=composer)
 
-    # Validate replication of expert_token_counts within dispatch groups (all chips see same totals)
-    replication_result = validate_replication(host_expert_token_counts, name="counts_replication")
+    tensors_to_validate = [
+        ("expert_offsets", host_expert_offsets, expert_offsets),
+        ("expert_token_counts", host_expert_token_counts, expert_token_counts),
+    ]
 
-    # Validate values match torch reference
-    offsets_result = validate_composed(
-        host_expert_offsets.int(),
-        expert_offsets.int(),
-        num_dispatch_groups,
-        dispatch_group_size,
-        compare_exact,
-        name="expert_offsets",
-    )
-    counts_result = validate_composed(
-        host_expert_token_counts.int(),
-        expert_token_counts.int(),
-        num_dispatch_groups,
-        dispatch_group_size,
-        compare_exact,
-        name="expert_token_counts",
-    )
+    # Validate replication within dispatch groups (across cols)
+    for name, host_tensor, _ in tensors_to_validate:
+        for i in range(num_dispatch_groups):
+            ref = host_tensor[i][0]
+            for j in range(1, dispatch_group_size):
+                if not torch.allclose(host_tensor[i][j], ref, atol=0, rtol=0):
+                    raise AssertionError(
+                        f"Replication mismatch in {name} for dispatch group {i}, row {j}. "
+                        f"Expected {ref}, got {host_tensor[i][j]}"
+                    )
 
-    log_validation_results(
-        results=[offsets_result, counts_result],
-        num_dispatch_groups=num_dispatch_groups,
-        dispatch_group_size=dispatch_group_size,
-        title="Routing Setup Validation",
-    )
-
-    for r in [replication_result, offsets_result, counts_result]:
-        r.assert_passed(f"{r.name} validation failed")
+    # Validate sparse -> dense across dispatch groups (rows)
+    for name, host_tensor, expected in tensors_to_validate:
+        tt_dense = sum(host_tensor[i][0].int() for i in range(num_dispatch_groups))
+        if not torch.allclose(tt_dense.flatten(), expected.int().flatten(), atol=0, rtol=0):
+            raise AssertionError(f"Sparse->dense mismatch for {name}. Expected {expected}, got {tt_dense}")
