@@ -312,11 +312,11 @@ class MoEDecoderStage(DecoderStage):
 
         return PipelineBlock(
             mesh_device,
-            self.PIPELINE_CORE,
-            upstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            upstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
-            downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
         )
