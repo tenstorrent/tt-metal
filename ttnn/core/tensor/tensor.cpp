@@ -612,7 +612,8 @@ std::uint64_t Tensor::to_hash() const noexcept {
         this->logical_shape(),
         this->padded_shape(),
         this->shard_spec(),
-        this->nd_shard_spec());
+        this->nd_shard_spec(),
+        this->tensor_topology());
 }
 
 const tt::tt_metal::Shape& Tensor::logical_shape() const {

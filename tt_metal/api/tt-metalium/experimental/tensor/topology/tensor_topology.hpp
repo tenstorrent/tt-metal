@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
@@ -57,6 +59,9 @@ public:
     // If no tensor coordinate corresponds to the given physical device coordinate, returns std::nullopt
     std::optional<tt::tt_metal::distributed::MeshCoordinate> get_tensor_coord(
         const tt::tt_metal::distributed::MeshCoordinate& device_coord) const;
+
+    // Used by `ttsl::hash::hash_object` / `Tensor::to_hash`; includes distribution and replica vs shard choice.
+    [[nodiscard]] std::uint64_t to_hash() const noexcept;
 
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;

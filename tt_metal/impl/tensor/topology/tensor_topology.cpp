@@ -6,6 +6,8 @@
 
 #include <tt_stl/reflection.hpp>
 
+#include <variant>
+
 namespace tt::tt_metal {
 
 TensorTopology TensorTopology::create_fully_replicated_tensor_topology(
@@ -119,6 +121,29 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
 
     // No match found
     return std::nullopt;
+}
+
+std::uint64_t TensorTopology::to_hash() const noexcept {
+    using tt::tt_metal::distributed::MeshMapperConfig;
+    ttsl::hash::hash_t h = 0;
+    h = ttsl::hash::hash_objects(h, distribution_shape_);
+    for (const auto& placement : placements_) {
+        std::visit(
+            [&h](const auto& alt) {
+                using T = std::decay_t<decltype(alt)>;
+                if constexpr (std::is_same_v<T, MeshMapperConfig::Replicate>) {
+                    h = ttsl::hash::hash_objects(h, std::uint8_t{0});
+                } else {
+                    static_assert(std::is_same_v<T, MeshMapperConfig::Shard>);
+                    h = ttsl::hash::hash_objects(h, std::uint8_t{1}, alt.dim);
+                }
+            },
+            placement);
+    }
+    for (const auto& coord : mesh_coords_) {
+        h = ttsl::hash::hash_objects(h, coord);
+    }
+    return h;
 }
 
 bool operator==(const TensorTopology& lhs, const TensorTopology& rhs) {
