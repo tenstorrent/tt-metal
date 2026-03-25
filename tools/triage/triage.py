@@ -55,34 +55,16 @@ import re
 
 _triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.txt")
 
-_ttexalens_import_error: "ImportError | None" = None
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
     import capnp
 except ImportError as e:
-    _ttexalens_import_error = e
-
-
-def _check_requirements() -> None:
-    """Print a user-friendly install hint and exit if required packages are missing.
-
-    Call this at the start of the CLI entry point (``main()``) to surface a
-    clear error message instead of a raw ``ImportError``.
-
-    Note: this module requires ``rich`` and ``ttexalens`` at import time
-    (lines below this function). If those packages are not installed, the module
-    itself cannot be imported and this function is unreachable. The try-except
-    at module level only guards ``ttexalens.tt_exalens_init`` / ``capnp``.
-    Tests that do ``import triage`` (e.g. ``test_triage.py``) therefore require
-    the full dependency stack to be installed.
-    """
-    if _ttexalens_import_error is not None:
-        RST = "\033[0m" if utils.should_use_color() else ""
-        GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-        pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-        print(f"Module '{_ttexalens_import_error.name}' not found. Please install requirements by running:")
-        print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path}{RST}")
-        exit(1)
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"Module '{e.name}' not found. Please install requirements by running:")
+    print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path}{RST}")
+    exit(1)
 
 
 # Import necessary libraries
@@ -983,7 +965,6 @@ def _build_triage_summary(script_queue: list[TriageScript]) -> str:
 
 
 def main():
-    _check_requirements()
     triage_start = time()
 
     # Parse only tt-triage script arguments first to initialize logging and console
