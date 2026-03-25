@@ -115,15 +115,6 @@ class DispatcherData:
         # Prefill cache from no-arg RPC (best effort); strict handling happens on-demand.
         self._populate_build_env_cache(strict=False)
 
-        if run_checks is None:
-            raise TTTriageError(
-                "RunChecks dependency is unavailable. Fix run_checks failures first (device mapping and selection) "
-                "or pass --dev explicitly."
-            )
-        if not hasattr(run_checks, "devices"):
-            raise TTTriageError(
-                "RunChecks.devices is unavailable. Ensure run_checks completed successfully and returned a valid result."
-            )
         if not run_checks.devices:
             raise TTTriageError(
                 "RunChecks selected zero devices. This commonly happens when --dev=in_use is combined with "
