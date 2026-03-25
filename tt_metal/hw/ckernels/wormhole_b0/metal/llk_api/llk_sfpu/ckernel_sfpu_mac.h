@@ -6,7 +6,6 @@
 
 #include "llk_defs.h"
 #include "sfpi.h"
-#include "ckernel_sfpu_binary.h"
 
 namespace ckernel::sfpu {
 
@@ -20,19 +19,28 @@ inline void calculate_mac(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
 
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr InstrModLoadStore mod0 =
+        (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
     // mac: out = a * b + c
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 * in1 + in2;
+        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, dst_index_in2 * dst_tile_size);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPNOP;
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A,
+                0,
+                p_sfpu::LREG3,
+                p_sfpu::LREG3,
+                InstrModLoadStore::FP16A);
         }
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
