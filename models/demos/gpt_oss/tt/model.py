@@ -531,7 +531,7 @@ class Model:
         for uid in user_indices:
             plen = int(prompt_lens[uid])
             toks = torch.cat(
-                [tokens[uid : uid + 1, :plen], torch.zeros(1, max_padded_len - plen, dtype=torch.long)], dim=-1
+                [tokens[uid : uid + 1, :plen], torch.zeros(1, max_padded_len - plen, dtype=tokens.dtype)], dim=-1
             )
             tokens_list.append(toks)
             pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
@@ -694,6 +694,10 @@ class Model:
 
         ttnn.synchronize_device(mesh_device)
         if sampling_params is not None:
+            # GPT-OSS always emits <|channel|> (token 200005) as the first generated token
+            # regardless of prompt content. Skipping lm_head and returning this hardcoded
+            # token saves ~100ms/user by avoiding the 201K-vocab matmul. vLLM device
+            # sampling accepts this as a pre-sampled token ID.
             CHANNEL_TOKEN_ID = 200005
             return torch.full((actual_batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
                 actual_batch_size, 1, dtype=torch.float32

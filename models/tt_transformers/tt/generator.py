@@ -359,6 +359,9 @@ class Generator(WarmupForwardMixin):
         sampling_params=None,
     ):
         """Dispatch to model's row-sharded batched prefill."""
+        assert (
+            self.data_parallel == 1
+        ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
         return self.model[0].row_sharded_batched_prefill(
             tokens,
             page_table,
