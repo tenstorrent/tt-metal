@@ -464,6 +464,9 @@ class VisionBackbone(LightweightModule):
         pool_dim = image_features_2d.shape[-1]
         gathered = ttnn.reshape(gathered, [1, 1, batch_size * n_out * k_pool, pool_dim])
 
+        # Per-position valid counts (same mask as forward() / HF): [1, B*N_out, K_pool, 1]
+        valid_k = ttnn.reshape(valid_mask_ttnn, [1, batch_size * n_out, k_pool, 1])
+
         # 3. Apply valid mask (zero out invalid positions)
         # valid_mask_ttnn: [1, 1, B*N_out*K_pool, 1]
         gathered = ttnn.mul(gathered, valid_mask_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -471,16 +474,40 @@ class VisionBackbone(LightweightModule):
         # Reshape to [1, B*N_out, K_pool, pool_dim]
         to_pool = ttnn.reshape(gathered, [1, batch_size * n_out, k_pool, pool_dim])
 
-        # 4. Compute query (mean of valid features per output position)
-        # Sum along K_pool dimension
+        # 4. Query = masked mean of gathered features (matches HF Molmo2VisionBackbone.forward)
+        #
+        # query = sum(to_pool, dim=K) / max(1, sum(valid, dim=K)) per output position.
+        # Shapes are static in B, N_out, K_pool; only mask values vary per input (traceable).
         query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)  # [1, B*N_out, 1, pool_dim]
-
-        # Simplified mean: uses static K_pool as denominator instead of per-position valid counts.
-        # Trade-off: enables TTNN tracing (dynamic per-position valid counts break trace capture)
-        # at the cost of slight accuracy reduction vs forward() which uses a proper masked mean.
-        # Measured PCC gap vs forward() path: < 0.01 for typical inputs.
-        query = ttnn.mul(query_sum, 1.0 / k_pool, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        valid_counts = ttnn.sum(valid_k, dim=2, keepdim=True)  # [1, B*N_out, 1, 1]
+        denom = ttnn.clamp(valid_counts, min=1.0)
+        query = ttnn.divide(query_sum, denom, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(query_sum)
+        ttnn.deallocate(valid_counts)
+
+        # Additive SDPA mask: 0 on valid keys, -inf on invalid (matches forward() when use_attention_mask)
+        valid_for_attn = ttnn.reshape(valid_k, [batch_size * n_out, 1, 1, k_pool])
+        zeros_mask = ttnn.zeros(
+            valid_for_attn.shape,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=valid_for_attn.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        neg_inf = ttnn.full(
+            valid_for_attn.shape,
+            fill_value=float("-inf"),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=valid_for_attn.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_mask = ttnn.where(ttnn.eq(valid_for_attn, zeros_mask), neg_inf, zeros_mask)
+        ttnn.deallocate(zeros_mask)
+        ttnn.deallocate(neg_inf)
+        ttnn.deallocate(valid_for_attn)
+        ttnn.deallocate(valid_k)
+        ttnn.deallocate(denom)
 
         # Optional: move small inputs to L1 so pooling matmuls read from L1 (reduces latency).
         # Only when tensor fits in L1 to avoid OOM (e.g. < 512K elements per tensor).
@@ -494,20 +521,20 @@ class VisionBackbone(LightweightModule):
         # 5. Cross-attention pooling
         # query: [1, B*N_out, 1, pool_dim]
         # to_pool (key/value): [1, B*N_out, K_pool, pool_dim]
-        # attn_mask is skipped here: dynamic masking breaks TTNN trace capture.
-        # The non-traced forward() path passes the mask correctly.
+        # attn_mask: [B*N_out, 1, 1, K_pool] additive (0 / -inf), same as forward()
         pool_matmul_config = (
             ttnn.L1_MEMORY_CONFIG if _query_el <= 512 * 1024 and _to_pool_el <= 512 * 1024 else ttnn.DRAM_MEMORY_CONFIG
         )
         pooled_features = self.image_pooling_2d(
             query=query,
             key_value=to_pool,
-            attn_mask=None,
+            attn_mask=attn_mask,
             matmul_output_memory_config=pool_matmul_config,
         )
 
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
+        ttnn.deallocate(attn_mask)
         ttnn.deallocate(gathered)
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]

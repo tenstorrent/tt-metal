@@ -161,7 +161,7 @@ MESH_DEVICE=T3K pytest models/demos/molmo2/tests/ -v
 1. **Decode RoPE**: Uses PyTorch-based RoPE computation during decode (HEIGHT_SHARDED requirement workaround)
 2. **Unified Trace**: Combined vision+prefill trace is disabled due to TTNN trace capture limitations with embedding ops
 3. **Weight Precision**: Uses bfloat16 weights during decode to avoid numerical overflow (bfloat8_b causes issues)
-4. **Vision trace simplified mean**: `forward_ttnn` uses static `1/K_pool` mean instead of per-position masked mean for traceability (PCC gap < 0.01)
+4. **Vision trace**: `forward_ttnn` uses the same per-position masked mean and additive SDPA mask as `forward()` / HF (fixed shapes; mask values vary per input).
 
 ## Future Optimizations
 
@@ -172,7 +172,6 @@ The following optimizations are identified but not yet implemented:
 | Unified vision+prefill trace | Eliminate trace setup latency | TTNN does not support `ttnn.embedding` writes during trace capture |
 | Native decode RoPE via `rotary_embedding_llama` | Reduce decode latency | HEIGHT_SHARDED tensor layout incompatibility |
 | Fused QKV in text prefill | Reduce prefill matmuls from 3→1 | None; straightforward to implement |
-| Per-position masked mean in `forward_ttnn` | Improve vision trace PCC by < 0.01 | Requires dynamic gather support in trace |
 | bfloat8_b decode weights | Reduce memory bandwidth | Numerical overflow in deep layers; needs investigation |
 
 ## References
