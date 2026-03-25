@@ -28,7 +28,7 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
         input_shape[input_shape.size() - 1],
         args.num_experts_per_token);
 
-    TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::UINT32, "Expert dispatch table must be UINT32!");
+    TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::INT32, "Expert dispatch table must be INT32!");
     TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert dispatch table must be ROW_MAJOR!");
     const auto& mask_shape = expert_mask.padded_shape();
     bool valid_1d = mask_shape.size() == 1 && mask_shape[0] == args.n_routed_experts;

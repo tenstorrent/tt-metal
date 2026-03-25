@@ -20,9 +20,9 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
             Input tensor must be a 2D UINT16 height-sharded ROW_MAJOR tensor of shape [sp_dim, topk_dim]
             containing expert indices selected for each token.
 
-            Expert dispatch table must be a UINT32 ROW_MAJOR tensor of shape [n_routed_experts] or
-            [1, n_routed_experts]. Values encode chip placement: 0xFFFFFFFF (-1 as int32) means the
-            expert is absent (skipped), any other value means the expert is present (counted).
+            Expert dispatch table must be an INT32 ROW_MAJOR tensor of shape [n_routed_experts] or
+            [1, n_routed_experts]. Negative (-1) means the expert is absent (skipped), non-negative
+            values (chip IDs) mean the expert is present.
 
             Returns a 1D UINT32 tensor of shape [n_routed_experts] where each element is the
             count of how many times the corresponding expert index appears in the input,
@@ -30,7 +30,7 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
 
             Args:
                 * :attr:`input_tensor`: 2D UINT16 height-sharded tensor of expert indices [sp_dim, topk_dim].
-                * :attr:`expert_mask`: UINT32 tensor of shape [n_routed_experts] or [1, n_routed_experts] (0xFFFFFFFF = skip, other = count).
+                * :attr:`expert_mask`: INT32 tensor of shape [n_routed_experts] or [1, n_routed_experts] (negative = skip, non-negative = count).
                 * :attr:`n_routed_experts`: Number of routed experts (output dimension size).
                 * :attr:`num_experts_per_token`: Number of expert columns per row to count (must be <= topk_dim). Columns beyond this index are ignored, allowing padded shard widths.
 

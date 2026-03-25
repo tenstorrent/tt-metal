@@ -113,7 +113,7 @@ class MoEGatePrefill(LightweightModule):
             self.expert_dispatch_table = ttnn.from_torch(
                 dispatch_table[0],
                 device=mesh_device,
-                dtype=ttnn.uint32,
+                dtype=ttnn.int32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -121,7 +121,7 @@ class MoEGatePrefill(LightweightModule):
             self.expert_dispatch_table = ttnn.from_torch(
                 dispatch_table,
                 device=mesh_device,
-                dtype=ttnn.uint32,
+                dtype=ttnn.int32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(

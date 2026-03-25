@@ -78,10 +78,11 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             .set_page_size(cb_gather_tmp, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gather_config);
 
-    // CB 4: expert mask (UINT32, one value per expert)
+    // CB 4: expert dispatch table (INT32, one value per expert; negative = absent, non-negative = present)
+    tt::DataFormat mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::INT32);
     uint32_t cb_mask = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_mask_config =
-        tt::tt_metal::CircularBufferConfig(mask_page_size, {{cb_mask, output_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(mask_page_size, {{cb_mask, mask_cb_data_format}})
             .set_page_size(cb_mask, mask_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_config);
 

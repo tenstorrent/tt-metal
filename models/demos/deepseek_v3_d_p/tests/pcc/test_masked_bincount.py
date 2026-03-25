@@ -144,12 +144,11 @@ def test_masked_bincount(
     )
     tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
-    # Dispatch table -> UINT32 for kernel (-1 in int32 becomes 0xFFFFFFFF in uint32)
     if num_dispatch_groups == 1:
         tt_dispatch_table = ttnn.from_torch(
             dispatch_table[0],
             device=mesh_device,
-            dtype=ttnn.uint32,
+            dtype=ttnn.int32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -157,7 +156,7 @@ def test_masked_bincount(
         tt_dispatch_table = ttnn.from_torch(
             dispatch_table,
             device=mesh_device,
-            dtype=ttnn.uint32,
+            dtype=ttnn.int32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
