@@ -125,7 +125,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 762_793_000,  # Welford off
+        "blackhole": 271_459_000,
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
@@ -133,7 +133,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 324_271_938,
-        "blackhole": 383_168_000,  # Welford off
+        "blackhole": 140_042_000,
     },
     "vae_encode_512x512": {
         "wormhole": 83_537_085,
