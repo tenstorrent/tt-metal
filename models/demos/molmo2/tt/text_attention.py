@@ -269,6 +269,8 @@ class TextAttention(LightweightModule):
         attn_mask: Optional[ttnn.Tensor] = None,
         start_pos: int = 0,
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+        trace_id: int = None,
+        layer_idx: int = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through GQA attention (prefill mode) with tensor parallelism.

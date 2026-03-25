@@ -1230,6 +1230,7 @@ class Molmo2Generator:
             attn_mask=None,
             kv_caches=self.kv_caches,
             rot_mats=rot_mats,
+            trace_id=trace_id,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
