@@ -131,48 +131,48 @@ groupings {
   ]
 }
 
-# MESH: 1 tray (8 ASICs)
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_1 } }
-  ]
-}
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_2 } }
-  ]
-}
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_3 } }
-  ]
-}
-# MESH: 1 tray (8 ASICs)
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { preset_type: TRAY_4 } }
-  ]
-}
+# # MESH: 1 tray (8 ASICs)
+# groupings {
+#   name: "2x4_Mesh"
+#   preset_type: MESH
+#   instances: [
+#     { id: 0 grouping_ref { preset_type: TRAY_1 } }
+#   ]
+# }
+# groupings {
+#   name: "2x4_Mesh"
+#   preset_type: MESH
+#   instances: [
+#     { id: 0 grouping_ref { preset_type: TRAY_2 } }
+#   ]
+# }
+# groupings {
+#   name: "2x4_Mesh"
+#   preset_type: MESH
+#   instances: [
+#     { id: 0 grouping_ref { preset_type: TRAY_3 } }
+#   ]
+# }
+# # MESH: 1 tray (8 ASICs)
+# groupings {
+#   name: "2x4_Mesh"
+#   preset_type: MESH
+#   instances: [
+#     { id: 0 grouping_ref { preset_type: TRAY_4 } }
+#   ]
+# }
 
-#groupings {
-#  name: "4x2 Mesh"
-#  preset_type: MESH
-#  instances: [
-#    { id: 0 grouping_ref { custom_type: "HALFTRAY" } },
-#    { id: 1 grouping_ref { custom_type: "HALFTRAY" } }
-#  ]
-#  row_major_mesh {
-#    dims: [2, 1]
-#  }
-#}
+groupings {
+ name: "4x2 Mesh"
+ preset_type: MESH
+ instances: [
+   { id: 0 grouping_ref { custom_type: "HALFTRAY" } },
+   { id: 1 grouping_ref { custom_type: "HALFTRAY" } }
+ ]
+ row_major_mesh {
+   dims: [2, 1]
+ }
+}
 
 # MESH: 2 trays (16 ASICs)
 groupings {
