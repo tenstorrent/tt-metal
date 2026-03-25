@@ -49,32 +49,82 @@ class BgeM3Model(LightweightModule):
             for layer_num in range(args.n_layers)
         ]
 
+    # def create_position_ids_from_input_ids(
+    #     self,
+    #     input_ids: ttnn.Tensor,
+    #     padding_idx: int,
+    #     past_key_values_length: int = 0,
+    # ) -> ttnn.Tensor:
+    #     """
+    #     HuggingFace RoBERTa-compatible, padding-aware position ID derivation.
+    #     """
+    #     self._require_rank2(input_ids, "input_ids")
+
+    #     mask = ttnn.ne(input_ids, padding_idx)
+    #     if mask.layout != ttnn.TILE_LAYOUT:
+    #         mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
+    #     mask = ttnn.typecast(mask, dtype=ttnn.int32)
+
+    #     incremental_indices = ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
+    #     if past_key_values_length:
+    #         incremental_indices = incremental_indices + int(past_key_values_length)
+    #     incremental_indices = incremental_indices * mask
+
+    #     position_ids = incremental_indices + int(padding_idx)
+    #     if position_ids.dtype != ttnn.uint32:
+    #         position_ids = ttnn.typecast(position_ids, dtype=ttnn.uint32)
+    #     if position_ids.layout != input_ids.layout:
+    #         position_ids = ttnn.to_layout(position_ids, input_ids.layout)
+    #     return position_ids
     def create_position_ids_from_input_ids(
         self,
         input_ids: ttnn.Tensor,
         padding_idx: int,
         past_key_values_length: int = 0,
     ) -> ttnn.Tensor:
-        """
-        HuggingFace RoBERTa-compatible, padding-aware position ID derivation.
-        """
         self._require_rank2(input_ids, "input_ids")
 
+        # mask: 1 for valid tokens, 0 for padding
         mask = ttnn.ne(input_ids, padding_idx)
         if mask.layout != ttnn.TILE_LAYOUT:
             mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
         mask = ttnn.typecast(mask, dtype=ttnn.int32)
 
-        incremental_indices = ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
-        if past_key_values_length:
-            incremental_indices = incremental_indices + int(past_key_values_length)
-        incremental_indices = incremental_indices * mask
+        batch_size, seq_len = input_ids.shape
 
-        position_ids = incremental_indices + int(padding_idx)
+        # Fast base positions: [0,1,2,...]
+        base_positions = ttnn.arange(
+            start=0,
+            end=seq_len,
+            step=1,
+            device=input_ids.device(),
+            dtype=ttnn.int32,
+        )
+        base_positions = ttnn.unsqueeze(base_positions, 0)
+        base_positions = ttnn.expand(base_positions, [batch_size, seq_len])
+
+        # Compute shift: number of pads before each token
+        # shift = index - valid_position_index
+        pad_counts = base_positions - ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
+
+        # Corrected positions
+        position_ids = base_positions - pad_counts
+
+        if past_key_values_length:
+            position_ids = position_ids + int(past_key_values_length)
+
+        # Zero out padding
+        position_ids = position_ids * mask
+
+        # Add padding_idx offset
+        position_ids = position_ids + int(padding_idx)
+
         if position_ids.dtype != ttnn.uint32:
             position_ids = ttnn.typecast(position_ids, dtype=ttnn.uint32)
+
         if position_ids.layout != input_ids.layout:
             position_ids = ttnn.to_layout(position_ids, input_ids.layout)
+
         return position_ids
 
     def _prepare_attention_mask(

@@ -203,6 +203,7 @@ class BgeM3Attention(LightweightModule):
             transpose_k_heads=False,
             memory_config=cfg.score_memcfg,
         )
+
         ttnn.deallocate(qkv_fused)
 
         # Stage 3: optional deterministic cast to score dtype.
@@ -352,10 +353,10 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     if config.score_prg_config is None:
         to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(8, 8),  # (8,8)
             q_chunk_size=128,
             k_chunk_size=512,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
     # Phase D: resolve single target device.
