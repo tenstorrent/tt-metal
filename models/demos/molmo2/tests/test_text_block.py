@@ -229,8 +229,8 @@ def _run_text_block_test(device, layer_num: int):
 
     # Split fused MLP projection
     ff_proj = state_dict[f"{prefix}.mlp.ff_proj.weight"]
-    ref_model.gate_proj.weight.data = ff_proj[:intermediate_dim, :]
-    ref_model.up_proj.weight.data = ff_proj[intermediate_dim:, :]
+    ref_model.up_proj.weight.data = ff_proj[:intermediate_dim, :]
+    ref_model.gate_proj.weight.data = ff_proj[intermediate_dim:, :]
 
     ref_model.down_proj.weight.data = state_dict[f"{prefix}.mlp.ff_out.weight"]
     ref_model.eval()
