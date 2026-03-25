@@ -27,6 +27,7 @@ void set_or_update_runtime_arguments(
     tt::tt_metal::KernelHandle writer_kernel_id,
     tt::tt_metal::KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
+    bool any_float32,
     const RunningStatistics::operation_attributes_t& operation_attributes,
     const RunningStatistics::tensor_args_t& tensor_args,
     RunningStatistics::tensor_return_value_t& c,
@@ -54,15 +55,6 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-
-    const bool any_float32 =
-        (tt::tt_metal::datatype_to_dataformat_converter(batch_mean_tensor.dtype()) == tt::DataFormat::Float32 ||
-         tt::tt_metal::datatype_to_dataformat_converter(batch_var_tensor.dtype()) == tt::DataFormat::Float32 ||
-         tt::tt_metal::datatype_to_dataformat_converter(c.dtype()) == tt::DataFormat::Float32 ||
-         (running_mean_has_value &&
-          tt::tt_metal::datatype_to_dataformat_converter(running_mean_tensor->dtype()) == tt::DataFormat::Float32) ||
-         (running_var_has_value &&
-          tt::tt_metal::datatype_to_dataformat_converter(running_var_tensor->dtype()) == tt::DataFormat::Float32));
 
     const uint32_t cHtWt = cHt * cWt;
     const auto scalar = momentum;
@@ -382,13 +374,15 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         writer_kernel_id,
         compute_kernel_id,
         compute_with_storage_grid_size,
+        any_float32,
         operation_attributes,
         tensor_args,
         output,
         set_runtime_args);
 
     return {
-        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size}};
+        std::move(program),
+        {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size, any_float32}};
 }
 
 void RunningStatistics::RunningStatisticsProgramFactory::override_runtime_arguments(
@@ -409,6 +403,7 @@ void RunningStatistics::RunningStatisticsProgramFactory::override_runtime_argume
         cached_program.shared_variables.writer_kernel_id,
         cached_program.shared_variables.compute_kernel_id,
         cached_program.shared_variables.compute_with_storage_grid_size,
+        cached_program.shared_variables.any_float32,
         operation_attributes,
         tensor_args,
         output,

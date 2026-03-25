@@ -27,6 +27,7 @@ void set_or_update_runtime_arguments(
     tt::tt_metal::KernelHandle writer_kernel_id,
     tt::tt_metal::KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
+    bool any_float32,
     const BatchNormOperation::operation_attributes_t& operation_attributes,
     const BatchNormOperation::tensor_args_t& tensor_args,
     BatchNormOperation::tensor_return_value_t& c,
@@ -54,16 +55,6 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-
-    const bool any_float32 =
-        (tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()) == tt::DataFormat::Float32 ||
-         tt::tt_metal::datatype_to_dataformat_converter(batch_mean_tensor.dtype()) == tt::DataFormat::Float32 ||
-         tt::tt_metal::datatype_to_dataformat_converter(batch_var_tensor.dtype()) == tt::DataFormat::Float32 ||
-         tt::tt_metal::datatype_to_dataformat_converter(c.dtype()) == tt::DataFormat::Float32 ||
-         (weight_has_value &&
-          tt::tt_metal::datatype_to_dataformat_converter(weight_tensor->dtype()) == tt::DataFormat::Float32) ||
-         (bias_has_value &&
-          tt::tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype()) == tt::DataFormat::Float32));
 
     const uint32_t cHtWt = cHt * cWt;
     const auto scalar = eps;
@@ -178,6 +169,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t f_single_tile_size = tt::tile_size(f_data_format);
     uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
 
+    // If accumulation occurs in float32 but output dtype is different, the compute kernel must typecast from
+    // float32 to output dtype
     const bool needs_output_typecast =
         (interm_data_format == DataFormat::Float32 && c_data_format != DataFormat::Float32);
 
@@ -348,13 +341,15 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         writer_kernel_id,
         compute_kernel_id,
         compute_with_storage_grid_size,
+        any_float32,
         operation_attributes,
         tensor_args,
         output,
         set_runtime_args);
 
     return {
-        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size}};
+        std::move(program),
+        {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size, any_float32}};
 }
 
 void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
@@ -375,6 +370,7 @@ void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
         cached_program.shared_variables.writer_kernel_id,
         cached_program.shared_variables.compute_kernel_id,
         cached_program.shared_variables.compute_with_storage_grid_size,
+        cached_program.shared_variables.any_float32,
         operation_attributes,
         tensor_args,
         output,
