@@ -37,6 +37,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
@@ -47,10 +48,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_where.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_minimum.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_maximum.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_activation.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
@@ -64,14 +64,14 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_divide.py
   - tests/ttnn/unit_tests/operations/eltwise/test_tanh_accuracy.py
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_fill.py
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
   - tests/ttnn/unit_tests/operations/eltwise/test_gcd.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_i1.py
   - tests/ttnn/unit_tests/operations/eltwise/test_exp_21f.py
   - tests/ttnn/unit_tests/operations/eltwise/test_mul.py
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_i1.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
 
@@ -102,6 +102,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
+
 
   # Reduce tests
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
@@ -200,3 +201,4 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
+
