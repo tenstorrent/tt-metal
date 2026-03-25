@@ -354,23 +354,6 @@ def summarize_failure_message(message: str | None) -> str:
     return lines[-1]
 
 
-def add_contextual_failure_hint(script_name: str | None, summary: str, message: str | None) -> str:
-    """Append script-aware hints to otherwise generic exception summaries."""
-    script_name = script_name or ""
-    full_message = message or ""
-
-    if (
-        script_name == "check_arc.py"
-        and "TypeError: 'NoneType' object is not iterable" in summary
-        and "heartbeat_samples" in full_message
-    ):
-        return (
-            f"{summary} (check_arc could not collect heartbeat samples; this usually means upstream device data "
-            "collection failed. Check prior failures from run_checks.py / metal_device_id_mapping.py / inspector data.)"
-        )
-
-    return summary
-
 
 def format_failure_message_lines(message: str | None, indent: str = "    ") -> list[str]:
     if not message:
@@ -390,7 +373,6 @@ def build_dependency_failure_lines(script: TriageScript) -> list[str]:
     lines = ["Failed dependencies:"]
     for failed_dep in failed_dependencies:
         summary = summarize_failure_message(failed_dep.failure_message)
-        summary = add_contextual_failure_hint(failed_dep.name, summary, failed_dep.failure_message)
         lines.append(f"- {failed_dep.name}: {summary}")
     lines.append(
         "Action: fix dependency failures above. For inspector-related failures, verify --inspector-log-path or "
@@ -664,7 +646,6 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"    {failure}")
             if script.failed:
                 summary = summarize_failure_message(script.failure_message)
-                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
                 utils.ERROR(f"    Summary: {summary}")
                 if script.failure_message and script.failure_message.strip() != summary:
                     utils.ERROR("    Details:")
@@ -1050,7 +1031,6 @@ def main():
                             utils.INFO(f"{script.name}{execution_time}:")
                             if script.failure_message is not None:
                                 summary = summarize_failure_message(script.failure_message)
-                                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
                                 utils.ERROR(f"  Data provider script failed: {summary}")
                                 if script.failure_message.strip() != summary:
                                     utils.ERROR("  Details:")
