@@ -152,6 +152,42 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+# ---- Bench: topology mapping SAT (CryptoMiniSat C++ API) ----
+# Install: sudo apt install libcryptominisat5-dev  (Jammy+ universe)
+find_path(CRYPTOMINISAT_INCLUDE_DIR NAMES cryptominisat5/cryptominisat.h PATHS /usr/include)
+find_library(
+    CRYPTOMINISAT_LIBRARY
+    NAMES
+        cryptominisat5
+    PATHS
+        /usr/lib
+        /usr/lib/x86_64-linux-gnu
+)
+
+if(NOT CRYPTOMINISAT_INCLUDE_DIR OR NOT CRYPTOMINISAT_LIBRARY)
+    message(
+        FATAL_ERROR
+        "topology_mapping_sat_benchmark requires libcryptominisat5-dev. "
+        "On Ubuntu/Debian: sudo apt install libcryptominisat5-dev"
+    )
+endif()
+
+add_executable(
+    topology_mapping_sat_benchmark
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/topology_mapping_sat_benchmark.cpp
+)
+
+target_include_directories(topology_mapping_sat_benchmark PRIVATE ${CRYPTOMINISAT_INCLUDE_DIR})
+
+target_link_libraries(topology_mapping_sat_benchmark PRIVATE ${CRYPTOMINISAT_LIBRARY})
+
+set_target_properties(
+    topology_mapping_sat_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 # ---- Test: addrgen_write (unified test for all addrgen variants) ----
 add_executable(
     test_addrgen_write
