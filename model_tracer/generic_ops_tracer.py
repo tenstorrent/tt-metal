@@ -103,7 +103,6 @@ def get_machine_info():
         device_count = len(pci_interfaces)
 
         # --- Device series & card count via tt-smi JSON snapshot -------------
-        import json
         from collections import Counter
 
         result = subprocess.run(
