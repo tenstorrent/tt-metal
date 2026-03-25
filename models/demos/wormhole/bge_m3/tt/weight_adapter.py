@@ -1,4 +1,5 @@
-from __future__ import annotations
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
 
@@ -109,7 +110,7 @@ def build_embedding_weights(state_dict: dict[str, torch.Tensor], dtype: object) 
 
 
 def build_attention_weights(
-    state_dict: dict[str, torch.Tensor], layer_num: int, qkv_dtype: object, wo_dtype: object, norm_dtype: object
+    state_dict: dict[str, torch.Tensor], layer_num: int, dtype: object, norm_dtype: object
 ) -> AttentionWeights:
     attention_scope = f"roberta.encoder.layer.{layer_num}.attention"
     attention_state = substate(state_dict, attention_scope)
@@ -147,16 +148,16 @@ def build_attention_weights(
     wo_bias = output_state.get("dense.bias")
 
     return AttentionWeights(
-        wqkv=_to_lazy_weight(wqkv, qkv_dtype),
-        wo_weight=_to_lazy_weight(wo_weight, wo_dtype),
-        bqkv=_to_lazy_weight(bqkv, qkv_dtype) if bqkv is not None else None,
-        wo_bias=_to_lazy_weight(_preprocess_linear_bias(wo_bias), wo_dtype) if wo_bias is not None else None,
+        wqkv=_to_lazy_weight(wqkv, dtype),
+        wo_weight=_to_lazy_weight(wo_weight, dtype),
+        bqkv=_to_lazy_weight(bqkv, dtype) if bqkv is not None else None,
+        wo_bias=_to_lazy_weight(_preprocess_linear_bias(wo_bias), dtype) if wo_bias is not None else None,
         layer_norm=_maybe_layer_norm_weights(output_layer_norm_state, norm_dtype),
     )
 
 
 def build_mlp_weights(
-    state_dict: dict[str, torch.Tensor], layer_num: int, wi_dtype: object, wo_dtype: object, norm_dtype: object
+    state_dict: dict[str, torch.Tensor], layer_num: int, dtype: object, norm_dtype: object
 ) -> MLPWeights:
     layer_scope = f"roberta.encoder.layer.{layer_num}"
     layer_state = substate(state_dict, layer_scope)
@@ -176,9 +177,9 @@ def build_mlp_weights(
     wo_bias = output_dense_state.get("bias")
 
     return MLPWeights(
-        wi_weight=_to_lazy_weight(wi_weight, wi_dtype),
-        wo_weight=_to_lazy_weight(wo_weight, wo_dtype),
-        wi_bias=_to_lazy_weight(_preprocess_linear_bias(wi_bias), wi_dtype) if wi_bias is not None else None,
-        wo_bias=_to_lazy_weight(_preprocess_linear_bias(wo_bias), wo_dtype) if wo_bias is not None else None,
+        wi_weight=_to_lazy_weight(wi_weight, dtype),
+        wo_weight=_to_lazy_weight(wo_weight, dtype),
+        wi_bias=_to_lazy_weight(_preprocess_linear_bias(wi_bias), dtype) if wi_bias is not None else None,
+        wo_bias=_to_lazy_weight(_preprocess_linear_bias(wo_bias), dtype) if wo_bias is not None else None,
         layer_norm=_maybe_layer_norm_weights(output_layer_norm_state, norm_dtype),
     )
