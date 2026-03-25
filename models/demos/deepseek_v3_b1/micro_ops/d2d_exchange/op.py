@@ -182,6 +182,17 @@ class SocketInterface:
             0,
             ttnn.BufferType.L1,
         )
+        if self.multi_upstream and sender_mesh.get_mesh_device():
+            sync_core_range = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(send_core_coord.core_coord, send_core_coord.core_coord)]
+            )
+            self._page_ready_sem = ttnn.create_global_semaphore(
+                self.mesh_device, sync_core_range, 0, ttnn.BufferType.L1
+            )
+            self._ncrisc_done_sem = ttnn.create_global_semaphore(
+                self.mesh_device, sync_core_range, 0, ttnn.BufferType.L1
+            )
+
         self.sender_packet_header_cb_index = (
             0 if sender_packet_header_cb_index is None else sender_packet_header_cb_index
         )
@@ -313,9 +324,15 @@ class SocketInterface:
 
         num_upstream = len(my_upstream_sockets)
         assert num_upstream == 8, "Multi-upstream kernel requires exactly 8 upstream sockets"
+        assert num_upstream % 2 == 0
+
+        num_sockets_per_risc = num_upstream // 2
+        brisc_sockets = my_upstream_sockets[:num_sockets_per_risc]
+        ncrisc_sockets = my_upstream_sockets[num_sockets_per_risc:]
+        brisc_socket_addrs = [s.get_config_buffer_address() for s in brisc_sockets]
+        ncrisc_socket_addrs = [s.get_config_buffer_address() for s in ncrisc_sockets]
 
         downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
-        upstream_socket_config_addrs = [s.get_config_buffer_address() for s in my_upstream_sockets]
 
         my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
         my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
@@ -340,19 +357,20 @@ class SocketInterface:
                         my_upstream_fabric_node_id == upstream_fid
                     ), "All upstream sockets must be on the same remote device"
 
-        num_fwd_links = 2
-        num_bwd_links = 1
-
         fabric_max_payload_size = 0
         num_whole_fabric_packets_per_link = 0
         partial_packet_size = 0
+
+        # 2 forward headers (one per RISC) + 2 backward headers (one per RISC, if fabric on receiver)
+        num_fwd_headers = 2
+        num_bwd_headers = 2 if use_fabric_on_receiver else 0
 
         packet_header_cb_desc = None
         if use_fabric_on_receiver or use_fabric_on_sender:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             num_whole_fabric_packets_per_link = self.upstream_page_size // fabric_max_payload_size
             partial_packet_size = self.upstream_page_size % fabric_max_payload_size
-            packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+            packet_header_cb_num_pages = num_fwd_headers + num_bwd_headers
             packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
             packet_header_cb_desc = ttnn.CBDescriptor(
@@ -367,59 +385,106 @@ class SocketInterface:
                 ],
             )
 
-        kernel_ct_args = [
-            downstream_socket_config_addr,  # 0: sender_socket_config_addr
-            num_upstream,  # 1: num_upstream_sockets
-            self.upstream_page_size,  # 2: upstream_page_size
-            ttnn.get_global_semaphore_address(self.termination_semaphore),  # 3
-            self.page_size,  # 4: page_size (total sender page)
-            num_whole_fabric_packets_per_link,  # 5
-            fabric_max_payload_size,  # 6: whole_packet_size
-            partial_packet_size,  # 7
-            packet_header_cb_index,  # 8
-            use_fabric_on_receiver,  # 9
-            use_fabric_on_sender,  # 10
-        ]
-        kernel_ct_args.extend(upstream_socket_config_addrs)  # 11-18
+        page_ready_sem_addr = ttnn.get_global_semaphore_address(self._page_ready_sem)
+        ncrisc_done_sem_addr = ttnn.get_global_semaphore_address(self._ncrisc_done_sem)
 
-        exchange_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp",
+        def _build_ct_args(socket_addrs, socket_start_idx, pkt_hdr_slot_start):
+            ct_args = [
+                downstream_socket_config_addr,  # 0: sender_socket_config_addr
+                num_sockets_per_risc,  # 1: num_upstream_sockets_per_risc
+                self.upstream_page_size,  # 2: upstream_page_size
+                ttnn.get_global_semaphore_address(self.termination_semaphore),  # 3
+                self.page_size,  # 4: page_size (total sender page)
+                num_whole_fabric_packets_per_link,  # 5
+                fabric_max_payload_size,  # 6: whole_packet_size
+                partial_packet_size,  # 7
+                packet_header_cb_index,  # 8
+                use_fabric_on_receiver,  # 9
+                use_fabric_on_sender,  # 10
+                page_ready_sem_addr,  # 11
+                ncrisc_done_sem_addr,  # 12
+                socket_start_idx,  # 13
+                pkt_hdr_slot_start,  # 14
+            ]
+            ct_args.extend(socket_addrs)  # 15-18
+            return ct_args
+
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])
+        kernel_source = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
+
+        # BRISC kernel: handles sockets 0..N/2-1, packet header slots 0-1, fabric link 0
+        brisc_kernel = ttnn.KernelDescriptor(
+            kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
-            compile_time_args=kernel_ct_args,
+            core_ranges=core_ranges,
+            compile_time_args=_build_ct_args(brisc_socket_addrs, 0, 0),
             config=ttnn.WriterConfigDescriptor(),
         )
 
+        # NCRISC kernel: handles sockets N/2..N-1, packet header slots 2-3, fabric link 1
+        ncrisc_kernel = ttnn.KernelDescriptor(
+            kernel_source=kernel_source,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_ranges,
+            compile_time_args=_build_ct_args(ncrisc_socket_addrs, num_sockets_per_risc, 2),
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+
         program = ttnn.ProgramDescriptor(
-            kernels=[exchange_kernel],
+            kernels=[brisc_kernel, ncrisc_kernel],
             semaphores=[],
             cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
         )
 
-        program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
-        rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
+        cx, cy = my_core_coord.core_coord.x, my_core_coord.core_coord.y
+
+        # BRISC runtime args: 1 forward fabric link (idx 0) + 1 backward link (idx 0)
+        program.kernels[0].runtime_args[cx][cy] = []
+        brisc_rt = program.kernels[0].runtime_args[cx][cy]
 
         if use_fabric_on_sender:
-            for idx in range(num_fwd_links):
-                fwd_fabric_args = ttnn.setup_fabric_connection(
-                    my_fabric_node_id,
-                    my_downstream_fabric_node_id,
-                    idx,
-                    program,
-                    my_core_coord.core_coord,
-                )
-                rt_args_ref.extend(fwd_fabric_args)
+            fwd_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_downstream_fabric_node_id,
+                0,
+                program,
+                my_core_coord.core_coord,
+            )
+            brisc_rt.extend(fwd_args)
 
         if use_fabric_on_receiver:
-            for idx in range(num_bwd_links):
-                bwd_fabric_args = ttnn.setup_fabric_connection(
-                    my_fabric_node_id,
-                    my_upstream_fabric_node_id,
-                    idx,
-                    program,
-                    my_core_coord.core_coord,
-                )
-                rt_args_ref.extend(bwd_fabric_args)
+            bwd_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_upstream_fabric_node_id,
+                0,
+                program,
+                my_core_coord.core_coord,
+            )
+            brisc_rt.extend(bwd_args)
+
+        # NCRISC runtime args: 1 forward fabric link (idx 1) + 1 backward link (idx 1)
+        program.kernels[1].runtime_args[cx][cy] = []
+        ncrisc_rt = program.kernels[1].runtime_args[cx][cy]
+
+        if use_fabric_on_sender:
+            fwd_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_downstream_fabric_node_id,
+                1,
+                program,
+                my_core_coord.core_coord,
+            )
+            ncrisc_rt.extend(fwd_args)
+
+        if use_fabric_on_receiver:
+            bwd_args = ttnn.setup_fabric_connection(
+                my_fabric_node_id,
+                my_upstream_fabric_node_id,
+                1,
+                program,
+                my_core_coord.core_coord,
+            )
+            ncrisc_rt.extend(bwd_args)
 
         return program
 
@@ -494,8 +559,10 @@ class SocketInterface:
                     cbs=combined_cbs,
                 )
                 # Preserve per-kernel runtime args from the independently built programs.
-                combined_program.kernels[0].runtime_args = sender_program.kernels[0].runtime_args
-                combined_program.kernels[1].runtime_args = receiver_program.kernels[0].runtime_args
+                for i, k in enumerate(sender_program.kernels):
+                    combined_program.kernels[i].runtime_args = k.runtime_args
+                for i, k in enumerate(receiver_program.kernels):
+                    combined_program.kernels[len(sender_program.kernels) + i].runtime_args = k.runtime_args
                 mesh_program_descriptor[
                     ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
                 ] = combined_program
