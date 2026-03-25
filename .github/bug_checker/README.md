@@ -85,14 +85,14 @@ flowchart TD
 - `select_rules()` filters by file-glob and label match against `PRInfo`
 - `group_rules()` batches rules that share a `group` name into a single LLM session
 - Current rules:
-  - `ccl-ring-buffer-mismatch` — blocking, paths: `ccl/**`
-  - `reshape-dim-check` — warning, paths: `data_movement/**`
+  - `ccl-ring-buffer-mismatch` — blocking, paths: `tt_metal/impl/ccl/**`, `ttnn/cpp/ttnn/operations/ccl/**`, labels: `area:ccl`
+  - `reshape-dim-check` — warning, paths: `ttnn/cpp/ttnn/operations/data_movement/**`, labels: `area:ops`
 
 #### LLM Analysis — `llm.py` : `LLMSession.analyze_rule()` (31–194)
 
 - Creates an Anthropic client (`claude-sonnet-4-6`, `max_tokens: 4096`, `temperature: 0`)
 - Per matched rule:
-  1. `_filter_diff_for_rule()` narrows the diff to files matching the rule's path globs
+  1. `_filter_diff_for_rule()` narrows the diff to files matching the rule's path globs; for label-only matches (no path globs matched), the full diff is passed through
   2. Builds a system prompt requiring structured `` ```finding `` blocks
   3. Builds a user message with the rule's markdown + filtered diff
   4. Calls `client.messages.create()`
