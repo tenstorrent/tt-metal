@@ -69,13 +69,17 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     if num_steps < 3:
         raise Exception(f"Number of steps recorded is less than 3.")
 
-    # Get the last 5% if number of steps > 100
+    # A single last loss value can be unreliable. A slightly better approach might be to take an average from an
+    # N-size window of last steps. However, this size can't be too small or too large. Based on past training data,
+    # most running with 5k steps, a window size of 36 produces an average that's roughly stable. Note that this
+    # choice is still considered arbitrary and may be subject to change.
+    window_size = 36
     last_loss_msg = f""
-    if num_steps > 100:
-        count = int(num_steps * 0.05)
-        last_losses = [x["loss"] for x in summary[-count:]]
+    # Use this window size when the max steps are over 10x. This is also an arbitrary choice.
+    if num_steps >= window_size * 10:
+        last_losses = [x["loss"] for x in summary[-window_size:]]
         last_loss = np.mean(last_losses)
-        last_loss_msg = f"Average loss for last {count} steps"
+        last_loss_msg = f"Average loss for last {window_size} steps"
     else:
         last_loss = summary[-1]["loss"]
         last_loss_msg = "Last loss"
