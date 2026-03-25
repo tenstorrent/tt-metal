@@ -77,6 +77,11 @@ class Qwen35GatedAttention:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         # KV cache state (concat-based, default)
         self.past_key = None
@@ -155,6 +160,25 @@ class Qwen35GatedAttention:
             device=self.device,
             memory_config=_dram,
         )
+        # Pre-computed tensors for on-device mask computation (avoids host round-trip)
+        # Position indices [0, 1, 2, ..., max_seq_len-1] for threshold comparison
+        self.mask_indices = ttnn.from_torch(
+            torch.arange(self.max_seq_len, dtype=torch.bfloat16).reshape(1, 1, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=_dram,
+        )
+        # One-hot at staging position (1.0 at staging_pos, 0.0 elsewhere)
+        staging_one_hot = torch.zeros(1, 1, 1, self.max_seq_len, dtype=torch.bfloat16)
+        staging_one_hot[:, :, :, self.staging_pos] = 1.0
+        self.staging_mask = ttnn.from_torch(
+            staging_one_hot,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=_dram,
+        )
         self.use_preallocated_cache = True
         self.use_trace_mode = False
         self.cache_pos = 0
@@ -164,34 +188,41 @@ class Qwen35GatedAttention:
         self.use_trace_mode = True
 
     def update_cache_after_trace(self, pos):
-        """Write captured K/V into cache at the correct position (called between trace replays)."""
-        # Read new K/V from trace buffers, pad to [B, H, 32, D] for update_cache
-        new_k = ttnn.to_torch(self.trace_new_k_buf)  # [1, H_kv, 1, D]
-        new_v = ttnn.to_torch(self.trace_new_v_buf)
-        k_padded = torch.zeros(1, self.num_kv_heads, 32, self.head_dim, dtype=torch.bfloat16)
-        v_padded = torch.zeros(1, self.num_kv_heads, 32, self.head_dim, dtype=torch.bfloat16)
-        k_padded[:, :, 0:1, :] = new_k
-        v_padded[:, :, 0:1, :] = new_v
-        k_tt = ttnn.from_torch(k_padded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        v_tt = ttnn.from_torch(v_padded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        ttnn.update_cache(self.kv_cache_key, k_tt, update_idx=pos)
-        ttnn.update_cache(self.kv_cache_value, v_tt, update_idx=pos)
-        ttnn.deallocate(k_tt)
-        ttnn.deallocate(v_tt)
+        """Write captured K/V into cache at the correct position (called between trace replays).
+
+        All on device — uses the same concat+update_cache pattern as the trace forward
+        path (ttnn_gated_attention.py lines 212-215). No host round-trips.
+        """
+        k_padded = ttnn.concat([self.trace_new_k_buf, self.trace_kv_pad_zeros], dim=2)
+        v_padded = ttnn.concat([self.trace_new_v_buf, self.trace_kv_pad_zeros], dim=2)
+        ttnn.update_cache(self.kv_cache_key, k_padded, update_idx=pos)
+        ttnn.update_cache(self.kv_cache_value, v_padded, update_idx=pos)
+        ttnn.deallocate(k_padded)
+        ttnn.deallocate(v_padded)
 
     def update_mask_for_pos(self, valid_len):
-        """Update attention mask to expose positions 0..valid_len-1 + staging pos."""
-        mask = torch.zeros(1, 1, 1, self.max_seq_len, dtype=torch.bfloat16)
-        mask[:, :, :, valid_len:] = -10000.0
-        # Always unmask the staging position (current token's K/V lives here)
-        mask[:, :, :, self.staging_pos] = 0.0
-        new_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        """Update attention mask to expose positions 0..valid_len-1 + staging pos.
+
+        All on device — uses pre-computed index tensor + comparison ops.
+        No host round-trips (the old path created a CPU tensor and transferred each step).
+        """
+        # mask_indices: [0, 1, 2, ..., max_seq_len-1]
+        # valid where index < valid_len (1.0) or at staging_pos (1.0), else 0.0
+        valid = ttnn.lt(self.mask_indices, float(valid_len))
+        # staging_mask is 1.0 at staging_pos only; positions don't overlap since
+        # staging_pos = max_seq_len-1 and valid_len <= max_seq_len-1
+        combined = ttnn.add(valid, self.staging_mask)
+        # non-zero → 0.0 (unmasked), zero → -10000.0 (masked)
+        new_mask = ttnn.where(combined, 0.0, -10000.0)
         ttnn.copy(new_mask, self.trace_attn_mask)
+        ttnn.deallocate(valid)
+        ttnn.deallocate(combined)
         ttnn.deallocate(new_mask)
 
     def forward(self, x, cos, sin):
         T = x.shape[1]
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
+        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
         if self.use_preallocated_cache and self.use_trace_mode:
             # Trace-compatible mode: save K/V to buffers, write to staging pos, SDPA with full cache + mask
@@ -212,7 +243,7 @@ class Qwen35GatedAttention:
                 norm_eps=self.norm_eps,
                 kv_cache_key=self.kv_cache_key,
                 kv_cache_value=self.kv_cache_value,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=ckc,
                 use_optimized_concat=True,
                 memory_config=mc,
                 norm_weights_pre_offset=True,
@@ -243,7 +274,7 @@ class Qwen35GatedAttention:
                 kv_cache_value=self.kv_cache_value,
                 cache_pos=self.cache_pos,
                 cache_len=self.max_seq_len,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=ckc,
                 use_optimized_concat=True,
                 memory_config=mc,
                 norm_weights_pre_offset=True,
@@ -268,7 +299,7 @@ class Qwen35GatedAttention:
                 norm_eps=self.norm_eps,
                 past_key=self.past_key,
                 past_value=self.past_value,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=ckc,
                 use_optimized_concat=True,
                 memory_config=mc,
                 norm_weights_pre_offset=True,
