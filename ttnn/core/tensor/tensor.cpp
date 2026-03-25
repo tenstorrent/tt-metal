@@ -599,7 +599,9 @@ const Storage& Tensor::storage() const { return this->tensor_attributes->get_sto
 
 std::uint64_t Tensor::to_hash() const noexcept {
     if (this->tensor_attributes == nullptr) {
-        return ttsl::hash::hash_objects(static_cast<ttsl::hash::hash_t>(0), std::uint8_t{0}, this->tensor_id);
+        // No per-handle identity: avoid cache fragmentation when tensor_id changes (e.g. graph tracking) while
+        // tensor_attributes stays null.
+        return ttsl::hash::hash_objects(static_cast<ttsl::hash::hash_t>(0), std::uint8_t{0});
     }
     return ttsl::hash::hash_objects(
         static_cast<ttsl::hash::hash_t>(0),
