@@ -26,10 +26,8 @@ import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
-from ...models.transformers.ltx.rope_ltx import precompute_freqs_cis
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 if TYPE_CHECKING:
@@ -192,7 +190,7 @@ class LTXPipeline:
         # Cached device tensors (computed once, reused across steps)
         self._cached_rope_cos: ttnn.Tensor | None = None
         self._cached_rope_sin: ttnn.Tensor | None = None
-        self._cached_trans_mat: ttnn.Tensor | None = None
+        # trans_mat not needed: using SPLIT RoPE (not interleaved)
         self._cached_prompt: ttnn.Tensor | None = None
         self._cached_negative_prompt: ttnn.Tensor | None = None
 
@@ -220,7 +218,7 @@ class LTXPipeline:
         sequence_length: int = 256,
         hidden_layer_index: int = -1,
     ) -> None:
-        """Load Gemma text encoder (torch-only)."""
+        """Load Gemma text encoder (torch-only). Fallback when reference encode_prompts is not available."""
         self.text_encoder = GemmaTokenizerEncoderPair(
             checkpoint=checkpoint,
             sequence_length=sequence_length,
@@ -228,6 +226,33 @@ class LTXPipeline:
             hidden_layer_index=hidden_layer_index,
         )
         logger.info(f"Loaded Gemma text encoder from {checkpoint}")
+
+    def encode_prompts_reference(
+        self,
+        prompts: list[str],
+        checkpoint_path: str,
+        gemma_path: str,
+    ) -> list:
+        """Encode prompts using the official LTX-2 reference pipeline (recommended for AV mode).
+
+        Returns list of encoding results with .video_encoding and .audio_encoding attributes.
+        """
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+        from ltx_pipelines.utils.helpers import encode_prompts
+        from ltx_pipelines.utils.model_ledger import ModelLedger
+
+        ledger = ModelLedger(
+            dtype=torch.bfloat16,
+            device=torch.device("cpu"),
+            checkpoint_path=checkpoint_path,
+            gemma_root_path=gemma_path,
+        )
+        results = encode_prompts(prompts, ledger)
+        del ledger
+        return results
 
     def load_vae_decoder(
         self,
@@ -267,6 +292,59 @@ class LTXPipeline:
             self.vae_decoder.load_state_dict(state_dict)
             logger.info("Loaded torch-only VAE decoder")
 
+    def load_from_checkpoint(self, checkpoint_path: str) -> None:
+        """Load transformer and VAE decoder from a single safetensors checkpoint file.
+
+        This is the recommended way to load the 22B model. It handles:
+        - Extracting diffusion model keys for the transformer
+        - Extracting VAE decoder keys and config from checkpoint metadata
+        - Setting up the 22B decoder_blocks config
+        """
+        import json
+
+        from safetensors.torch import load_file
+
+        raw = load_file(checkpoint_path)
+
+        # Transformer
+        prefix = "model.diffusion_model."
+        transformer_sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        self.load_transformer(transformer_sd)
+        del transformer_sd
+
+        # VAE decoder — extract config from metadata
+
+        with open(checkpoint_path, "rb") as f:
+            header_size = int.from_bytes(f.read(8), "little")
+            header = json.loads(f.read(header_size))
+        metadata = header.get("__metadata__", {})
+        config = json.loads(metadata.get("config", "{}"))
+        vae_config = config.get("vae", {})
+        decoder_blocks = vae_config.get("decoder_blocks", [])
+        causal = vae_config.get("causal_decoder", False)
+        base_channels = vae_config.get("decoder_base_channels", 128)
+
+        vae_state = {}
+        for k, v in raw.items():
+            if k.startswith("vae.decoder."):
+                vae_state[k[len("vae.decoder.") :]] = v
+            elif k.startswith("vae.per_channel_statistics."):
+                vae_state[k[len("vae.") :]] = v
+        del raw
+
+        if decoder_blocks:
+            from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+
+            self.vae_decoder = LTXVideoDecoder(
+                decoder_blocks=decoder_blocks,
+                causal=causal,
+                base_channels=base_channels,
+                mesh_device=self.mesh_device,
+            )
+            self.vae_decoder.load_torch_state_dict(vae_state)
+            logger.info(f"Loaded TTNN VAE decoder ({len(decoder_blocks)} blocks, causal={causal})")
+        del vae_state
+
     def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
@@ -294,48 +372,49 @@ class LTXPipeline:
             return self.vae_decoder.decode(latent_spatial)
 
     def _prepare_rope(
-        self, num_frames: int, latent_height: int, latent_width: int
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Compute and cache RoPE features for the given spatial dimensions."""
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Compute video RoPE using reference SPLIT rotation with pixel-space coordinates.
 
-        # Build position grid: center of each latent cell in pixel space
-        t_ids = torch.arange(num_frames)
-        h_ids = torch.arange(latent_height)
-        w_ids = torch.arange(latent_width)
-        grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
-        fps = 24.0
-        t_s = (grid_t.float() * 8 + 1 - 8).clamp(min=0) / fps
-        t_e = ((grid_t.float() + 1) * 8 + 1 - 8).clamp(min=0) / fps
-        t_mid = (t_s + t_e) / 2
-        h_mid = (grid_h.float() + 0.5) * 32
-        w_mid = (grid_w.float() + 0.5) * 32
-        indices_grid = torch.stack([t_mid.flatten(), h_mid.flatten(), w_mid.flatten()], dim=-1).float().unsqueeze(0)
+        Uses the official LTX-2 VideoLatentPatchifier for positions, matching the reference
+        pipeline's precompute_freqs_cis with SPLIT rotation. No trans_mat needed.
+        """
+        import sys
 
-        cos_freq, sin_freq = precompute_freqs_cis(
-            indices_grid,
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        from ltx_core.components.patchifiers import VideoLatentPatchifier, get_pixel_coords
+        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+        from ltx_core.model.transformer.rope import generate_freq_grid_np
+        from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
+        from ltx_core.types import VideoLatentShape
+
+        v_patchifier = VideoLatentPatchifier(patch_size=1)
+        v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
+        v_coords = v_patchifier.get_patch_grid_bounds(output_shape=v_shape, device="cpu")
+        v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
+        v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
+
+        cos_freq, sin_freq = ref_precompute(
+            v_positions.bfloat16(),
             dim=self.inner_dim,
             out_dtype=torch.float32,
             theta=self.positional_embedding_theta,
             max_pos=self.positional_embedding_max_pos,
+            use_middle_indices_grid=True,
             num_attention_heads=self.num_attention_heads,
-        )
+            rope_type=RefRopeType.SPLIT,
+            freq_grid_generator=generate_freq_grid_np,
+        )  # (1, num_heads, N, D_half)
 
-        seq_len = num_frames * latent_height * latent_width
-        head_dim = self.attention_head_dim
-        cos_heads = cos_freq.reshape(1, seq_len, self.num_attention_heads, head_dim).permute(0, 2, 1, 3)
-        sin_heads = sin_freq.reshape(1, seq_len, self.num_attention_heads, head_dim).permute(0, 2, 1, 3)
-
-        tt_cos = bf16_tensor_2dshard(cos_heads, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        tt_sin = bf16_tensor_2dshard(sin_heads, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        tt_cos = bf16_tensor_2dshard(cos_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
+        tt_sin = bf16_tensor_2dshard(sin_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
         self._cached_rope_cos = tt_cos
         self._cached_rope_sin = tt_sin
-        self._cached_trans_mat = tt_trans_mat
 
-        return tt_cos, tt_sin, tt_trans_mat
+        return tt_cos, tt_sin
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
         """Push prompt embeddings to device, padding to cross_attention_dim if needed."""
@@ -422,7 +501,7 @@ class LTXPipeline:
         tt_negative_prompt = self._prepare_prompt(negative_embeds) if do_cfg else None
 
         # 2. Prepare RoPE
-        rope_cos, rope_sin, trans_mat = self._prepare_rope(latent_frames, latent_height, latent_width)
+        rope_cos, rope_sin = self._prepare_rope(latent_frames, latent_height, latent_width)
 
         # 3. Compute sigma schedule
         sigmas = compute_sigmas(
@@ -456,7 +535,7 @@ class LTXPipeline:
                 video_prompt_1BLP=tt_prompt,
                 video_rope_cos=rope_cos,
                 video_rope_sin=rope_sin,
-                trans_mat=trans_mat,
+                trans_mat=None,
                 video_N=num_tokens,
                 timestep_torch=timestep_torch,
             )
@@ -471,7 +550,7 @@ class LTXPipeline:
                     video_prompt_1BLP=tt_negative_prompt,
                     video_rope_cos=rope_cos,
                     video_rope_sin=rope_sin,
-                    trans_mat=trans_mat,
+                    trans_mat=None,
                     video_N=num_tokens,
                     timestep_torch=timestep_torch,
                 )
@@ -585,7 +664,7 @@ class LTXPipeline:
 
         logger.info(f"AV: {num_frames}f@{height}x{width}, vN={video_N}, aN={audio_N}(real={audio_N_real})")
 
-        v_cos, v_sin, trans_mat = self._prepare_rope(latent_frames, latent_h, latent_w)
+        v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
         tt_attn_mask, tt_pad_mask = self._prepare_audio_masks(audio_N, audio_N_real)
 
@@ -626,7 +705,7 @@ class LTXPipeline:
                     audio_rope_cos=a_cos,
                     audio_rope_sin=a_sin,
                     audio_N=audio_N,
-                    trans_mat=trans_mat,
+                    trans_mat=None,
                     timestep_torch=torch.tensor([sigma]),
                     skip_cross_attn=skip_ca,
                     skip_self_attn_blocks=skip_sa_blocks,
