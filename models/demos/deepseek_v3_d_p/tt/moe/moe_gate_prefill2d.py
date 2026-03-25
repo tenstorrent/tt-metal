@@ -172,11 +172,12 @@ class MoEGatePrefill(LightweightModule):
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)
 
 
-class MoEGate_prep_dispatch_combine(LightweightModule):
-    """MoE gate module from DeepSeek-R1."""
+class MoERoutingSetup(LightweightModule):
+    """Prepares routing metadata (offsets, token counts) for MoE dispatch."""
 
-    def __init__(self, mesh_device, expert_dispatch_table):
+    def __init__(self, mesh_device, expert_dispatch_table, num_links=1):
         self.mesh_device = mesh_device
+        self.num_links = num_links
 
         # expert_dispatch_table (Raw table shape: (1, 64))
         # int value => chip location; -1 not in this group
@@ -186,6 +187,7 @@ class MoEGate_prep_dispatch_combine(LightweightModule):
             dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
         )
 
     def forward(
@@ -197,7 +199,7 @@ class MoEGate_prep_dispatch_combine(LightweightModule):
         seq_len_per_chip: int,
         num_experts_per_tok: int,
     ):
-        signpost(header="MoEGate_prep_dispatch_combine")
+        signpost(header="MoERoutingSetup")
         # indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
@@ -244,24 +246,24 @@ class MoEGate_prep_dispatch_combine(LightweightModule):
         # shard (0,None) -> per chip (1,num_routed_experts)
         # expert_token_counts: Total tokens per expert per chip
         #     Shape: (dispatch_group_size, experts_per_chip)
-        # cum_sum: Cumulative sum of token counts across chips
-        #     Shape: (dispatch_group_size, num_routed_experts)
 
         # Torch Input shapes: x.shape=torch.Size([8, 3200, 7168])
         # Sharded to seq parallel => [1, 3200, 7168] per chip
-        # unsqueeze here for simplicty
+        # unsqueeze here for simplicity
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        logger.warning(f"{ttnn_top_k_experts_indices.shape=}")
+        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         # expert table (dispatch_groups, routed_experts)
         # sharded to each dispatch group => (1, routed_experts)
         # [create_expert_dispatch_table] OUTPUT: table.shape=torch.Size([1, 64])
         # need to squeeze, as op doesn't support tensor rank 2.
-        logger.error(f"{len(self.experts_in_dispatch_group.shape)}==1?")
         if len(self.experts_in_dispatch_group.shape) != 1:
+            assert (
+                self.experts_in_dispatch_group.shape[0] == 1
+            ), "Expected first dimension to be 1 after sharding expert dispatch table"
             self.experts_in_dispatch_group = ttnn.squeeze(self.experts_in_dispatch_group, 0)
-        logger.warning(f"{self.experts_in_dispatch_group.shape=}")
+        logger.debug(f"{self.experts_in_dispatch_group.shape=}")
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts
@@ -270,11 +272,9 @@ class MoEGate_prep_dispatch_combine(LightweightModule):
         dispatch_offsets, total_counts_per_expert = ttnn.experimental.deepseek_prefill.offset_cumsum(
             expert_histograms,
             cluster_axis=0,
-            num_links=1,
+            num_links=self.num_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
-        # return expert_offsets, expert_token_counts, cum_sum
-        # return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)
         return dispatch_offsets, total_counts_per_expert, expert_histograms
