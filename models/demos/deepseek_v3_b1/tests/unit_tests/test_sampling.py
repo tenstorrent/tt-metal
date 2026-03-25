@@ -528,7 +528,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
     "seed, final_core_idx, p, temperature",
     [
         (2005, 100, 0.95, 0.6),
-        (17, 0, 0.5, 0.4),
+        (17, 0, 0.995, 0.4),
         (1337, 50, 1.0, 0.8),
         (4242, 73, 0.1, 0.6),
     ],

@@ -913,9 +913,7 @@ struct TopKSampling {
                 // Top-P filtering: accumulate probabilities until cum_prob > p
                 float cum_prob = 0.0f;
                 uint32_t kept_tokens = K;
-                // skip if p_bf16 is 1.0 (i.e. no top-p filtering)
-                // if (bf16_p != 16256) {
-                DPRINT << "Top-P filtering as p != " << 1.0f << ENDL();
+                // optimization: skip if p == 1.0.f – kept_tokens == K and cum_prob == 1.0.f
                 for (uint32_t i = 0; i < K; ++i) {
                     uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
                     DPRINT << "Accumulating probability " << BF16(prob) << " sum so far " << cum_prob << ENDL();
