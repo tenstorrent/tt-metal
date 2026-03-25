@@ -311,15 +311,12 @@ class MoEGate(AbstractModule):
                 topk_experts_indices, (-1, topk_experts_indices.shape[-2], topk_experts_indices.shape[-1])
             )
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
             topk_experts_scores_list.append(topk_experts_scores[:batch_size_per_iter, :, :])
             topk_experts_indices_list.append(topk_experts_indices[:batch_size_per_iter, :, :])
             ttnn.deallocate(cur_logits)
 
-        # ttnn.deallocate(scores_correction_bias)
-        # ttnn.deallocate(ttnn_output_tensor)
-        # ttnn.deallocate(ttnn_input_indices)
-        # ttnn.deallocate(ttnn_output_indices)
-        # ttnn.deallocate(logits)
+        ttnn.deallocate(logits)
 
         topk_experts_weights = ttnn.concat(topk_experts_scores_list, dim=0)
         topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
@@ -339,12 +336,7 @@ class MoEGate(AbstractModule):
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_indices = ttnn.slice(topk_experts_indices, [0, 0, 0, 0], [1, 1, total_batch_size, 8])
-        """
-        for tensor in topk_experts_scores_list:
-            ttnn.deallocate(tensor)
-        for tensor in topk_experts_indices_list:
-            ttnn.deallocate(tensor)
-        """
+
         return topk_experts_weights, topk_experts_indices
 
     @classmethod
