@@ -21,13 +21,14 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out,
   constexpr uint8_t instr_mod_index = GetSfpLoadStoreInstrMod<DATA_FORMAT>();
   // Size of each tile in Dest is 64 rows
   constexpr uint dst_tile_size = 64;
-  for (int d = 0; d < ITERATIONS; d++) {
-    TT_SFPLOAD(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3,
-               dst_index_in * dst_tile_size);
-    TT_SFPSTORE(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3,
-                dst_index_out * dst_tile_size);
-    dst_reg++;
-  }
+  #pragma GCC unroll(0)
+    for (int d = 0; d < ITERATIONS; d++) {
+      TT_SFPLOAD(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3,
+                dst_index_in * dst_tile_size);
+      TT_SFPSTORE(p_sfpu::LREG0, instr_mod_index, ADDR_MOD_3,
+                  dst_index_out * dst_tile_size);
+      dst_reg++;
+    }
 }
 
 // Deprecated: Use the DataFormat template parameter version instead
