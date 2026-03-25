@@ -15,7 +15,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-CHECKPOINT_DIR = "/localdev/atupe/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2"
+CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 pytestmark = run_for_blackhole()
 PCC_THRESHOLD = 0.98
 

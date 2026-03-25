@@ -24,10 +24,16 @@ def _seq_memory_config(seq_len):
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
-    """RMSNorm with SiLU gating — fused ttnn.rms_norm (trace-compatible, no try/except)."""
+    """RMSNorm with SiLU gating — fused ttnn.rms_norm (trace-compatible, no try/except).
+
+    Clamps gate activation to prevent sparse float overflow in the multiply.
+    At long sequences (T>512), the chunk delta rule can produce a few extreme
+    values that, when multiplied by silu(gate), exceed bfloat16/float32 range.
+    """
     mc = memory_config
     x_normed = ttnn.rms_norm(x, weight=weight, epsilon=eps, memory_config=mc)
     gate_act = ttnn.silu(gate, memory_config=mc)
+    gate_act = ttnn.clip(gate_act, min=-1e4, max=1e4)
     return ttnn.multiply(x_normed, gate_act, memory_config=mc)
 
 
@@ -253,8 +259,10 @@ def causal_conv1d_ttnn(
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
     mc = memory_config
 
-    # Use FIR path when we have conv state (simpler to handle) or when T is large
-    if conv_state is not None or T > max_conv_len:
+    # Use FIR path when we have conv state, T is large, or D is large enough
+    # that the native ttnn.conv1d circular buffers would exceed per-core L1
+    # (D=4096 overflows by ~9 KB; D=2048 fits comfortably).
+    if conv_state is not None or T > max_conv_len or D > 2048:
         return _causal_conv1d_fir(
             x,
             weight,
@@ -739,7 +747,8 @@ def gated_deltanet_forward_ttnn(
     else:
         o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps, memory_config=mc)
 
-    # 7. Reshape and project output
+    # 7. Reshape and project output — clamp to prevent sparse overflow in o_proj matmul
+    o = ttnn.clip(o, min=-1e4, max=1e4)
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
     if mc is not None:
         o = ttnn.to_memory_config(o, mc)

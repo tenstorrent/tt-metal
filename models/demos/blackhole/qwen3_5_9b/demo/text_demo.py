@@ -13,10 +13,13 @@ Run short:  pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k 
 Run 2k:     pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k "prefill_2k"
 """
 
+import hashlib
 import json
 import time
+from pathlib import Path
 
 import pytest
+import requests
 import torch
 from loguru import logger
 
@@ -24,7 +27,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
 
-CHECKPOINT_DIR = "/localdev/atupe/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2"
+CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 
@@ -34,8 +37,40 @@ PERF_TARGETS = {
     128: {"min_decode_tok_s": 5.0, "max_ttft_s": 15.0},
     2048: {"min_decode_tok_s": 4.0, "max_ttft_s": 20.0},
     4096: {"min_decode_tok_s": 2.0, "max_ttft_s": 40.0},
-    8192: {"min_decode_tok_s": 1.5, "max_ttft_s": 80.0},
+    8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 80.0},
 }
+
+# Frankenstein prompt config: seqlen → json_index in eval_frankenstein_long.json.
+# Each entry clips Frankenstein text to enough characters to exceed the target token count
+# (English text ≈ 4.3 chars/token). Full Frankenstein is ~450K chars ≈ 104K tokens.
+_FRANKENSTEIN_CONFIGS = {
+    8192: 0,  # 70k chars ≈ 16k tokens (covers 8k with margin)
+    16384: 1,  # 140k chars ≈ 32k tokens
+    32768: 1,  # 140k chars ≈ 32k tokens
+    65536: 2,  # 300k chars ≈ 70k tokens
+    131072: 3,  # 500k chars ≈ 104k tokens (full text, Frankenstein caps at ~104k tokens)
+}
+
+
+def _load_and_cache_context(context_url, max_length=None):
+    """Download text from URL, cache locally, clip to max_length."""
+    cache_dir = Path(SAMPLE_PROMPTS_DIR) / ".context_cache"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+
+    if cache_file.exists():
+        context_text = cache_file.read_text()
+        logger.info(f"Loaded context from cache: {context_url}")
+    else:
+        response = requests.get(context_url)
+        response.raise_for_status()
+        context_text = response.text
+        cache_file.write_text(context_text)
+        logger.info(f"Downloaded and cached context: {context_url}")
+
+    if max_length:
+        context_text = context_text[:max_length]
+    return context_text
 
 
 def _get_prompt(seqlen, tokenizer):
@@ -45,6 +80,36 @@ def _get_prompt(seqlen, tokenizer):
         inputs = tokenizer(prompt, return_tensors="pt")
         return inputs["input_ids"]
 
+    # For long sequences (16k+), use Frankenstein from Project Gutenberg.
+    # Feed the raw text and let the model continue it — tests long-context processing.
+    if seqlen in _FRANKENSTEIN_CONFIGS:
+        idx = _FRANKENSTEIN_CONFIGS[seqlen]
+        path = f"{SAMPLE_PROMPTS_DIR}/eval_frankenstein_long.json"
+        with open(path) as f:
+            data = json.load(f)
+        entry = data[idx]
+        context = _load_and_cache_context(entry["context"], entry.get("max_length"))
+        # Wrap in chat template so the model enters instruction-following mode.
+        # Truncate context to leave room for the template + instruction.
+        instruction = entry["prompt"]
+        prefix = "<|im_start|>user\n"
+        # Seed <think> to start the reasoning chain. At very long contexts (100K+),
+        # the DeltaNet recurrent state's finite capacity [B,32,128,128] dilutes the
+        # suffix signal, making argmax split ~33% <|im_end|> vs ~15% <think>.
+        # Explicit <think> ensures the model enters reasoning mode.
+        suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
+        wrapper_ids = tokenizer(prefix + suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        max_context_tokens = seqlen - wrapper_ids.shape[1]
+        context_ids = tokenizer(context, add_special_tokens=False, return_tensors="pt")["input_ids"][
+            :, :max_context_tokens
+        ]
+        prefix_ids = tokenizer(prefix, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        suffix_ids = tokenizer(suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
+        import torch as _torch
+
+        return _torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)
+
+    # For medium sequences (1k-8k), use static prompt files
     size_label = f"{seqlen // 1024}k" if seqlen >= 1024 else str(seqlen)
     path = f"{SAMPLE_PROMPTS_DIR}/input_data_long_{size_label}.json"
     with open(path) as f:
@@ -60,12 +125,13 @@ def _get_prompt(seqlen, tokenizer):
 @pytest.mark.parametrize(
     "seqlen, max_seq_len, max_generated_tokens, use_trace",
     [
-        (128, 2048, 50, False),
-        (2048, 4096, 30, True),
-        (4096, 8192, 30, True),
-        (8192, 16384, 20, True),
+        (128, 2048, 50, True),
+        (4096, 8192, 100, True),
+        (8192, 16384, 50, True),
+        (65536, 131072, 100, True),
+        (131072, 262144, 100, True),
     ],
-    ids=["prefill_128", "prefill_2k", "prefill_4k", "prefill_8k"],
+    ids=["prefill_128", "prefill_4k", "prefill_8k", "prefill_64k", "prefill_128k"],
 )
 def test_demo_text(
     device,

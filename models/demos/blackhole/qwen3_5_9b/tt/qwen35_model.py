@@ -106,8 +106,8 @@ class Qwen35Model:
     def prefill(self, token_ids, segment_size=1024):
         B, T = token_ids.shape
 
-        if T > 2048:
-            return self.prefill_layer_chunked(token_ids, chunk_size=2048)
+        if T > 1024:
+            return self.prefill_layer_chunked(token_ids, chunk_size=1024)
 
         # Original path for short sequences
         self.reset_state(batch_size=B)
@@ -182,8 +182,11 @@ class Qwen35Model:
 
         Unlike prefill_segmented (segment through all layers), this processes
         each layer across the full sequence before moving to the next. DeltaNet
-        uses fast chunk mode; errors are contained within a single layer instead
-        of compounding across layers x segments.
+        uses chunk mode with a larger chunk_size (256 vs default 64) to reduce
+        error accumulation across sub-chunks. At chunk_size=64, 4096 tokens
+        produce 64 sub-chunks where Neumann series errors compound beyond
+        tested PCC thresholds. At chunk_size=256, only 16 sub-chunks are needed,
+        matching the validated PCC range (>0.98).
 
         Args:
             token_ids: [B, T] token IDs
@@ -215,7 +218,13 @@ class Qwen35Model:
                     sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
                     x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                 else:
-                    x_chunk = layer.forward(x_chunk, cos=None, sin=None, mode="prefill")
+                    x_chunk = layer.forward(
+                        x_chunk,
+                        cos=None,
+                        sin=None,
+                        mode="prefill",
+                        chunk_size=layer.attention.long_prefill_chunk_size,
+                    )
 
                 chunks_out.append(x_chunk)
 
@@ -233,7 +242,20 @@ class Qwen35Model:
             ttnn.synchronize_device(self.device)
             _tl1 = _time.time()
             kind = "attention" if layer.is_full_attention else "deltanet"
-            logger.info(f"Layer {layer_idx} ({kind}) done in {(_tl1-_tl0)*1000:.0f}ms")
+            import torch as _torch
+
+            x_diag = ttnn.to_torch(x).float()
+            x_last_tok = x_diag[:, -1:, :].float()
+            diag_msg = (
+                f"Layer {layer_idx} ({kind}) {(_tl1-_tl0)*1000:.0f}ms | "
+                f"x: mean={x_diag.abs().mean():.4f} max={x_diag.abs().max():.4f} "
+                f"inf={_torch.isinf(x_diag).sum().item()} | "
+                f"x_last: mean={x_last_tok.abs().mean():.4f}"
+            )
+            if not layer.is_full_attention:
+                s = ttnn.to_torch(layer.attention.recurrent_state).float()
+                diag_msg += f" | state: mean={s.abs().mean():.6f} max={s.abs().max():.4f}"
+            logger.info(diag_msg)
 
         x_last = x[:, -1:, :]
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
@@ -335,7 +357,7 @@ class Qwen35Model:
                 layer.attention.use_trace_mode = False
                 layer.attention.use_preallocated_cache = False
 
-        chunk_size = 2048
+        chunk_size = 1024
         if T <= chunk_size:
             position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
             cos, sin = self.rope.get_rot_mats(position_ids)
@@ -355,7 +377,13 @@ class Qwen35Model:
                         sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
                         x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                     else:
-                        x_chunk = layer.forward(x_chunk, cos=None, sin=None, mode="prefill")
+                        x_chunk = layer.forward(
+                            x_chunk,
+                            cos=None,
+                            sin=None,
+                            mode="prefill",
+                            chunk_size=layer.attention.long_prefill_chunk_size,
+                        )
 
                     chunks_out.append(x_chunk)
 
@@ -452,10 +480,45 @@ class Qwen35Model:
             device=device,
         )
 
+        # Save DeltaNet states before trace capture. Trace capture executes
+        # forward_decode with zero inputs, which corrupts in-place state buffers.
+        saved_dn_states = []
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                dn = layer.attention
+                saved_dn_states.append(
+                    {
+                        "recurrent": ttnn.to_torch(dn.recurrent_state),
+                        "conv": ttnn.to_torch(dn.fused_conv_state) if dn.fused_conv_state is not None else None,
+                    }
+                )
+
         # Capture trace
         self._trace_id = ttnn.begin_trace_capture(device, cq_id=0)
         self._trace_output = self.forward_decode(self._trace_input, self._trace_cos, self._trace_sin)
         ttnn.end_trace_capture(device, self._trace_id, cq_id=0)
+
+        # Restore DeltaNet states after trace capture. Must use ttnn.copy() into the
+        # original buffers (not replace references) since the trace recorded operations
+        # against those specific buffer addresses.
+        idx = 0
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                dn = layer.attention
+                saved = saved_dn_states[idx]
+                restored = ttnn.from_torch(
+                    saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                )
+                ttnn.copy(restored, dn.recurrent_state)
+                ttnn.deallocate(restored)
+                if saved["conv"] is not None:
+                    restored_conv = ttnn.from_torch(
+                        saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    )
+                    ttnn.copy(restored_conv, dn.fused_conv_state)
+                    ttnn.deallocate(restored_conv)
+                idx += 1
+
         logger.info("Trace captured successfully!")
 
     def decode_traced(self, token_ids, current_pos):

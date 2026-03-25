@@ -81,8 +81,8 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None):
         q_chunk = 128
         k_chunk = 128
     elif seq_len >= 2048:
-        q_chunk = 256
-        k_chunk = 256
+        q_chunk = 128
+        k_chunk = 128
     else:
         q_chunk = 64
         k_chunk = 64

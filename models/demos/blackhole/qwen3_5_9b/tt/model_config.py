@@ -18,7 +18,7 @@ class Qwen35ModelArgs:
     def __init__(
         self,
         mesh_device=None,
-        checkpoint_dir="/localdev/atupe/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2",
+        checkpoint_dir="/local/ttuser/atupe/Qwen9b",
         max_batch_size=1,
         max_seq_len=2048,
     ):
