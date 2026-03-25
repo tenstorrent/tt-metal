@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """BGE-M3 demo: sample input, load model, PCC/cosine validation, return sparse + colbert scores from BgeM3Model."""
 import numpy as np
 import torch
@@ -78,7 +81,7 @@ def run_bge_demo_inference(
     ttnn_model = BgeM3Model(
         args=model_args,
         mesh_device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         state_dict=reference_model.state_dict(),
     )
 
