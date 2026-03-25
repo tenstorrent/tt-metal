@@ -10,6 +10,7 @@ PyTorch reference implementation when dispatching tokens to experts.
 """
 
 import pytest
+import torch
 from loguru import logger
 from tracy import signpost
 
@@ -17,22 +18,22 @@ import ttnn
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGate_prep_dispatch_combine
+from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoERoutingSetup
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         (3200, 7168, 64, 2, 2),
     ],
@@ -80,7 +81,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 def test_prep_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
-    hidden_dim,
+    emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     capacity_factor,
@@ -96,17 +97,18 @@ def test_prep_dispatch_combine(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"prep dispatch/combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"prep dispatch/combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -114,25 +116,25 @@ def test_prep_dispatch_combine(
         x, weights, indices = initialize_predictable_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
             seq_len_per_chip=seq_len_per_chip,
-            hidden_dim=hidden_dim,
+            emb_dim=emb_dim,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
@@ -148,7 +150,7 @@ def test_prep_dispatch_combine(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -170,8 +172,8 @@ def test_prep_dispatch_combine(
         num_experts_per_tok,
     )
 
-    tt_gate_outputs = MoEGate_prep_dispatch_combine(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table
+    tt_gate_outputs = MoERoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
     )
 
     tt_expert_offsets, tt_expert_token_counts, tt_per_device_expert_counter = tt_gate_outputs(
@@ -183,31 +185,37 @@ def test_prep_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    logger.warning(f"{expert_offsets.shape=}, {expert_token_counts.shape=}, {per_device_expert_counter.shape=}")
-    logger.warning(
-        f"{tt_expert_offsets.shape=}, {tt_expert_token_counts.shape=}, {tt_per_device_expert_counter.shape=}"
-    )
+    # tt_expert_offsets and tt_expert_token_counts are replicated across columns; and sparse across rows;
+    # expert_offsets, and expert_token_counts on torch are dense acrros rows;
 
-    composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[0, -1],
-        ),
-    )
+    # Compose across cols and rows
+    # - Validate replication on cols
+    # - Sparse -> dense on rows to validate everything
+    tt_expert_offsets = ttnn.unsqueeze_to_4D(tt_expert_offsets)
+    tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
 
-    for name, torch_tensor, tt_tensor in [
-        ("expert_offsets", expert_offsets, tt_expert_offsets),
-        ("expert_token_counts", expert_token_counts, tt_expert_token_counts),
-        ("per_device_expert_counter", per_device_expert_counter, tt_per_device_expert_counter),
-    ]:
-        logger.info(f"Validating {name}...")
-        logger.info(f"{tt_tensor.tensor_topology()=}")
+    composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+    host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=composer)
+    host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=composer)
 
-    # tt_tensor.tensor_topology()= (distribution_shape=MeshShape([8, 1]), placements=SmallVector([PlacementShard(0), PlacementReplicate()]),
+    tensors_to_validate = [
+        ("expert_offsets", host_expert_offsets, expert_offsets),
+        ("expert_token_counts", host_expert_token_counts, expert_token_counts),
+    ]
 
-    tt_expert_offsets_per_device = ttnn.get_device_tensors(tt_expert_offsets)
-    for t in tt_expert_offsets_per_device:
-        t = ttnn.to_torch(t)
-        logger.warning(f"{t.shape=}\n{t}")
+    # Validate replication within dispatch groups (across cols)
+    for name, host_tensor, _ in tensors_to_validate:
+        for i in range(num_dispatch_groups):
+            ref = host_tensor[i][0]
+            for j in range(1, dispatch_group_size):
+                if not torch.allclose(host_tensor[i][j], ref, atol=0, rtol=0):
+                    raise AssertionError(
+                        f"Replication mismatch in {name} for dispatch group {i}, row {j}. "
+                        f"Expected {ref}, got {host_tensor[i][j]}"
+                    )
 
-    logger.warning(f"expected {expert_offsets=}")
+    # Validate sparse -> dense across dispatch groups (rows)
+    for name, host_tensor, expected in tensors_to_validate:
+        tt_dense = sum(host_tensor[i][0].int() for i in range(num_dispatch_groups))
+        if not torch.allclose(tt_dense.flatten(), expected.int().flatten(), atol=0, rtol=0):
+            raise AssertionError(f"Sparse->dense mismatch for {name}. Expected {expected}, got {tt_dense}")
