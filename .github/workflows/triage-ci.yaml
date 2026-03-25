@@ -40,7 +40,7 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
+          output="$(agent --trust -p "Reply with exactly: CURSOR_CI_OK")"
           echo "Agent output: $output"
           if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
             echo "Unexpected agent output; expected CURSOR_CI_OK"
