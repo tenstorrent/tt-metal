@@ -219,9 +219,13 @@ def _run_eager_generation(model, tokenizer, device, token_ids, max_generated_tok
 
 
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
-    """Prefill + traced decode loop. Returns (generated_tokens, perf_dict)."""
+    """Prefill + traced decode loop. Returns (generated_tokens, perf_dict).
+
+    Trace captures embedding + full forward + norm + LM head.
+    Before each replay, inputs are updated via fast host-to-device DMA.
+    """
     T = token_ids.shape[1]
-    model.enable_trace(batch_size=1)
+    model.enable_trace(batch_size=1, use_paged_cache=False)
 
     t0 = time.time()
     logits = model._prefill_for_trace(token_ids)
@@ -232,7 +236,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
 
-    # Warmup decode (populates program cache before trace capture)
+    # Warmup decode — uses old forward_decode to produce warmup token + populate cache at pos T
     warmup_input = torch.tensor([[next_token]], dtype=torch.long)
     token_ids_ttnn = ttnn.from_torch(warmup_input, dtype=ttnn.uint32, device=device)
     x = ttnn.embedding(token_ids_ttnn, model.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -245,6 +249,15 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         if layer.is_full_attention:
             layer.attention.update_cache_after_trace(T)
 
+    # Profile one eager decode step to see per-layer breakdown
+    logger.info("=" * 70)
+    logger.info("PROFILING EAGER DECODE (per-layer breakdown):")
+    profile_input = torch.tensor([[warmup_token]], dtype=torch.long)
+    model.decode(profile_input, current_pos=T + 1, profile=True)
+    ttnn.synchronize_device(device)
+    logger.info("=" * 70)
+
+    # Capture trace (embedding inside trace, internal warmup compiles new path)
     model.capture_decode_trace(device)
 
     generated = [next_token, warmup_token]
@@ -256,7 +269,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         next_input = torch.tensor([[current_token]], dtype=torch.long)
 
         t_step = time.time()
-        logits = model.decode_traced(next_input, current_pos=current_pos)
+        logits = model.decode_traced(next_input, current_pos=current_pos, profile=(i < 5))
         ttnn.synchronize_device(device)
         decode_times.append(time.time() - t_step)
 
