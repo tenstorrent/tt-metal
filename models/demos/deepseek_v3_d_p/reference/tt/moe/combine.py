@@ -55,18 +55,18 @@ class TorchCombineModule(torch.nn.Module):
         Combine expert outputs back to original token positions.
 
         Args:
-            dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+            dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
             metadata: Metadata tensor containing token positions
             expert_token_counts: Counter tracking tokens per expert
 
         Returns:
-            y: Combined output tensor of shape (dispatch_group_size, seq_len, num_experts_per_tok, hidden_dim)
+            y: Combined output tensor of shape (dispatch_group_size, seq_len, num_experts_per_tok, emb_dim)
         """
-        # Infer hidden_dim from dispatched tensor shape
-        hidden_dim = dispatched_buffer.shape[-1]
+        # Infer emb_dim from dispatched tensor shape
+        emb_dim = dispatched_buffer.shape[-1]
 
         y = torch.zeros(
-            (self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok, hidden_dim),
+            (self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok, emb_dim),
             dtype=torch.bfloat16,
         )
         for group in range(self.num_dispatch_groups):
