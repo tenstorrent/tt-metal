@@ -147,7 +147,7 @@ void run_single_core_transpose(
             .pap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .num_consumers = 1,
             .cap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
+            .enable_implicit_sync = true,
             .data_format = tt::DataFormat::Float16_b};
 
         tt::tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
@@ -157,7 +157,7 @@ void run_single_core_transpose(
             .pap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .num_consumers = 1,
             .cap = tt::tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
+            .enable_implicit_sync = true,
             .data_format = tt::DataFormat::Float16_b};
 
         dfb_src0 = tt::tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
