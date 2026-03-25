@@ -134,7 +134,7 @@ RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
     // Set runtime args
     uint32_t start_shard_id = 0;
     std::vector<CoreCoord> ordered_memory_banks_with_data =
-        output_distribution_spec.cores_with_data();  // need this for the maped_cored logic in the compute kernel
+        output_distribution_spec.cores_with_data();  // need this for the mapped_cores logic in the compute kernel
                                                      // runtime args block to be valid for DRAM sharded tensors
     for (const auto& core : ordered_cores_with_data) {
         // Reader run-time args
@@ -166,7 +166,6 @@ RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
                                                     // over only cores with data.
                         break;
                     }
-                    // Advance num_tiles_per_input_block
                     page_offset++;
                 }
             }

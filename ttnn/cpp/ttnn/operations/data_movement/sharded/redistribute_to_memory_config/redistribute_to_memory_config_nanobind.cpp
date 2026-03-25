@@ -20,6 +20,7 @@ void bind_redistribute_to_memory_config(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Converts a tensor to a specified memory layout. This operation supports conversions between any two memory configs, and is meant to be the default op called by ttnn.to_memory_config.
+        You should not be calling this op by itself. Please use ttnn.to_memory_config instead, as that can route to a more optimized program if applicable.
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor
