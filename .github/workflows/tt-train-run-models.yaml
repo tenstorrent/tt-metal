@@ -58,7 +58,6 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
