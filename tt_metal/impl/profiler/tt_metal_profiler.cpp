@@ -368,24 +368,10 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        const auto& active_eth_cores = device_sender->get_active_ethernet_cores(false);
-        auto eth_sender_core_iter = active_eth_cores.begin();
-        tt_xy_pair eth_receiver_core;
-        tt_xy_pair eth_sender_core;
+        const auto& connected_chips =
+            MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(device_id_sender);
 
-        ChipId device_id_receiver_curr = std::numeric_limits<ChipId>::max();
-        while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end())) {
-            eth_sender_core = *eth_sender_core_iter;
-            if (not MetalContext::instance().get_cluster().is_ethernet_link_up(device_sender->id(), eth_sender_core)) {
-                eth_sender_core_iter++;
-                continue;
-            }
-            std::tie(device_id_receiver_curr, eth_receiver_core) =
-                device_sender->get_connected_ethernet_core(eth_sender_core);
-            eth_sender_core_iter++;
-        }
-
-        if (device_id_receiver != device_id_receiver_curr) {
+        if (!connected_chips.contains(device_id_receiver) || connected_chips.at(device_id_receiver).empty()) {
             log_warning(
                 tt::LogMetal,
                 "No eth connection could be found between device {} and {}",
@@ -393,6 +379,11 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
                 device_id_receiver);
             return;
         }
+
+        CoreCoord eth_sender_core = connected_chips.at(device_id_receiver)[0];
+        auto [connected_chip_id, eth_receiver_core] =
+            MetalContext::instance().get_cluster().get_connected_ethernet_core(
+                std::make_tuple(device_id_sender, eth_sender_core));
 
         const std::vector<uint32_t>& ct_args = {
             channel_count, static_cast<uint32_t>(sample_count), static_cast<uint32_t>(sample_size)};
@@ -639,20 +630,12 @@ void ProfilerSync(ProfilerSyncState state) {
                 if (!MetalContext::instance().device_manager()->is_device_active(sender_device_id)) {
                     continue;
                 }
-                auto* sender_device = MetalContext::instance().device_manager()->get_active_device(sender_device_id);
-                const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
-                ChipId receiver_device_id;
-                tt_xy_pair receiver_eth_core;
-                for (const auto& sender_eth_core : active_eth_cores) {
-                    if (not MetalContext::instance().get_cluster().is_ethernet_link_up(
-                            sender_device_id, sender_eth_core)) {
-                        continue;
-                    }
+                const auto& connected_chips =
+                    MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                        sender_device_id);
 
-                    std::tie(receiver_device_id, receiver_eth_core) =
-                        sender_device->get_connected_ethernet_core(sender_eth_core);
-
+                for (const auto& [receiver_device_id, eth_cores] : connected_chips) {
                     if (visited.contains(receiver_device_id) && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
                         num_connected_devices[*root_device]++;
