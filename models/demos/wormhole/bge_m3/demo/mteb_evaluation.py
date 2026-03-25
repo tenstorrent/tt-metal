@@ -626,6 +626,7 @@ def _parse_args():
     parser.add_argument("--sequence-length", type=int, default=DEFAULT_SEQUENCE_LENGTH)
     parser.add_argument("--max-samples", type=int, default=100)
     parser.add_argument("--tt-data-parallel", type=int, default=2)
+    parser.add_argument("--mesh-rows", type=int, default=1)
     parser.add_argument("--mesh-cols", type=int, default=2)
     parser.add_argument("--per-chip-batch-sizes", type=int, nargs="+", default=list(DEFAULT_PER_CHIP_BATCH_SIZES))
     return parser.parse_args()
@@ -636,7 +637,7 @@ if __name__ == "__main__":
     logger.info(f"TT_VISIBLE_DEVICES={os.environ.get('TT_VISIBLE_DEVICES', '<unset>')}")
 
     original_default_device = ttnn.GetDefaultDevice()
-    with ttnn.create_mesh_device(mesh_shape=ttnn.MeshShape(1, args.mesh_cols)) as mesh_device:
+    with ttnn.create_mesh_device(mesh_shape=ttnn.MeshShape(args.mesh_rows, args.mesh_cols)) as mesh_device:
         logger.info(
             "Opened mesh device with num_devices={} and grid={}",
             mesh_device.get_num_devices(),
