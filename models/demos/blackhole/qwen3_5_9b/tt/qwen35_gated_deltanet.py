@@ -124,6 +124,8 @@ class Qwen35GatedDeltaNet:
 
         self.A_log = load_1d("A_log")
         self.dt_bias = load_1d("dt_bias")
+        # DeltaNet output norm uses STANDARD RMSNorm (raw weights ~0.88),
+        # NOT zero-centered like the decoder/attention norms (raw weights ~0.03).
         self.o_norm_weight = load_1d("norm.weight")
 
         # Precompute A_neg = -exp(A_log) once (constant per layer, saves 2 ops per decode step)
@@ -147,6 +149,12 @@ class Qwen35GatedDeltaNet:
         # Pre-cache chunk masks for prefill (shared across all calls)
         self.prefill_chunk_size = 64
         self.cached_masks = create_chunk_masks(self.prefill_chunk_size, device)
+
+        # chunk_size=64 is the largest safe value — at chunk_size=256, the Neumann
+        # inverse R=(I-M)^{-1} overflows float32 (entries grow as ~1.5^chunk_size).
+        # Using 64 matches the proven-working regular prefill path.
+        self.long_prefill_chunk_size = 64
+        self.cached_masks_long = self.cached_masks  # same size, share masks
 
         self.recurrent_state = None
         # Conv states: ttnn tensors on device [B, kernel_size-1, D]
@@ -263,7 +271,12 @@ class Qwen35GatedDeltaNet:
             self.fused_conv_state = ttnn.to_layout(self.fused_conv_state, ttnn.TILE_LAYOUT)
 
         # Use cached masks for chunk mode with matching chunk_size
-        masks = self.cached_masks if (mode == "chunk" and chunk_size == self.prefill_chunk_size) else None
+        if mode == "chunk" and chunk_size == self.prefill_chunk_size:
+            masks = self.cached_masks
+        elif mode == "chunk" and chunk_size == self.long_prefill_chunk_size:
+            masks = self.cached_masks_long
+        else:
+            masks = None
 
         output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
             hidden_states=x,

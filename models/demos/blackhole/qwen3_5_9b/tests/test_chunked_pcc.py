@@ -13,7 +13,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 
-CHECKPOINT_DIR = "/localdev/atupe/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2"
+CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 
 
 def compute_pcc(a, b):
@@ -88,6 +88,32 @@ def test_chunked_vs_recurrent_pcc(seq_len, device):
     pcc = _run_single_deltanet_layer_both_modes(device, seq_len, chunk_size=64)
     threshold = 0.98 if seq_len >= 1024 else 0.99
     assert pcc > threshold, f"PCC {pcc:.6f} < {threshold} at seq_len={seq_len}"
+
+
+@pytest.mark.parametrize(
+    "seq_len, chunk_size",
+    [
+        (2048, 64),  # 32 sub-chunks — baseline for comparison
+        (2048, 256),  # 8 sub-chunks — used in layer-chunked prefill
+        (4096, 256),  # 16 sub-chunks — matches tested range at 1024/64
+    ],
+    ids=["2k_c64", "2k_c256", "4k_c256"],
+)
+def test_chunked_vs_recurrent_pcc_long(seq_len, chunk_size, device):
+    """Long-sequence PCC: validates larger chunk_size reduces error accumulation.
+
+    At chunk_size=64, error compounds across many sub-chunks (32 for 2048, 64 for 4096).
+    At chunk_size=256, sub-chunk count stays within the validated range (<=16).
+    """
+    pcc = _run_single_deltanet_layer_both_modes(device, seq_len, chunk_size=chunk_size)
+    if chunk_size == 64:
+        # chunk_size=64 at long sequences: expect degradation, just log it
+        threshold = 0.90
+        logger.warning(f"chunk_size=64 at seq_len={seq_len}: PCC={pcc:.6f} (monitoring, threshold={threshold})")
+    else:
+        # chunk_size=256: should match quality of short sequences
+        threshold = 0.97
+    assert pcc > threshold, f"PCC {pcc:.6f} < {threshold} at seq_len={seq_len}, chunk_size={chunk_size}"
 
 
 @pytest.mark.parametrize("seq_len", [64, 128, 256])

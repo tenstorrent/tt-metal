@@ -40,7 +40,9 @@ class Qwen35MLP:
 
     def forward(self, x):
         ckc = self.compute_kernel_config
-        mc = ttnn.L1_MEMORY_CONFIG
+        # Use L1 for short sequences (decode/small prefill), DRAM for long sequences
+        T = x.shape[1] if len(x.shape) >= 3 else 1
+        mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(x, self.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
         w3_out = ttnn.linear(x, self.w3, compute_kernel_config=ckc, memory_config=mc)
         hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)

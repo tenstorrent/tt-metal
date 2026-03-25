@@ -74,10 +74,6 @@ class Qwen35TransformerBlock:
         if self.is_full_attention:
             attn_output = self.attention.forward(attn_input, cos, sin)
         else:
-            # Use chunked mode for direct prefill (parallel within chunks, faster).
-            # Segmented prefill uses recurrent — chunked error compounds through 24 layers
-            # × many segments, producing garbage output at 4K+ tokens.
-            # Decode always uses recurrent mode (T=1).
             deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
             attn_output = self.attention.forward(attn_input, mode=deltanet_mode, chunk_size=chunk_size)
         ttnn.deallocate(attn_input)
