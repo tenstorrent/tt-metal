@@ -342,6 +342,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
+                "vae_use_cache": False,
                 "sdpa_t_fracture_w_only": True,
             }
             config = device_configs[tuple(mesh_device.shape)]
