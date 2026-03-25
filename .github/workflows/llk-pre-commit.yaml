@@ -1,0 +1,36 @@
+name: 🔍 Static checks
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        description: "Python version to use for pre-commit"
+        required: false
+        type: string
+        default: "3.10"
+
+env:
+  LLK_PATH: tt_metal/third_party/tt_llk
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Run pre-commit
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files
