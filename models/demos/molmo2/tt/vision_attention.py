@@ -187,6 +187,25 @@ class VisionAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+    def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+        """
+        SDPA tuning for ViT self-attention (bidirectional, typical seq ~729).
+
+        Default SDPA uses q/k chunk size 32, which increases sequence tiling iterations.
+        Using larger chunks (multiples of 32) and the full device grid improves throughput;
+        chunk caps avoid oversized tiles on long sequences (e.g. reshaped >2048 path).
+        """
+        grid_size = self.mesh_device.compute_with_storage_grid_size()
+        seq_tile = ((int(seq_len) + 31) // 32) * 32
+        max_chunk = 256 if seq_len >= 1024 else 128
+        chunk_size = max(32, min(seq_tile, max_chunk))
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=False,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -248,6 +267,7 @@ class VisionAttention(LightweightModule):
             is_causal=False,
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self._sdpa_program_config(seq_len),
         )
 
         ttnn.deallocate(q)
