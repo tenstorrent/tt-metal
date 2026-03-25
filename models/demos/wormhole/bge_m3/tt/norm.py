@@ -88,7 +88,7 @@ class LayerNorm1D(LightweightModule):
             epsilon=cfg.eps,
             weight=self.weight,
             bias=self.bias,
-            program_config=None,
+            program_config=None,  # None to pc
             memory_config=None,
             compute_kernel_config=cfg.compute_kernel_config,
         )
