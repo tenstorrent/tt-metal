@@ -358,20 +358,23 @@ class VectorExportSource(VectorSource):
                                     # current machine provides. Compare traced card_count against
                                     # current_machine_info.card_count so that galaxy vectors run on
                                     # galaxy machines and are skipped only on machines with fewer cards
-                                    # (e.g. N150).
-                                    current_card_count = current_machine_info.get("card_count") or 1
-                                    has_compatible_card_count = any(
-                                        entry.get("card_count") is None
-                                        or entry.get("card_count", 1) <= current_card_count
-                                        for entry in traced_machine_entries
-                                    )
-                                    if not has_compatible_card_count:
-                                        logger.debug(
-                                            f"Skipping vector - traced card_count exceeds current machine "
-                                            f"card_count={current_card_count}"
+                                    # (e.g. N150).  If the current card_count is unknown (None),
+                                    # skip this filter entirely to avoid incorrectly rejecting
+                                    # multi-card vectors on capable machines.
+                                    current_card_count = current_machine_info.get("card_count")
+                                    if current_card_count is not None:
+                                        has_compatible_card_count = any(
+                                            entry.get("card_count") is None
+                                            or entry.get("card_count", 1) <= current_card_count
+                                            for entry in traced_machine_entries
                                         )
-                                        machine_mismatch_count += 1
-                                        skip_for_resources = True
+                                        if not has_compatible_card_count:
+                                            logger.debug(
+                                                f"Skipping vector - traced card_count exceeds current machine "
+                                                f"card_count={current_card_count}"
+                                            )
+                                            machine_mismatch_count += 1
+                                            skip_for_resources = True
 
                             if skip_for_resources:
                                 continue
