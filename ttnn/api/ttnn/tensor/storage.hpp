@@ -73,11 +73,18 @@ public:
 
     bool is_allocated() const;
 
-    // Returns true if the mesh_buffer exists (non-null), regardless of allocation state.
-    // Use this for cases where you need to check buffer existence without the stricter
-    // is_allocated() check (which also validates the MeshDevice weak_ptr).
-    // This is a hack to preserve mesh_device_ even when the buffer is deallocated.
-    bool has_mesh_buffer() const;
+    // Returns the MeshDevice pointer if mesh_buffer exists, or nullptr otherwise.
+    // Unlike get_device(), this does NOT throw when the buffer is deallocated.
+    //
+    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
+    // When a tensor's DeviceStorage is copied (e.g., by view/reshape) and the original
+    // is deallocated, the copy's MeshBuffer is in DeallocatedState but still exists.
+    // This function allows retrieving the device even in that state, preventing nullptr
+    // device propagation when constructing new tensors from such storage.
+    //
+    // TODO: Remove this workaround once models properly manage tensor lifetimes and
+    // don't operate on deallocated tensors.
+    distributed::MeshDevice* get_device_bypass_deallocate_check() const;
 
     distributed::MeshDevice* get_device() const;
 
