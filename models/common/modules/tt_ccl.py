@@ -40,7 +40,7 @@ def clear_tt_ccl_cache():
     _tt_ccl_cache.clear()
 
 
-def _get_local_num_devices(mesh_device: ttnn.MeshDevice) -> int:
+def _get_local_num_devices(mesh_device: Optional[ttnn.MeshDevice]) -> int:
     """Return the number of devices visible to the current host process."""
     if mesh_device is None:
         raise ValueError("mesh_device is required to determine CCL link counts")
