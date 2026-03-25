@@ -54,6 +54,7 @@ def test_pipeline_performance_video(
     Runs warmup (2 steps) then measured iteration (5 steps) and reports timing.
     Uses 1-layer random-weight model for fast CI.
     """
+    pytest.importorskip("ltx_core", reason="LTX-2 reference package required")
     from ltx_core.model.transformer.model import LTXModel, LTXModelType
 
     from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
