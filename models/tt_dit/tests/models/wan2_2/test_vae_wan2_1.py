@@ -1357,6 +1357,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
+@pytest.mark.parametrize("use_cache", [True, False], ids=["cached", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1391,7 +1392,23 @@ def test_wan_decoder3d(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_decoder(
-    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, dtype, MIN_PCC, MAX_RMSE
+    mesh_device,
+    B,
+    C,
+    T,
+    H,
+    W,
+    mean,
+    std,
+    h_axis,
+    w_axis,
+    num_links,
+    real_weights,
+    skip_check,
+    use_cache,
+    dtype,
+    MIN_PCC,
+    MAX_RMSE,
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
@@ -1460,12 +1477,9 @@ def test_wan_decoder(
         dtype=tt_input_dtype,
     )
 
-    logger.info(f"running tt model")
+    logger.info(f"running tt model (use_cache={use_cache})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
-        tt_input_tensor,
-        logical_h,
-    )
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, use_cache=use_cache)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1481,10 +1495,7 @@ def test_wan_decoder(
         logger.info(f"running torch model")
         start = time.time()
         with torch.no_grad():
-            torch_output = torch_model.decode(
-                torch_input_tensor,
-                return_dict=False,
-            )[0]
+            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
         logger.info(f"torch time taken: {time.time() - start}")
         logger.info(f"torch output shape: {torch_output.shape}")
 
