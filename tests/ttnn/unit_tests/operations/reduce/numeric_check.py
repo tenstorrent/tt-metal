@@ -25,7 +25,7 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-NEAR_ZERO_THRESHOLD = 1e-04
+NEAR_ZERO_THRESHOLD = 1e-09
 FROBENIUS_GRID_SPLITS = 4  # Split each dim into N pieces → NxN tile grid
 FROBENIUS_TOP_K = 5  # Report the K worst tiles
 # # Padding validation configuration

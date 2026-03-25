@@ -8,7 +8,7 @@ from loguru import logger
 from models.common.utility_functions import is_watcher_enabled
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
@@ -69,5 +69,13 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         test_name=test_name,
         csv_filename="test_ema_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        golden_output_tensor,
+        torch_output_tensor,
+        pcc_threshold=0.999877,
+        rtol=0.00796975,
+        atol=0.003985375,
+        frobenius_threshold=0.00280151464,
     )
     assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)

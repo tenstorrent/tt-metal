@@ -8,7 +8,7 @@ import torch
 import ttnn
 import sys
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     # assert_matmul_accuracy,
@@ -45,6 +45,14 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99934,
+        rtol=0.0118918642,
+        atol=0.011954125,
+        frobenius_threshold=0.00435791122,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -80,6 +88,14 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999703,
+        rtol=0.022039579,
+        atol=0.0159385,
+        frobenius_threshold=0.00628784302,
     )
 
 
@@ -138,6 +154,14 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999871,
+        rtol=0.0886533412,
+        atol=0.255001,
+        frobenius_threshold=0.0702246142,
+    )
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -171,6 +195,14 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999897,
+        rtol=1.64953276,
+        atol=0.127501,
+        frobenius_threshold=0.00278595046,
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -208,6 +240,14 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999897,
+        rtol=0.0295102732,
+        atol=0.031876,
+        frobenius_threshold=0.00261474754,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -243,6 +283,14 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999896,
+        rtol=0.0326230684,
+        atol=0.127501,
+        frobenius_threshold=0.00628784302,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -277,6 +325,14 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999897,
+        rtol=0.80484475,
+        atol=0.255001,
+        frobenius_threshold=0.0025057993,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -309,6 +365,14 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999893,
+        rtol=8.478751,
+        atol=4.080001,
+        frobenius_threshold=0.00393768448,
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -376,6 +440,25 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    # From test_var_numeric_results.csv: BFLOAT16 rows are exact; BFLOAT8_B aggregate across dtype=BFLOAT8_B rows.
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.9999,
+            rtol=1e-6,
+            atol=1e-6,
+            frobenius_threshold=1e-9,
+        )
+    else:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.996363,
+            rtol=0.0435791022,
+            atol=0.0159385,
+            frobenius_threshold=0.0069415294,
+        )
 
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -435,6 +518,14 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
 
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
@@ -499,6 +590,25 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    # From test_var_numeric_results.csv: BFLOAT16 exact; BFLOAT8_B aggregate across dtype=BFLOAT8_B rows.
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.9999,
+            rtol=1e-6,
+            atol=1e-6,
+            frobenius_threshold=1e-9,
+        )
+    else:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.999554,
+            rtol=2.932501,
+            atol=0.0258994324,
+            frobenius_threshold=0.0093952353,
+        )
 
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -564,6 +674,25 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    # From test_var_numeric_results.csv: BFLOAT16 exact; BFLOAT8_B aggregate across dtype=BFLOAT8_B rows.
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.9999,
+            rtol=1e-6,
+            atol=1e-6,
+            frobenius_threshold=1e-9,
+        )
+    else:
+        assert_numeric_metrics(
+            pyt_topk_values,
+            ttnn_torch_values,
+            pcc_threshold=0.99977,
+            rtol=2.996251,
+            atol=0.0258994324,
+            frobenius_threshold=0.010900485,
+        )
 
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -596,6 +725,14 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999897,
+        rtol=0.0250278526,
+        atol=0.255001,
+        frobenius_threshold=0.00460693504,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -626,6 +763,14 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999899,
+        rtol=0.00772072618,
+        atol=0.127501,
+        frobenius_threshold=0.0048248305,
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -660,6 +805,14 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999892,
+        rtol=6.598126,
+        atol=0.0159385,
+        frobenius_threshold=0.00669250558,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -692,6 +845,14 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999896,
+        rtol=0.0600156478,
+        atol=0.00099709375,
+        frobenius_threshold=0.00672363394,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -722,6 +883,14 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
         test_name=test_name,
         csv_filename="test_var_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999898,
+        rtol=0.00772072618,
+        atol=0.0019931875,
+        frobenius_threshold=0.0059765635,
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -838,17 +1007,28 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-    # Collect numeric metrics and dump to CSV using reusable function
-    test_name = f"test_torch_compatibility[tensor_shape={tensor_shape},keepdim={keepdim},dim={dim},op={op}]"
-    collect_and_dump_numeric_metrics(
-        torch_result,
-        ttnn_result,
-        test_name=test_name,
-        csv_filename="test_var_numeric_results.csv",
-        test_params=None,
-    )
+    # var/std along a length-0 axis: PyTorch returns all-NaN; Frobenius/PCC-style checks are undefined.
+    outputs_all_finite = torch.isfinite(torch_result).all() and torch.isfinite(ttnn_result).all()
 
-    assert_with_pcc(torch_result, ttnn_result, 0.99)
+    test_name = f"test_torch_compatibility[tensor_shape={tensor_shape},keepdim={keepdim},dim={dim},op={op}]"
+    # Caps from test_var_numeric_results.csv (aggregate over all test_torch_compatibility rows).
+    if outputs_all_finite:
+        collect_and_dump_numeric_metrics(
+            torch_result,
+            ttnn_result,
+            test_name=test_name,
+            csv_filename="test_var_numeric_results.csv",
+            test_params=None,
+        )
+        assert_numeric_metrics(
+            torch_result,
+            ttnn_result,
+            pcc_threshold=0.9999,
+            rtol=0.00335619616,
+            atol=0.0375033502,
+            frobenius_threshold=0.00335519716,
+        )
+        assert_with_pcc(torch_result, ttnn_result, 0.99)
 
     atol = rtol = 0.1
     # There is a scale factor difference between torch and ttnn for std and var

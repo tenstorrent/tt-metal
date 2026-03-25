@@ -25,7 +25,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
@@ -75,6 +75,14 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch.manual_seed(42)
@@ -87,6 +95,14 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
         test_name=test_name_2,
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
@@ -113,6 +129,14 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.max, shape, dim=-1, dtype=ttnn.bfloat16)
@@ -124,6 +148,14 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
         test_name=test_name_2,
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
@@ -145,6 +177,14 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     # dim=-2 (H): ReduceMultiCoreHProgramFactory
@@ -157,6 +197,14 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
         test_name=test_name_2,
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
@@ -230,6 +278,14 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_ref,
+        tt_out1_torch,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     test_name_2 = f"test_reduce_cache_miss_sub_core_grids[shape={shape},grid=grid_b]"
     collect_and_dump_numeric_metrics(
         torch_ref,
@@ -237,6 +293,14 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
         test_name=test_name_2,
         csv_filename="test_reduction_program_cache_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_ref,
+        tt_out2_torch,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
     assert_with_pcc(torch_ref, tt_out1_torch, 0.999)
     assert_with_pcc(torch_ref, tt_out2_torch, 0.999)

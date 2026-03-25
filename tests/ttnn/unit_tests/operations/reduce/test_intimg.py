@@ -5,10 +5,10 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
@@ -66,7 +66,26 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
         csv_filename="test_intimg_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.998)
+
+    # Thresholds from test_intimg_numeric_results.csv (test_cumsum_channel_last); headroom on extrema.
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor,
+            pcc_threshold=0.9983,
+            rtol=0.156,
+            atol=1180.0,
+            frobenius_threshold=0.0496,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor,
+            pcc_threshold=0.99989,
+            rtol=0.0145,
+            atol=66.0,
+            frobenius_threshold=0.0035,
+        )
 
     # experimental intimg
     input_tensor = ttnn.from_torch(
@@ -85,4 +104,22 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
         csv_filename="test_intimg_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.998)
+    # Thresholds from test_intimg_numeric_results.csv (test_intimg_channel_last).
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor_2,
+            pcc_threshold=0.99988,
+            rtol=0.039,
+            atol=131.0,
+            frobenius_threshold=0.011,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor_2,
+            pcc_threshold=0.99999,
+            rtol=0.0111,
+            atol=33.0,
+            frobenius_threshold=0.00235,
+        )

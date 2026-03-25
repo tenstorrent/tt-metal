@@ -7,7 +7,14 @@ import json
 import time
 
 from loguru import logger
-from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import (
+    comp_allclose,
+    comp_equal,
+    comp_pcc,
+    comp_ulp,
+    divup,
+    roundup,
+)
 from typing import Tuple, Union
 
 import ttnn
@@ -110,6 +117,68 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
     return pcc_passed, pcc_message
+
+
+def assert_numeric_metrics(
+    expected,
+    actual,
+    rtol=1e-05,
+    atol=1e-08,
+    frobenius_threshold=0.01,
+    pcc_threshold=0.99,
+    check_allclose=True,
+    check_frobenius=True,
+    check_pcc=True,
+):
+    if check_allclose:
+        allclose_kwargs = {}
+        if rtol is not None:
+            allclose_kwargs["rtol"] = rtol
+        if atol is not None:
+            allclose_kwargs["atol"] = atol
+        assert_allclose(expected, actual, **allclose_kwargs)
+
+    if check_frobenius:
+        frobenius_kwargs = {}
+        if frobenius_threshold is not None:
+            frobenius_kwargs["threshold"] = frobenius_threshold
+        assert_relative_frobenius(expected, actual, **frobenius_kwargs)
+
+    if check_pcc:
+        threshold = 0.98 if pcc_threshold is None else pcc_threshold
+        passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
+        assert passing_pcc, pcc_message
+
+
+# def assert_numeric_metrics(
+#     expected,
+#     actual,
+#     rtol=None,
+#     atol=None,
+#     frobenius_threshold=None,
+#     pcc_threshold=None,
+#     check_allclose=True,
+#     check_frobenius=True,
+#     check_pcc=True,
+# ):
+#     if check_allclose:
+#         allclose_kwargs = {}
+#         if rtol is not None:
+#             allclose_kwargs["rtol"] = rtol
+#         if atol is not None:
+#             allclose_kwargs["atol"] = atol
+#         assert_allclose(expected, actual, **allclose_kwargs)
+
+#     if check_frobenius:
+#         frobenius_kwargs = {}
+#         if frobenius_threshold is not None:
+#             frobenius_kwargs["threshold"] = frobenius_threshold
+#         assert_relative_frobenius(expected, actual, **frobenius_kwargs)
+
+#     if check_pcc:
+#         threshold = 0.98 if pcc_threshold is None else pcc_threshold
+#         passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
+#         assert passing_pcc, pcc_message
 
 
 def assert_allclose(
@@ -302,9 +371,20 @@ def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
         actual_pytorch_result.shape
     ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
 
-    error = expected_pytorch_result - actual_pytorch_result
+    # linalg.vector_norm / torch.norm(p="fro") requires floating or complex dtypes (not Long, etc.).
+    exp = (
+        expected_pytorch_result
+        if expected_pytorch_result.is_floating_point() or expected_pytorch_result.is_complex()
+        else expected_pytorch_result.float()
+    )
+    act = (
+        actual_pytorch_result
+        if actual_pytorch_result.is_floating_point() or actual_pytorch_result.is_complex()
+        else actual_pytorch_result.float()
+    )
+    error = exp - act
     frob_error = torch.norm(error, p="fro")
-    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+    frob_expected = torch.norm(exp, p="fro")
 
     expected_norm_is_zero = frob_expected == 0
     rel_norm_value = float(frob_error / frob_expected) if not expected_norm_is_zero else float(frob_error)

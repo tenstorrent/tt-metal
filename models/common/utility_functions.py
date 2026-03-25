@@ -17,6 +17,8 @@ from typing_extensions import deprecated
 
 import ttnn
 
+# from tests.ttnn.utils_for_testing import construct_pcc_assert_message
+
 
 def get_mesh_device():
     """Fixture to provide mesh device configuration."""
@@ -60,6 +62,27 @@ def roundup(a, b):
 
 def roundup32(a):
     return roundup(a, 32)
+
+
+def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
+    """Relative Frobenius norm ||expected - actual||_F / ||expected||_F (absolute if ||expected||_F == 0)."""
+    if isinstance(expected_pytorch_result, ttnn.Tensor):
+        expected_pytorch_result = ttnn.to_torch(expected_pytorch_result)
+    if isinstance(actual_pytorch_result, ttnn.Tensor):
+        actual_pytorch_result = ttnn.to_torch(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    error = expected_pytorch_result - actual_pytorch_result
+    frob_error = torch.norm(error, p="fro")
+    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+
+    expected_norm_is_zero = frob_expected == 0
+    rel_norm_value = float(frob_error / frob_expected) if not expected_norm_is_zero else float(frob_error)
+
+    return rel_norm_value, expected_norm_is_zero
 
 
 def float_to_bits(x):
@@ -515,9 +538,28 @@ def comp_allclose_custom(golden, calculated, rtol=1e-05, atol=1e-08):
     abs_diff = torch.abs(golden - calculated)
     max_abs_idx = torch.argmax(abs_diff).item()
 
-    atol_delta_mean = torch.mean(torch.abs(golden - calculated)).item()
+    atol_delta_mean = torch.mean(torch.abs(golden - calculated).float()).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(golden)).item()
-    rtol_delta_mean = torch.mean(torch.abs(golden - calculated) / torch.abs(golden)).item()
+    rtol_delta_mean = torch.mean((torch.abs(golden - calculated) / torch.abs(golden)).float()).item()
+    return (
+        torch.allclose(golden, calculated, rtol, atol, True),
+        f"Max ATOL Delta: {atol_delta}, Mean ATOL Delta: {atol_delta_mean}, Max RTOL Delta: {rtol_delta}, Mean RTOL Delta: {rtol_delta_mean}, Max Absolute Difference Index: {max_abs_idx}",
+        # f"Max ATOL Delta: {atol_delta}, Mean ATOL Delta: {atol_delta_mean}, Max RTOL Delta: {rtol_delta}, Mean RTOL Delta: {rtol_delta_mean}",
+    )
+
+
+def comp_allclose_custom(golden, calculated, rtol=1e-05, atol=1e-08):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    atol_delta = torch.max(torch.abs(golden - calculated)).item()
+
+    abs_diff = torch.abs(golden - calculated)
+    max_abs_idx = torch.argmax(abs_diff).item()
+
+    atol_delta_mean = torch.mean(torch.abs(golden - calculated).float()).item()
+    rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(golden)).item()
+    rtol_delta_mean = torch.mean((torch.abs(golden - calculated) / torch.abs(golden)).float()).item()
     return (
         torch.allclose(golden, calculated, rtol, atol, True),
         f"Max ATOL Delta: {atol_delta}, Mean ATOL Delta: {atol_delta_mean}, Max RTOL Delta: {rtol_delta}, Mean RTOL Delta: {rtol_delta_mean}, Max Absolute Difference Index: {max_abs_idx}",
@@ -532,10 +574,12 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(golden)).item()
     abs_diff = torch.abs(golden - calculated)
-    avg_atol = abs_diff.mean().item()
+    avg_atol = abs_diff.float().mean().item()
     non_zero_mask = torch.abs(golden) > 1e-10
     avg_rtol = (
-        (abs_diff[non_zero_mask] / torch.abs(golden[non_zero_mask])).mean().item() if non_zero_mask.any() else 0.0
+        (abs_diff[non_zero_mask].float() / torch.abs(golden[non_zero_mask]).float()).mean().item()
+        if non_zero_mask.any()
+        else 0.0
     )
     return (
         torch.allclose(golden, calculated, rtol, atol, True),
@@ -663,33 +707,33 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False, find_ulp_
     # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
     # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
     # if golden.dtype != calculated.dtype:
-    #     ulp_value = ulp(golden.type(calculated.dtype))
+    ulp_value = ulp(golden.type(calculated.dtype))
     # else:
     #     ulp_value = ulp(golden)
     # ulp_value = ulp(golden)
     ###########################################################3
-    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
-        # print("Ulp value before ****************")
-        # for i in range(len(ulp_value)):
-        #     print(f"{ulp_value[i].item():.20f}")
-        # print("--------------------------------")
+    # if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+    #     # print("Ulp value before ****************")
+    #     # for i in range(len(ulp_value)):
+    #     #     print(f"{ulp_value[i].item():.20f}")
+    #     # print("--------------------------------")
 
-        # calculated = calculated.type(golden.dtype)
-        # ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
-        golden_bits = torch.finfo(golden.dtype).bits
-        calc_bits = torch.finfo(calculated.dtype).bits
-        ulp_dtype = golden.dtype if golden_bits <= calc_bits else calculated.dtype
+    #     # calculated = calculated.type(golden.dtype)
+    #     # ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+    #     golden_bits = torch.finfo(golden.dtype).bits
+    #     calc_bits = torch.finfo(calculated.dtype).bits
+    #     ulp_dtype = golden.dtype if golden_bits <= calc_bits else calculated.dtype
 
-        # print("Ulp value after ****************")
-        # for i in range(len(ulp_value)):
-        #     print(f"{ulp_value[i].item():.20f}")
-        # print("--------------------------------")
-    else:
-        ulp_dtype = golden.dtype
+    #     # print("Ulp value after ****************")
+    #     # for i in range(len(ulp_value)):
+    #     #     print(f"{ulp_value[i].item():.20f}")
+    #     # print("--------------------------------")
+    # else:
+    #     ulp_dtype = golden.dtype
 
-    ulp_value = ulp(golden.type(ulp_dtype))
-    calculated = calculated.type(ulp_dtype)
-    golden = golden.type(ulp_dtype)
+    # ulp_value = ulp(golden.type(ulp_dtype))
+    # calculated = calculated.type(ulp_dtype)
+    # golden = golden.type(ulp_dtype)
     # for i in range(len(golden)):
     #     print(f"golden[i]: {golden[i].item():.20f}, calculated[i]: {calculated[i].item():.20f}")
     # for i in range(len(golden)):
@@ -697,9 +741,9 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False, find_ulp_
     #     print(f"difference: {diff:.20f}")
     # for i in range(len(ulp_value)):
     #     print(f"ulp_value[i]: {ulp_value[i].item():.20f}")
-    # if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
-    #     calculated = calculated.type(golden.dtype)
-    #     ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
 
     ###########################################################3
     ulp_tensor = torch.abs(calculated - golden) / ulp_value

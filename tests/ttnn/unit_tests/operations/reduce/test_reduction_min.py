@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
@@ -44,7 +44,24 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
         csv_filename="test_reduction_min_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -73,4 +90,11 @@ def test_min_global(device, batch_size, h, w):
         csv_filename="test_reduction_min_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )

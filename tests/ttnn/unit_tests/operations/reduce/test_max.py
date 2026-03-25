@@ -9,11 +9,20 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
+
+# From test_max_numeric_results.csv (496 rows): for test_max / test_max_2d / test_max_4d /
+# test_max_global, min(pcc_value)=1.0 and max(max_abs_dif)=max(max_rel_dif)=max(frobenius_value)=0.
+# Thresholds: pcc_threshold=max(0.9,1.0-1e-4); atol/rtol=max(0*1.02+1e-6,1e-8); frobenius=max(0*1.02+1e-9,1e-9);
+# frobenius uses 1e-8 for a small numeric-stability margin on relative Frobenius.
+_MAX_NUMERIC_PCC = 0.9999
+_MAX_NUMERIC_RTOL = 1e-6
+_MAX_NUMERIC_ATOL = 1e-6
+_MAX_NUMERIC_FROBENIUS = 1e-8
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -43,7 +52,14 @@ def test_max(device, batch_size, h, w, dim, dtype):
         csv_filename="test_max_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 @pytest.mark.parametrize("batch_size1", [2])
@@ -73,7 +89,14 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
         csv_filename="test_max_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 @pytest.mark.parametrize("h", [64])
@@ -101,7 +124,14 @@ def test_max_2d(device, h, w, dim):
         csv_filename="test_max_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -127,7 +157,14 @@ def test_max_global(device, batch_size, h, w):
         csv_filename="test_max_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,4 +201,11 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )

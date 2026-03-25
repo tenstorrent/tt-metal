@@ -8,7 +8,7 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_allclose, assert_equal
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
@@ -72,6 +72,14 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         test_name=test_name,
         csv_filename="test_topk_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
     )
     assert_equal(ttnn_torch_values, pyt_topk_values)
 

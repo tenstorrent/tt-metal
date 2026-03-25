@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
@@ -57,6 +57,14 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
             test_name=test_name,
             csv_filename="test_moe_numeric_results.csv",
             test_params=None,
+        )
+        assert_numeric_metrics(
+            torch_weights_1SB1,
+            ttnn_weights_1SB1,
+            pcc_threshold=0.999715,
+            rtol=0.0455722846,
+            atol=0.011954125,
+            frobenius_threshold=0.0168090808,
         )
         assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 

@@ -10,7 +10,7 @@ import torch
 from functools import partial
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
@@ -71,6 +71,14 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         csv_filename="test_reduction_h_interleaved_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=8.160001,
+        atol=8.160001,
+        frobenius_threshold=0.000377427112,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -130,6 +138,14 @@ def test_2D_tensor_full_grid(
         csv_filename="test_reduction_h_interleaved_numeric_results.csv",
         test_params=None,
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1.36265776,
+        atol=8.160001,
+        frobenius_threshold=0.000400773076,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -184,5 +200,13 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         test_name=test_name,
         csv_filename="test_reduction_h_interleaved_numeric_results.csv",
         test_params=None,
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999869,
+        rtol=1.020001,
+        atol=12.240001,
+        frobenius_threshold=0.00895955554,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)

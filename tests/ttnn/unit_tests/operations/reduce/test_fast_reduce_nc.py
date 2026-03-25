@@ -4,10 +4,10 @@
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
+
+# from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True, dataformat=ttnn.bfloat16):
@@ -93,17 +94,14 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
         csv_filename="test_fast_reduce_nc_numeric_results.csv",
         test_params=None,
     )
-    # test for equivalance
-    rtol = atol = 0.12
-    if dataformat == ttnn.bfloat8_b:
-        passing, output_pcc = comp_pcc(torch_output, tt_output_cpu, pcc=0.999)
-    else:
-        passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
-
-    assert passing
+    assert_numeric_metrics(
+        torch_output,
+        tt_output_cpu,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
 
 # Program caching test
@@ -175,14 +173,14 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
             csv_filename="test_fast_reduce_nc_numeric_results.csv",
             test_params=None,
         )
-        # test for equivalance
-        rtol = atol = 0.12
-        passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-        logger.debug(f"Out passing={passing}")
-        logger.debug(f"Output pcc={output_pcc}")
-
-        assert passing
+        assert_numeric_metrics(
+            torch_output,
+            tt_output_cpu,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
         assert device.num_program_cache_entries() == len(dims) + 1
 
     input_shape_2 = [1, 8, 32, 32]
@@ -210,12 +208,12 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
             csv_filename="test_fast_reduce_nc_numeric_results.csv",
             test_params=None,
         )
-        # test for equivalance
-        rtol = atol = 0.12
-        passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-        logger.debug(f"Out passing={passing}")
-        logger.debug(f"Output pcc={output_pcc}")
-
-        assert passing
+        assert_numeric_metrics(
+            torch_output,
+            tt_output_cpu,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
         assert device.num_program_cache_entries() == 2 * len(dims) + 1

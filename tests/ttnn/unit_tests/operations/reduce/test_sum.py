@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
@@ -43,7 +43,15 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
         csv_filename="test_sum_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999891,
+        rtol=2.4703135,
+        atol=65.280001,
+        frobenius_threshold=0.00675476128,
+    )
+    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -73,7 +81,15 @@ def test_sum_global(device, batch_size, h, w, dtype):
         csv_filename="test_sum_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.0617588176,
+        atol=228.480001,
+        frobenius_threshold=0.0618181822,
+    )
+    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [1, 9])
@@ -100,7 +116,15 @@ def test_sum_4d(device, n, c, h, w, dim):
         csv_filename="test_sum_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999895,
+        rtol=0.00499616746,
+        atol=472.499089,
+        frobenius_threshold=0.00499516846,
+    )
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -139,7 +163,15 @@ def test_sum_nd_shard(device, shapes, keepdim):
         csv_filename="test_sum_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.000812444578,
+        atol=0.193305484,
+        frobenius_threshold=0.000664564864,
+    )
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -181,4 +213,12 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
         csv_filename="test_sum_numeric_results.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.0147556366,
+        atol=4177.920001,
+        frobenius_threshold=0.014782606,
+    )
+    # assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

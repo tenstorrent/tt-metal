@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, assert_allclose
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
     collect_and_dump_numeric_metrics,
@@ -41,7 +41,14 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
         csv_filename="test_reduction_mean.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999896,
+        rtol=0.117540088,
+        atol=0.0019931875,
+        frobenius_threshold=0.00504272596,
+    )
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -69,7 +76,14 @@ def test_mean_scaling(device, shape, dim, keepdim):
         csv_filename="test_reduction_mean.csv",
         test_params=None,
     )
-    assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.003985375,
+        atol=0.003985375,
+        frobenius_threshold=0.003984376,
+    )
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -94,7 +108,14 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
         csv_filename="test_reduction_mean.csv",
         test_params=None,
     )
-    assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.003985375,
+        atol=0.00796975,
+        frobenius_threshold=0.003984376,
+    )
 
 
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block"])
@@ -135,4 +156,11 @@ def test_mean_shard(device, mem_config, keepdim):
         csv_filename="test_reduction_mean.csv",
         test_params=None,
     )
-    assert_with_pcc(torch_output, tt_output_torch)
+    assert_numeric_metrics(
+        torch_output,
+        tt_output_torch,
+        pcc_threshold=0.999896,
+        rtol=0.609610324,
+        atol=0.0019931875,
+        frobenius_threshold=0.0048248305,
+    )
