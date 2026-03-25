@@ -29,12 +29,12 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto* device = input.device();
 
     auto device_grid = device->compute_with_storage_grid_size();
-    uint32_t max_dim = static_cast<uint32_t>(std::min({device_grid.x, device_grid.y, (std::size_t)10}));
+    // Largest square grid with room for a helper column at x=grid_dim
+    uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
 
     uint32_t logical_M_tiles = input.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
     uint32_t logical_K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
 
-    uint32_t grid_dim = max_dim;
     uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, grid_dim);
     uint32_t Mpc = padded_M_tiles / grid_dim;
 
@@ -48,14 +48,10 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto full_grid = CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
 
     // Diagonal helper column: x=grid_dim cores compute odd-K partial for diagonal blocks.
-    // Avoids making diagonal cores (y,y) do 2× work when accumulating even+odd partials.
-    bool has_helpers = device_grid.x > grid_dim;
-    CoreRange helper_range =
-        has_helpers ? CoreRange({grid_dim, 0}, {grid_dim, grid_dim - 1}) : CoreRange({0, 0}, {0, 0});
-    auto all_cores = has_helpers ? CoreRangeSet(std::set<CoreRange>{full_grid, helper_range})
-                                 : CoreRangeSet(std::set<CoreRange>{full_grid});
-    // Upper x-bound for row multicast (includes helper column if present)
-    uint32_t upper_x_end = has_helpers ? grid_dim : grid_dim - 1;
+    CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
+    auto all_cores = CoreRangeSet(std::set<CoreRange>{full_grid, helper_range});
+    // Upper x-bound for row multicast (includes helper column)
+    uint32_t upper_x_end = grid_dim;
 
     uint32_t subblock_h = 2;
     uint32_t subblock_w = std::min(Mpc, 2u);
@@ -199,7 +195,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_6, out_tile_format, out_tile_sz, M_block);
     };
     create_all_cbs(full_grid);
-    if (has_helpers) {
+    {  // helpers
         create_all_cbs(helper_range);
     }
 
@@ -496,7 +492,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // === Diagonal helper kernels (x=grid_dim column) ===
     KernelHandle helper_recv_kid = 0, helper_dram_reader_kid = 0;
-    if (has_helpers) {
+    {  // helpers
         // Helper row receiver: REDUCE_RECV on RISCV_0 (receives diagonal's partial)
         std::vector<uint32_t> ct_recv = {
             recv_tiles,
@@ -587,7 +583,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // Helpers: REDUCE_ACCUMULATOR (no mirror — diagonal blocks are self-symmetric)
-    if (has_helpers) {
+    {  // helpers
         CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{accum_define, "1"}}));
     }
 
@@ -761,7 +757,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // --- Helper runtime args ---
-    if (has_helpers) {
+    {  // helpers
         for (uint32_t y = 0; y < grid_dim; y++) {
             CoreCoord helper_core{grid_dim, y};
             auto row_sender_p = device->worker_core_from_logical_core({0, y});

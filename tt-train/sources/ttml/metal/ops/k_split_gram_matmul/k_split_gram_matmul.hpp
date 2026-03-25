@@ -12,7 +12,7 @@ namespace ttml::metal {
 
 // Compute G = X @ X^T using interleaved K-split multicast gram matmul.
 // Exploits symmetry: lower triangle computes even-K, upper computes odd-K, results are accumulated.
-// Uses 10x10 core grid + 10 diagonal helper cores.
+// Uses min(device_grid.x - 1, device_grid.y) core grid + column of diagonal helper cores.
 //
 // output_mode: UpperTriangle writes G[i,j] for i<=j. Full also writes transposed mirror G[j,i].
 ttnn::Tensor gram_matmul(
