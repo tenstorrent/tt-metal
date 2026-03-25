@@ -52,6 +52,11 @@ class Qwen35GatedDeltaNet:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         prefix = f"layers.{layer_num}.linear_attn"
 
@@ -145,6 +150,20 @@ class Qwen35GatedDeltaNet:
 
         # Fused a+b projection weight: [4096, 64] — saves 1 matmul per decode step
         self.ab_proj_weight = self._precompute_fused_ab_weight()
+
+        # Mega-fused weight: QKV + a + b + g in one [4096, 12352] matmul
+        # Eliminates 2 separate matmuls (g_proj, ab_proj) per decode step
+        self.mega_fused_weight = self._precompute_mega_fused_weight()
+        if self.mega_fused_weight is not None:
+            self.mega_qkv_dim = self.args.linear_q_dim + self.args.linear_k_dim + self.args.linear_v_dim
+            self.mega_a_dim = self.num_v_heads
+            self.mega_b_dim = self.num_v_heads
+            self.mega_g_dim = self.num_v_heads * self.head_v_dim
+        else:
+            self.mega_qkv_dim = None
+            self.mega_a_dim = None
+            self.mega_b_dim = None
+            self.mega_g_dim = None
 
         # Pre-cache chunk masks for prefill (shared across all calls)
         self.prefill_chunk_size = 64
@@ -319,12 +338,19 @@ class Qwen35GatedDeltaNet:
             qkv_proj_weight=self.qkv_proj_weight,
             q_dim=self.args.linear_q_dim,
             k_dim=self.args.linear_k_dim,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_decode
+            if mode == "recurrent"
+            else self.compute_kernel_config,
             A_neg_precomputed=self.A_neg,
             fused_conv_weight_taps=self.fused_conv_weight_taps,
             fused_conv_bias_dev=self.fused_conv_bias_dev,
             fused_conv_state=self.fused_conv_state,
             ab_proj_weight=self.ab_proj_weight,
+            mega_fused_weight=self.mega_fused_weight,
+            mega_qkv_dim=self.mega_qkv_dim,
+            mega_a_dim=self.mega_a_dim,
+            mega_b_dim=self.mega_b_dim,
+            mega_g_dim=self.mega_g_dim,
             cached_masks=masks,
             use_inplace_state=self.use_inplace_state,
         )

@@ -177,7 +177,7 @@ class Qwen35Model:
 
         return logits
 
-    def prefill_layer_chunked(self, token_ids, chunk_size=2048):
+    def prefill_layer_chunked(self, token_ids, chunk_size=2048, profile=False):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Unlike prefill_segmented (segment through all layers), this processes
@@ -191,6 +191,7 @@ class Qwen35Model:
         Args:
             token_ids: [B, T] token IDs
             chunk_size: tokens per chunk (default 2048, matches direct prefill limit)
+            profile: if True, log per-layer timing and activation diagnostics
         """
         import time as _time
 
@@ -203,8 +204,9 @@ class Qwen35Model:
         ttnn.deallocate(token_ids_ttnn)
 
         for layer_idx, layer in enumerate(self.layers):
-            ttnn.synchronize_device(self.device)
-            _tl0 = _time.time()
+            if profile:
+                ttnn.synchronize_device(self.device)
+                _tl0 = _time.time()
 
             chunks_out = []
             for chunk_start in range(0, T, chunk_size):
@@ -239,23 +241,24 @@ class Qwen35Model:
             ttnn.deallocate(x)
             x = x_new
 
-            ttnn.synchronize_device(self.device)
-            _tl1 = _time.time()
-            kind = "attention" if layer.is_full_attention else "deltanet"
-            import torch as _torch
+            if profile:
+                ttnn.synchronize_device(self.device)
+                _tl1 = _time.time()
+                kind = "attention" if layer.is_full_attention else "deltanet"
+                import torch as _torch
 
-            x_diag = ttnn.to_torch(x).float()
-            x_last_tok = x_diag[:, -1:, :].float()
-            diag_msg = (
-                f"Layer {layer_idx} ({kind}) {(_tl1-_tl0)*1000:.0f}ms | "
-                f"x: mean={x_diag.abs().mean():.4f} max={x_diag.abs().max():.4f} "
-                f"inf={_torch.isinf(x_diag).sum().item()} | "
-                f"x_last: mean={x_last_tok.abs().mean():.4f}"
-            )
-            if not layer.is_full_attention:
-                s = ttnn.to_torch(layer.attention.recurrent_state).float()
-                diag_msg += f" | state: mean={s.abs().mean():.6f} max={s.abs().max():.4f}"
-            logger.info(diag_msg)
+                x_diag = ttnn.to_torch(x).float()
+                x_last_tok = x_diag[:, -1:, :].float()
+                diag_msg = (
+                    f"Layer {layer_idx} ({kind}) {(_tl1-_tl0)*1000:.0f}ms | "
+                    f"x: mean={x_diag.abs().mean():.4f} max={x_diag.abs().max():.4f} "
+                    f"inf={_torch.isinf(x_diag).sum().item()} | "
+                    f"x_last: mean={x_last_tok.abs().mean():.4f}"
+                )
+                if not layer.is_full_attention:
+                    s = ttnn.to_torch(layer.attention.recurrent_state).float()
+                    diag_msg += f" | state: mean={s.abs().mean():.6f} max={s.abs().max():.4f}"
+                logger.info(diag_msg)
 
         x_last = x[:, -1:, :]
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)

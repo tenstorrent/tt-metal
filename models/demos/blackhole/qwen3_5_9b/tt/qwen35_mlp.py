@@ -21,6 +21,11 @@ class Qwen35MLP:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         def load_weight(name):
             """Load 2D weight, transpose to [in, out] for ttnn.linear."""
@@ -39,9 +44,9 @@ class Qwen35MLP:
         self.w3 = load_weight("up_proj.weight")
 
     def forward(self, x):
-        ckc = self.compute_kernel_config
-        # Use L1 for short sequences (decode/small prefill), DRAM for long sequences
         T = x.shape[1] if len(x.shape) >= 3 else 1
+        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+        # Use L1 for short sequences (decode/small prefill), DRAM for long sequences
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(x, self.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
         w3_out = ttnn.linear(x, self.w3, compute_kernel_config=ckc, memory_config=mc)
