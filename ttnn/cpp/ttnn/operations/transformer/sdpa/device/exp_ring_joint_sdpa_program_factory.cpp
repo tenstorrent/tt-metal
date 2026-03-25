@@ -353,7 +353,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    
+
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
@@ -1159,9 +1159,15 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     }
 
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
-    // Hardcoded positions: backward-direction MUX at (11,0), (11,5); forward-direction MUX at (11,4), (11,9).
-    const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 9}};
-    const std::vector<CoreCoord> mux_forward_logical_cores = {{11, 4}, {11, 5}};
+    // MUX cores are placed at the last x coordinate of the full device grid.
+    // Backward MUX: first y (0) and last y (device_y - 1).
+    // Forward MUX:  middle y - 1 and middle y.
+    const uint32_t device_x = mesh_device->compute_with_storage_grid_size().x;
+    const uint32_t device_y = mesh_device->compute_with_storage_grid_size().y;
+    const uint32_t mux_x = device_x - 1;
+    const uint32_t mid_y = device_y / 2;
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{mux_x, 0}, {mux_x, device_y - 1}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{mux_x, mid_y - 1}, {mux_x, mid_y}};
 
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
