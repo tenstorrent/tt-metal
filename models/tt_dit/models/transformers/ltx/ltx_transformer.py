@@ -61,6 +61,7 @@ class LTXTransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         has_audio: bool = False,
+        apply_gated_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -86,6 +87,7 @@ class LTXTransformerBlock(Module):
             "ccl_manager": ccl_manager,
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
+            "apply_gated_attention": apply_gated_attention,
         }
 
         # Video-only uses fsdp_mesh_axis for FFN; AV does not.
@@ -475,6 +477,7 @@ class LTXTransformerModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         has_audio: bool = False,
+        apply_gated_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -606,6 +609,7 @@ class LTXTransformerModel(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     has_audio=has_audio,
+                    apply_gated_attention=apply_gated_attention,
                 )
             )
 

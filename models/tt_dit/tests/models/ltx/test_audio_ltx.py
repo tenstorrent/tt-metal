@@ -349,6 +349,7 @@ def test_av_transformer_block(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         has_audio=True,
+        apply_gated_attention=True,
     )
     tt_block.load_torch_state_dict(block_state)
 
@@ -471,6 +472,7 @@ def test_av_model_with_real_weights(mesh_device: ttnn.MeshDevice, sp_axis: int, 
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         has_audio=True,
+        apply_gated_attention=True,
     )
     model.load_torch_state_dict(filt)
 
@@ -650,6 +652,7 @@ def test_av_model_pcc_vs_reference(mesh_device: ttnn.MeshDevice, sp_axis: int, t
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         has_audio=True,
+        apply_gated_attention=True,
     )
     tt_model.load_torch_state_dict(filt)
 
