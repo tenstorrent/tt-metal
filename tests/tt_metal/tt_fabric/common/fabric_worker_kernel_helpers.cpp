@@ -56,7 +56,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
     // Use first device
     auto* src_physical_device = device->get_devices()[0];
-    // Get source fabric node ID from physical first device
+    // Get source fabric node ID from logical first device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     FabricNodeId src_fabric_node = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device->id());
     // Target core on remote chip for traffic destination

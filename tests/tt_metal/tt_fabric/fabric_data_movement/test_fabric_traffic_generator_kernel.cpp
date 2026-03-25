@@ -117,17 +117,18 @@ protected:
             GTEST_SKIP() << "Requires at least 2 devices";
         }
 
-        // Launch kernel on first device
-        mesh_device_ = devices[0];
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        
+        // Use logical fabric nodes 0 and 1 as neighbors
+        FabricNodeId src_node(MeshId{0}, 0);
+        FabricNodeId dest_node(MeshId{0}, 1);
+        
+        // Launch kernel on logical first device
+        ChipId src_physical_chip = control_plane.get_physical_chip_id_from_fabric_node_id(src_node);
+        mesh_device_ = get_device(src_physical_chip);
 
         // Allocate memory
         memory_layout_ = allocate_worker_memory();
-
-        // Create destination node (second device)
-        // Grab the (Mesh, LogicalId) pair from the physical chip
-        auto* dest_physical_device = devices[1]->get_devices()[0];
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        FabricNodeId dest_node = control_plane.get_fabric_node_id_from_physical_chip_id(dest_physical_device->id());
 
         // Create and launch program (note: correct argument order)
         program_ = create_traffic_generator_program(mesh_device_, worker_core, dest_node, memory_layout_);
