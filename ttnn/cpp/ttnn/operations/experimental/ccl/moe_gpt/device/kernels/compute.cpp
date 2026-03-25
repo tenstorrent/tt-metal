@@ -262,9 +262,6 @@ void kernel_main() {
             cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
             constexpr uint32_t w2_bias_blocks_per_iter_fused = w2_blocks_per_expert / num_a2a_iters;
 
-            // Init pack_untilize once before the iter loop (overlaps with matmul compute)
-            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
-
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
                 uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -329,12 +326,12 @@ void kernel_main() {
 
                 // Untilize W2 output to cb_c2s_out (ROW_MAJOR)
                 tile_regs_wait();
+                pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
                 pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+                pack_untilize_uninit(cb_c2s_out);
                 tile_regs_release();
             }
-
-            pack_untilize_uninit(cb_c2s_out);
             cb_push_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
 
             // Toggle input buffer and reinit packer for next chunk's SwiGLU

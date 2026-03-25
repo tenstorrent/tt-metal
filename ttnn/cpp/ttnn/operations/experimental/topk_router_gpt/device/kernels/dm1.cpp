@@ -98,6 +98,20 @@ void kernel_main() {
     const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
     const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
+    // Reset semaphores at kernel start for trace replay compatibility.
+    // Without this, increments from the previous trace iteration can race with
+    // the post-wait reset, causing lost increments and deadlock.
+    if (is_worker) {
+        volatile tt_l1_ptr uint32_t* partial_sem_reset =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_partial_ready));
+        noc_semaphore_set(partial_sem_reset, 0);
+    }
+    if (is_collector) {
+        volatile tt_l1_ptr uint32_t* topk_sem_reset =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_topk_ready));
+        noc_semaphore_set(topk_sem_reset, 0);
+    }
+
     // CBs
     constexpr auto cb_partial_recv = tt::CBIndex::c_2;
     constexpr auto cb_local_out = tt::CBIndex::c_3;

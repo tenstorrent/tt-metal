@@ -114,8 +114,8 @@ def get_supported_trace_region_size(request, mesh_device):
             "TG": 50000000,
         },
         "GPT-OSS-120B": {
-            "T3K": 50000000,
-            "TG": 50000000,
+            "T3K": 100000000,
+            "TG": 100000000,
         },
         "Qwen2.5-72B": {
             "T3K": 70000000,
