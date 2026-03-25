@@ -168,7 +168,9 @@ def test_masked_bincount(
         )
 
     # Run ttnn op
-    tt_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(tt_indices, tt_dispatch_table, n_routed_experts)
+    tt_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
+        tt_indices, tt_dispatch_table, n_routed_experts, topk
+    )
 
     # Compare per-device
     device_tensors = ttnn.get_device_tensors(tt_histograms)

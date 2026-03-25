@@ -32,13 +32,15 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
                 * :attr:`input_tensor`: 2D UINT16 height-sharded tensor of expert indices [sp_dim, topk_dim].
                 * :attr:`expert_mask`: UINT32 tensor of shape [n_routed_experts] or [1, n_routed_experts] (0xFFFFFFFF = skip, other = count).
                 * :attr:`n_routed_experts`: Number of routed experts (output dimension size).
+                * :attr:`num_experts_per_token`: Number of expert columns per row to count (must be <= topk_dim). Columns beyond this index are ignored, allowing padded shard widths.
 
         )doc",
         ttnn::overload_t(
             &masked_bincount,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_mask").noconvert(),
-            nb::arg("n_routed_experts")));
+            nb::arg("n_routed_experts"),
+            nb::arg("num_experts_per_token")));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail

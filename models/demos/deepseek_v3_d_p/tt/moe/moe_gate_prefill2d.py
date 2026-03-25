@@ -178,7 +178,7 @@ class MoEGatePrefill(LightweightModule):
         )
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
-            ttnn_top_k_experts_indices, self.expert_dispatch_table, self.n_routed_experts
+            ttnn_top_k_experts_indices, self.expert_dispatch_table, self.n_routed_experts, self.topk
         )
 
         dispatch_offsets, total_counts_per_expert = ttnn.experimental.deepseek_prefill.offset_cumsum(

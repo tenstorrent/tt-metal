@@ -30,5 +30,6 @@ struct MaskedBincountDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-Tensor masked_bincount(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts);
+Tensor masked_bincount(
+    const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts, uint32_t num_experts_per_token);
 }  // namespace ttnn::prim

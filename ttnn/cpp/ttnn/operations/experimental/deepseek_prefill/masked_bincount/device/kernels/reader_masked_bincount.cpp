@@ -64,7 +64,7 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t h_count = get_compile_time_arg_val(4);
-    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t num_experts_per_token = get_compile_time_arg_val(5);
     constexpr uint32_t n_routed_experts = get_compile_time_arg_val(6);
     constexpr bool is_initializer = (bool)get_compile_time_arg_val(7);
     constexpr uint32_t init_sem_idx = get_compile_time_arg_val(8);
@@ -117,7 +117,7 @@ void kernel_main() {
     for (uint32_t h = 0; h < h_count; h++) {
         volatile tt_l1_ptr uint16_t* row =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
-        for (uint32_t w = 0; w < W; w++) {
+        for (uint32_t w = 0; w < num_experts_per_token; w++) {
             uint32_t expert_idx = row[w];
             if (expert_idx < n_routed_experts && mask[expert_idx] != 0xFFFFFFFF) {
                 uint64_t noc_addr = get_noc_addr(out_addr + expert_idx * sizeof(uint32_t));

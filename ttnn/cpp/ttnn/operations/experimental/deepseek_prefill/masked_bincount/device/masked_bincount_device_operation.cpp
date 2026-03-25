@@ -22,6 +22,11 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be height sharded!");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor must have a shard spec!");
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
+    TT_FATAL(
+        args.num_experts_per_token > 0 && args.num_experts_per_token <= input_shape[input_shape.size() - 1],
+        "num_experts_per_token must be in (0, {}], got {}",
+        input_shape[input_shape.size() - 1],
+        args.num_experts_per_token);
 
     TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::UINT32, "Expert dispatch table must be UINT32!");
     TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert dispatch table must be ROW_MAJOR!");
@@ -64,9 +69,11 @@ MaskedBincountDeviceOperation::tensor_return_value_t MaskedBincountDeviceOperati
 
 namespace ttnn::prim {
 
-Tensor masked_bincount(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts) {
+Tensor masked_bincount(
+    const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts, uint32_t num_experts_per_token) {
     using OperationType = ttnn::experimental::prim::MaskedBincountDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{.n_routed_experts = n_routed_experts};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .n_routed_experts = n_routed_experts, .num_experts_per_token = num_experts_per_token};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .expert_mask = expert_mask};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
