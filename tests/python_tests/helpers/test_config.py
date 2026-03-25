@@ -43,7 +43,6 @@ from .device import (
     handle_if_assert_hit,
     set_tensix_soft_reset,
 )
-from .dump import TensixDump
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
     FORMATS_CONFIG_STRUCT_COMPILETIME,
@@ -108,7 +107,6 @@ def dummy_golden_generator(cls):
 @dataclass
 class TestOutcome:
     result: Any = None
-    dumps: Any = None
 
 
 class TestConfig:
@@ -1068,11 +1066,10 @@ class TestConfig:
                     verify_write=False,
                 )
                 set_tensix_soft_reset(0, [RiscCore.BRISC], location)
+            if get_chip_architecture() != ChipArchitecture.QUASAR:
+                commit_brisc_command(location, BriscCmd.RESET_TRISCS)
         else:
             set_tensix_soft_reset(1, location=location)
-
-        # unsafe, ordering is not guaranteed :(
-        TensixDump.initialize(location)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -1152,8 +1149,6 @@ class TestConfig:
 
         time.sleep(0.001)
 
-        tensix_dumps = []
-
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
@@ -1161,12 +1156,8 @@ class TestConfig:
                 if read_word_from_device(core_loc, mailbox.value) == KERNEL_COMPLETE:
                     completed.add(mailbox)
 
-            TensixDump.try_process_request(tensix_dumps, core_loc)
-
             if completed == mailboxes:
-                if get_chip_architecture() != ChipArchitecture.QUASAR:
-                    commit_brisc_command(core_loc, BriscCmd.RESET_TRISCS)
-                return tensix_dumps
+                return
 
         handle_if_assert_hit(
             self.temp_elfs,
@@ -1203,7 +1194,7 @@ class TestConfig:
             self.variant_stimuli.write(location)
 
         self.run_elf_files(location)
-        dumps = self.wait_for_tensix_operations_finished(location)
+        self.wait_for_tensix_operations_finished(location)
 
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device(location)
@@ -1214,7 +1205,6 @@ class TestConfig:
                 if self.variant_stimuli
                 else None
             ),
-            dumps=dumps,
         )
 
 

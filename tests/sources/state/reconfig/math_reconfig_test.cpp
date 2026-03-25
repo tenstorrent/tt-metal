@@ -8,7 +8,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "dump.h"
 #include "llk_defs.h"
 #include "params.h"
 
@@ -21,7 +20,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    llk::debug::tensix_dump::request();
 }
 
 #endif
@@ -67,8 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 /* srcb_data_format */ next_b);
         }
     }
-
-    llk::debug::tensix_dump::request();
 }
 #endif
 
@@ -76,7 +72,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    llk::debug::tensix_dump::request();
 }
 
 #endif
