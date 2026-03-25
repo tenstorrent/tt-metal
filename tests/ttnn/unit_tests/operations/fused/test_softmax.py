@@ -451,7 +451,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
 @pytest.mark.parametrize(
     "shape, dim, dtype",
     [
-        ([32, 32], -1, [torch.bfloat16, ttnn.bfloat8_b]),  # AttentionOptimized path
+        ([32, 32], -1, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralW path (rank!=4)
         ([32, 32, 32, 32], 0, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 1, [torch.bfloat16, ttnn.bfloat8_b]),  # GeneralCLarge path
         ([32, 32, 32, 32], 3, [torch.bfloat16, ttnn.bfloat8_b]),  # AttentionOptimized path
