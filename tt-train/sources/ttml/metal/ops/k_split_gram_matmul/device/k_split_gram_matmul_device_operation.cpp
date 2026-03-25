@@ -37,6 +37,9 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
 
 KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output->tensor_spec();
+    }
     uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
     auto shape = ttnn::Shape({1, 1, M, M});
     return ttnn::TensorSpec(
@@ -46,6 +49,9 @@ KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOpera
 
 KSplitGramMatmulDeviceOperation::tensor_return_value_t KSplitGramMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }

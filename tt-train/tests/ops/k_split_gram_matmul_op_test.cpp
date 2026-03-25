@@ -154,6 +154,37 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     EXPECT_GT(p_mirror, 0.99);
 }
 
+TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto input = make_test_tensor(64, 2048);
+    uint32_t M = input.logical_shape()[-2];
+
+    // Preallocate output tensor
+    auto output_spec = ttnn::TensorSpec(
+        ttnn::Shape({1, 1, M, M}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
+    auto preallocated = create_device_tensor(output_spec, device);
+
+    auto output =
+        ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, MathFidelity::HiFi4, preallocated);
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+
+    // Verify it wrote to the preallocated tensor (same buffer address)
+    EXPECT_EQ(output.buffer()->address(), preallocated.buffer()->address());
+
+    // Verify correctness
+    auto in_vec = input.to_vector<float>();
+    auto out_vec = output.to_vector<float>();
+    uint32_t K = input.logical_shape()[-1];
+    uint32_t padded_out = output.logical_shape()[-1];
+
+    auto ref = compute_gram_tile(in_vec, K, 2, 15);
+    auto dev = extract_output_tile(out_vec, padded_out, 2, 15);
+    double p = tile_pcc(ref, dev);
+    std::cout << "Preallocated G[2,15] PCC=" << p << "\n";
+    EXPECT_GT(p, 0.99);
+}
+
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
     struct Shape {
         uint32_t M_tiles, K_dim;
