@@ -133,21 +133,6 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        if len(input_tensor.tensor_topology().placements()) == 1:
-            assert (
-                input_tensor.tensor_topology().placements()[0].dim == self.input_dim
-            ), f"Input tensor must be sharded on dimension {self.input_dim}."
-        elif len(input_tensor.tensor_topology().placements()) == 2:
-            assert (
-                input_tensor.tensor_topology().placements()[0].dim == 0
-            ), f"Input tensor must be sharded on batch dim (0)."
-            assert (
-                input_tensor.tensor_topology().placements()[1].dim == self.input_dim
-            ), f"Input tensor must be sharded on dimension {self.input_dim}."
-        else:
-            raise RuntimeError(
-                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), but got tensor with placements: {input_tensor.tensor_topology().placements()}"
-            )
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)

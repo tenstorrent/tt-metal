@@ -78,6 +78,24 @@ class DistributedConfig:
         if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
             self.ccl_manager = TT_CCL(self.mesh_device)
 
+    def get_replicated_tensor_config(self, shape):
+        """Return config for replicated tensors (take one device's copy, no concat)."""
+        mesh_shape = self.mesh_device.shape
+        num_mesh_dims = len(mesh_shape) if hasattr(mesh_shape, "__len__") else 1
+        dims = [0] * num_mesh_dims
+        shape_override = [1] * num_mesh_dims
+        return DistributedTensorConfig(
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_composer=ttnn.create_mesh_composer(
+                self.mesh_device,
+                ttnn.MeshComposerConfig(
+                    dims,
+                    ttnn.MeshShape(shape_override),
+                ),
+            ),
+            logical_shape_fn=lambda s: tuple(s),
+        )
+
     def get_tensor_config_for_tensor(self, module_name, tensor):
         if tensor is not None:
             if (
@@ -85,15 +103,11 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
-                print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
-                )
-                return DistributedTensorConfig(
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
-                )
+                if NormalRun.verbose:
+                    print(
+                        f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                    )
+                return self.get_replicated_tensor_config(tensor.shape)
         return self.tensor_config
 
 
@@ -1091,28 +1105,20 @@ class TracedRun(LightweightRun):
             not hasattr(self, "should_trace") or self.should_trace(*args, **kwds)
         )
         if not should_trace or _TRACE_RUNNING:
-            if _TRACE_RUNNING:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
-                )
-            else:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
-                )
             # Fall back to normal execution
             result = self.forward(*func_args, **func_kwargs)
             end = time.time()
             DispatchManager.record_timing(
                 "TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin
             )
+            result = post_process_ttnn_module_output(self, result)
             DispatchManager.set_current_module_name(None)
-            return post_process_ttnn_module_output(self, result)
+            return result
 
         # Traced execution path
         cache_key = TracedRun._make_cache_key(self.module_name, func_args, func_kwargs)
 
         if cache_key in TracedRun._trace_cache:
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             entry = TracedRun._trace_cache[cache_key]
             if hasattr(self, "pre_trace_execute"):
                 self.pre_trace_execute(*args, **kwds)
@@ -1124,9 +1130,6 @@ class TracedRun(LightweightRun):
             result = entry.trace_output
         else:
             _TRACE_RUNNING = True
-            print(
-                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
-            )
             # Capture new trace
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
@@ -1138,12 +1141,13 @@ class TracedRun(LightweightRun):
             _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
+        result = post_process_ttnn_module_output(self, result)
         DispatchManager.set_current_module_name(None)
         end_full = time.time()
         DispatchManager.record_timing(
             "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
         )
-        return post_process_ttnn_module_output(self, result)
+        return result
 
 
 def disable_trace(fn):
