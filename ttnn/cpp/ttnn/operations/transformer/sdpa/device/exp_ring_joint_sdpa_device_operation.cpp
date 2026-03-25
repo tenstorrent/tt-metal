@@ -203,6 +203,75 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     for (const auto& tensor : sdpa_input_tensors) {
         validate_padding(tensor);
     }
+
+    // --- Grid and chunk compatibility ---
+    // The factory always computes sdpa_grid = {device_x - 1, device_y} (last column = CCL MUX).
+    // The op is designed for at most one (batch, head) per grid row and one Q chunk per core,
+    // so total Q chunks must not exceed the SDPA core count.
+
+    TT_FATAL(
+        DH % tt::constants::TILE_WIDTH == 0,
+        "Head dimension ({}) must be divisible by TILE_WIDTH ({})",
+        DH,
+        tt::constants::TILE_WIDTH);
+
+    const auto device_grid = input_tensor_q.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        device_grid.x >= 3,
+        "Device grid must have at least 3 columns (2 reserved for fabric MUX + at least 1 for SDPA workers). "
+        "Got {} columns.",
+        device_grid.x);
+
+    const uint32_t sdpa_grid_x = device_grid.x - 1;
+    const uint32_t sdpa_grid_y = device_grid.y;
+    const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
+
+    // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
+    TT_FATAL(
+        L == 0 || L % q_chunk_size == 0,
+        "Joint sequence length ({}) must be 0 or divisible by q_chunk_size ({}).",
+        L,
+        q_chunk_size);
+
+    const uint32_t num_local_q_chunks = (N_local + q_chunk_size - 1) / q_chunk_size;
+    const uint32_t num_joint_q_chunks = (L == 0) ? 0 : (L / q_chunk_size);
+    const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
+    const uint32_t total_q_chunks = B * NQH * num_q_chunks;
+
+    // One head per row: each (batch, head) pair must map to its own grid row.
+    TT_FATAL(
+        B * NQH <= sdpa_grid_y,
+        "Number of (batch × heads) combinations (B={} × NQH={} = {}) exceeds SDPA grid rows ({}) on "
+        "device grid {}×{}. Reduce batch size or head count (e.g. via tensor parallelism).",
+        B,
+        NQH,
+        B * NQH,
+        sdpa_grid_y,
+        device_grid.x,
+        device_grid.y);
+
+    // One Q chunk per column: all Q chunks for one head must fit across the grid columns.
+    TT_FATAL(
+        num_q_chunks <= sdpa_grid_x,
+        "Q chunks per head (num_local={} + num_joint={} = {}) exceeds SDPA grid columns ({}) on "
+        "device grid {}×{}. Increase q_chunk_size or reduce sequence length.",
+        num_local_q_chunks,
+        num_joint_q_chunks,
+        num_q_chunks,
+        sdpa_grid_x,
+        device_grid.x,
+        device_grid.y);
+
+    // Final sanity: total Q chunks must not exceed total SDPA cores.
+    TT_FATAL(
+        total_q_chunks <= num_sdpa_cores,
+        "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}). "
+        "The two constraints above should have caught this.",
+        B,
+        NQH,
+        num_q_chunks,
+        total_q_chunks,
+        num_sdpa_cores);
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(
