@@ -131,6 +131,8 @@ class TextBlock(LightweightModule):
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        trace_id: int = None,
+        layer_idx: int = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through decoder block.
@@ -152,8 +154,18 @@ class TextBlock(LightweightModule):
         residual = x
         x = self.attn_norm(x)
         attn_out, new_kv_cache = self.self_attn(
-            x, rot_mats, transformation_mats, attn_mask, start_pos, kv_cache, page_table, user_id
+            x,
+            rot_mats,
+            transformation_mats,
+            attn_mask,
+            start_pos,
+            kv_cache,
+            page_table,
+            user_id,
+            trace_id=trace_id,
+            layer_idx=layer_idx,
         )
+
         x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 

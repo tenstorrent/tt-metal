@@ -942,6 +942,7 @@ class Molmo2Generator:
             kv_caches=self.kv_caches,
             rot_mats=rot_mats,
             page_table=page_table_for_trace,
+            trace_id=trace_id,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)

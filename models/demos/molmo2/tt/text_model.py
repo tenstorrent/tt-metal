@@ -218,6 +218,7 @@ class TextModel(LightweightModule):
         rot_mats: Optional[List[ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
         user_id: int = 0,
+        trace_id: int = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -253,7 +254,16 @@ class TextModel(LightweightModule):
 
             kv_cache = kv_caches[layer_idx] if kv_caches else None
             x, new_kv_cache = block(
-                x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache, page_table, user_id
+                x,
+                rot_mats,
+                self.transformation_mats,
+                attn_mask,
+                start_pos,
+                kv_cache,
+                page_table,
+                user_id,
+                trace_id,
+                layer_idx,
             )
             new_kv_caches.append(new_kv_cache)
 
