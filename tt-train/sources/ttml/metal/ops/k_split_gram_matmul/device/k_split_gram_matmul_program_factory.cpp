@@ -45,11 +45,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     TT_FATAL(K_tiles % 2 == 0, "K_tiles ({}) must be even for lower/upper K-split", K_tiles);
     uint32_t K_half = K_tiles / 2;
 
-    auto full_grid = CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
+    auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
 
     // Diagonal helper column: x=grid_dim cores compute odd-K partial for diagonal blocks.
-    CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
-    auto all_cores = CoreRangeSet(std::set<CoreRange>{full_grid, helper_range});
+    tt::tt_metal::CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
+    auto all_cores = tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>{full_grid, helper_range});
     // Upper x-bound for row multicast (includes helper column)
     uint32_t upper_x_end = grid_dim;
 
@@ -166,7 +166,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t send_out_cb = use_per_nsb_reduction ? (uint32_t)tt::CBIndex::c_5 : (uint32_t)tt::CBIndex::c_3;
     uint32_t c5_tiles = use_per_nsb_reduction ? M_block * N_block : Mpc * M_block;
 
-    auto create_all_cbs = [&](const CoreRange& range) {
+    auto create_all_cbs = [&](const tt::tt_metal::CoreRange& range) {
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_0, tile_format, tile_sz, cb_size);
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_1, tile_format, tile_sz, cb_size);
         create_circular_buffer(
@@ -218,16 +218,16 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // === Core classification ===
     // Row senders: x=0
-    std::vector<CoreCoord> row_senders;  // (0, y>0) — regular sender
+    std::vector<tt::tt_metal::CoreCoord> row_senders;  // (0, y>0) — regular sender
     for (uint32_t y = 1; y < grid_dim; y++) row_senders.push_back({0, y});
     // (0, 0) is sender_writer — handled separately
 
     // Col senders: y=0 (all x)
-    std::vector<CoreCoord> col_senders;
+    std::vector<tt::tt_metal::CoreCoord> col_senders;
     for (uint32_t x = 0; x < grid_dim; x++) col_senders.push_back({x, 0});
 
     // Row receivers (RISCV_0, x>0): ALL use receiver_writer (including y=0 edge)
-    std::vector<CoreCoord> row_lower_recv, row_upper_recv;
+    std::vector<tt::tt_metal::CoreCoord> row_lower_recv, row_upper_recv;
     for (uint32_t y = 0; y < grid_dim; y++) {
         for (uint32_t x = 1; x < grid_dim; x++) {
             if (x <= y) {
@@ -239,7 +239,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // Col receivers (RISCV_1, y>0): interior = plain receiver, edge (x=0) = receiver_writer
-    std::vector<CoreCoord> col_lower_recv_interior, col_lower_recv_edge, col_upper_recv;
+    std::vector<tt::tt_metal::CoreCoord> col_lower_recv_interior, col_lower_recv_edge, col_upper_recv;
     for (uint32_t x = 0; x < grid_dim; x++) {
         for (uint32_t y = 1; y < grid_dim; y++) {
             if (x == 0) {
@@ -371,7 +371,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     };
 
     // Lower off-diagonal (x < y, x > 0): REDUCE_SEND — send transposed partial to upper
-    std::vector<CoreCoord> row_lower_offdiag, row_lower_diag;
+    std::vector<tt::tt_metal::CoreCoord> row_lower_offdiag, row_lower_diag;
     for (auto& c : row_lower_recv) {
         if (c.x < c.y)
             row_lower_offdiag.push_back(c);
@@ -543,7 +543,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     };
 
     // Lower off-diagonal: REDUCE_SENDER_TRANSPOSE
-    std::vector<CoreCoord> sender_transpose_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_transpose_cores;
     for (uint32_t y = 1; y < grid_dim; y++)
         for (uint32_t x = 0; x < y; x++) sender_transpose_cores.push_back({x, y});
     if (!sender_transpose_cores.empty()) {
@@ -555,14 +555,14 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // Diagonal: REDUCE_SENDER
-    std::vector<CoreCoord> sender_diag_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
     for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
     CreateKernel(program, compute_matmul_path, make_crs(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR (or diagnostic variant)
     std::string accum_define = "REDUCE_ACCUMULATOR";
 
-    std::vector<CoreCoord> accum_cores;
+    std::vector<tt::tt_metal::CoreCoord> accum_cores;
     for (uint32_t y = 0; y < grid_dim; y++)
         for (uint32_t x = y + 1; x < grid_dim; x++) accum_cores.push_back({x, y});
     if (!accum_cores.empty()) {
@@ -589,7 +589,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         SetRuntimeArgs(
             program,
             row_sender_reduce_kid,
-            CoreCoord{0, 0},
+            tt::tt_metal::CoreCoord{0, 0},
             {in_addr,
              (uint32_t)row_lower_start_p.x,
              (uint32_t)row_lower_start_p.y,
@@ -614,13 +614,15 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // --- Row sender at (0, y>0) ---
     for (uint32_t y = 1; y < grid_dim; y++) {
-        CoreCoord sender_core{0, y};
+        tt::tt_metal::CoreCoord sender_core{0, y};
         uint32_t row_lower_num = y + 1;
         auto row_lower_start_p = device->worker_core_from_logical_core({0, y});
         auto row_lower_end_p = device->worker_core_from_logical_core({y, y});
         uint32_t row_upper_num = (upper_x_end > y) ? (upper_x_end - y) : 0;
-        CoreCoord row_upper_start_log = (row_upper_num > 0) ? CoreCoord{y + 1, y} : CoreCoord{0, y};
-        CoreCoord row_upper_end_log = (row_upper_num > 0) ? CoreCoord{upper_x_end, y} : CoreCoord{0, y};
+        tt::tt_metal::CoreCoord row_upper_start_log =
+            (row_upper_num > 0) ? tt::tt_metal::CoreCoord{y + 1, y} : tt::tt_metal::CoreCoord{0, y};
+        tt::tt_metal::CoreCoord row_upper_end_log =
+            (row_upper_num > 0) ? tt::tt_metal::CoreCoord{upper_x_end, y} : tt::tt_metal::CoreCoord{0, y};
         auto row_upper_start_p = device->worker_core_from_logical_core(row_upper_start_log);
         auto row_upper_end_p = device->worker_core_from_logical_core(row_upper_end_log);
         SetRuntimeArgs(
@@ -649,17 +651,19 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     // --- Col sender at (x, 0) ---
     for (uint32_t x = 0; x < grid_dim; x++) {
-        CoreCoord sender_core{x, 0};
+        tt::tt_metal::CoreCoord sender_core{x, 0};
         uint32_t col_lower_num = grid_dim - x;
-        CoreCoord col_lower_start_log{x, x}, col_lower_end_log{x, grid_dim - 1};
+        tt::tt_metal::CoreCoord col_lower_start_log{x, x}, col_lower_end_log{x, grid_dim - 1};
         if (x == 0)
             col_lower_start_log = {0, 0};
         auto col_lower_start_p = device->worker_core_from_logical_core(col_lower_start_log);
         auto col_lower_end_p = device->worker_core_from_logical_core(col_lower_end_log);
         std::swap(col_lower_start_p, col_lower_end_p);  // NOC_1: swap
         uint32_t col_upper_num = (x >= 2) ? (x - 1) : 0;
-        CoreCoord col_upper_start_log = (col_upper_num > 0) ? CoreCoord{x, 1} : CoreCoord{x, 0};
-        CoreCoord col_upper_end_log = (col_upper_num > 0) ? CoreCoord{x, x - 1} : CoreCoord{x, 0};
+        tt::tt_metal::CoreCoord col_upper_start_log =
+            (col_upper_num > 0) ? tt::tt_metal::CoreCoord{x, 1} : tt::tt_metal::CoreCoord{x, 0};
+        tt::tt_metal::CoreCoord col_upper_end_log =
+            (col_upper_num > 0) ? tt::tt_metal::CoreCoord{x, x - 1} : tt::tt_metal::CoreCoord{x, 0};
         auto col_upper_start_p = device->worker_core_from_logical_core(col_upper_start_log);
         auto col_upper_end_p = device->worker_core_from_logical_core(col_upper_end_log);
         std::swap(col_upper_start_p, col_upper_end_p);  // NOC_1: swap
@@ -693,7 +697,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     for (uint32_t y = 0; y < grid_dim; y++) {
         auto row_sender_p = device->worker_core_from_logical_core({0, y});
         for (uint32_t x = 1; x < grid_dim; x++) {
-            CoreCoord core{x, y};
+            tt::tt_metal::CoreCoord core{x, y};
             if (x < y) {
                 // Lower off-diagonal: REDUCE_SEND to upper core (y, x)
                 auto partner_p = device->worker_core_from_logical_core({y, x});
@@ -734,7 +738,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     for (uint32_t x = 0; x < grid_dim; x++) {
         auto col_sender_p = device->worker_core_from_logical_core({x, 0});
         for (uint32_t y = 1; y < grid_dim; y++) {
-            CoreCoord core{x, y};
+            tt::tt_metal::CoreCoord core{x, y};
             if (x == 0) {
                 // Edge lower (0, y>0): REDUCE_SEND to upper core (y, 0)
                 auto partner_p = device->worker_core_from_logical_core({y, 0});
@@ -754,7 +758,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // --- Helper runtime args ---
     {  // helpers
         for (uint32_t y = 0; y < grid_dim; y++) {
-            CoreCoord helper_core{grid_dim, y};
+            tt::tt_metal::CoreCoord helper_core{grid_dim, y};
             auto row_sender_p = device->worker_core_from_logical_core({0, y});
 
             // RISCV_0: row receiver + REDUCE_RECV (receives diagonal's partial)
