@@ -3,25 +3,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Sweep block sizes for ttnn.experimental.all_gather_minimal_matmul_async
+Sweep block sizes for minimal_matmul and all_gather_minimal_matmul_async
 using device profiler for accurate kernel timing.
 
 Architecture:
-  - Worker test (test_agmm_sweep_worker): Self-contained profiled test.
-    For a given (shape, M_block), runs all valid (K_block, N_block) combos,
-    calling the fused op directly. Invoked as a subprocess by the device profiler.
-  - Orchestrator test (test_agmm_sweep): Iterates M_blocks, spawns worker via
+  - Worker test (test_mm_sweep_worker): Self-contained profiled test.
+    For a given (device_config, shape, M_block), runs all valid (K_block, N_block)
+    combos, calling the appropriate op directly. Invoked as subprocess by device profiler.
+  - Orchestrator test (test_mm_sweep): Iterates M_blocks, spawns worker via
     run_device_profiler, parses ops log to extract per-op device kernel durations.
 
 Usage:
-    # Orchestrator: sweep one shape (invokes device profiler per M_block)
-    pytest models/tt_dit/tests/models/wan2_2/sweep_agmm_block_sizes.py::test_agmm_sweep -k "6144_5120_3456" -x -s
+    # Orchestrator: sweep one shape on BH 4x8
+    pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep \\
+        -k "bh_4x8-6144_5120_3456_11x10_mm" -x -s
 
     # Worker: run directly (useful for debugging, no profiling)
-    pytest models/tt_dit/tests/models/wan2_2/sweep_agmm_block_sizes.py::test_agmm_sweep_worker -k "6144_5120_3456-m4" -x -s
+    pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
+        -k "bh_4x8-6144_5120_3456_11x10_mm-m4" -x -s
 
     # Standalone script
-    python models/tt_dit/tests/models/wan2_2/sweep_agmm_block_sizes.py --shape 6144,5120,3456
+    python models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py \\
+        --device-config bh_4x8 --shape 6144,5120,3456
 """
 
 import argparse
@@ -36,62 +39,100 @@ import ttnn
 from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import create_global_semaphores
 
 # ============================================================================
-# CONFIGURATION
+# DEVICE CONFIGURATIONS
+# ============================================================================
+# To add a new config: add an entry here with the required fields.
+# The worker and orchestrator will pick it up automatically.
+
+DEVICE_CONFIGS = {
+    "bh_4x8": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,  # max_packet_payload_size_bytes
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
+}
+
+DEFAULT_DEVICE_CONFIG = "bh_4x8"
+
+
+def resolve_config(name):
+    """Resolve a device config name to its dict, with ttnn enums."""
+    cfg = DEVICE_CONFIGS[name]
+    return {
+        "mesh_shape": cfg["mesh_shape"],
+        "fabric_config": getattr(ttnn.FabricConfig, cfg["fabric_config"]),
+        "fabric_router_config_payload": cfg["fabric_router_config_payload"],
+        "topology": getattr(ttnn.Topology, cfg["topology"]),
+        "num_links": cfg["num_links"],
+        "num_workers_per_link": cfg["num_workers_per_link"],
+        "sp_axis": cfg["sp_axis"],
+        "tp_axis": cfg["tp_axis"],
+        "cluster_axis": cfg["cluster_axis"],
+    }
+
+
+# ============================================================================
+# SHAPE TABLE
 # ============================================================================
 
-# (M, K, N, core_grid_x, core_grid_y)
+# (M, K, N, core_grid_x, core_grid_y, is_agmm)
+# M, K, N are the matmul dimensions as seen by the kernel (per-device).
+# Core grid matches what the model passes to get_matmul_config at runtime.
+# For is_agmm=False: calls ttnn.experimental.minimal_matmul
+# For is_agmm=True: calls ttnn.experimental.all_gather_minimal_matmul_async
 SHAPES = [
-    (96, 96, 192, 11, 10),
-    (64, 192, 384, 11, 10),
-    (64, 96, 192, 11, 10),
-    (32, 96, 192, 11, 10),
-    (32, 192, 384, 11, 10),
-    (32, 256, 5120, 11, 10),
-    (32, 32, 32, 11, 10),
-    (32, 1280, 30720, 11, 10),
-    (32, 3072, 10240, 11, 10),
-    (32, 5120, 1280, 11, 10),
-    (32, 10240, 10240, 11, 10),
-    (128, 5120, 2560, 11, 10),
-    (512, 4096, 5120, 11, 10),
-    (512, 5120, 5120, 11, 10),
-    (6144, 384, 384, 11, 10),
-    (6144, 384, 1152, 11, 10),
-    (6144, 3456, 5120, 11, 10),
-    (6144, 5120, 64, 11, 10),
-    (6144, 5120, 1280, 12, 9),
-    (6144, 5120, 3456, 11, 10),
-    (6144, 5120, 3840, 12, 9),
-    (6240, 384, 384, 11, 10),
-    (6240, 384, 1152, 11, 10),
-    (6240, 3456, 5120, 11, 10),
-    (6240, 5120, 64, 11, 10),
-    (6240, 5120, 1280, 12, 9),
-    (6240, 5120, 3456, 11, 10),
-    (6240, 5120, 3840, 12, 9),
-    (14400, 384, 384, 11, 10),
-    (14400, 384, 1152, 11, 10),
-    (14400, 3456, 5120, 11, 10),
-    (14400, 5120, 64, 11, 10),
-    (14400, 5120, 1280, 12, 9),
-    (14400, 5120, 3456, 11, 10),
-    (14400, 5120, 3840, 12, 9),
+    (96, 96, 192, 11, 10, False),
+    (64, 192, 384, 11, 10, False),
+    (64, 96, 192, 11, 10, False),
+    (32, 96, 192, 11, 10, False),
+    (32, 192, 384, 11, 10, False),
+    (32, 256, 5120, 11, 10, False),
+    (32, 32, 32, 11, 10, False),
+    (32, 1280, 30720, 11, 10, False),
+    (32, 3072, 10240, 11, 10, False),
+    (32, 5120, 1280, 11, 10, False),
+    (32, 10240, 10240, 11, 10, False),
+    (128, 5120, 2560, 11, 10, False),
+    (512, 4096, 5120, 11, 10, False),
+    (512, 5120, 5120, 11, 10, False),
+    (6144, 384, 384, 11, 10, False),
+    (6144, 384, 1152, 11, 10, False),
+    (6144, 3456, 5120, 11, 10, False),
+    (6144, 5120, 64, 11, 10, False),
+    (6144, 5120, 1280, 12, 9, False),
+    (6144, 5120, 3456, 11, 10, False),
+    (6144, 5120, 3840, 12, 9, False),
+    (6240, 384, 384, 11, 10, False),
+    (6240, 384, 1152, 11, 10, False),
+    (6240, 3456, 5120, 11, 10, False),
+    (6240, 5120, 64, 11, 10, False),
+    (6240, 5120, 1280, 12, 9, False),
+    (6240, 5120, 3456, 11, 10, False),
+    (6240, 5120, 3840, 12, 9, False),
+    (14400, 384, 384, 11, 10, False),
+    (14400, 384, 1152, 11, 10, False),
+    (14400, 3456, 5120, 11, 10, False),
+    (14400, 5120, 64, 11, 10, False),
+    (14400, 5120, 1280, 12, 9, False),
+    (14400, 5120, 3456, 11, 10, False),
+    (14400, 5120, 3840, 12, 9, False),
 ]
 
-SHAPE_IDS = [f"{M}_{K}_{N}" for M, K, N, _, _ in SHAPES]
-
-# Mesh / fabric config
-SP_AXIS = 0
-TP_AXIS = 1
-CLUSTER_AXIS = 1
-NUM_LINKS = 1
-NUM_WORKERS_PER_LINK = 4
+SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}" for M, K, N, cgx, cgy, agmm in SHAPES]
 
 # Block sweep range
 MAX_BLOCK = 16
 
-CSV_FILE = "sweep_results_agmm.csv"
+CSV_FILE = "sweep_results_mm.csv"
 CSV_COLUMNS = [
+    "device_config",
+    "op_type",
     "M",
     "K",
     "N",
@@ -118,17 +159,17 @@ def get_divisors(n, max_val=MAX_BLOCK):
     return sorted(i for i in range(1, min(n, max_val) + 1) if n % i == 0)
 
 
-def pick_subblock(m_block, n_block):
-    """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= 8."""
+def pick_subblock(m_block, n_block, max_dest_volume=4):
+    """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume."""
     best = (1, 1)
     best_product = 1
-    for h in range(1, min(m_block, 8) + 1):
+    for h in range(1, min(m_block, max_dest_volume) + 1):
         if m_block % h != 0:
             continue
-        for w in range(1, min(n_block, 8) + 1):
+        for w in range(1, min(n_block, max_dest_volume) + 1):
             if n_block % w != 0:
                 continue
-            if h * w <= 8 and h * w > best_product:
+            if h * w <= max_dest_volume and h * w > best_product:
                 best = (h, w)
                 best_product = h * w
     return best
@@ -141,26 +182,37 @@ def generate_kn_combos(K_tiles, N_tiles):
     return [(k, n) for k in k_divs for n in n_divs]
 
 
-def compute_tile_counts(M, K, N, sp_size=2):
-    """Compute tile counts for the per-device matmul."""
-    per_device_M = M // sp_size
-    M_tiles = max(1, -(-per_device_M // 32))  # ceiling division
+def compute_tile_counts(M, K, N):
+    """Compute tile counts for the matmul dimensions (all per-device)."""
+    M_tiles = max(1, -(-M // 32))  # ceiling division
     K_tiles = K // 32
     N_tiles = N // 32
-    return per_device_M, M_tiles, K_tiles, N_tiles
+    return M_tiles, K_tiles, N_tiles
 
 
-def open_mesh():
-    """Open a (2,4) mesh device with FABRIC_1D."""
-    ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+def open_mesh(cfg):
+    """Open a mesh device with the given resolved config."""
+    fabric_kwargs = [
+        cfg["fabric_config"],
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
-    )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(2, 4))
+    ]
+    if cfg["fabric_router_config_payload"] is not None:
+        fabric_kwargs.append(create_fabric_router_config(cfg["fabric_router_config_payload"]))
+    ttnn.set_fabric_config(*fabric_kwargs)
+
+    rows, cols = cfg["mesh_shape"]
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
 
 
 def close_mesh(mesh_device):
@@ -230,16 +282,19 @@ def parse_ops_log(subdir):
 # ============================================================================
 
 
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
 @pytest.mark.parametrize("m_block", range(1, MAX_BLOCK + 1), ids=[f"m{i}" for i in range(1, MAX_BLOCK + 1)])
-def test_agmm_sweep_worker(shape, m_block):
-    """Run all (K_block, N_block) combos for a given shape and M_block.
+def test_mm_sweep_worker(device_config, shape, m_block):
+    """Run all (K_block, N_block) combos for a given device config, shape, and M_block.
 
     Designed to be invoked via run_device_profiler as a subprocess.
     Emits start/stop signposts around the measured region.
     """
-    M, K, N, cgx, cgy = shape
-    per_device_M, M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    cfg = resolve_config(device_config)
+    M, K, N, cgx, cgy, is_agmm = shape
+
+    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
 
     if M_tiles % m_block != 0:
         pytest.skip(f"m_block={m_block} doesn't divide M_tiles={M_tiles}")
@@ -248,43 +303,16 @@ def test_agmm_sweep_worker(shape, m_block):
     if not kn_combos:
         pytest.skip("No valid (K_block, N_block) combos")
 
-    logger.info(f"Worker: M={M} K={K} N={N} m_block={m_block}, {len(kn_combos)} K/N combos")
+    op_type = "agmm" if is_agmm else "mm"
+    logger.info(
+        f"Worker [{device_config}] {op_type}: M={M} K={K} N={N} grid={cgx}x{cgy} "
+        f"m_block={m_block}, {len(kn_combos)} K/N combos"
+    )
 
-    mesh_device = open_mesh()
+    mesh_device = open_mesh(cfg)
     try:
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
-
-        # Create input tensors (same layout as run_test_linear)
-        torch_input = torch.randn((M, K), dtype=torch.float32)
-        weight_input = torch.randn((K, N), dtype=torch.float32)
-        bias_input = torch.randn((1, N), dtype=torch.float32)
-
-        shard_dims = [TP_AXIS, SP_AXIS]
-        tt_input = ttnn.from_torch(
-            torch_input,
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-        )
-        tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-        tt_bias = ttnn.from_torch(bias_input, dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-
-        # Persistent output buffer for all_gather intermediate
-        ccl_cores = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
-        )
-        ccl_semaphore_handles = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), ccl_cores, 0)
-
-        persistent_output_buffer = ttnn.from_torch(
-            torch.zeros((per_device_M, K), dtype=torch.float32),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
-        )
 
         compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -294,38 +322,125 @@ def test_agmm_sweep_worker(shape, m_block):
             packer_l1_acc=True,
         )
 
-        def run_op(k_blk, n_blk):
-            sb_h, sb_w = pick_subblock(m_block, n_blk)
-            matmul_config = ttnn.MinimalMatmulConfig(
-                M_block_size=m_block,
-                K_block_size=k_blk,
-                N_block_size=n_blk,
-                subblock_h=sb_h,
-                subblock_w=sb_w,
-                compute_with_storage_grid_size=core_grid,
+        if is_agmm:
+            # ----- AGMM path: sharded input + CCL infrastructure -----
+            sp_axis = cfg["sp_axis"]
+            tp_axis = cfg["tp_axis"]
+            sp_size = cfg["mesh_shape"][sp_axis]
+
+            # M is per-device; create full tensor for mesh sharding
+            full_M = M * sp_size
+            shard_dims = [sp_axis, tp_axis]
+            tt_input = ttnn.from_torch(
+                torch.randn((full_M, K), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
             )
-            ttnn.experimental.all_gather_minimal_matmul_async(
-                tt_input,
-                tt_weight,
-                bias_tensor=tt_bias,
-                fused_activation=None,
-                compute_kernel_config=compute_config,
-                config=matmul_config,
-                persistent_output_buffer=persistent_output_buffer,
-                multi_device_global_semaphore=ccl_semaphore_handles,
-                num_links=NUM_LINKS,
-                topology=ttnn.Topology.Ring,
-                cluster_axis=CLUSTER_AXIS,
-                barrier_semaphore=None,
-                force_transpose=True,
-                num_workers_per_link=NUM_WORKERS_PER_LINK,
-                num_buffers_per_channel=48,
-                scalar=None,
-                addcmul_input_tensor1=None,
-                addcmul_input_tensor2=None,
-                chunks=1,
+            tt_weight = ttnn.from_torch(
+                torch.randn((K, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
             )
-            ttnn.synchronize_device(mesh_device)
+            tt_bias = ttnn.from_torch(
+                torch.randn((1, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+            ccl_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            )
+            ccl_semaphore_handles = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), ccl_cores, 0)
+
+            persistent_output_buffer = ttnn.from_torch(
+                torch.zeros((M, K), dtype=torch.float32),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+            )
+
+            def run_op(k_blk, n_blk):
+                sb_h, sb_w = pick_subblock(m_block, n_blk)
+                matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=m_block,
+                    K_block_size=k_blk,
+                    N_block_size=n_blk,
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+                ttnn.experimental.all_gather_minimal_matmul_async(
+                    tt_input,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    fused_activation=None,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                    persistent_output_buffer=persistent_output_buffer,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
+                    num_links=cfg["num_links"],
+                    topology=cfg["topology"],
+                    cluster_axis=cfg["cluster_axis"],
+                    barrier_semaphore=None,
+                    force_transpose=True,
+                    num_workers_per_link=cfg["num_workers_per_link"],
+                    num_buffers_per_channel=48,
+                    scalar=None,
+                    addcmul_input_tensor1=None,
+                    addcmul_input_tensor2=None,
+                    chunks=1,
+                )
+                ttnn.synchronize_device(mesh_device)
+
+        else:
+            # ----- Non-AGMM path: replicated tensors + minimal_matmul -----
+            tt_input = ttnn.from_torch(
+                torch.randn((M, K), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_weight = ttnn.from_torch(
+                torch.randn((K, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_bias = ttnn.from_torch(
+                torch.randn((1, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+            def run_op(k_blk, n_blk):
+                sb_h, sb_w = pick_subblock(m_block, n_blk)
+                matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=m_block,
+                    K_block_size=k_blk,
+                    N_block_size=n_blk,
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+                ttnn.experimental.minimal_matmul(
+                    input_tensor=tt_input,
+                    weight_tensor=tt_weight,
+                    bias_tensor=tt_bias,
+                    config=matmul_config,
+                    fused_activation=None,
+                    compute_kernel_config=compute_config,
+                )
+                ttnn.synchronize_device(mesh_device)
 
         # Warmup: compile all programs (outside signpost region)
         for k_blk, n_blk in kn_combos:
@@ -352,18 +467,21 @@ def test_agmm_sweep_worker(shape, m_block):
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
-def test_agmm_sweep(shape):
-    """Orchestrate the block size sweep for one shape.
+def test_mm_sweep(device_config, shape):
+    """Orchestrate the block size sweep for one (device_config, shape).
 
-    For each valid M_block, invokes test_agmm_sweep_worker via the device profiler
+    For each valid M_block, invokes test_mm_sweep_worker via the device profiler
     as a subprocess, then parses the ops log to extract device kernel durations.
     """
     from tracy.process_model_log import run_device_profiler
 
-    M, K, N, cgx, cgy = shape
-    per_device_M, M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
-    shape_id = f"{M}_{K}_{N}"
+    cfg = resolve_config(device_config)
+    M, K, N, cgx, cgy, is_agmm = shape
+    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    op_type = "agmm" if is_agmm else "mm"
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}"
     core_grid_str = f"{cgx}x{cgy}"
 
     m_blocks = get_divisors(M_tiles)
@@ -373,7 +491,7 @@ def test_agmm_sweep(shape):
         pytest.skip(f"No valid (K_block, N_block) combos for K_tiles={K_tiles}, N_tiles={N_tiles}")
 
     logger.info(
-        f"Sweep {shape_id}: M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
+        f"Sweep [{device_config}] {op_type} {shape_id}: M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
         f"{len(m_blocks)} M_blocks, {len(kn_combos)} K/N combos each"
     )
 
@@ -381,10 +499,10 @@ def test_agmm_sweep(shape):
     all_results = []
 
     for m_block in m_blocks:
-        subdir = f"agmm_sweep_{shape_id}_m{m_block}"
+        subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
         command = (
-            f"pytest models/tt_dit/tests/models/wan2_2/sweep_agmm_block_sizes.py"
-            f"::test_agmm_sweep_worker[{shape_id}-m{m_block}] -x"
+            f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+            f"::test_mm_sweep_worker[{device_config}-{shape_id}-m{m_block}] -x"
         )
 
         logger.info(f"  M_block={m_block}: profiling {len(kn_combos)} combos...")
@@ -395,7 +513,7 @@ def test_agmm_sweep(shape):
 
             if len(durations) != len(kn_combos):
                 logger.warning(
-                    f"  M_block={m_block}: expected {len(kn_combos)} ops, got {len(durations)} in profiler log"
+                    f"  M_block={m_block}: expected {len(kn_combos)} ops, " f"got {len(durations)} in profiler log"
                 )
 
             for i, (k_blk, n_blk) in enumerate(kn_combos):
@@ -420,6 +538,8 @@ def test_agmm_sweep(shape):
                 append_csv_row(
                     CSV_FILE,
                     [
+                        device_config,
+                        op_type,
                         M,
                         K,
                         N,
@@ -434,7 +554,7 @@ def test_agmm_sweep(shape):
                     ],
                 )
 
-            logger.info(f"  M_block={m_block}: done, {min(len(durations), len(kn_combos))} results recorded")
+            logger.info(f"  M_block={m_block}: done, " f"{min(len(durations), len(kn_combos))} results recorded")
 
         except Exception as e:
             err_msg = str(e)
@@ -446,6 +566,8 @@ def test_agmm_sweep(shape):
                 append_csv_row(
                     CSV_FILE,
                     [
+                        device_config,
+                        op_type,
                         M,
                         K,
                         N,
@@ -465,12 +587,11 @@ def test_agmm_sweep(shape):
         all_results.sort(key=lambda r: r["duration_ns"])
         best = all_results[0]
         logger.info(
-            f"BEST for {shape_id}: "
+            f"BEST for [{device_config}] {shape_id}: "
             f"M={best['M_block']} K={best['K_block']} N={best['N_block']} "
             f"sb_h={best['subblock_h']} sb_w={best['subblock_w']} "
             f"-> {best['duration_ns']:.0f} ns"
         )
-        # Print top 5
         logger.info("Top 5 configs:")
         for rank, r in enumerate(all_results[:5], 1):
             logger.info(
@@ -478,7 +599,7 @@ def test_agmm_sweep(shape):
                 f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
             )
     else:
-        logger.warning(f"No valid results for {shape_id}")
+        logger.warning(f"No valid results for [{device_config}] {shape_id}")
 
 
 # ============================================================================
@@ -489,7 +610,14 @@ def test_agmm_sweep(shape):
 def main():
     from tracy.process_model_log import run_device_profiler
 
-    parser = argparse.ArgumentParser(description="Sweep AGMM block sizes with device profiler")
+    parser = argparse.ArgumentParser(description="Sweep matmul block sizes with device profiler")
+    parser.add_argument(
+        "--device-config",
+        type=str,
+        default=DEFAULT_DEVICE_CONFIG,
+        choices=list(DEVICE_CONFIGS.keys()),
+        help=f"Device configuration (default: {DEFAULT_DEVICE_CONFIG})",
+    )
     parser.add_argument(
         "--shape",
         type=str,
@@ -500,10 +628,13 @@ def main():
     parser.add_argument("--max-block", type=int, default=MAX_BLOCK, help="Max block size in tiles (default: 16)")
     args = parser.parse_args()
 
+    device_config = args.device_config
+    cfg = resolve_config(device_config)
+
     # Filter shapes
     if args.shape:
         m, k, n = [int(x) for x in args.shape.split(",")]
-        shapes = [(M, K, N, cgx, cgy) for M, K, N, cgx, cgy in SHAPES if M == m and K == k and N == n]
+        shapes = [s for s in SHAPES if s[0] == m and s[1] == k and s[2] == n]
         if not shapes:
             print(f"Shape {args.shape} not found in SHAPES table")
             return
@@ -513,9 +644,15 @@ def main():
     write_csv_header(args.csv)
     all_best = {}
 
-    for M, K, N, cgx, cgy in shapes:
-        per_device_M, M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
-        shape_id = f"{M}_{K}_{N}"
+    print(
+        f"Device config: {device_config} (mesh={cfg['mesh_shape']}, "
+        f"sp_axis={cfg['sp_axis']}, links={cfg['num_links']})"
+    )
+
+    for M, K, N, cgx, cgy, is_agmm in shapes:
+        M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+        op_type = "agmm" if is_agmm else "mm"
+        shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}"
         core_grid_str = f"{cgx}x{cgy}"
 
         m_blocks = get_divisors(M_tiles, args.max_block)
@@ -526,17 +663,20 @@ def main():
             continue
 
         print(f"\n{'='*80}")
-        print(f"Shape {shape_id}: M_tiles={M_tiles} K_tiles={K_tiles} N_tiles={N_tiles}")
+        print(
+            f"[{device_config}] {op_type} Shape {M}_{K}_{N} grid={core_grid_str}: "
+            f"M_tiles={M_tiles} K_tiles={K_tiles} N_tiles={N_tiles}"
+        )
         print(f"  {len(m_blocks)} M_blocks x {len(kn_combos)} K/N combos")
         print(f"{'='*80}")
 
         shape_results = []
 
         for m_block in m_blocks:
-            subdir = f"agmm_sweep_{shape_id}_m{m_block}"
+            subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
             command = (
-                f"pytest models/tt_dit/tests/models/wan2_2/sweep_agmm_block_sizes.py"
-                f"::test_agmm_sweep_worker[{shape_id}-m{m_block}] -x"
+                f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                f"::test_mm_sweep_worker[{device_config}-{shape_id}-m{m_block}] -x"
             )
 
             print(f"  M_block={m_block}: profiling {len(kn_combos)} combos...", end=" ", flush=True)
@@ -563,6 +703,8 @@ def main():
                         append_csv_row(
                             args.csv,
                             [
+                                device_config,
+                                op_type,
                                 M,
                                 K,
                                 N,
@@ -580,6 +722,8 @@ def main():
                         append_csv_row(
                             args.csv,
                             [
+                                device_config,
+                                op_type,
                                 M,
                                 K,
                                 N,
@@ -603,6 +747,8 @@ def main():
                     append_csv_row(
                         args.csv,
                         [
+                            device_config,
+                            op_type,
                             M,
                             K,
                             N,
@@ -619,7 +765,7 @@ def main():
 
         if shape_results:
             shape_results.sort(key=lambda r: r["duration_ns"])
-            all_best[(M, K, N)] = shape_results[0]
+            all_best[(M, K, N, cgx, cgy, op_type)] = shape_results[0]
             best = shape_results[0]
             print(
                 f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
@@ -629,16 +775,17 @@ def main():
     # Print summary
     if all_best:
         print(f"\n{'='*100}")
-        print("SWEEP SUMMARY - Best configs per shape")
+        print(f"SWEEP SUMMARY [{device_config}] - Best configs per shape")
         print(f"{'='*100}")
         print(
-            f"{'M':>6} {'K':>6} {'N':>6} | {'M_blk':>5} {'K_blk':>5} {'N_blk':>5} "
-            f"{'sb_h':>4} {'sb_w':>4} | {'duration_ns':>12}"
+            f"{'type':>4} {'M':>6} {'K':>6} {'N':>6} {'grid':>7} | "
+            f"{'M_blk':>5} {'K_blk':>5} {'N_blk':>5} {'sb_h':>4} {'sb_w':>4} | "
+            f"{'duration_ns':>12}"
         )
         print("-" * 100)
-        for (M, K, N), best in sorted(all_best.items()):
+        for (M, K, N, cgx, cgy, op_type), best in sorted(all_best.items()):
             print(
-                f"{M:>6} {K:>6} {N:>6} | "
+                f"{op_type:>4} {M:>6} {K:>6} {N:>6} {cgx}x{cgy:>2} | "
                 f"{best['M_block']:>5} {best['K_block']:>5} {best['N_block']:>5} "
                 f"{best['subblock_h']:>4} {best['subblock_w']:>4} | "
                 f"{best['duration_ns']:>12.0f}"
