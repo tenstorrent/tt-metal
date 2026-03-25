@@ -124,7 +124,8 @@ def _filter_diff_for_rule(diff: str, changed_files: list[str], rule) -> str:
     """
     matched = {f for f in changed_files if rule.matches_pr([f], [])}
     if not matched:
-        return ""
+        # Rule was selected by label only — no path filter, use full diff
+        return diff
 
     kept: list[str] = []
     current_lines: list[str] = []
