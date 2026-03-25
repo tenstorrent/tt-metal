@@ -67,19 +67,27 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     auto* mesh_device = input0.device();
     IDevice* sender_device = mesh_device->get_device(mesh_coordinate);
 
+    const auto& mesh_view = mesh_device->get_view();
     std::vector<IDevice*> devices_to_use = {};
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     if (args.cluster_axis.has_value()) {
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        const auto& mesh_view = mesh_device->get_view();
         devices_to_use = (args.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                                           : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+        fabric_node_ids = (args.cluster_axis.value() == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                                           : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
     } else {
         devices_to_use = args.devices;
+        fabric_node_ids.reserve(devices_to_use.size());
+        for (auto* device : devices_to_use) {
+            auto coord = mesh_view.find_device(device->id());
+            fabric_node_ids.push_back(mesh_device->get_fabric_node_id(coord));
+        }
     }
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
 
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < args.ring_size; ++i) {
@@ -87,13 +95,17 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             device_index = i;
             if (i != 0) {
                 backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (args.topology == ttnn::ccl::Topology::Ring) {
                 backward_device = devices_to_use.at(args.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(args.ring_size - 1);
             }
             if (i != args.ring_size - 1) {
                 forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (args.topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices_to_use.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -442,23 +454,17 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
+            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
+            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
