@@ -105,6 +105,7 @@ def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
         out_channels=out_channels,
         cross_attention_dim=dim,
         use_middle_indices_grid=True,
+        cross_attention_adaln=True,
     )
     torch_model.eval()
 
@@ -186,6 +187,7 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
         out_channels=out_channels,
         cross_attention_dim=dim,
         use_middle_indices_grid=True,
+        cross_attention_adaln=True,
     )
     torch_model.eval()
 
