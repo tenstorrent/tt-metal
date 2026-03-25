@@ -106,7 +106,17 @@ def random_weights(config_only):
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
-def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison, scale_down_sl, is_balanced):
+def test_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+):
     """
     Test comparing reference and TT MLA modules with same weights.
 
@@ -224,10 +234,11 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
 
             ref_kvpe = ref_cache.key_cache[0]  # layer 0
 
-            # Save to cache for future runs
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
-            logger.info(f"✓ Saved reference results to {cache_path}")
+            if not (is_ci_env or is_ci_v2_env):
+                # Save to cache for future runs
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
+                logger.info(f"✓ Saved reference results to {cache_path}")
 
             logger.info(f"✓ Reference forward pass complete")
             logger.info(f"  Input shape:  {hidden_states.shape}")
