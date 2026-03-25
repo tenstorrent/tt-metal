@@ -23,8 +23,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RedistributeToMemoryConfigTilizedProgramFactory::cached_program_t
-RedistributeToMemoryConfigTilizedProgramFactory::create(
+RedistributeToMemoryConfigTilizedShardedProgramFactory::cached_program_t
+RedistributeToMemoryConfigTilizedShardedProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -35,8 +35,8 @@ RedistributeToMemoryConfigTilizedProgramFactory::create(
     const auto& output_distribution_spec = output.buffer()->buffer_distribution_spec().value();
     const auto num_output_shards = output_distribution_spec.num_shards();
 
-    // computation of core_grid. To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452 once
-    // that is merged
+    // Computation of core_grid. TODO: To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452
+    // once that is merged
     std::vector<CoreCoord> ordered_cores_with_data;
 
     if (!output.memory_config().is_dram()) {
@@ -53,8 +53,7 @@ RedistributeToMemoryConfigTilizedProgramFactory::create(
         }
     }
 
-    // end of core grid computation. Can add option to use custom core grid too (like default path to accomodate
-    // subdevices op)
+    // End of core grid computation.
 
     const auto num_cores = ordered_cores_with_data.size();
     const auto& ordered_cores_with_data_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
@@ -180,7 +179,7 @@ RedistributeToMemoryConfigTilizedProgramFactory::create(
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores_with_data}};
 }
-void RedistributeToMemoryConfigTilizedProgramFactory::override_runtime_arguments(
+void RedistributeToMemoryConfigTilizedShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

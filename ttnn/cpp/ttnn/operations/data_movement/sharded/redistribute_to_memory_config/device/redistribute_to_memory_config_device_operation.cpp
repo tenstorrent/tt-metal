@@ -13,12 +13,16 @@ namespace ttnn::prim {
 
 RedistributeToMemoryConfigDeviceOperation::program_factory_t
 RedistributeToMemoryConfigDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    if (input_tensor.layout() == Layout::TILE) {
-        return RedistributeToMemoryConfigTilizedProgramFactory{};
+    if (operation_attributes.output_mem_config.is_sharded()) {
+        if (input_tensor.layout() == Layout::TILE) {
+            return RedistributeToMemoryConfigTilizedShardedProgramFactory{};
+        }
+        return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
     }
-    return RedistributeToMemoryConfigRowMajorProgramFactory{};
+    return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};  // TODO: will implement to interleaved program
+                                                                       // factories in follow up PR!
 }
 
 void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(

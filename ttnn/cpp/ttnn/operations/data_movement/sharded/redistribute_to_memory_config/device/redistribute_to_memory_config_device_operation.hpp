@@ -21,8 +21,9 @@ struct RedistributeToMemoryConfigDeviceOperation {
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
 
-    using program_factory_t =
-        std::variant<RedistributeToMemoryConfigRowMajorProgramFactory, RedistributeToMemoryConfigTilizedProgramFactory>;
+    using program_factory_t = std::variant<
+        RedistributeToMemoryConfigRowMajorShardedProgramFactory,
+        RedistributeToMemoryConfigTilizedShardedProgramFactory>;
     static program_factory_t select_program_factory(
         const ::ttnn::prim::operation_attributes_t&, const ::ttnn::prim::tensor_args_t&);
 

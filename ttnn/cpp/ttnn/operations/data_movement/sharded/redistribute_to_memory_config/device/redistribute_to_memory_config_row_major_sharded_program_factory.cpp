@@ -22,8 +22,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RedistributeToMemoryConfigRowMajorProgramFactory::cached_program_t
-RedistributeToMemoryConfigRowMajorProgramFactory::create(
+RedistributeToMemoryConfigRowMajorShardedProgramFactory::cached_program_t
+RedistributeToMemoryConfigRowMajorShardedProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -58,8 +58,8 @@ RedistributeToMemoryConfigRowMajorProgramFactory::create(
     const auto input_pages_cb_index = tt::CBIndex::c_0;
     const auto output_page_cb_index = tt::CBIndex::c_1;
 
-    // computation of core_grid. To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452 once
-    // that is merged
+    // Computation of core_grid. TODO: To be replaced by get_optimal_worker_cores_for_sharded_tensor API in PR #40452
+    // once that is merged
     std::vector<CoreCoord> ordered_cores_with_data;
 
     if (!output.memory_config().is_dram()) {
@@ -76,8 +76,7 @@ RedistributeToMemoryConfigRowMajorProgramFactory::create(
         }
     }
 
-    // end of core grid computation. Can add option to use custom core grid too (like default path to accomodate
-    // subdevices op)
+    // End of core grid computation.
 
     const auto num_cores = ordered_cores_with_data.size();
     const auto& ordered_cores_with_data_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
@@ -161,7 +160,7 @@ RedistributeToMemoryConfigRowMajorProgramFactory::create(
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores_with_data}};
 }
-void RedistributeToMemoryConfigRowMajorProgramFactory::override_runtime_arguments(
+void RedistributeToMemoryConfigRowMajorShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

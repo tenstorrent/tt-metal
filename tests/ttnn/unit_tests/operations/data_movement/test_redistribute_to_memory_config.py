@@ -1025,7 +1025,7 @@ def test_redistribute_to_memory_config_tilized_interleaved_to_nd_sharded_dram(
         ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
         # 3-D tensor sharded across all dims → disjoint DRAM banks
         (
-            [4, 96, 96],
+            [3, 160, 160],
             [2, 64, 64],
             ttnn.CoreRangeSet(
                 {

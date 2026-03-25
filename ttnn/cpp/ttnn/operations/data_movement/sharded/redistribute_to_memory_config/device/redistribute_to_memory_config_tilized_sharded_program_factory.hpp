@@ -9,7 +9,7 @@
 
 namespace ttnn::prim {
 
-struct RedistributeToMemoryConfigTilizedProgramFactory {
+struct RedistributeToMemoryConfigTilizedShardedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
