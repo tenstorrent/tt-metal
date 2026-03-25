@@ -54,7 +54,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
     // in0 mcast args
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
