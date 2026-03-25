@@ -21,10 +21,21 @@ def _mesh_num_devices(mesh_device):
     return mesh_rows * mesh_cols
 
 
-def _mesh_scratch_shape_per_device(mesh_device):
-    # winner slot size = 16B = 4 uint32 values; total slots = rows + cols.
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _mesh_scratch_shape_per_device(mesh_device, k: int = 1):
     mesh_rows, mesh_cols = _mesh_shape(mesh_device)
-    scratch_width_uint32 = (mesh_rows + mesh_cols) * 4
+    total_slots = mesh_rows + mesh_cols
+    if k == 1:
+        slot_bytes = 16  # bf16 score + uint32 index, padded to 16
+    else:
+        topk_scores_stride = _round_up(k * 2, 16)
+        topk_indices_stride = _round_up(k * 4, 16)
+        slot_bytes = topk_scores_stride + topk_indices_stride
+    total_bytes = total_slots * slot_bytes
+    scratch_width_uint32 = _round_up(total_bytes, 4) // 4
     return (1, scratch_width_uint32)
 
 
@@ -514,8 +525,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
         f"Selected index {result_idx} is not in the rigged top-{k} set.\n" f"  Rigged winners: {sorted(winner_indices)}"
     )
     assert result_idx == golden_selected, (
-        f"Kernel selected {result_idx} but golden selected {golden_selected} "
-        f"(rand_value={rand_value})"
+        f"Kernel selected {result_idx} but golden selected {golden_selected} " f"(rand_value={rand_value})"
     )
 
     logger.info(
@@ -542,4 +552,223 @@ def test_sampling_topk_single_device(device, seed, p, temperature, final_core_id
     The kernel must select a token from within this set, proving that the
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
-    _run_sampling_topk_single_device(device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx)
+    _run_sampling_topk_single_device(
+        device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx
+    )
+
+
+def _run_sampling_topk_mesh(
+    mesh_device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, final_mesh_coord: tuple
+):
+    """
+    Run the top-K sampling kernel on a multi-device mesh with rigged scores.
+
+    32 global winners are chosen at random across the entire vocabulary
+    (spanning all devices).  Each winner gets a distinct high score
+    (100, 99, …, 69) so the global top-32 is deterministic regardless of
+    which devices they land on.  The kernel returns its random value,
+    enabling exact golden verification.
+    """
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
+    active_cores = all_device_cores[:101]
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
+    assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
+    final_core = active_cores[final_core_idx]
+
+    num_devices = _mesh_num_devices(mesh_device)
+    num_cores = len(active_cores)
+    scores_shape_per_device = (1, 160 * num_cores)
+    vocab_per_device = scores_shape_per_device[1]
+    global_vocab_size = num_devices * vocab_per_device
+    input_shard_shape = (1, 160)
+    output_shape_per_device = (1, 1)
+    scratch_shape_per_device = _mesh_scratch_shape_per_device(mesh_device, k=k)
+    tile_1x32 = ttnn.Tile([1, 32])
+
+    logger.info(
+        f"Testing sampling top-K mesh: seed={seed}, k={k}, p={p}, temperature={temperature}, "
+        f"final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
+    )
+    torch.manual_seed(seed)
+
+    torch_scores_all = torch.randn((num_devices, *scores_shape_per_device), dtype=torch.bfloat16)
+    torch_indices_all = torch.arange(global_vocab_size, dtype=torch.int32).reshape(
+        num_devices, *scores_shape_per_device
+    )
+
+    winner_rng = torch.Generator().manual_seed(seed)
+    winner_global_positions = torch.randperm(global_vocab_size, generator=winner_rng)[:k].sort().values
+    for i, gpos in enumerate(winner_global_positions):
+        dev_idx = int(gpos) // vocab_per_device
+        local_idx = int(gpos) % vocab_per_device
+        torch_scores_all[dev_idx, 0, local_idx] = torch.tensor(100.0 - i, dtype=torch.bfloat16)
+    winner_indices = set(torch_indices_all.reshape(-1)[winner_global_positions].tolist())
+
+    _, golden_topk = SamplingOp.golden(
+        torch_scores_all.reshape(1, -1),
+        torch_indices_all.reshape(1, -1),
+        k=k,
+        p=p,
+        temperature=temperature,
+    )
+    golden_topk_set = set(golden_topk.reshape(-1).tolist())
+    assert golden_topk_set == winner_indices, (
+        f"Golden top-{k} should match rigged winners.\n"
+        f"  Golden: {sorted(golden_topk_set)}\n"
+        f"  Rigged: {sorted(winner_indices)}"
+    )
+
+    devices_with_winners = sorted({int(gpos) // vocab_per_device for gpos in winner_global_positions})
+    logger.info(f"Rigged {k} winners spread across devices: {devices_with_winners}")
+
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
+    output_shard_spec = ttnn.ShardSpec(final_core_grid, output_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        output_shard_spec,
+    )
+    rand_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(final_core_grid, output_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    scratch_shard_spec = ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR)
+    scratch_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        scratch_shard_spec,
+    )
+
+    mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    ttnn_scores = ttnn.from_torch(
+        torch_scores_all,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch_indices_all,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((num_devices, *output_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=output_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_rand_output = ttnn.from_torch(
+        torch.zeros((num_devices, *output_shape_per_device), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=rand_output_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_fabric_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    global_semaphore = ttnn.create_global_semaphore(mesh_device, final_core_grid, 0)
+    global_stage2_semaphore = ttnn.create_global_semaphore(mesh_device, final_core_grid, 0)
+    ttnn.synchronize_device(mesh_device)
+
+    ttnn_result = SamplingOp.op(
+        scores_tensor=ttnn_scores,
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        k=k,
+        p=p,
+        temperature=temperature,
+        seed=seed,
+        rand_output_tensor=ttnn_rand_output,
+        final_core_coord=final_core,
+        final_mesh_coord=final_mesh_coord,
+        global_semaphore=global_semaphore,
+        global_stage2_semaphore=global_stage2_semaphore,
+        fabric_scratch_tensor=ttnn_fabric_scratch,
+        mesh_axis="x",
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    output_shards = ttnn.get_device_tensors(ttnn_result)
+    rand_shards = ttnn.get_device_tensors(ttnn_rand_output)
+    final_device_idx = _mesh_device_index(final_mesh_coord, mesh_device)
+    final_output_torch = ttnn.to_torch(output_shards[final_device_idx])
+    result_idx = int(final_output_torch.to(torch.uint32).item())
+
+    rand_torch = ttnn.to_torch(rand_shards[final_device_idx])
+    rand_value = rand_torch.float().item()
+    logger.info(f"Kernel selected index: {result_idx}, rand_value: {rand_value}")
+
+    golden_idx, _ = SamplingOp.golden(
+        torch_scores_all.reshape(1, -1),
+        torch_indices_all.reshape(1, -1),
+        k=k,
+        p=p,
+        temperature=temperature,
+        rand_value=rand_value,
+    )
+    golden_selected = int(golden_idx.to(torch.uint32).item())
+    logger.info(f"Golden selected index: {golden_selected}")
+
+    assert result_idx in winner_indices, (
+        f"Selected index {result_idx} is not in the rigged top-{k} set.\n" f"  Rigged winners: {sorted(winner_indices)}"
+    )
+    assert result_idx == golden_selected, (
+        f"Kernel selected {result_idx} but golden selected {golden_selected} " f"(rand_value={rand_value})"
+    )
+
+    logger.info(f"Sampling top-K mesh test passed. seed={seed}, k={k}, " f"selected={result_idx}, rand={rand_value}")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize(
+    "final_mesh_coord, seed, final_core_idx, p, temperature",
+    [
+        ((1, 1), 2005, 100, 0.95, 0.6),
+        ((1, 0), 52098, 0, 0.995, 0.4),
+        ((2, 1), 1337, 50, 1.0, 0.8),
+        ((2, 0), 4242, 73, 0.1, 0.6),
+    ],
+)
+@pytest.mark.requires_grid_size(101)
+def test_sampling_topk_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
+    """
+    Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
+
+    Each device performs local top-32, then mesh stages merge across devices
+    before the final device runs softmax + top-P + random selection.
+    Scores are rigged so 32 global winners are spread across devices.
+    """
+    _run_sampling_topk_mesh(
+        mesh_device,
+        seed=seed,
+        k=32,
+        p=p,
+        temperature=temperature,
+        final_core_idx=final_core_idx,
+        final_mesh_coord=final_mesh_coord,
+    )

@@ -76,13 +76,17 @@ void kernel_main() {
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
-        0, 0, 0,
+        0,
+        0,
+        0,
         get_named_compile_time_arg_val("sampling_topk_k"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_rand_cb"),
         get_named_compile_time_arg_val("sampling_winner_cb"),
         get_named_compile_time_arg_val("sampling_p_bf16"),
-        get_named_compile_time_arg_val("sampling_topk_scores_stride")>;
+        get_named_compile_time_arg_val("sampling_topk_scores_stride"),
+        get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage2_receiver")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
         .final_noc_x = get_common_arg_val<uint32_t>(0),
@@ -109,7 +113,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_temp_cb"),
         get_named_compile_time_arg_val("sampling_rand_cb"),
         get_named_compile_time_arg_val("sampling_seed"),
-        get_named_compile_time_arg_val("sampling_topk_k")>;
+        get_named_compile_time_arg_val("sampling_topk_k"),
+        get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage2_receiver")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
