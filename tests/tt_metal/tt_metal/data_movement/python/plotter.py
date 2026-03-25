@@ -21,6 +21,7 @@ class Plotter:
         # Create architecture-specific subdirectory
         self.output_dir = os.path.join(output_dir, arch)
         self.noc_width = NOC_WIDTHS.get(arch, 64)  # Default to 64 if architecture not found
+        self.noc_freq_ghz = NOC_FREQ_GHZ.get(arch, 1.0)
         self.arch = arch
         self.test_id_to_name = test_id_to_name
         self.test_id_to_comment = test_id_to_comment
@@ -61,6 +62,15 @@ class Plotter:
         test_info = self.metadata_loader.load_test_information()
         test_data = test_info.get("tests", {}).get(test_id, {})
         return test_data.get("bandwidth_mode", "per_core")
+
+    def get_bandwidth_unit(self, test_id):
+        """Returns the bandwidth_unit for a given test_id from test_information.yaml.
+        Defaults to 'bpc' (bytes/cycle) if not specified."""
+        if self.metadata_loader is None:
+            return "bpc"
+        test_info = self.metadata_loader.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+        return test_data.get("bandwidth_unit", "bpc")
 
     def plot_dm_stats(self):
         # Ensure output directory exists
@@ -119,6 +129,7 @@ class Plotter:
                     axes.append(fig.add_subplot(gridspec[row, col]))
 
             bandwidth_mode = self.get_bandwidth_mode(test_id)
+            bandwidth_unit = self.get_bandwidth_unit(test_id)
 
             # Generate plots based on test type
             if "Multicast Schemes" in test_name:
@@ -151,7 +162,9 @@ class Plotter:
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
-                self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id], bandwidth_mode=bandwidth_mode)
+                self.plot_data_size_vs_bandwidth(
+                    axes[1], plot_data[test_id], bandwidth_mode=bandwidth_mode, bandwidth_unit=bandwidth_unit
+                )
 
             # Add figure title
             fig.suptitle(f"{test_name} ({self.arch.upper()})", fontsize=16, fontweight="bold", y=0.98)
@@ -182,6 +195,7 @@ class Plotter:
         yscale="linear",
         xbase=2,
         ybase=10,
+        y_scale=1.0,
     ):
         # Flatten data and add riscv to each run
         all_runs = []
@@ -214,7 +228,7 @@ class Plotter:
             current_series_runs.sort(key=lambda r: r[x_key])
 
             x_vals = [run[x_key] for run in current_series_runs]
-            y_vals = [run[y_key] for run in current_series_runs]
+            y_vals = [run[y_key] * y_scale for run in current_series_runs]
 
             label = label_format(combo, series_keys)
 
@@ -269,18 +283,37 @@ class Plotter:
         )
 
     # Packet Sizes: Transaction Size vs Bandwidth
-    def plot_data_size_vs_bandwidth(self, ax, data, bandwidth_mode="per_core"):
+    def plot_data_size_vs_bandwidth(self, ax, data, bandwidth_mode="per_core", bandwidth_unit="bpc"):
         x_key = "transaction_size"
         series_keys = ["riscv", "num_transactions"]
+
+        use_gbps = bandwidth_unit == "gbps"
 
         if bandwidth_mode == "combined":
             y_key = "combined_bandwidth"
             title = "Transaction Size vs Combined Bandwidth"
-            ylabel = "Combined Bandwidth (bytes/cycle)"
+            if use_gbps:
+                ylabel = "Combined Bandwidth (GB/s)"
+                y_scale = self.noc_freq_ghz
+            else:
+                ylabel = "Combined Bandwidth (bytes/cycle)"
+                y_scale = 1.0
         else:
-            y_key = "bandwidth"
+            if use_gbps:
+                # Use bandwidth_gbps (computed from real device clock freq) when available
+                has_gbps = any(run.get("bandwidth_gbps", 0) > 0 for runs in data.values() for run in runs)
+                if has_gbps:
+                    y_key = "bandwidth_gbps"
+                    y_scale = 1.0  # Already in GB/s
+                else:
+                    y_key = "bandwidth"
+                    y_scale = self.noc_freq_ghz
+                ylabel = "Bandwidth (GB/s)"
+            else:
+                y_key = "bandwidth"
+                y_scale = 1.0
+                ylabel = "Bandwidth (bytes/cycle)"
             title = "Transaction Size vs Bandwidth"
-            ylabel = "Bandwidth (bytes/cycle)"
 
         xlabel = "Transaction Size (bytes)"
 
@@ -297,6 +330,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
+            y_scale=y_scale,
         )
 
     # Transaction ID: Transaction ID Count vs Bandwidth (grouped by transaction size)
@@ -331,7 +365,7 @@ class Plotter:
                 riscv_runs.sort(key=lambda r: r["transaction_id_count"])
 
                 x_vals = [run["transaction_id_count"] for run in riscv_runs]
-                y_vals = [run["bandwidth"] for run in riscv_runs]
+                y_vals = [run["bandwidth"] * self.noc_freq_ghz for run in riscv_runs]
 
                 label = f"{risc_to_kernel_map[riscv]} (Transaction Size={transaction_size}B)"
 
@@ -345,7 +379,7 @@ class Plotter:
         ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0, fontsize=8)
 
         ax.set_xlabel("Transaction ID Count")
-        ax.set_ylabel("Bandwidth (bytes/cycle)")
+        ax.set_ylabel("Bandwidth (GB/s)")
         ax.set_title("Transaction ID Count vs Bandwidth")
         ax.grid()
 
@@ -357,7 +391,7 @@ class Plotter:
 
         title = "Number of Transactions vs Bandwidth"
         xlabel = "Number of Transactions"
-        ylabel = "Bandwidth (bytes/cycle)"
+        ylabel = "Bandwidth (GB/s)"
 
         self._plot_series(
             ax=ax,
@@ -371,6 +405,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
+            y_scale=self.noc_freq_ghz,
         )
 
     # Direct Write: Address pattern
@@ -381,7 +416,7 @@ class Plotter:
 
         title = "Number of Transactions vs Bandwidth"
         xlabel = "Number of Transactions"
-        ylabel = "Bandwidth (bytes/cycle)"
+        ylabel = "Bandwidth (GB/s)"
 
         self._plot_series(
             ax=ax,
@@ -395,6 +430,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
+            y_scale=self.noc_freq_ghz,
         )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
@@ -405,7 +441,7 @@ class Plotter:
 
         title = "Grid Dimensions vs Bandwidth"
         xlabel = "Grid Dimensions"
-        ylabel = "Bandwidth (bytes/cycle)"
+        ylabel = "Bandwidth (GB/s)"
 
         filtered_data = {
             r: [run for run in runs if run.get("noc_index") == noc_index] for r, runs in data.items() if r == riscv
@@ -424,6 +460,7 @@ class Plotter:
             title=title,
             xlabel=xlabel,
             ylabel=ylabel,
+            y_scale=self.noc_freq_ghz,
         )
 
     def plot_bandwidth_virtual_channels(self, ax, data, noc_index):
@@ -433,7 +470,7 @@ class Plotter:
 
         title = f"Transaction Size vs Bandwidth (NOC {noc_index})"
         xlabel = "Transaction Size (bytes)"
-        ylabel = "Bandwidth (bytes/cycle)"
+        ylabel = "Bandwidth (GB/s)"
 
         # Filter data for the specific NOC index
         filtered_data = {}
@@ -470,6 +507,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
+            y_scale=self.noc_freq_ghz,
         )
 
     # NOC API Latency: Transaction Size vs Cycles per Transaction

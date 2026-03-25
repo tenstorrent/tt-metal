@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(3);
     constexpr uint32_t pcie_l1_local_addr = get_compile_time_arg_val(4);
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t clock_freq_mhz = get_compile_time_arg_val(6);
 
     uint32_t pcie_x_coord = packed_subordinate_core_coordinates >> 16;
     uint32_t pcie_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
@@ -30,4 +31,5 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+    DeviceTimestampedData("Clock frequency MHz", clock_freq_mhz);
 }
