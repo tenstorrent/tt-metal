@@ -320,7 +320,6 @@ class TtMSDeformableAttention3D:
 
             ttnn.deallocate(reference_xy_reshaped)
             ttnn.deallocate(sampling_locations_reshaped)
-            ttnn.deallocate(sampling_locations_add)
 
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
@@ -338,6 +337,8 @@ class TtMSDeformableAttention3D:
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(value)
         ttnn.deallocate(sampling_locations)
+        if reference_points.shape[-1] == 2:
+            ttnn.deallocate(sampling_locations_add)
         ttnn.deallocate(attention_weights)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
