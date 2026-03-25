@@ -39,6 +39,10 @@ except ImportError:
 # This bypasses vLLM's multimodal batching which can't handle the irregular shape
 _image_token_pooling_cache = {"last": None}
 
+# Module-level cache for video processing state
+# This is needed because vLLM creates new processor instances for each method call
+_video_processing_cache = {"tokens_expanded": False, "video_data": None}
+
 
 def compute_image_token_pooling(
     image_grids: torch.Tensor,
@@ -172,11 +176,17 @@ def compute_image_token_pooling(
 
 
 from models.demos.molmo2.demo.demo import (
+    IMAGENET_MEAN,
+    IMAGENET_STD,
     Molmo2Generator,
+    arange_for_pooling,
     create_model,
+    get_video_tokens,
     load_model_weights,
     load_processor,
+    normalize_image,
     preprocess_image_molmo2,
+    resize_image,
 )
 from models.demos.molmo2.tt.model_config import Molmo2ModelArgs
 
@@ -399,10 +409,13 @@ class Molmo2ProcessorWrapper:
 
         For vLLM compatibility, we need to:
         1. Process images/videos to get pixel_values, image_grids, etc.
-        2. Tokenize text WITHOUT replacing <|image|> placeholder
-        3. Let vLLM's _get_prompt_updates handle the token replacement
+        2. For VIDEOS: Follow demo flow - expand tokens at STRING level before tokenization
+        3. For IMAGES: Keep placeholder for vLLM's _get_prompt_updates to handle
 
-        For videos, we extract frames and process them as images.
+        For videos, we use the demo's approach:
+        - Preprocess frames into combined tensor [n_frames, 3, H, W]
+        - Replace <|video|> with demo-style token string including frame markers & timestamps
+        - Tokenize the expanded string
         """
         import numpy as np
         from loguru import logger
@@ -411,77 +424,170 @@ class Molmo2ProcessorWrapper:
             f"Molmo2ProcessorWrapper.__call__ invoked: text={text[:50] if text else None}..., images={type(images)}, videos={type(videos)}"
         )
 
-        # Handle video input by extracting frames
-        # vLLM passes videos as numpy array of shape [num_videos, num_frames, H, W, C]
+        # Handle video input using demo flow (string-level token expansion)
         self._is_video_input = False
+        self._video_data = None
         if videos is not None and images is None:
-            logger.info(f"  Processing video input: type={type(videos)}")
+            logger.info(f"  Processing video input using DEMO FLOW: type={type(videos)}")
             self._is_video_input = True
+
             if isinstance(videos, list) and len(videos) > 0:
                 video_frames = videos[0]  # Take first video
                 if isinstance(video_frames, np.ndarray):
                     # video_frames shape: [num_frames, H, W, C]
                     logger.info(f"    Video frames shape: {video_frames.shape}")
+
                     # Sample 8 frames evenly if more than 8
                     num_frames = video_frames.shape[0]
                     if num_frames > 8:
                         indices = np.linspace(0, num_frames - 1, 8, dtype=int)
                         video_frames = video_frames[indices]
-                    # Treat video frames as a batch of images
-                    images = [video_frames[i] for i in range(video_frames.shape[0])]
-                    logger.info(f"    Extracted {len(images)} frames for processing")
+                        num_frames = 8
 
-        # Process images to get all outputs including image_grids
-        if images is not None:
+                    # Process frames using demo approach (resize, normalize, stack)
+                    # Using imports from top of file: resize_image, normalize_image,
+                    # arange_for_pooling, IMAGENET_MEAN, IMAGENET_STD
+
+                    base_size = 378
+                    patch_size = 14
+                    pool_h, pool_w = 2, 2
+                    crop_patches = base_size // patch_size  # 27
+
+                    # Process each frame
+                    all_crops = []
+                    all_pooling_idx = []
+                    patches_per_frame = crop_patches * crop_patches  # 729
+
+                    # Pre-compute pooling indices template
+                    resize_idx_per_frame = np.arange(patches_per_frame).reshape(crop_patches, crop_patches)
+                    resize_idx_per_frame = arange_for_pooling(resize_idx_per_frame, pool_h, pool_w)
+                    pooled_h, pooled_w = resize_idx_per_frame.shape[0], resize_idx_per_frame.shape[1]
+                    resize_idx_flat = resize_idx_per_frame.reshape(-1, pool_h * pool_w)
+
+                    for frame_idx in range(num_frames):
+                        frame = video_frames[frame_idx]
+                        # Resize and normalize
+                        frame_resized = resize_image(frame, [base_size, base_size])
+                        frame_normalized = normalize_image(frame_resized, IMAGENET_MEAN, IMAGENET_STD)
+                        # [H, W, C] -> [C, H, W]
+                        crop = torch.from_numpy(frame_normalized).permute(2, 0, 1).float()
+                        all_crops.append(crop)
+
+                        # Pooling indices with offset for this frame
+                        offset = frame_idx * patches_per_frame
+                        frame_idx_with_offset = np.where(
+                            resize_idx_flat >= 0,
+                            resize_idx_flat + offset,
+                            resize_idx_flat,
+                        )
+                        all_pooling_idx.append(frame_idx_with_offset)
+
+                    # Stack into combined tensors (demo format)
+                    pixel_values = torch.stack(all_crops, dim=0)  # [n_frames, 3, H, W]
+                    image_token_pooling = torch.from_numpy(np.stack(all_pooling_idx, axis=0)).long()
+
+                    # Generate timestamps (evenly spaced)
+                    # Assume ~2 FPS sampling, so timestamps are 0.0, 0.5, 1.0, ...
+                    timestamps = np.arange(num_frames, dtype=float) * 0.5
+
+                    logger.info(
+                        f"    Processed {num_frames} frames: pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
+                    )
+                    logger.info(f"    pooled_h={pooled_h}, pooled_w={pooled_w}, timestamps={timestamps}")
+
+                    # Store video data for later use
+                    self._video_data = {
+                        "pixel_values": pixel_values,
+                        "image_token_pooling": image_token_pooling,
+                        "n_frames": num_frames,
+                        "timestamps": timestamps,
+                        "pooled_h": pooled_h,
+                        "pooled_w": pooled_w,
+                    }
+
+        # Process images normally (for non-video case)
+        if images is not None and not self._is_video_input:
             logger.info(f"  Processing images: type={type(images)}")
             image_outputs = self.image_processor(images, return_tensors="np")
-            # Ensure image_grids is present (needed for _get_prompt_updates)
             if "image_grids" not in image_outputs:
-                # Compute default image_grids if not present
-                # Format: [resized_h, resized_w, height, width] per image
                 num_images = 1 if not isinstance(images, list) else len(images)
-                # Default to 14x14 grid (378/27 patches, pooled by 2)
                 image_outputs["image_grids"] = np.array([[14, 14, 14, 14]] * num_images)
-            # Ensure image_num_crops is present
             if "image_num_crops" not in image_outputs:
                 num_images = 1 if not isinstance(images, list) else len(images)
                 image_outputs["image_num_crops"] = np.array([1] * num_images)
+        elif self._video_data is not None:
+            # For video: create image outputs from our processed video data
+            n_frames = self._video_data["n_frames"]
+            pooled_h = self._video_data["pooled_h"]
+            pooled_w = self._video_data["pooled_w"]
+            image_outputs = {
+                "pixel_values": self._video_data["pixel_values"].numpy(),  # [n_frames, 3, H, W]
+                # Single "image" for vLLM modality tracking (one video = one item)
+                "image_grids": np.array([[pooled_h, pooled_w, 0, 0]]),  # Single entry for video
+                "image_num_crops": np.array([n_frames]),  # All frames as crops of one "image"
+            }
+            logger.info(f"    Video image_outputs: pixel_values={image_outputs['pixel_values'].shape}")
         else:
             image_outputs = {}
 
-        # Tokenize text keeping <|image|> or <|video|> placeholder intact
-        # Don't call the full processor - just tokenize and process images separately
+        # Handle text - for video, expand tokens at STRING level like demo
         if text is not None:
-            num_images = 0
-            is_video_input = False
-            if images is not None:
-                num_images = len(images) if isinstance(images, list) else 1
-                # If we have more than 1 image and they came from video processing, use <|video|>
-                if num_images > 1 and hasattr(self, "_is_video_input") and self._is_video_input:
-                    is_video_input = True
+            if self._is_video_input and self._video_data is not None:
+                # VIDEO FLOW: Replace <|video|> with demo-style token string BEFORE tokenization
+                n_frames = self._video_data["n_frames"]
+                timestamps = self._video_data["timestamps"]
+                pooled_h = self._video_data["pooled_h"]
+                pooled_w = self._video_data["pooled_w"]
 
-            # Check for existing placeholders
-            existing_video = text.count("<|video|>")
-            existing_image = text.count("<|image|>")
+                # Generate video token string using demo's get_video_tokens
+                video_tokens_str = get_video_tokens(n_frames, pooled_h, pooled_w, timestamps)
+                logger.info(f"    Generated video_tokens_str (first 100 chars): {video_tokens_str[:100]}...")
 
-            if is_video_input:
-                # For video input, use <|video|> token (not multiple <|image|>)
-                if existing_video == 0 and existing_image == 0:
-                    text = "<|video|>" + text
-                    logger.info(f"  Added <|video|> placeholder for video frames ({num_images} frames)")
-            elif num_images > 0 and existing_image == 0 and existing_video == 0:
-                # For regular images, add <|image|> for each
-                image_placeholders = "<|image|>" * num_images
-                text = image_placeholders + text
-                logger.info(f"  Added {num_images} <|image|> placeholders")
-            elif num_images > existing_image and existing_video == 0:
-                # Not enough placeholders, add more
-                additional = num_images - existing_image
-                text = "<|image|>" * additional + text
-                logger.info(f"  Added {additional} additional <|image|> placeholders")
+                # Replace placeholder at STRING level (demo approach)
+                if "<|video|>" in text:
+                    text = text.replace("<|video|>", video_tokens_str)
+                    logger.info(f"    Replaced <|video|> with video tokens string")
+                elif "<|image|>" in text:
+                    text = text.replace("<|image|>", video_tokens_str, 1)
+                    logger.info(f"    Replaced first <|image|> with video tokens string")
+                else:
+                    # No placeholder, prepend video tokens
+                    text = video_tokens_str + " " + text
+                    logger.info(f"    Prepended video tokens string")
 
-            # Tokenize without image token expansion
-            text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
+                # Tokenize the expanded string (tokens already expanded)
+                text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
+                logger.info(
+                    f"    Tokenized video prompt: input_ids len={text_inputs['input_ids'].shape if hasattr(text_inputs.get('input_ids', None), 'shape') else 'N/A'}"
+                )
+
+                # For video, we DON'T need vLLM's PromptReplacement - tokens are already expanded
+                # Mark this in module-level cache so _get_mm_fields_config can detect it
+                # (vLLM creates new processor instances for each method call)
+                _video_processing_cache["tokens_expanded"] = True
+                _video_processing_cache["video_data"] = self._video_data
+            else:
+                # IMAGE FLOW: Keep placeholder for vLLM's _get_prompt_updates
+                # Clear video cache to ensure proper modality detection
+                _video_processing_cache["tokens_expanded"] = False
+                _video_processing_cache["video_data"] = None
+                num_images = 0
+                if images is not None:
+                    num_images = len(images) if isinstance(images, list) else 1
+
+                existing_image = text.count("<|image|>")
+                existing_video = text.count("<|video|>")
+
+                if num_images > 0 and existing_image == 0 and existing_video == 0:
+                    image_placeholders = "<|image|>" * num_images
+                    text = image_placeholders + text
+                    logger.info(f"  Added {num_images} <|image|> placeholders")
+                elif num_images > existing_image and existing_video == 0:
+                    additional = num_images - existing_image
+                    text = "<|image|>" * additional + text
+                    logger.info(f"  Added {additional} additional <|image|> placeholders")
+
+                text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
         else:
             text_inputs = {}
 
@@ -510,13 +616,24 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         tokenization_kwargs: Mapping[str, object],
     ) -> bool:
         """
-        Return False so vLLM applies prompt updates via _get_prompt_updates.
+        Check if HF processor already applied token expansion.
 
-        For Molmo2, we want vLLM to handle the placeholder replacement rather
-        than having the HF processor do it. This is because Molmo2's processor
-        replaces <|image|> at the string level, but vLLM expects to handle
-        the replacement at the token level via _get_prompt_updates.
+        For VIDEO: Returns True because we expand tokens at string level BEFORE tokenization
+                   (matching demo flow with frame markers and timestamps).
+        For IMAGE: Returns False so vLLM applies prompt updates via _get_prompt_updates.
         """
+        from loguru import logger
+
+        # Check module-level cache for video processing state
+        # (vLLM creates new processor instances for each method call, so instance attrs don't persist)
+        if _video_processing_cache.get("tokens_expanded", False):
+            logger.info("  _hf_processor_applies_updates: True (video tokens already expanded)")
+            # Reset the flag for next request
+            _video_processing_cache["tokens_expanded"] = False
+            return True
+
+        # For images, let vLLM handle token replacement
+        logger.info("  _hf_processor_applies_updates: False (image - vLLM will apply prompt updates)")
         return False
 
     def _get_mm_fields_config(
@@ -528,10 +645,14 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         Configure multimodal fields for Molmo2.
 
         Molmo2 returns:
-        - pixel_values: image crops
+        - pixel_values: image crops or video frames
         - image_token_pooling: pooling indices
         - image_grids: grid information
         - image_num_crops: number of crops per image
+
+        For VIDEO: Tokens are already expanded at string level (demo flow).
+                   pixel_values is [n_frames, 3, H, W] - treat as single "video" item.
+        For IMAGE: pixel_values is per-image crops, use flat_from_sizes.
         """
         import numpy as np
         from loguru import logger
@@ -546,10 +667,14 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             else:
                 logger.info(f"  {key}: type={type(value)}")
 
+        # Check if this is video data (tokens already expanded by processor)
+        # Use module-level cache since vLLM creates new processor instances for each call
+        is_video = _video_processing_cache.get("video_data") is not None
+
         # Molmo2 uses image_num_crops instead of num_crops
         num_crops_raw = hf_inputs.get("image_num_crops", None)
 
-        # Convert to numpy array for flat_from_sizes
+        # Convert to numpy array
         if num_crops_raw is None:
             num_crops = np.array([], dtype=np.int64)
         elif isinstance(num_crops_raw, torch.Tensor):
@@ -564,38 +689,41 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         num_images = len(num_crops)
 
         if num_images == 0:
-            # NOTE: image_token_pooling is NOT included - it can't be batched
             return dict(
                 pixel_values=MultiModalFieldConfig.batched("image"),
                 image_grids=MultiModalFieldConfig.batched("image"),
                 image_num_crops=MultiModalFieldConfig.batched("image"),
             )
 
-        logger.info(f"  num_crops = {num_crops}, num_images = {num_images}")
+        logger.info(f"  num_crops = {num_crops}, num_images = {num_images}, is_video = {is_video}")
 
-        # Log image_token_pooling info for debugging
-        image_token_pooling = hf_inputs.get("image_token_pooling", None)
-        if image_token_pooling is not None:
-            logger.info(f"  image_token_pooling shape: {image_token_pooling.shape}")
-
-        # Cache image_token_pooling for retrieval in prefill_forward
-        # We can't pass it through vLLM's batching because its first dimension
-        # is total_pooled_tokens (not batch size)
+        # Cache image_token_pooling for prefill_forward (can't be batched by vLLM)
         image_token_pooling = hf_inputs.get("image_token_pooling", None)
         if image_token_pooling is not None:
             _image_token_pooling_cache["last"] = image_token_pooling
             logger.info(f"  Cached image_token_pooling: shape={image_token_pooling.shape}")
 
-        return dict(
-            # Map pixel_values to "image" modality - indexed by num_crops
-            pixel_values=MultiModalFieldConfig.flat_from_sizes("image", num_crops),
-            # image_grids and image_num_crops are per-image (1 per image)
-            image_grids=MultiModalFieldConfig.batched("image"),
-            image_num_crops=MultiModalFieldConfig.batched("image"),
-            # NOTE: image_token_pooling is NOT included here - it can't be batched
-            # because its shape is (total_pooled_tokens, 4), not (num_images, ...)
-            # We cache it above and retrieve in prefill_forward
-        )
+        if is_video:
+            # VIDEO: Use flat_from_sizes to tell vLLM this is 1 video with n_frames
+            # pixel_values: [n_frames, 3, H, W] -> n_frames entries for 1 video
+            # image_grids: [1, 4] -> 1 entry for 1 video
+            # image_num_crops: [1] -> 1 entry for 1 video
+            pixel_values = hf_inputs.get("pixel_values")
+            n_frames = pixel_values.shape[0] if pixel_values is not None else 8
+            logger.info(f"  VIDEO mode: flat_from_sizes config (n_frames={n_frames})")
+            return dict(
+                pixel_values=MultiModalFieldConfig.flat_from_sizes("video", np.array([n_frames])),
+                image_grids=MultiModalFieldConfig.flat_from_sizes("video", np.array([1])),
+                image_num_crops=MultiModalFieldConfig.flat_from_sizes("video", np.array([1])),
+            )
+        else:
+            # IMAGE: Use flat_from_sizes for multi-crop images
+            logger.info(f"  IMAGE mode: flat_from_sizes config (num_crops={num_crops})")
+            return dict(
+                pixel_values=MultiModalFieldConfig.flat_from_sizes("image", num_crops),
+                image_grids=MultiModalFieldConfig.batched("image"),
+                image_num_crops=MultiModalFieldConfig.batched("image"),
+            )
 
     def _get_prompt_updates(
         self,
@@ -612,6 +740,12 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         from loguru import logger
 
         logger.info(f"_get_prompt_updates called: out_mm_kwargs keys = {list(out_mm_kwargs.keys())}")
+        # Log mm_items counts (critical for understanding modality mismatch)
+        try:
+            mm_counts = mm_items.get_all_counts()
+            logger.info(f"  mm_items.get_all_counts() = {dict(mm_counts)}")
+        except Exception as e:
+            logger.error(f"  Error getting mm_items counts: {e}")
         if "image" in out_mm_kwargs:
             logger.info(f"  out_mm_kwargs['image'] len = {len(out_mm_kwargs['image'])}")
             for i, item in enumerate(out_mm_kwargs["image"]):
@@ -637,8 +771,19 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             """
             import numpy as np
 
-            out_item = out_mm_kwargs["image"][item_idx]
-            image_grids = out_item.get("image_grids")
+            try:
+                num_images = len(out_mm_kwargs["image"])
+                logger.info(f"  get_replacement_molmo2[{item_idx}]: num_images={num_images}")
+                if item_idx >= num_images:
+                    logger.error(
+                        f"  get_replacement_molmo2[{item_idx}]: item_idx out of range (num_images={num_images})"
+                    )
+                    return [hf_processor.image_patch_id] * 392  # Default fallback
+                out_item = out_mm_kwargs["image"][item_idx]
+                image_grids = out_item.get("image_grids")
+            except Exception as e:
+                logger.error(f"  get_replacement_molmo2[{item_idx}]: Error accessing out_mm_kwargs: {e}")
+                return [hf_processor.image_patch_id] * 392
 
             if image_grids is None:
                 logger.warning(f"  get_replacement_molmo2[{item_idx}]: no image_grids, using default 392 tokens")
@@ -671,52 +816,9 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             )
             return [hf_processor.image_patch_id] * total_tokens
 
-        # Get the <|video|> placeholder token ID
-        video_placeholder = "<|video|>"
-        video_placeholder_id = tokenizer.convert_tokens_to_ids(video_placeholder)
-
-        def get_replacement_video(item_idx: int) -> list:
-            """Generate the replacement tokens for video (all frames combined).
-
-            For video, we replace a single <|video|> token with all frame tokens.
-            """
-            import numpy as np
-
-            # Collect tokens for ALL frames in the video
-            all_tokens = []
-            num_frames = len(out_mm_kwargs["image"])
-            logger.info(f"  get_replacement_video: generating tokens for {num_frames} frames")
-
-            for frame_idx in range(num_frames):
-                out_item = out_mm_kwargs["image"][frame_idx]
-                image_grids = out_item.get("image_grids")
-
-                if image_grids is None:
-                    # Default tokens for this frame
-                    frame_tokens = 392
-                else:
-                    if hasattr(image_grids, "data"):
-                        grid = image_grids.data
-                    else:
-                        grid = image_grids
-
-                    if isinstance(grid, torch.Tensor):
-                        grid = grid.numpy()
-
-                    grid = np.array(grid).flatten()
-                    if len(grid) >= 4:
-                        resized_h, resized_w, h, w = int(grid[0]), int(grid[1]), int(grid[2]), int(grid[3])
-                        frame_tokens = resized_h * resized_w + h * w
-                    else:
-                        frame_tokens = 392
-
-                all_tokens.extend([hf_processor.image_patch_id] * frame_tokens)
-                logger.info(f"  get_replacement_video: frame {frame_idx} = {frame_tokens} tokens")
-
-            logger.info(f"  get_replacement_video: total = {len(all_tokens)} tokens")
-            return all_tokens
-
-        # Return prompt replacements for both image and video
+        # Return prompt replacements for both image and video modalities
+        # Video frames are processed as images, but vLLM's mm_items has "video" modality
+        # We need to register both so vLLM can match based on the original request type
         prompt_replacements = [
             PromptReplacement(
                 modality="image",
@@ -725,16 +827,67 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             )
         ]
 
-        # Add video replacement if <|video|> is a valid token
-        if video_placeholder_id != tokenizer.unk_token_id:
+        # Also register for video modality - video frames use same replacement
+        # since they're processed as images with <|image|> placeholders
+        mm_counts = mm_items.get_all_counts()
+        if mm_counts.get("video", 0) > 0:
+            logger.info(f"  Registering video modality replacement (video count={mm_counts['video']})")
+
+            def get_replacement_video(item_idx: int) -> list:
+                """Generate replacement tokens for video frame at item_idx.
+
+                For video, each frame is processed as an image, so we use
+                the same logic as get_replacement_molmo2 but access video frames
+                from out_mm_kwargs["video"] (or "image" as fallback).
+                """
+                import numpy as np
+
+                # Video frames are stored in out_mm_kwargs["video"] (after modality fix)
+                # Fallback to "image" for backwards compatibility
+                video_frames = out_mm_kwargs.get("video", out_mm_kwargs.get("image", []))
+                num_frames = len(video_frames)
+                logger.info(f"  get_replacement_video[{item_idx}]: num_frames={num_frames}")
+
+                # For video, we return ALL frame tokens for a single replacement
+                # since the text has one <|image|> placeholder and mm_items has 1 video
+                all_tokens = []
+                for frame_idx in range(num_frames):
+                    try:
+                        out_item = video_frames[frame_idx]
+                        image_grids = out_item.get("image_grids")
+
+                        if image_grids is None:
+                            frame_tokens = 392
+                        else:
+                            if hasattr(image_grids, "data"):
+                                grid = image_grids.data
+                            else:
+                                grid = image_grids
+                            if isinstance(grid, torch.Tensor):
+                                grid = grid.numpy()
+                            grid = np.array(grid).flatten()
+                            if len(grid) >= 4:
+                                resized_h, resized_w, h, w = int(grid[0]), int(grid[1]), int(grid[2]), int(grid[3])
+                                frame_tokens = resized_h * resized_w + h * w
+                            else:
+                                frame_tokens = 392
+
+                        all_tokens.extend([hf_processor.image_patch_id] * frame_tokens)
+                        logger.info(f"  get_replacement_video: frame {frame_idx} = {frame_tokens} tokens")
+                    except Exception as e:
+                        logger.error(f"  get_replacement_video: Error processing frame {frame_idx}: {e}")
+                        all_tokens.extend([hf_processor.image_patch_id] * 392)
+
+                logger.info(f"  get_replacement_video: total = {len(all_tokens)} tokens")
+                return all_tokens
+
             prompt_replacements.append(
                 PromptReplacement(
-                    modality="image",  # Video uses image modality internally
-                    target=[video_placeholder_id],
+                    modality="video",
+                    target=[image_placeholder_id],  # Video uses <|image|> placeholders for each frame
                     replacement=get_replacement_video,
                 )
             )
-            logger.info(f"  Added video replacement: placeholder_id={video_placeholder_id}")
 
         return prompt_replacements
 
@@ -934,10 +1087,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             max_seq_len=max_seq_len,
         )
 
-        # Warmup: Initialize KV cache and capture traces during initialization
-        # This ensures all inference requests have good performance
-        logger.info("Running warmup to capture traces...")
-        cls._warmup_traces(generator, mesh_device)
+        # Note: Trace warmup is handled by TTWorker.compile_or_warm_up_model()
+        # which calls warmup_model_decode and warmup_model_prefill.
+        # Do NOT call _warmup_traces here - it would create duplicate traces.
 
         logger.info("Molmo2-8B initialized successfully for vLLM")
 
@@ -1116,70 +1268,55 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Check for vLLM-style pre-processed images first
             if has_vllm_images and user_id < len(pixel_values) and pixel_values[user_id] is not None:
                 # vLLM provides pre-processed pixel_values
-                # For video: pixel_values is a list of 8 frame tensors
-                # For image: pixel_values[user_id] is a single tensor with crops
+                # Two formats:
+                # 1. Demo-style VIDEO: pixel_values[0] is combined tensor [n_frames, 3, H, W]
+                # 2. Old-style or IMAGE: pixel_values[user_id] is per-image tensor [n_crops, 3, H, W]
 
-                # Detect video: multiple items in pixel_values when batch_size == 1
-                is_video_input = batch_size == 1 and len(pixel_values) > 1
-
-                if is_video_input:
-                    # Video: concatenate all frames' pixel_values
-                    logger.info(f"  prefill_forward: Detected video input with {len(pixel_values)} frames")
-                    frame_tensors = []
-                    for frame_idx, pv in enumerate(pixel_values):
-                        if isinstance(pv, list) and len(pv) > 0:
-                            pv = pv[0]
-                        if isinstance(pv, torch.Tensor):
-                            frame_tensors.append(pv)
-                        elif hasattr(pv, "__array__"):
-                            frame_tensors.append(torch.from_numpy(pv))
-                        else:
-                            frame_tensors.append(torch.tensor(pv))
-                    pv_tensor = torch.cat(frame_tensors, dim=0)
-                    logger.info(f"  prefill_forward: Combined video pixel_values shape={pv_tensor.shape}")
-
-                    # For video, compute pooling from all frames' image_grids
-                    pooling = None
-                    if image_grids is not None and len(image_grids) > 0:
-                        import numpy as np
-
-                        all_pooling = []
-                        total_crops_offset = 0
-                        for frame_idx, grid_data in enumerate(image_grids):
-                            if isinstance(grid_data, list) and len(grid_data) > 0:
-                                grid_data = grid_data[0]
-                            if grid_data is not None:
-                                if hasattr(grid_data, "numpy"):
-                                    grid_arr = grid_data.numpy().flatten()
-                                else:
-                                    grid_arr = np.array(grid_data).flatten()
-                                # Get num_crops for this frame
-                                num_crops = frame_tensors[frame_idx].shape[0] if frame_idx < len(frame_tensors) else 9
-                                frame_pooling = compute_image_token_pooling(grid_data, num_crops)
-                                # Offset indices for this frame
-                                frame_pooling = frame_pooling + total_crops_offset * 729  # 729 patches per crop
-                                all_pooling.append(frame_pooling)
-                                total_crops_offset += num_crops
-                                logger.info(f"  prefill_forward: Frame {frame_idx} pooling shape={frame_pooling.shape}")
-
-                        if all_pooling:
-                            pooling = torch.cat(all_pooling, dim=0).unsqueeze(0)
-                            logger.info(f"  prefill_forward: Combined video pooling shape={pooling.shape}")
+                pv = pixel_values[user_id]
+                # Handle nested list structure from vLLM
+                if isinstance(pv, list) and len(pv) > 0:
+                    pv = pv[0]
+                if isinstance(pv, torch.Tensor):
+                    pv_tensor = pv
+                elif hasattr(pv, "__array__"):
+                    pv_tensor = torch.from_numpy(pv)
                 else:
-                    # Single image
-                    pv = pixel_values[user_id]
-                    # Handle nested list structure from vLLM
-                    if isinstance(pv, list) and len(pv) > 0:
-                        pv = pv[0]  # Take first image's pixel values
-                    if isinstance(pv, torch.Tensor):
-                        pv_tensor = pv
-                    else:
-                        pv_tensor = torch.from_numpy(pv) if hasattr(pv, "__array__") else torch.tensor(pv)
+                    pv_tensor = torch.tensor(pv)
+
+                # Detect video: shape [n_frames, 3, H, W] where n_frames > 1 and H=W=378
+                # Image crops have shape [n_crops, 3, 378, 378] but n_crops is typically 1-9
+                # Video has n_frames=8 typically
+                is_demo_video = (
+                    pv_tensor.dim() == 4
+                    and pv_tensor.shape[0] >= 2  # Multiple frames
+                    and pv_tensor.shape[1] == 3  # RGB
+                    and pv_tensor.shape[2] == 378
+                    and pv_tensor.shape[3] == 378
+                    and _image_token_pooling_cache.get("last") is not None
+                    and _image_token_pooling_cache["last"].dim() == 3  # [n_frames, N_out, K_pool]
+                )
+
+                if is_demo_video:
+                    # Demo-style video: pixel_values already combined [n_frames, 3, H, W]
+                    n_frames = pv_tensor.shape[0]
+                    logger.info(f"  prefill_forward: Detected DEMO-STYLE video with {n_frames} frames")
+                    logger.info(f"    pixel_values shape: {pv_tensor.shape}")
+
+                    # Get pooling from cache - shape [n_frames, N_out, K_pool]
+                    pooling = _image_token_pooling_cache["last"]
+                    logger.info(f"    Cached pooling shape: {pooling.shape}")
+
+                    # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
+                    # This is what run_prefill expects for video
+                    if pooling.dim() == 3:
+                        n_frames_p, n_out, k_pool = pooling.shape
+                        pooling = pooling.reshape(n_frames_p * n_out, k_pool).unsqueeze(0)
+                        logger.info(f"    Reshaped pooling for prefill: {pooling.shape}")
+                else:
+                    # Single image or old-style format
+                    logger.info(f"  prefill_forward: Processing as IMAGE, pixel_values shape={pv_tensor.shape}")
 
                     # Get image_token_pooling - compute from image_grids
-                    # NOTE: We always compute from image_grids (not cache) because:
-                    # 1. Cache doesn't work across vLLM's separate processes
-                    # 2. Cache can have stale data from warmup images
                     pooling = None
 
                     # Compute from image_grids - this is the reliable source
@@ -1342,13 +1479,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.deallocate(token_id_ttnn)
 
         # Check if we have a captured decode trace and should use it
-        use_traced_decode = (
-            enable_trace
-            and hasattr(self.generator, "decode_trace_id")
-            and self.generator.decode_trace_id is not None
-            and hasattr(self.generator, "decode_trace_tensors")
-            and self.generator.decode_trace_tensors is not None
+        has_trace_id = hasattr(self.generator, "decode_trace_id") and self.generator.decode_trace_id is not None
+        has_trace_tensors = (
+            hasattr(self.generator, "decode_trace_tensors") and self.generator.decode_trace_tensors is not None
         )
+        use_traced_decode = enable_trace and has_trace_id and has_trace_tensors
+
+        # Log only on first decode to avoid spam
+        if not hasattr(self, "_logged_trace_status"):
+            logger.info(
+                f"decode_forward trace status: enable_trace={enable_trace}, has_trace_id={has_trace_id}, has_trace_tensors={has_trace_tensors}, use_traced_decode={use_traced_decode}"
+            )
+            self._logged_trace_status = True
 
         if use_traced_decode:
             # Execute captured decode trace
@@ -1646,6 +1788,20 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         logger.info("Capturing text model prefill trace...")
         rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
 
+        # CRITICAL: Run a warmup forward pass BEFORE trace capture
+        # This ensures all lazy tensor allocations and weight transfers happen
+        # before we start tracing (writes are not allowed during trace capture)
+        logger.info("Running warmup forward pass before trace capture...")
+        warmup_logits, _ = self.generator.model.text_model.forward(
+            hidden_states=trace_tensors["hidden_states"],
+            start_pos=0,
+            attn_mask=None,
+            kv_caches=self.generator.kv_caches,
+            rot_mats=rot_mats,
+        )
+        ttnn.deallocate(warmup_logits)
+        logger.info("Warmup forward pass complete")
+
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         logits_trace, _ = self.generator.model.text_model.forward(
@@ -1698,6 +1854,23 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             Tuple of (trace_id, logits_trace_output)
         """
         logger.info("Capturing decode trace...")
+
+        # CRITICAL: Run a warmup forward pass BEFORE trace capture
+        # This ensures all lazy tensor allocations and weight transfers happen
+        # before we start tracing (writes are not allowed during trace capture)
+        logger.info("Running warmup decode forward pass before trace capture...")
+        warmup_rot_mats = self.generator.model.text_model.rotary_setup.get_rot_mats_decode_traced(
+            self.generator.rot_mat_idxs
+        )
+
+        warmup_logits = self.generator.model.text_model.forward_decode(
+            hidden_states=trace_tensors["hidden_states"],
+            kv_caches=self.generator.kv_caches,
+            current_pos=self.generator.current_pos,
+            rot_mats=warmup_rot_mats,
+        )
+        ttnn.deallocate(warmup_logits)
+        logger.info("Warmup decode forward pass complete")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
@@ -1828,6 +2001,22 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             Tuple of (trace_id, visual_embeddings_trace_output)
         """
         logger.info("Capturing vision trace...")
+
+        # CRITICAL: Run a warmup forward pass BEFORE trace capture
+        # This ensures all lazy tensor allocations and weight transfers happen
+        # before we start tracing (writes are not allowed during trace capture)
+        logger.info("Running warmup vision forward pass before trace capture...")
+        warmup_embeddings = self.generator.model.vision_backbone.forward_ttnn(
+            images_embedded=trace_tensors["embedded"],
+            pooled_patches_idx_ttnn=trace_tensors["idx"],
+            valid_mask_ttnn=trace_tensors["valid_mask"],
+            valid_token_ttnn=trace_tensors["valid_token"],
+            n_out=trace_tensors["n_out"],
+            k_pool=trace_tensors["k_pool"],
+            batch_size=trace_tensors["batch_size"],
+        )
+        ttnn.deallocate(warmup_embeddings)
+        logger.info("Warmup vision forward pass complete")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
