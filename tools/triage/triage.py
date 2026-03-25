@@ -349,15 +349,8 @@ def summarize_failure_message(message: str | None) -> str:
         return "No failure details available."
 
     for line in reversed(lines):
-        if line.startswith("Traceback"):
-            continue
-        if line.startswith("File "):
-            continue
-        if line.startswith("During handling of the above exception"):
-            continue
-        if line == "^":
-            continue
-        return line
+        if not (line.startswith("Traceback") or line.startswith("File ") or line.startswith("During handling of the above exception") or line == "^"):
+            return line
     return lines[-1]
 
 
