@@ -579,7 +579,10 @@ def test_conv3d_fp32_reduction_c_in_blocking(device, C_in_block):
 
     assert fp32_match, f"fp32 partials (C_in_block={C_in_block}) diverged from baseline: {fp32_vs_baseline}"
 
-    error_ratio = bf16_mean_err / fp32_mean_err
+    if fp32_mean_err == 0:
+        error_ratio = float("inf")
+    else:
+        error_ratio = bf16_mean_err / fp32_mean_err
     logger.info(
         f"Error ratio bf16/fp32: {error_ratio:.1f}x (bf16 mean_err={bf16_mean_err:.6f}, fp32 mean_err={fp32_mean_err:.6f})"
     )

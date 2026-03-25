@@ -219,16 +219,9 @@ void kernel_main() {
                                 matmul_M_t, num_patches);
 
                             if constexpr (use_fp32_partials) {
-                                // Reconfigure unpacker for matmul after tilize, and packer for fp32 output
-                                mm_block_init_short_with_both_dt(
-                                    cb_vol2col_tiled,
-                                    cb_weight_tiled,
-                                    cb_vol2col_rm,
-                                    cb_weight_tiled,
-                                    false,
-                                    subblock_w,
-                                    subblock_h,
-                                    in0_block_w);
+                                // Reconfigure packer for fp32 output after tilize left it in bf16.
+                                // mm_block_init_short_with_both_dt is not needed: matmul_blocks()
+                                // calls mm_block_init_short() + reconfig_data_format() internally.
                                 pack_reconfig_data_format(cb_matmul_interm_tiled);
                             }
 
@@ -270,12 +263,9 @@ void kernel_main() {
                                 // We are a reducer core. Note that num_workers can be 0, in which case there is no
                                 // reduction.
                                 if constexpr (use_fp32_partials) {
-                                    // FPU accumulate: copy_tile loads reducer's partial to DST
-                                    // at full fp32 precision (datacopy, no SRC truncation), then
-                                    // add_tiles(worker, zero) accumulates worker via DST += worker + 0.
                                     cb_wait_front(cb_zero_tiled, 1);
                                     reconfig_data_format_srca(cb_matmul_interm_tiled);
-                                    pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                    // pack_reconfig not needed — packer already fp32 from pre-matmul reconfig
                                 }
                                 for (uint32_t i = 0; i < num_workers; i++) {
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
