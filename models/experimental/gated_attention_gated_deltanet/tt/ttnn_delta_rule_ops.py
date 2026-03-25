@@ -1072,31 +1072,64 @@ def chunk_gated_delta_rule_ttnn(
             memory_config=None,
         )
 
-    prog_config_qk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
     prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None)
 
+    # Pre-compute state-independent ops as batched 4D tensors (hoisted from the loop).
+    # This converts num_chunks × 3D ops into single batched 4D ops, improving hardware
+    # utilization and reducing Python dispatch overhead in the sequential loop.
+
+    # 1. Batched qk: [BH, num_chunks, cs, K] @ [BH, num_chunks, K, cs] → [BH, num_chunks, cs, cs]
+    k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
+    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    ttnn.deallocate(k_c_4d_t)
+
+    # 2. Batched intra_attn: qk * L_mask * lower_causal
+    lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
+    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
+    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
+    ttnn.deallocate(qk_4d)
+    ttnn.deallocate(combined_mask_4d)
+
+    # 3. Batched q_decay: q * exp(clip(decay_raw)) for inter-chunk state query
+    # decay_raw_3d: [BH, num_chunks, cs] → [BH, num_chunks, cs, 1] for broadcast
+    decay_raw_exp_4d = ttnn.reshape(
+        ttnn.exp(ttnn.clip(decay_raw_3d, min=-20.0, max=0.0), memory_config=_cmc),
+        [BH, num_chunks, chunk_size, 1],
+        memory_config=_cmc,
+    )
+    q_decay_4d = ttnn.multiply(q_c_4d, decay_raw_exp_4d, memory_config=_cmc)
+    ttnn.deallocate(decay_raw_exp_4d)
+
+    # 4. Batched k_decay_t: k * exp(clip(decay_last - decay)) then transpose
+    # decay_diff = decay_last_normalized - decay (per-chunk normalized coordinates)
+    decay_last_norm_4d = ttnn.reshape(decay_last_normalized, [BH, num_chunks, 1], memory_config=_cmc)
+    decay_diff_3d = ttnn.subtract(decay_last_norm_4d, decay_3d, memory_config=_cmc)
+    decay_diff_exp_4d = ttnn.reshape(
+        ttnn.exp(ttnn.clip(decay_diff_3d, min=-20.0, max=0.0), memory_config=_cmc),
+        [BH, num_chunks, chunk_size, 1],
+        memory_config=_cmc,
+    )
+    k_decay_4d = ttnn.multiply(k_c_4d, decay_diff_exp_4d, memory_config=_cmc)
+    ttnn.deallocate(decay_diff_exp_4d)
+    k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_cmc)
+    ttnn.deallocate(k_decay_4d)
+
+    # 5. Batched state decay factors: exp(clip(decay_last_raw))
+    # decay_last_raw: [BH, num_chunks, 1] → dl_exp_3d: [BH, num_chunks, 1]
+    dl_exp_3d = ttnn.exp(ttnn.clip(decay_last_raw, min=-20.0, max=0.0), memory_config=_cmc)
+
     outputs = []
     for i in range(num_chunks):
-        q_i = q_c_4d[:, i]
-        k_i = k_c_4d[:, i]
         v_i = v_cor_4d[:, i]
         k_cum_i = k_cum_4d[:, i]
-        L_mask_i = L_mask_4d[:, i]
-        decay_i = decay_3d[:, i]
+        intra_attn_i = intra_attn_4d[:, i]
+        q_decay_i = q_decay_4d[:, i]
+        k_decay_t_i = k_decay_t_4d[:, i]
 
-        k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=_cmc)
-        if prog_config_qk:
-            qk = ttnn.matmul(
-                q_i, k_i_t, program_config=prog_config_qk, memory_config=_cmc, compute_kernel_config=_hifi_cfg
-            )
-        else:
-            qk = ttnn.matmul(q_i, k_i_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
-        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=_cmc)
-        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=_cmc)
-
+        # v_prime = k_cumdecay @ S (state-dependent)
         if prog_config_vprime:
             v_prime = ttnn.matmul(
                 k_cum_i, S, program_config=prog_config_vprime, memory_config=_cmc, compute_kernel_config=_hifi_cfg
@@ -1105,62 +1138,46 @@ def chunk_gated_delta_rule_ttnn(
             v_prime = ttnn.matmul(k_cum_i, S, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
         v_new = ttnn.subtract(v_i, v_prime, memory_config=_cmc)
 
-        # Site 3: query scaling needs raw (absolute) decay for inter-chunk state query.
-        # q_decay @ S must use absolute decay since S carries absolute inter-chunk decay.
-        decay_i_raw = decay_raw_3d[:, i]
-        decay_i_exp = ttnn.reshape(
-            ttnn.exp(ttnn.clip(decay_i_raw, min=-20.0, max=0.0), memory_config=_cmc),
-            [BH, chunk_size, 1],
-            memory_config=_cmc,
-        )
-        q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=_cmc)
+        # o_inter = q_decay @ S (state-dependent)
         if prog_config_o_inter:
             o_inter = ttnn.matmul(
-                q_decay, S, program_config=prog_config_o_inter, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+                q_decay_i, S, program_config=prog_config_o_inter, memory_config=_cmc, compute_kernel_config=_hifi_cfg
             )
         else:
-            o_inter = ttnn.matmul(q_decay, S, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+            o_inter = ttnn.matmul(q_decay_i, S, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
 
+        # intra_v = intra_attn @ v_new (depends on v_new which depends on S)
         if prog_config_intra:
             intra_v = ttnn.matmul(
-                intra_attn, v_new, program_config=prog_config_intra, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+                intra_attn_i,
+                v_new,
+                program_config=prog_config_intra,
+                memory_config=_cmc,
+                compute_kernel_config=_hifi_cfg,
             )
         else:
-            intra_v = ttnn.matmul(intra_attn, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+            intra_v = ttnn.matmul(intra_attn_i, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
 
         o_i = ttnn.add(o_inter, intra_v, memory_config=_cmc)
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=_cmc))
 
-        # Site 4: inter-chunk state decay uses raw decay_last (independent of normalization)
-        dl_i_raw = decay_last_raw[:, i]
-        dl_i_exp = ttnn.exp(ttnn.clip(dl_i_raw, min=-20.0, max=0.0), memory_config=_cmc)
+        # State update: S = S * decay_factor + k_decay_t @ v_new
+        dl_i_exp = dl_exp_3d[:, i]
         S = ttnn.multiply(
             S,
             ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=_cmc),
             memory_config=_cmc,
         )
-
-        # Site 5: key scaling uses normalized decay_last and normalized decay_i
-        # decay_diff = how much decay from position to end of chunk (in normalized coords)
-        dl_i_norm = decay_last_normalized[:, i]
-        decay_diff = ttnn.subtract(
-            ttnn.reshape(dl_i_norm, [BH, 1], memory_config=_cmc),
-            decay_i,  # normalized
-            memory_config=_cmc,
-        )
-        decay_diff_exp = ttnn.exp(ttnn.clip(decay_diff, min=-20.0, max=0.0), memory_config=_cmc)
-        k_decay = ttnn.multiply(
-            k_i,
-            ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=_cmc),
-            memory_config=_cmc,
-        )
-        k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=_cmc)
         if prog_config_state:
             state_update = ttnn.matmul(
-                k_decay_t, v_new, program_config=prog_config_state, memory_config=_cmc, compute_kernel_config=_hifi_cfg
+                k_decay_t_i,
+                v_new,
+                program_config=prog_config_state,
+                memory_config=_cmc,
+                compute_kernel_config=_hifi_cfg,
             )
         else:
-            state_update = ttnn.matmul(k_decay_t, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+            state_update = ttnn.matmul(k_decay_t_i, v_new, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
         S = ttnn.add(S, state_update, memory_config=_cmc)
 
     o = ttnn.concat(outputs, dim=1, memory_config=None)
