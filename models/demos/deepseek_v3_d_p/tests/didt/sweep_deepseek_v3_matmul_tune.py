@@ -454,8 +454,7 @@ def test_sweep_deepseek_v3_matmul_tune(
         )
 
     iterations = max(1, min(didt_workload_iterations, 1000))
-    _debug_ids = {"gate", "routed_expert_w1", "routed_expert_w3"}  # TEMP: remove after testing
-    workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1 and w.workload_id in _debug_ids]
+    workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1]
 
     print(SWEEP_CSV_HEADER, flush=True)
     all_results: list[SweepResult] = []
