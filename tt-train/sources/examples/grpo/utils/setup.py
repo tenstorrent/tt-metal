@@ -8,6 +8,7 @@ from ttml.optimizers import create_optimizer
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from .llama_overrides import LlamaCompositeKV
+import logging
 
 
 @dataclass
@@ -21,7 +22,6 @@ class InferenceCtx:
     tile_size: int = 32
     group_size: int = 1
     sample_seed: int = 42
-    optimizer: object | None = None
     _kv_cache: object = None
     _B: int = None
     _N: int = None
@@ -36,6 +36,27 @@ class GrpoConfig:
     num_mini_epochs: int  # from training_config.num_epochs
     prompts_to_train: int
     completions_batch_size: int  # from training_config.batch_size
+
+
+@dataclass
+class TrainingCtx:
+    inference: InferenceCtx
+    grpo_cfg: GrpoConfig
+    optimizer: object
+    output_dir: str
+    checkpoint_dir: str
+    logger: logging.Logger
+
+    def save_checkpoint(self, step: int) -> str:
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        tensors = {}
+        for name, param in self.inference.tt_model.parameters().items():
+            tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32)
+
+        filepath = os.path.join(self.checkpoint_dir, f"grpo_step_{step}.safetensors")
+        save_file(tensors, filepath)
+        self.logger.info(f"Saved checkpoint ({len(tensors)} tensors) to {filepath}")
+        return filepath
 
 
 def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
@@ -99,15 +120,7 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
         )
         load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
-    optimizer = None
-    if setup_optimizer:
-        optimizer = create_optimizer(
-            yaml_config["training_config"]["optimizer"],
-            tt_model.parameters(),
-        )
-
     ctx = InferenceCtx(
-        optimizer=optimizer,
         tt_model=tt_model,
         tokenizer=tokenizer,
         pad_token=pad_token,
