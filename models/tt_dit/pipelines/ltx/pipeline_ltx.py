@@ -26,7 +26,7 @@ import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.ltx_transformer import LTXTransformerModel
-from ...parallel.config import DiTParallelConfig
+from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
@@ -193,6 +193,70 @@ class LTXPipeline:
         # trans_mat not needed: using SPLIT RoPE (not interleaved)
         self._cached_prompt: ttnn.Tensor | None = None
         self._cached_negative_prompt: ttnn.Tensor | None = None
+
+    @staticmethod
+    def create_pipeline(
+        mesh_device: ttnn.MeshDevice,
+        *,
+        checkpoint_path: str | None = None,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
+        num_links: int | None = None,
+        dynamic_load: bool | None = None,
+        topology: ttnn.Topology | None = None,
+        is_fsdp: bool | None = None,
+        mode: str = "av",
+    ) -> "LTXPipeline":
+        """Factory method matching Wan's create_pipeline pattern.
+
+        Auto-configures parallel settings from mesh shape and loads checkpoint.
+        """
+        mesh_shape = tuple(mesh_device.shape)
+        # Default configs per mesh shape
+        device_configs = {
+            (2, 4): {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            },
+            (1, 1): {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 1,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            },
+        }
+        defaults = device_configs.get(mesh_shape, device_configs[(2, 4)])
+        sp_axis = sp_axis if sp_axis is not None else defaults["sp_axis"]
+        tp_axis = tp_axis if tp_axis is not None else defaults["tp_axis"]
+        num_links = num_links if num_links is not None else defaults["num_links"]
+        dynamic_load = dynamic_load if dynamic_load is not None else defaults["dynamic_load"]
+        topology = topology if topology is not None else defaults["topology"]
+        is_fsdp = is_fsdp if is_fsdp is not None else defaults["is_fsdp"]
+
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
+            tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
+        )
+        ccl_manager = CCLManager(mesh_device, topology=topology)
+
+        pipeline = LTXPipeline(
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+            mode=mode,
+        )
+
+        if checkpoint_path:
+            pipeline.load_from_checkpoint(checkpoint_path)
+
+        return pipeline
 
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
@@ -676,6 +740,8 @@ class LTXPipeline:
         rescale_scale: float = 0.7,
         stg_block: int = 28,
         seed: int | None = None,
+        profiler=None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent)."""
         from ...utils.ltx import AudioLatentShape, VideoPixelShape
