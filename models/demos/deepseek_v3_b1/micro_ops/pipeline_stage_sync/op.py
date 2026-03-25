@@ -29,6 +29,8 @@ class PipelineStageSync:
 
     @staticmethod
     def op(
+        pseudo_input_tensor: ttnn.Tensor,
+        pseudo_output_tensor: ttnn.Tensor,
         mesh_device: ttnn.MeshDevice,
         stalling_device_mesh_coord: ttnn.MeshCoordinate,
         stalling_core: ttnn.CoreCoord,
@@ -73,7 +75,7 @@ class PipelineStageSync:
         ), f"If the stalling device is the same as the signalling device, and the stalling core is the same as the signalling core, then the stalling kernel must run on a different risc than the signalling kernel"
 
         global_semaphore = ttnn.create_global_semaphore(
-            mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_device_mesh_coord, stalling_device_mesh_coord)]), 0
+            mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)]), 0
         )
         global_semaphore_addr = ttnn.get_global_semaphore_address(global_semaphore)
 
@@ -83,7 +85,7 @@ class PipelineStageSync:
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 mesh_coord = ttnn.MeshCoordinate(row, col)
-                device = mesh_device.get_device(row, col)
+                # device = mesh_device.get_device(row, col)
 
                 # === Compile-time args ===
 
@@ -101,9 +103,10 @@ class PipelineStageSync:
                     ("num_iterations", num_iterations),
                 ]
                 writer_named_ct_args = reader_named_ct_args
+                compute_name_ct_args = [("num_iterations", num_iterations)]
 
                 # === Common Runtime Args ===
-                stalling_core_phys = device.worker_core_from_logical_core(stalling_core)
+                stalling_core_phys = mesh_device.worker_core_from_logical_core(stalling_core)
                 stalling_device_semaphore_noc_x_addr = stalling_core_phys.x
                 stalling_device_semaphore_noc_y_addr = stalling_core_phys.y
                 stalling_device_semaphore_l1_addr = global_semaphore_addr
@@ -128,15 +131,20 @@ class PipelineStageSync:
                     mesh_coord == signalling_device_mesh_coord and run_signalling_kernel_on_brisc
                 )
 
-                unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source=kernel_path,
-                    core_ranges=ttnn.CoreRangeSet(
+                if stalling_core == signalling_core:
+                    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(stalling_core, stalling_core)])
+                else:
+                    core_ranges = ttnn.CoreRangeSet(
                         [
                             ttnn.CoreRange(stalling_core, stalling_core),
                             ttnn.CoreRange(signalling_core, signalling_core),
                         ]
-                    ),
+                    )
+                unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=core_ranges,
                     ncrisc_named_compile_time_args=reader_named_ct_args,
+                    trisc_named_compile_time_args=compute_name_ct_args,
                     brisc_named_compile_time_args=writer_named_ct_args,
                     ncrisc_common_runtime_args=reader_common_rt_args,
                     brisc_common_runtime_args=writer_common_rt_args,
@@ -172,21 +180,22 @@ class PipelineStageSync:
                     cbs=[],
                 )
 
-                if mesh_coord == signalling_device_mesh_coord:
+                if (
+                    mesh_coord == signalling_device_mesh_coord
+                    and not stalling_device_mesh_coord == signalling_device_mesh_coord
+                ):
                     if not run_signalling_kernel_on_brisc:
                         kernel_idx = kernel_result.get_group_by_arg(
                             "run_signalling_logic_on_ncrisc", 1
                         ).ncrisc_kernel_index
-                        per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
-                            signalling_core.y
-                        ]
                     else:
                         kernel_idx = kernel_result.get_group_by_arg(
                             "run_signalling_logic_on_brisc", 1
                         ).brisc_kernel_index
-                        per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
-                            signalling_core.y
-                        ]
+                    program.kernels[kernel_idx].runtime_args[signalling_core.x][signalling_core.y] = []
+                    per_core_rt_args_ref = program.kernels[kernel_idx].runtime_args[signalling_core.x][
+                        signalling_core.y
+                    ]
 
                     signalling_fabric_node_id = mesh_device.get_fabric_node_id(signalling_device_mesh_coord)
                     link_index = 0
@@ -202,4 +211,4 @@ class PipelineStageSync:
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
         # Execute pipeline_stage_sync operation
-        ttnn.generic_op([], mesh_program_descriptor)
+        ttnn.generic_op([pseudo_input_tensor, pseudo_output_tensor], mesh_program_descriptor)

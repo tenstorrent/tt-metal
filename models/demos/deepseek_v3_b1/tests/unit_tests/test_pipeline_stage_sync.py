@@ -7,11 +7,12 @@ Unit tests for PipelineStageSyncB1 operation.
 """
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import PipelineStageSync
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import PipelineStageSync
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -23,7 +24,7 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
             ttnn.CoreCoord(0, 0),
             True,
             ttnn.MeshCoordinate((1, 1)),
-            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(1, 1),
             False,
         ),
         (
@@ -31,7 +32,7 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
             ttnn.CoreCoord(0, 0),
             False,
             ttnn.MeshCoordinate((1, 1)),
-            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(1, 1),
             True,
         ),
         (
@@ -39,7 +40,7 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
             ttnn.CoreCoord(0, 0),
             True,
             ttnn.MeshCoordinate((1, 1)),
-            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(1, 1),
             True,
         ),
         (
@@ -47,8 +48,16 @@ from models.demos.deepseek_v3_b1.micro_ops.ccl_pipeline_stage_sync.op import Pip
             ttnn.CoreCoord(0, 0),
             False,
             ttnn.MeshCoordinate((1, 1)),
-            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(1, 1),
             False,
+        ),
+        (
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(0, 0),
+            True,
+            ttnn.MeshCoordinate((0, 0)),
+            ttnn.CoreCoord(1, 1),
+            True,
         ),
         (
             ttnn.MeshCoordinate((0, 0)),
@@ -89,8 +98,34 @@ def test_pipeline_stage_sync_2d(
 
     logger.info(f"\n=== Testing pipeline_stage_sync (num_iterations={num_iterations}) ===")
 
+    # Pseudo input/output tensors
+    pseudo_input_tensor = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        device=submesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            submesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh_device.shape),
+        ),
+    )
+    pseudo_output_tensor = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        device=submesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            submesh_device,
+            ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh_device.shape),
+        ),
+    )
+
     # Run pipeline_stage_sync with looping inside the kernel
     PipelineStageSync.op(
+        pseudo_input_tensor=pseudo_input_tensor,
+        pseudo_output_tensor=pseudo_output_tensor,
         mesh_device=submesh_device,
         stalling_device_mesh_coord=stalling_device_mesh_coord,
         stalling_core=stalling_core,

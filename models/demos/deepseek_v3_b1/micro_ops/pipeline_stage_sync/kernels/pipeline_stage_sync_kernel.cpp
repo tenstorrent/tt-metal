@@ -43,16 +43,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("fabric_arg_base")>;
 
     // Writer runtime args (from common args)
-    PipelineStageSync::WriterArgs rt_args =
-        {
-            get_common_arg_val<uint32_t>(0),  // stalling_device_semaphore_noc_x_addr
-            get_common_arg_val<uint32_t>(1),  // stalling_device_semaphore_noc_y_addr
-            get_common_arg_val<uint32_t>(2),  // stalling_device_semaphore_l1_addr
-        }
+    PipelineStageSync::WriterArgs rt_args = {
+        get_common_arg_val<uint32_t>(0),  // stalling_device_semaphore_noc_x_addr
+        get_common_arg_val<uint32_t>(1),  // stalling_device_semaphore_noc_y_addr
+        get_common_arg_val<uint32_t>(2),  // stalling_device_semaphore_l1_addr
+    };
 
 #elif defined(COMPILE_FOR_TRISC)
     // Compute CTArgs
-    PipelineStageSync::ComputeCTArgs CTArgs = {};
+    using CTArgs = PipelineStageSync::ComputeCTArgs;
 
     // Compute runtime args
     PipelineStageSync::ComputeArgs rt_args = {};
@@ -60,7 +59,7 @@ void kernel_main() {
 
     // Execute the op (looped for testing iteration correctness)
     constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
-    PipelineStageSync::Op<CTArgs, true> op;
+    PipelineStageSync::Op<CTArgs> op;
     for (uint32_t iteration = 0; iteration < num_iterations; ++iteration) {
         op(rt_args);
     }
