@@ -182,7 +182,6 @@ class Plotter:
         yscale="linear",
         xbase=2,
         ybase=10,
-        add_theoretical_max_bw=False,
     ):
         # Flatten data and add riscv to each run
         all_runs = []
@@ -220,13 +219,6 @@ class Plotter:
             label = label_format(combo, series_keys)
 
             ax.plot(x_vals, y_vals, label=label, marker="o")
-
-        if add_theoretical_max_bw:
-            all_x_vals = sorted(set(run[x_key] for run in all_runs))
-            max_bandwidths = [
-                self.noc_width * ((size / self.noc_width) / ((size / self.noc_width) + 1)) for size in all_x_vals
-            ]
-            ax.plot(all_x_vals, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
         # Adjust the plot area to leave space for the legend
         box = ax.get_position()
@@ -285,12 +277,10 @@ class Plotter:
             y_key = "combined_bandwidth"
             title = "Transaction Size vs Combined Bandwidth"
             ylabel = "Combined Bandwidth (bytes/cycle)"
-            add_theoretical_max_bw = False
         else:
             y_key = "bandwidth"
             title = "Transaction Size vs Bandwidth"
             ylabel = "Bandwidth (bytes/cycle)"
-            add_theoretical_max_bw = True
 
         xlabel = "Transaction Size (bytes)"
 
@@ -307,7 +297,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=add_theoretical_max_bw,
         )
 
     # Transaction ID: Transaction ID Count vs Bandwidth (grouped by transaction size)
@@ -382,7 +371,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=False,
         )
 
     # Direct Write: Address pattern
@@ -407,7 +395,6 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=False,
         )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth

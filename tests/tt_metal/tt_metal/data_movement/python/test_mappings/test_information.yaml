@@ -659,6 +659,12 @@ tests:
   603:
     name: "PCIe Read Bandwidth"
 
+  604:
+    name: "PCIe Write Bandwidth Sweep"
+
+  605:
+    name: "PCIe Read Bandwidth Sweep"
+
   610:
     name: "Transaction ID - Write After Read"
     comment: |

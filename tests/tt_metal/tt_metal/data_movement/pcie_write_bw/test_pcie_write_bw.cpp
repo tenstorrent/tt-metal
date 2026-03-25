@@ -16,24 +16,23 @@ using namespace std;
 using namespace tt;
 using namespace test_utils;
 
-namespace unit_tests::dm::pcie_read_bw {
+namespace unit_tests::dm::pcie_write_bw {
 
-// Test config for PCIe read bandwidth test
-struct PCIeReadBwConfig {
+// Test config for PCIe write bandwidth test
+struct PCIeWriteBwConfig {
     uint32_t test_id = 0;
     CoreCoord master_core_coord = {0, 0};
     uint32_t num_of_transactions = 0;
-    uint32_t pages_per_transaction = 0;
-    uint32_t bytes_per_page = 0;
+    uint32_t bytes_per_transaction = 0;
     DataFormat l1_data_format = DataFormat::Float32;
     NOC noc_id = NOC::RISCV_0_default;
 };
 
-/// @brief Runs PCIe read bandwidth test
+/// @brief Runs PCIe write bandwidth test
 /// @param mesh_device Mesh device for execution
 /// @param test_config Configuration for the test
 /// @return true if test passes, false otherwise
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeReadBwConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWriteBwConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->impl().get_device(0);
     auto device_id = device->id();
@@ -41,12 +40,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     // Program
     Program program = CreateProgram();
 
-    const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
-
     L1AddressInfo master_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     uint32_t l1_base_address = master_l1_info.base_address;
 
-    if (master_l1_info.size < bytes_per_transaction) {
+    if (master_l1_info.size < test_config.bytes_per_transaction) {
         log_error(LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -68,13 +65,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     // Compile-time arguments for kernels
     vector<uint32_t> compile_args = {
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)bytes_per_transaction,
+        (uint32_t)test_config.bytes_per_transaction,
         (uint32_t)test_config.test_id,
         (uint32_t)packed_subordinate_core_coordinates,
         (uint32_t)pcie_l1_local_addr,
         (uint32_t)l1_base_address};
 
-    std::string kernel_path = "tests/tt_metal/tt_metal/data_movement/pcie_read_bw/kernels/pcie_read_bw.cpp";
+    std::string kernel_path = "tests/tt_metal/tt_metal/data_movement/pcie_write_bw/kernels/pcie_write_bw.cpp";
     CreateKernel(
         program,
         kernel_path,
@@ -83,7 +80,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
             .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
 
     log_info(
-        LogTest, "Running PCIe Read BW Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+        LogTest,
+        "Running PCIe Write BW Test ID: {}, Run ID: {}, Transactions: {}, Bytes/Txn: {}",
+        test_config.test_id,
+        unit_tests::dm::runtime_host_id,
+        test_config.num_of_transactions,
+        test_config.bytes_per_transaction);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     auto mesh_workload = distributed::MeshWorkload();
@@ -98,39 +100,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     return true;
 }
 
-void pcie_read_bw_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id, CoreCoord master_core_coord = {0, 0}) {
-    // Physical Constraints
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+}  // namespace unit_tests::dm::pcie_write_bw
 
-    uint32_t num_of_transactions = 256;
-    uint32_t pages_per_transaction = max_transmittable_pages;
-
-    PCIeReadBwConfig test_config = {
-        .test_id = test_id,
-        .master_core_coord = master_core_coord,
-        .num_of_transactions = num_of_transactions,
-        .pages_per_transaction = pages_per_transaction,
-        .bytes_per_page = bytes_per_page,
-        .l1_data_format = DataFormat::Float32,
-        .noc_id = NOC::RISCV_0_default,
-    };
-
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
-}
-
-}  // namespace unit_tests::dm::pcie_read_bw
-
-TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidth) {
-    uint32_t test_id = 603;
-    CoreCoord master_core_coord = {0, 0};
-
-    unit_tests::dm::pcie_read_bw::pcie_read_bw_test(get_mesh_device(), test_id, master_core_coord);
-}
-
-/* ========== Sweep 1M transactions with varying transaction sizes; Test id = 605 ========== */
-TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
+/* ========== Sweep 1M transactions with varying transaction sizes; Test id = 604 ========== */
+TEST_F(GenericMeshDeviceFixture, PCIeWriteBandwidthSweep) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -151,19 +124,16 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
 
     // Sweep transaction sizes by powers of 2 from page_size_bytes to max
     for (uint32_t txn_size = page_size_bytes; txn_size <= max_transaction_size_bytes; txn_size *= 2) {
-        uint32_t pages_per_txn = txn_size / page_size_bytes;
-
-        unit_tests::dm::pcie_read_bw::PCIeReadBwConfig test_config = {
-            .test_id = 605,
+        unit_tests::dm::pcie_write_bw::PCIeWriteBwConfig test_config = {
+            .test_id = 604,
             .master_core_coord = master_core_coord,
             .num_of_transactions = total_transactions,
-            .pages_per_transaction = pages_per_txn,
-            .bytes_per_page = page_size_bytes,
+            .bytes_per_transaction = txn_size,
             .l1_data_format = DataFormat::Float32,
             .noc_id = NOC::RISCV_0_default,
         };
 
-        EXPECT_TRUE(unit_tests::dm::pcie_read_bw::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::pcie_write_bw::run_dm(mesh_device, test_config));
     }
 }
 
