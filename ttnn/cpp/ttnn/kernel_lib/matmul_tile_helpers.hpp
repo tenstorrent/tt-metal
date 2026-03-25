@@ -139,7 +139,8 @@ template <
     matmul_tile_config::InitUninitMode init_uninit_mode = matmul_tile_config::InitUninitMode::InitAndUninit,
     matmul_tile_config::WaitMode wait_mode = matmul_tile_config::WaitMode::WaitPerTile,
     matmul_tile_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        matmul_tile_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        matmul_tile_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    bool transpose = false>
 ALWI void matmul_tile(uint32_t Mt, uint32_t Nt, uint32_t Kt, uint32_t batch = 1);
 
 }  // namespace compute_kernel_lib

@@ -21,7 +21,8 @@ template <
     uint32_t out_cb,
     matmul_tile_config::InitUninitMode init_uninit_mode,
     matmul_tile_config::WaitMode wait_mode,
-    matmul_tile_config::ReconfigureRegisterDatatypeMode reconfig_mode>
+    matmul_tile_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    bool transpose>
 ALWI void matmul_tile(uint32_t Mt, uint32_t Nt, uint32_t Kt, uint32_t batch) {
 
     // Compile-time validation
@@ -61,7 +62,7 @@ ALWI void matmul_tile(uint32_t Mt, uint32_t Nt, uint32_t Kt, uint32_t batch) {
     if constexpr (
         init_uninit_mode == matmul_tile_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == matmul_tile_config::InitUninitMode::InitOnly) {
-        mm_init(in0_cb, in1_cb, out_cb);
+        mm_init(in0_cb, in1_cb, out_cb, transpose);
     }
 
     // Main loop: batch × Mt × Nt × Kt.

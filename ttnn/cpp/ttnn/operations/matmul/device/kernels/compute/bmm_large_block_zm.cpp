@@ -4,8 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/matmul.h"
-#include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
@@ -26,84 +25,13 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_intermed0 = get_named_compile_time_arg_val("cb_intermed0");
 
-    mm_init(cb_in0, cb_in1, cb_intermed0);
-
-    for (uint32_t b = 0; b < batch; b++) {
-        bool spill = num_blocks > 1;
-        bool enable_reload = false;
-        uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
-
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            bool last_out = block == (num_blocks - 1);
-
-            cb_wait_front(cb_in0, in0_block_num_tiles);
-            cb_wait_front(cb_in1, in1_block_num_tiles);
-            int in0_index_subblock_offset = 0;
-            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = 0;
-                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    acquire_dst();
-
-                    if (enable_reload) {
-                        copy_tile_to_dst_init_short_with_dt(cb_in1, cb_intermed0);
-                        cb_wait_front(cb_intermed0, out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile(cb_intermed0, i, i);
-                        }
-                        cb_pop_front(cb_intermed0, out_subblock_num_tiles);
-                        mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0);
-                    }
-
-                    // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out_subblock_h; h++) {
-                        for (uint32_t w = 0; w < out_subblock_w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
-                                in1_index_inner_dim_offset += in1_per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0_block_w;
-                    }
-
-                    if (last_out) {
-                        // Pack out to output buffer
-                        cb_reserve_back(cb_out, out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, cb_out);
-                        }
-                        cb_push_back(cb_out, out_subblock_num_tiles);
-                    } else {
-                        // Wait for tiles in output buffer to be written out since interm and output share memory
-                        if (block == 0) {
-                            cb_reserve_back(cb_out, out_num_tiles_to_wait);
-                            out_num_tiles_to_wait += out_subblock_num_tiles;
-                        }
-                        // Move partial result to interm buffer
-                        cb_reserve_back(cb_intermed0, out_subblock_num_tiles);
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, cb_intermed0);
-                        }
-                        cb_push_back(cb_intermed0, out_subblock_num_tiles);
-                    }
-
-                    release_dst();
-                    in1_index_subblock_offset += out_subblock_w;
-                }
-                in0_index_subblock_offset += in0_subblock_num_tiles;
-            }
-
-            if (spill) {
-                enable_reload = true;
-            }
-
-            cb_pop_front(cb_in0, in0_block_num_tiles);
-            cb_pop_front(cb_in1, in1_block_num_tiles);
-        }
-    }
+    compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_intermed0>(
+        {.block_w = in0_block_w,
+         .num_subblocks = in0_num_subblocks,
+         .block_num_tiles = in0_block_num_tiles,
+         .subblock_num_tiles = in0_subblock_num_tiles},
+        {.num_subblocks = in1_num_subblocks, .block_num_tiles = in1_block_num_tiles, .per_core_w = in1_per_core_w},
+        num_blocks,
+        {.h = out_subblock_h, .w = out_subblock_w, .num_tiles = out_subblock_num_tiles},
+        batch);
 }

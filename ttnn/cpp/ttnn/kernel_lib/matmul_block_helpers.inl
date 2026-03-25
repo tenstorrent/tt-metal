@@ -21,7 +21,8 @@ template <
     uint32_t out_cb,
     uint32_t interm_cb,
     matmul_block_config::InitUninitMode init_uninit_mode,
-    matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode>
+    matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    bool transpose>
 ALWI void matmul_block(
     matmul_block_config::In0BlockParams in0,
     matmul_block_config::In1BlockParams in1,
@@ -64,11 +65,14 @@ ALWI void matmul_block(
         pack_reconfig_data_format(out_cb);
     }
 
-    // Init
+    // Init — configure packer with interm_cb because during K-blocking we spill
+    // partial results to the intermediate buffer. The final pack to out_cb works
+    // because pack_tile takes the destination CB at call time.
+    // This matches the production pattern: mm_init(cb_in0, cb_in1, cb_intermed0).
     if constexpr (
         init_uninit_mode == matmul_block_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == matmul_block_config::InitUninitMode::InitOnly) {
-        mm_init(in0_cb, in1_cb, out_cb);
+        mm_init(in0_cb, in1_cb, interm_cb, transpose);
     }
 
     for (uint32_t b = 0; b < batch; b++) {
@@ -89,15 +93,17 @@ ALWI void matmul_block(
                 for (uint32_t in1_subblock = 0; in1_subblock < in1.num_subblocks; in1_subblock++) {
                     acquire_dst();
 
-                    // Reload partial results from intermediate CB if accumulating across blocks
+                    // Reload partial results from intermediate CB if accumulating across blocks.
+                    // Uses _with_dt variants to handle data format reconfiguration between
+                    // in1_cb and interm_cb (e.g., bf16 inputs with fp32 intermediate accumulation).
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short(interm_cb);
+                        copy_tile_to_dst_init_short_with_dt(in1_cb, interm_cb);
                         cb_wait_front(interm_cb, out.num_tiles);
                         for (uint32_t i = 0; i < out.num_tiles; i++) {
                             copy_tile(interm_cb, i, i);
                         }
                         cb_pop_front(interm_cb, out.num_tiles);
-                        mm_init_short(in0_cb, in1_cb);
+                        mm_init_short_with_dt(in0_cb, in1_cb, interm_cb, transpose);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

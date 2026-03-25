@@ -58,9 +58,10 @@ struct OutSubblockParams {
  * accumulation, enabling matmul of larger matrices than DST can hold at once.
  *
  * This wraps mm_init + matmul_tiles with sub-block indexing, matching the pattern
- * used in the bmm_large_block_zm programming example. Input tiles are consumed in
- * full blocks (all in0_block_num_tiles and in1_block_num_tiles at once) rather than
- * one-at-a-time as in matmul_tile.
+ * used in bmm_large_block_zm.cpp. Input tiles are consumed in full blocks (all
+ * in0_block_num_tiles and in1_block_num_tiles at once) rather than one-at-a-time
+ * as in matmul_tile. The spill/reload path uses _with_dt variants for correct
+ * data format reconfiguration when in1_cb and interm_cb have different formats.
  *
  * NOTE: Unlike matmul_tile, this helper does NOT require compute_kernel_hw_startup()
  * to be called first. The mm_init() call inside the helper performs all necessary
@@ -77,6 +78,7 @@ struct OutSubblockParams {
  *                The out_cb and interm_cb should share memory (overlapping address
  *                space) to avoid wasting L1 — the output only needs space once the
  *                final block is ready.
+ *   transpose  — If true, transpose B tiles before multiplication (default: false).
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
@@ -113,7 +115,8 @@ template <
     uint32_t interm_cb,
     matmul_block_config::InitUninitMode init_uninit_mode = matmul_block_config::InitUninitMode::InitAndUninit,
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        matmul_block_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        matmul_block_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    bool transpose = false>
 ALWI void matmul_block(
     matmul_block_config::In0BlockParams in0,
     matmul_block_config::In1BlockParams in1,
