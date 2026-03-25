@@ -10,7 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
@@ -40,7 +40,7 @@ def _get_diffusers_pipeline(is_ci_env):
             20,
             1280,
             0,
-            0.973,
+            0.973 if is_wormhole_b0() else 0.969,
         ),
         (
             (1024, 1024),
@@ -97,9 +97,8 @@ def test_crossattnup(
     reset_seeds,
     lora_path,
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
-
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 resolution not supported on Blackhole")
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 

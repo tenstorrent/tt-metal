@@ -14,7 +14,7 @@ import torch
 from diffusers import DiffusionPipeline
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
@@ -69,9 +69,6 @@ def test_lora_fuse(
     is_ci_v2_env,
     lora_path,
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
-
     pipeline_for_tt = _get_diffusers_pipeline(model_location_generator, is_ci_env, is_ci_v2_env)
     pipeline_for_tt.unet.eval()
     state_dict = pipeline_for_tt.unet.state_dict()
@@ -101,7 +98,7 @@ def test_lora_fuse(
     [
         (
             "pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py::test_lora_fuse",
-            166_329_976,
+            166_329_976 if is_wormhole_b0() else 71_935_194,
             "sdxl_lora_fuse",
             "sdxl_lora_fuse",
             1,
@@ -117,10 +114,8 @@ def test_lora_fuse(
 def test_lora_perf_device(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
-
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     run_model_device_perf_test(
         command=command,
