@@ -17,18 +17,30 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+bool can_deallocate(const Tensor& input_tensor) {
+    if (is_cpu_tensor(input_tensor)) {
+        return false;
+    }
+    return input_tensor.device_storage().mesh_buffer.use_count() == 1;
+}
+
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    // TODO(#38697): Migrate to Tensor::deallocate(/* force = */ false)
-    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
+    if (not can_deallocate(input_tensor)) {
         // TODO: Should this throw error?
         return input_tensor;
     }
-    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
+    // Special handling for Mesh vs single device. Needs to be consolidated after full
+    // migration
+    if (input_tensor.device_storage().mesh_buffer) {
+        input_tensor.device_storage().mesh_buffer->deallocate();
+    } else {
+        DeallocateBuffer(*input_tensor.buffer());
+    }
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
@@ -98,10 +110,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    auto shard_spec = input_tensor.shard_spec().value();
-
-    // TODO(#38697): Migrate to Tensor::deallocate(/* forced = */ false)
-    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
+    if (not can_deallocate(input_tensor)) {
         TT_FATAL(
             false,
             "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably "
@@ -109,7 +118,15 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         // TODO: Should this throw error?
         return {input_tensor};
     }
-    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
+    auto shard_spec = input_tensor.shard_spec().value();
+    // Special handling for Mesh vs single device. Needs to be consolidated after full
+    // migration
+
+    if (input_tensor.device_storage().mesh_buffer) {
+        input_tensor.device_storage().mesh_buffer->deallocate();
+    } else {
+        DeallocateBuffer(*input_tensor.buffer());
+    }
 
     auto output_tensor_spec = input_tensor.tensor_spec();
     if (mem_config) {

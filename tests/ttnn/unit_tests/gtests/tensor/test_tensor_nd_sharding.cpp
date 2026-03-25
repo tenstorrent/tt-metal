@@ -136,20 +136,18 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     std::vector<uint16_t> empty_data(volume);
     auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
 
-    const auto& buffer = tensor.mesh_buffer();
+    const auto& storage = tensor.device_storage();
+    auto buffer = storage.get_mesh_buffer();
 
-    // TODO(#38691): Clean this up after we provide non-shared-ptr overloads for these methods.
-    const auto& shared_mesh_buffer = tensor.device_storage().get_mesh_buffer_leak_ownership();
-
-    size_t region_size = buffer.page_size();
-    while (buffer.size() % (region_size * 2) == 0) {
+    size_t region_size = buffer->page_size();
+    while (buffer->size() % (region_size * 2) == 0) {
         region_size *= 2;
     }
 
     std::vector<uint16_t> partial_readback_data(tensor_data.size());
     std::vector<uint16_t> full_readback_data(tensor_data.size());
 
-    for (size_t region = 0; region < buffer.size() / region_size; region++) {
+    for (size_t region = 0; region < buffer->size() / region_size; region++) {
         size_t region_offset = region * region_size;
         auto buffer_region = BufferRegion{region_offset, region_size};
         auto write_shard_data_transfer =
@@ -160,13 +158,13 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
             distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
                 .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
                 .region(buffer_region);
-        device_->mesh_command_queue().enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
-        device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
+        device_->mesh_command_queue().enqueue_write_shards(buffer, {write_shard_data_transfer}, true);
+        device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
     distributed::ReadShard(
-        device_->mesh_command_queue(), full_readback_data, shared_mesh_buffer, distributed::MeshCoordinate(0, 0), true);
+        device_->mesh_command_queue(), full_readback_data, buffer, distributed::MeshCoordinate(0, 0), true);
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 

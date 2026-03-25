@@ -66,9 +66,9 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     }
 
     // Verify all tensors are at the same address
-    auto reference_address = unit_tensors[0].mesh_buffer().address();
+    auto reference_address = unit_tensors[0].mesh_buffer()->address();
     for (size_t i = 1; i < unit_tensors.size(); i++) {
-        EXPECT_EQ(unit_tensors[i].mesh_buffer().address(), reference_address);
+        EXPECT_EQ(unit_tensors[i].mesh_buffer()->address(), reference_address);
     }
 
     // Test aggregate
@@ -79,7 +79,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     EXPECT_EQ(aggregated_tensor.logical_shape(), shape);
     EXPECT_EQ(aggregated_tensor.dtype(), dtype);
     EXPECT_EQ(aggregated_tensor.layout(), layout);
-    EXPECT_EQ(aggregated_tensor.mesh_buffer().address(), reference_address);
+    EXPECT_EQ(aggregated_tensor.mesh_buffer()->address(), reference_address);
 
     // Test disaggregate
     auto disaggregated_tensors = disaggregate(aggregated_tensor);
@@ -92,7 +92,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
         EXPECT_EQ(tensor.logical_shape(), shape);
         EXPECT_EQ(tensor.dtype(), dtype);
         EXPECT_EQ(tensor.layout(), layout);
-        EXPECT_EQ(tensor.mesh_buffer().address(), reference_address);
+        EXPECT_EQ(tensor.mesh_buffer()->address(), reference_address);
     }
 }
 

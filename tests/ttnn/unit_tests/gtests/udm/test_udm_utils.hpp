@@ -563,7 +563,8 @@ inline void log_gcores_info(
 inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(const ttnn::Tensor& tensor) {
     // Extract MeshBuffer from the distributed tensor
     TT_FATAL(is_device_tensor(tensor), "Tensor must be on device");
-    TT_FATAL(tensor.is_allocated(), "Tensor must be allocated");
+    const auto& device_storage = tensor.device_storage();
+    TT_FATAL(device_storage.mesh_buffer != nullptr, "Tensor must have a MeshBuffer");
 
     // Extract distribution info from tensor topology
     const auto& topology = tensor.tensor_topology();
@@ -587,7 +588,7 @@ inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(
     }
 
     return tt::tt_metal::experimental::udm::MeshTensorBuilder(
-        tensor.mesh_buffer(), tensor_shape_in_pages, distribution_shape, shard_dims);
+        *device_storage.mesh_buffer, tensor_shape_in_pages, distribution_shape, shard_dims);
 }
 
 /**

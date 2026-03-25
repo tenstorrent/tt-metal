@@ -205,12 +205,12 @@ void eltwise_add_tensix(
     // future).
     create_cb(prog_state.program, prog_state.core, tiles_per_cb_output, tt::CBIndex::c_16);
 
-    // Get MeshBuffers from tensors. Mesh buffers hold info about how tensor data is distributed
+    // Get MeshBuffer pointers from tensors. Mesh buffers hold info about how tensor data is distributed
     // across physical DRAM banks (at least for our case when data is stored in DRAM).
     // Programmer doesn't need to understand the internals, but needs to pass this info to the kernels.
-    const auto& src0_mesh_buffer = src0_tensor.mesh_buffer();
-    const auto& src1_mesh_buffer = src1_tensor.mesh_buffer();
-    const auto& dst_mesh_buffer = dst_tensor.mesh_buffer();
+    auto src0_mesh_buffer = src0_tensor.mesh_buffer();
+    auto src1_mesh_buffer = src1_tensor.mesh_buffer();
+    auto dst_mesh_buffer = dst_tensor.mesh_buffer();
 
     // Create the reader, writer and compute kernels. The kernels do the following:
     // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
@@ -223,8 +223,8 @@ void eltwise_add_tensix(
     std::vector<uint32_t> reader_compile_time_args;
     // TensorAccessorArgs just extracts data distribution details from MeshBuffer object into
     // the vector of uint32_t so it can be pushed into compile-time arguments.
-    TensorAccessorArgs(src0_mesh_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(src1_mesh_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src0_mesh_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_mesh_buffer).append_to(reader_compile_time_args);
 
     // There are two data movement RISCV processors in each Tensix core:
     // DataMovementProcessor::RISCV_0 and DataMovementProcessor::RISCV_1, corresponding to
@@ -242,7 +242,7 @@ void eltwise_add_tensix(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(dst_mesh_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
     KernelHandle writer_id = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp",
@@ -266,9 +266,9 @@ void eltwise_add_tensix(
         tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
     // Set the runtime arguments for the kernels.
-    uint32_t src0_addr = src0_mesh_buffer.address();
-    uint32_t src1_addr = src1_mesh_buffer.address();
-    uint32_t dst_addr = dst_mesh_buffer.address();
+    uint32_t src0_addr = src0_mesh_buffer->address();
+    uint32_t src1_addr = src1_mesh_buffer->address();
+    uint32_t dst_addr = dst_mesh_buffer->address();
     tt_metal::SetRuntimeArgs(prog_state.program, reader_id, prog_state.core, {src0_addr, src1_addr, n_tiles});
     tt_metal::SetRuntimeArgs(prog_state.program, writer_id, prog_state.core, {dst_addr, n_tiles});
 

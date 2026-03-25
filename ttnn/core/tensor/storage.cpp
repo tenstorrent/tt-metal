@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <unordered_set>
 #include <vector>
 
 #include <ttnn/tensor/layout/layout.hpp>
@@ -59,14 +57,7 @@ Buffer* DeviceStorage::get_buffer() const {
     TT_THROW("Buffer is not allocated");
 }
 
-const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
-    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
-    return *mesh_buffer;
-}
-
-bool DeviceStorage::is_sole_owner_of_device_memory() const { return mesh_buffer.use_count() == 1; }
-
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
+std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
     TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
     return mesh_buffer;
 }

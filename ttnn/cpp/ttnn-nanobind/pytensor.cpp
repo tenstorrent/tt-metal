@@ -1309,8 +1309,9 @@ void pytensor_module(nb::module_& mod) {
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
-                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
-                return self.mesh_buffer().address();
+                const auto& storage = self.device_storage();
+                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return storage.mesh_buffer->address();
             },
             R"doc(
             Get the address of the underlying buffer.
