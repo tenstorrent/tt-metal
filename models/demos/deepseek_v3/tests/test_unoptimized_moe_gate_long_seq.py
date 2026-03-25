@@ -23,6 +23,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -94,6 +95,13 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        {"trace_region_size": 178030000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
         ("prefill", 1, _prefill_seq_len),
@@ -108,7 +116,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 @pytest.mark.parametrize(
     "num_iters",
     [
-        5,
+        10,
     ],
 )
 @pytest.mark.parametrize("weight_type", ["real"])
@@ -130,6 +138,7 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     time1 = time.perf_counter()
+    profiler = BenchmarkProfiler()
     module_path = "model.layers.3.mlp" if weight_type == "real" else None
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort)
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
@@ -177,14 +186,41 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.synchronize_device(mesh_device)
-    time2 = time.perf_counter()
+    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    # warmup
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(10):
+        tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+        ttnn.deallocate(tt_topk_weights)
+        ttnn.deallocate(tt_topk_indices)
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
 
+    # run forward in trace mode
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iters):
         tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+        ttnn.deallocate(tt_topk_weights)
+        ttnn.deallocate(tt_topk_indices)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
     ttnn.synchronize_device(mesh_device)
+
+    time2 = time.perf_counter()
+    profiler.start("main")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("main")
+
     time3 = time.perf_counter()
+    wall_seconds = profiler.get_duration("main")
     logger.info(f"TTNN preparation time: {time2-time1} seconds")
     logger.info(f"TTNN forward pass time: {time3-time2} seconds")
+    logger.info(f"TTNN forward pass wall time: {wall_seconds} seconds")
+
+    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_topk_weights_memory_config = tt_topk_weights.memory_config()
