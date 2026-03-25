@@ -215,6 +215,7 @@ class TextModel(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         output_hidden_states: bool = False,
         rot_mats: Optional[List[ttnn.Tensor]] = None,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -226,6 +227,7 @@ class TextModel(LightweightModule):
             kv_caches: Optional list of (k_cache, v_cache) per layer
             output_hidden_states: Whether to return all hidden states
             rot_mats: Optional pre-computed rotation matrices [cos, sin] for tracing
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Tuple of (logits, new_kv_caches)
@@ -247,7 +249,7 @@ class TextModel(LightweightModule):
                 all_hidden_states.append(x)
 
             kv_cache = kv_caches[layer_idx] if kv_caches else None
-            x, new_kv_cache = block(x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache)
+            x, new_kv_cache = block(x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache, page_table)
             new_kv_caches.append(new_kv_cache)
 
         # Final normalization
@@ -295,6 +297,7 @@ class TextModel(LightweightModule):
         current_pos: ttnn.Tensor,
         rot_mats: Optional[List[ttnn.Tensor]] = None,
         rot_mat_idxs: Optional[ttnn.Tensor] = None,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass (single token at a time).
@@ -308,6 +311,7 @@ class TextModel(LightweightModule):
             current_pos: Current decode position tensor [batch]
             rot_mats: Optional pre-computed [cos, sin] rotation matrices (for tracing)
             rot_mat_idxs: Optional device tensor [1, padded_batch] for RoPE lookup
+            page_table: Optional page table for paged attention (vLLM)
 
         Returns:
             Logits tensor
@@ -323,7 +327,7 @@ class TextModel(LightweightModule):
         x = hidden_states
         for layer_idx, block in enumerate(self.blocks):
             kv_cache = kv_caches[layer_idx]
-            x = block.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos)
+            x = block.forward_decode(x, rot_mats, transformation_mat, kv_cache, current_pos, page_table)
 
         # Final normalization
         x = self.ln_f(x)
@@ -409,6 +413,82 @@ def init_kv_cache(
         kv_caches.append((k_cache, v_cache))
 
     logger.info(f"KV cache initialized: {len(kv_caches)} layers")
+    return kv_caches
+
+
+def init_paged_kv_cache(
+    mesh_device,
+    num_layers: int,
+    num_blocks: int = 512,
+    num_kv_heads: int = 8,
+    block_size: int = 64,
+    head_dim: int = 128,
+    dtype=ttnn.bfloat8_b,
+) -> List[Tuple[ttnn.Tensor, ttnn.Tensor]]:
+    """
+    Initialize paged KV cache for all layers.
+
+    Paged attention allocates KV cache as blocks that can be dynamically
+    assigned to different sequences via page tables.
+
+    Args:
+        mesh_device: TTNN mesh device or single device
+        num_layers: Number of decoder layers
+        num_blocks: Total number of blocks in the cache
+        num_kv_heads: Number of KV heads (total across all devices)
+        block_size: Number of tokens per block
+        head_dim: Dimension per head
+        dtype: Data type for cache
+
+    Returns:
+        List of (k_cache, v_cache) tuples per layer
+    """
+    from loguru import logger
+
+    is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+
+    if is_mesh_device:
+        num_devices = mesh_device.get_num_devices()
+        num_kv_heads_per_device = num_kv_heads // num_devices
+        # Shard KV cache along heads dimension (dim=1)
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+        logger.info(
+            f"Initializing paged KV cache: {num_layers} layers, "
+            f"{num_blocks} blocks, block_size={block_size}, "
+            f"{num_kv_heads_per_device} kv_heads per device"
+        )
+    else:
+        num_kv_heads_per_device = num_kv_heads
+        mesh_mapper = None
+        logger.info(
+            f"Initializing paged KV cache: {num_layers} layers, " f"{num_blocks} blocks, block_size={block_size}"
+        )
+
+    kv_caches = []
+    for layer_idx in range(num_layers):
+        # Paged KV cache shape: [num_blocks, num_kv_heads, block_size, head_dim]
+        # This allows dynamic allocation of blocks to sequences via page tables
+        k_cache = ttnn.as_tensor(
+            torch.zeros((num_blocks, num_kv_heads, block_size, head_dim)),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        v_cache = ttnn.as_tensor(
+            torch.zeros((num_blocks, num_kv_heads, block_size, head_dim)),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+        kv_caches.append((k_cache, v_cache))
+
+    logger.info(f"Paged KV cache initialized: {len(kv_caches)} layers")
     return kv_caches
 
 
