@@ -132,6 +132,13 @@ protected:
         // Create and launch program (note: correct argument order)
         program_ = create_traffic_generator_program(mesh_device_, worker_core, dest_node, memory_layout_);
         this->RunProgramNonblocking(mesh_device_, *program_);
+
+        log_info(
+            LogTest,
+            "Traffic generator kernel launched on device {}, core ({},{})",
+            mesh_device_->id(),
+            worker_core.x,
+            worker_core.y);
     }
 
     WorkerMemoryLayout memory_layout_{};
