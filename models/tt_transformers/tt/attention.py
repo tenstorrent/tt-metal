@@ -541,8 +541,12 @@ class Attention(LightweightModule):
         rotary_first_half, rotary_second_half = ttnn.split(
             rotary_tensor, split_size=[rotary_half_width, rotary_half_width], dim=3
         )
-        cos_first_half, cos_second_half = ttnn.split(cos_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3)
-        sin_first_half, sin_second_half = ttnn.split(sin_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3)
+        cos_first_half, cos_second_half = ttnn.split(
+            cos_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3
+        )
+        sin_first_half, sin_second_half = ttnn.split(
+            sin_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3
+        )
 
         rotary_first_half_padded = ttnn.pad(
             rotary_first_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=0.0
@@ -737,7 +741,7 @@ class Attention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
         if self._should_use_hf_rotary_width_workaround(q_heads_1QSD_pre_rot):
-            is_sharded = q_heads_1QSD_pre_rot.is_sharded()  
+            is_sharded = q_heads_1QSD_pre_rot.is_sharded()
 
             q_heads_1QSD_pre_rot_padded, q_cos_matrix, q_sin_matrix = self._pad_hf_rotary_width_to_64(
                 q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1]
