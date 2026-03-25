@@ -1736,6 +1736,7 @@ class Molmo2Generator:
         hidden_states_ttnn: ttnn.Tensor,
         trace_tensors: dict,
         use_trace: bool,
+        page_table: Optional[ttnn.Tensor] = None,
     ):
         """Run prefill warm-up (compile) pass."""
         logger.info("Running prefill warm-up (compile)...")
@@ -1748,14 +1749,14 @@ class Molmo2Generator:
             # Run forward to compile - MUST pass kv_caches to compile fill_cache ops
             # Also pass page_table to compile paged attention ops
             rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
-            page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
+            effective_page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
             logits, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
                 start_pos=0,
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Pass KV cache to compile fill_cache
                 rot_mats=rot_mats,
-                page_table=page_table,  # Compile paged attention ops
+                page_table=effective_page_table,  # Compile paged attention ops
             )
         else:
             logits, _ = self.model.text_model.forward(
@@ -1763,6 +1764,7 @@ class Molmo2Generator:
                 start_pos=0,
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
+                page_table=page_table,  # Pass page_table for paged attention
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -1774,6 +1776,7 @@ class Molmo2Generator:
         hidden_states: ttnn.Tensor,
         trace_tensors: dict,
         use_trace: bool,
+        page_table: Optional[ttnn.Tensor] = None,
     ):
         """Run decode warm-up (compile) pass."""
         logger.info("Running decode warm-up (compile)...")
@@ -1783,13 +1786,13 @@ class Molmo2Generator:
             ttnn.copy(hidden_states, trace_tensors["hidden_states"])
 
             rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
-            page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
+            effective_page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
             logits = self.model.text_model.forward_decode(
                 hidden_states=trace_tensors["hidden_states"],
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
                 rot_mats=rot_mats,
-                page_table=page_table,  # Compile paged attention ops
+                page_table=effective_page_table,  # Compile paged attention ops
             )
         else:
             logits = self.model.text_model.forward_decode(
@@ -1797,6 +1800,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,
                 current_pos=self.current_pos,
                 rot_mat_idxs=self.rot_mat_idxs,
+                page_table=page_table,  # Pass page_table for paged attention
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -1974,7 +1978,9 @@ class Molmo2Generator:
             ttnn.deallocate(hidden_states_ttnn)
         else:
             # Warm-up (compile)
-            timing["compile_prefill_ms"] = self.warmup_prefill(hidden_states_ttnn, None, use_trace=False)
+            timing["compile_prefill_ms"] = self.warmup_prefill(
+                hidden_states_ttnn, None, use_trace=False, page_table=effective_page_table
+            )
 
             # Actual prefill (TTFT) - pass KV cache to fill during forward
             ttft_start = time.perf_counter()
@@ -2054,7 +2060,7 @@ class Molmo2Generator:
             decode_time = (time.perf_counter() - start_time) * 1000
         else:
             if is_first:
-                compile_time = self.warmup_decode(hidden_states, None, use_trace=False)
+                compile_time = self.warmup_decode(hidden_states, None, use_trace=False, page_table=effective_page_table)
 
             start_time = time.perf_counter()
             logits = self.model.text_model.forward_decode(
@@ -2510,6 +2516,7 @@ def run_demo(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
+    use_paged_attention: bool = False,
 ):
     """
     Run the Molmo2 demo.
@@ -2565,6 +2572,7 @@ def run_demo(
             num_layers=text_num_layers,
             batch_size=1,
             max_seq_len=max_seq_len,
+            use_paged_attention=use_paged_attention,
         )
 
         # Run inference
@@ -2695,6 +2703,11 @@ def main():
         action="store_true",
         help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
+    parser.add_argument(
+        "--paged-attention",
+        action="store_true",
+        help="Enable paged attention (for testing vLLM compatibility)",
+    )
 
     args = parser.parse_args()
 
@@ -2729,6 +2742,7 @@ def main():
             use_decode_trace=args.use_decode_trace,
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
+            use_paged_attention=args.paged_attention,
         )
 
 
