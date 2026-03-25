@@ -86,6 +86,7 @@ void kernel_main() {
 
     // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        // cb tile index
         constexpr uint32_t tile_index = 0;
 
         cb_batch_mean_obj.wait_front(onetile);
@@ -160,6 +161,7 @@ void kernel_main() {
 
             tile_regs_wait();
             pack_tile_with_dt(tile_index * 2, cb_updated_running_mean);
+            // For the output tensor, return the same values as either of the stats.
             if constexpr (!old_running_var_has_value) {
                 pack_tile_with_dt(tile_index * 2, cb_out0);
             }

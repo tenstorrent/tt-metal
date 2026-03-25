@@ -177,15 +177,11 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::normalization::BatchNormOperation;
 
-    // Output always has the same dtype as input; params (mean/var/weight/bias) may differ.
-    DataType output_dtype = input.dtype();
-
     OperationType::operation_attributes_t operation_attributes{
         eps,
         memory_config.value_or(input.memory_config()),
         ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
-        input.dtype(),
-        output_dtype};
+        input.dtype()};
     OperationType::tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
