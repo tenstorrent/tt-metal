@@ -21,15 +21,13 @@ void kernel_main() {
     const auto accessor_src = TensorAccessor(src_args, src_addr);
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
-
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_dst.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); page_iter++) {
             auto output_page_id = page_iter->page_id();
-            cb_wait_front(cb_id_in0, 1);
+            cb_reserve_back(cb_id_in0, 1);
             const uint64_t src_page_noc_addr = accessor_src.get_noc_addr(output_page_id);
             uint32_t output_page_write_addr = get_write_ptr(cb_id_in0);
-
             noc_async_read(src_page_noc_addr, output_page_write_addr, tile_size_bytes);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, 1);

@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<3>();
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in16);
-
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_dst.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); page_iter++) {
