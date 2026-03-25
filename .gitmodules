@@ -16,5 +16,5 @@
 	branch = main
 [submodule "tt_metal/third_party/tt-agents"]
 	path = tt_metal/third_party/tt-agents
-	url = https://github.com/dstoiljkovicTT/tt-agents.git
+	url = https://github.com/tenstorrent/tt_ops_code_gen.git
 	branch = main
