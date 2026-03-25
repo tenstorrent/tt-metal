@@ -115,18 +115,26 @@ class LTXCausalConv3d(Module):
         if "conv.bias" in state:
             state["bias"] = state.pop("conv.bias")
 
-        if "weight" in state and "bias" in state:
+        if "weight" in state:
             weight = state["weight"]
-            bias = state["bias"]
+            bias = state.get("bias")
 
             # Pad out_channels if needed
             if self.out_channels != self.unpadded_out_channels:
                 weight = torch.nn.functional.pad(
                     weight, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels - self.unpadded_out_channels)
                 )
-                bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
+                if bias is not None:
+                    bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
-            state["weight"], state["bias"] = ttnn.experimental.prepare_conv3d_weights(weight, bias, self.conv_config)
+            # New API: prepare weights via ttnn tensor + C_in_block
+            weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
+            prepared = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            )
+            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         """
