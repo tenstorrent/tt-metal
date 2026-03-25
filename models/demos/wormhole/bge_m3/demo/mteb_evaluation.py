@@ -29,6 +29,8 @@ QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 DEFAULT_MODEL_NAME = "BAAI/bge-m3"
 DEFAULT_SEQUENCE_LENGTH = 8192
 DEFAULT_PER_CHIP_BATCH_SIZES = (8, 16, 32)
+# Temporarily disable HF reference evaluation so this script can be used for TT-only device testing.
+ENABLE_HF_REFERENCE = False
 DATASET_URL_FALLBACKS = {
     "mteb/arguana": {
         "test": {
@@ -371,12 +373,6 @@ def _evaluate_retrieval_batch(
     )
     assert model_args is not None
 
-    ref_query_embeddings = _encode_dense_hf(
-        queries, host_batch_size, model_args, backbone, desc=f"HF queries bs={host_batch_size}"
-    )
-    ref_doc_embeddings = _encode_dense_hf(
-        documents, host_batch_size, model_args, backbone, desc=f"HF docs bs={host_batch_size}"
-    )
     ttnn_query_embeddings = _encode_dense_ttnn(
         queries, host_batch_size, model_args, generator_model, desc=f"TTNN queries bs={host_batch_size}"
     )
@@ -384,32 +380,51 @@ def _evaluate_retrieval_batch(
         documents, host_batch_size, model_args, generator_model, desc=f"TTNN docs bs={host_batch_size}"
     )
 
-    ref_similarities = torch.mm(
-        _normalize_embeddings(ref_query_embeddings), _normalize_embeddings(ref_doc_embeddings).t()
-    ).numpy()
     ttnn_similarities = torch.mm(
         _normalize_embeddings(ttnn_query_embeddings), _normalize_embeddings(ttnn_doc_embeddings).t()
     ).numpy()
 
-    result = {
-        "per_chip_batch_size": per_chip_batch_size,
-        "host_batch_size": host_batch_size,
-        "pytorch": {
+    if ENABLE_HF_REFERENCE:
+        ref_query_embeddings = _encode_dense_hf(
+            queries, host_batch_size, model_args, backbone, desc=f"HF queries bs={host_batch_size}"
+        )
+        ref_doc_embeddings = _encode_dense_hf(
+            documents, host_batch_size, model_args, backbone, desc=f"HF docs bs={host_batch_size}"
+        )
+        ref_similarities = torch.mm(
+            _normalize_embeddings(ref_query_embeddings), _normalize_embeddings(ref_doc_embeddings).t()
+        ).numpy()
+        ref_metrics = {
             "recall@10": _calculate_recall_at_k(ref_similarities, relevant_doc_ids, k=10),
             "ndcg@10": _calculate_ndcg_at_k(ref_similarities, relevant_doc_ids, k=10),
             "recall@100": _calculate_recall_at_k(ref_similarities, relevant_doc_ids, k=100),
             "ndcg@100": _calculate_ndcg_at_k(ref_similarities, relevant_doc_ids, k=100),
-        },
+        }
+        alignment = {
+            "queries": _mean_embedding_alignment(ref_query_embeddings, ttnn_query_embeddings),
+            "documents": _mean_embedding_alignment(ref_doc_embeddings, ttnn_doc_embeddings),
+        }
+    else:
+        logger.info("HF reference evaluation is disabled; running TT-only retrieval batch.")
+        ref_metrics = {
+            "recall@10": float("nan"),
+            "ndcg@10": float("nan"),
+            "recall@100": float("nan"),
+            "ndcg@100": float("nan"),
+        }
+        alignment = {"queries": float("nan"), "documents": float("nan")}
+
+    result = {
+        "per_chip_batch_size": per_chip_batch_size,
+        "host_batch_size": host_batch_size,
+        "pytorch": ref_metrics,
         "ttnn": {
             "recall@10": _calculate_recall_at_k(ttnn_similarities, relevant_doc_ids, k=10),
             "ndcg@10": _calculate_ndcg_at_k(ttnn_similarities, relevant_doc_ids, k=10),
             "recall@100": _calculate_recall_at_k(ttnn_similarities, relevant_doc_ids, k=100),
             "ndcg@100": _calculate_ndcg_at_k(ttnn_similarities, relevant_doc_ids, k=100),
         },
-        "alignment": {
-            "queries": _mean_embedding_alignment(ref_query_embeddings, ttnn_query_embeddings),
-            "documents": _mean_embedding_alignment(ref_doc_embeddings, ttnn_doc_embeddings),
-        },
+        "alignment": alignment,
     }
 
     logger.info(
@@ -464,12 +479,6 @@ def _evaluate_sts_batch(
     )
     assert model_args is not None
 
-    ref_emb1 = _encode_dense_hf(
-        sentences1, host_batch_size, model_args, backbone, desc=f"HF sentence1 bs={host_batch_size}"
-    )
-    ref_emb2 = _encode_dense_hf(
-        sentences2, host_batch_size, model_args, backbone, desc=f"HF sentence2 bs={host_batch_size}"
-    )
     ttnn_emb1 = _encode_dense_ttnn(
         sentences1, host_batch_size, model_args, generator_model, desc=f"TTNN sentence1 bs={host_batch_size}"
     )
@@ -477,21 +486,33 @@ def _evaluate_sts_batch(
         sentences2, host_batch_size, model_args, generator_model, desc=f"TTNN sentence2 bs={host_batch_size}"
     )
 
-    ref_similarities = (_normalize_embeddings(ref_emb1) * _normalize_embeddings(ref_emb2)).sum(dim=1).numpy()
     ttnn_similarities = (_normalize_embeddings(ttnn_emb1) * _normalize_embeddings(ttnn_emb2)).sum(dim=1).numpy()
 
-    ref_spearman, _ = spearmanr(ref_similarities, gold_scores)
     ttnn_spearman, _ = spearmanr(ttnn_similarities, gold_scores)
+    if ENABLE_HF_REFERENCE:
+        ref_emb1 = _encode_dense_hf(
+            sentences1, host_batch_size, model_args, backbone, desc=f"HF sentence1 bs={host_batch_size}"
+        )
+        ref_emb2 = _encode_dense_hf(
+            sentences2, host_batch_size, model_args, backbone, desc=f"HF sentence2 bs={host_batch_size}"
+        )
+        ref_similarities = (_normalize_embeddings(ref_emb1) * _normalize_embeddings(ref_emb2)).sum(dim=1).numpy()
+        ref_spearman, _ = spearmanr(ref_similarities, gold_scores)
+        alignment = {
+            "sentence1": _mean_embedding_alignment(ref_emb1, ttnn_emb1),
+            "sentence2": _mean_embedding_alignment(ref_emb2, ttnn_emb2),
+        }
+    else:
+        logger.info("HF reference evaluation is disabled; running TT-only STS batch.")
+        ref_spearman = float("nan")
+        alignment = {"sentence1": float("nan"), "sentence2": float("nan")}
 
     result = {
         "per_chip_batch_size": per_chip_batch_size,
         "host_batch_size": host_batch_size,
         "pytorch": {"spearman": float(ref_spearman)},
         "ttnn": {"spearman": float(ttnn_spearman)},
-        "alignment": {
-            "sentence1": _mean_embedding_alignment(ref_emb1, ttnn_emb1),
-            "sentence2": _mean_embedding_alignment(ref_emb2, ttnn_emb2),
-        },
+        "alignment": alignment,
     }
 
     logger.info(
@@ -523,7 +544,7 @@ def run_mteb_evaluation(
 ):
     test_dataset = _load_mteb_dataset(dataset_name, split="test", max_samples=max_samples)
     task_type = _detect_task_type(test_dataset)
-    backbone = _load_reference_backbone(model_name)
+    backbone = _load_reference_backbone(model_name) if ENABLE_HF_REFERENCE else None
 
     logger.info(
         "Running {} evaluation for {} with sequence_length={} and per-chip batch sizes {}",
