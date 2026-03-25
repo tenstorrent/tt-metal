@@ -123,7 +123,7 @@ class DecoderBlock:
         return AttentionBlock.create_semaphores(mesh_device) + MoeOp.create_semaphores(mesh_device)
 
     @staticmethod
-    def op(
+    def get_program_context(
         # AttentionBlock parameters
         input_tensor_mesh,
         gamma_tensor,
@@ -195,6 +195,11 @@ class DecoderBlock:
         persistent_mode=False,
         is_torus=True,
     ):
+        """Build io_tensors and mesh_program_descriptor without executing.
+
+        Returns (io_tensors, mesh_program_descriptor, attention_block_output_tensor)
+        so callers can later run ``DecoderBlock.execute(...)`` at their convenience.
+        """
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
@@ -290,7 +295,6 @@ class DecoderBlock:
         io_tensors.append(reconfig_tensor)
         cbs_list = cb_id_manager.build_dummy_cb_descriptors(full_device_grid)
 
-        # TODO: Passing the address here as a named compile time arg is not ideal. Done for simplicity.
         additional_named_compile_time_args = [
             ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
@@ -358,11 +362,6 @@ class DecoderBlock:
                 attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
             moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
 
-            # Compute the correct bases and patch directly into moe_brisc_ct.
-            # Both worker and fabric cores start reading their moe per-core args immediately after
-            # the attn per-core args, so both bases equal attn_base. All reduce cores (worker and
-            # fabric) must have the same attn_base since attn assigns the same per-core args to
-            # every core on the device.
             if moe_per_core_brisc:
                 attn_bases = {attn_brisc_prefix_len_by_core.get((c.x, c.y), 0) for c, _ in moe_per_core_brisc}
                 assert (
@@ -551,5 +550,31 @@ class DecoderBlock:
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
+
+        return io_tensors, mesh_program_descriptor, attention_block_output_tensor
+
+    @staticmethod
+    def execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor):
+        """Run a previously built decoder block program.
+
+        Args:
+            io_tensors: List of IO tensors from ``get_program_context``.
+            mesh_program_descriptor: MeshProgramDescriptor from ``get_program_context``.
+            attention_block_output_tensor: The attention output tensor from ``get_program_context``.
+
+        Returns:
+            Tuple of (moe_result, attention_block_output_tensor).
+        """
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result, attention_block_output_tensor
+
+    @staticmethod
+    def op(*args, **kwargs):
+        """Convenience wrapper: builds the program and executes it immediately.
+
+        Accepts the same arguments as ``get_program_context``.
+        """
+        io_tensors, mesh_program_descriptor, attention_block_output_tensor = DecoderBlock.get_program_context(
+            *args, **kwargs
+        )
+        return DecoderBlock.execute(io_tensors, mesh_program_descriptor, attention_block_output_tensor)
