@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from bug_checker.github_client import _truncate_diff, check_prerequisites, diff_file_paths, diff_line_numbers
+from bug_checker.github_client import (
+    _truncate_diff,
+    check_prerequisites,
+    diff_file_paths,
+    diff_line_numbers,
+)
 
 
 DIFF_SINGLE_HUNK = """\
@@ -166,7 +171,9 @@ def test_truncate_diff_identifies_cut_files():
     from bug_checker.github_client import MAX_DIFF_LINES
 
     # file_a alone exceeds MAX_DIFF_LINES, so file_b's header falls after the cutoff
-    diff = _make_diff_for_files(["file_a.cpp", "file_b.cpp"], lines_per_file=MAX_DIFF_LINES)
+    diff = _make_diff_for_files(
+        ["file_a.cpp", "file_b.cpp"], lines_per_file=MAX_DIFF_LINES
+    )
     result_diff, truncated = _truncate_diff(diff, ["file_a.cpp", "file_b.cpp"])
     assert "file_b.cpp" in truncated
     assert "file_a.cpp" not in truncated

@@ -43,7 +43,12 @@ def test_build_findings_multiple():
     s = _session()
     tool_input = {
         "findings": [
-            {"file": "a.cpp", "line": 10, "message": "First issue", "suggested_fix": "auto x = 1;"},
+            {
+                "file": "a.cpp",
+                "line": 10,
+                "message": "First issue",
+                "suggested_fix": "auto x = 1;",
+            },
             {"file": "b.cpp", "line": 20, "message": "Second issue"},
         ]
     }
@@ -58,7 +63,11 @@ def test_build_findings_multiple():
 def test_build_findings_suggested_fix_empty_string_normalized():
     # Empty string suggested_fix should be normalized to None
     s = _session()
-    tool_input = {"findings": [{"file": "a.cpp", "line": 1, "message": "Bug", "suggested_fix": ""}]}
+    tool_input = {
+        "findings": [
+            {"file": "a.cpp", "line": 1, "message": "Bug", "suggested_fix": ""}
+        ]
+    }
     findings = s._build_findings(tool_input, "rule-1", "blocking")
     assert findings[0].suggested_fix is None
 

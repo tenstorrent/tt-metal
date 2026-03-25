@@ -19,7 +19,9 @@ if "bug_checker" not in sys.modules:
     for submod_name in ("rules", "llm", "github_client", "output", "orchestrator"):
         submod_path = _pkg_dir / f"{submod_name}.py"
         if submod_path.exists():
-            sub_spec = importlib.util.spec_from_file_location(f"bug_checker.{submod_name}", submod_path)
+            sub_spec = importlib.util.spec_from_file_location(
+                f"bug_checker.{submod_name}", submod_path
+            )
             sub_mod = importlib.util.module_from_spec(sub_spec)
             sys.modules[f"bug_checker.{submod_name}"] = sub_mod
             sub_spec.loader.exec_module(sub_mod)

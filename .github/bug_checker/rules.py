@@ -28,7 +28,9 @@ class Rule:
     labels: list[str] = field(default_factory=list)
     content: str = ""
 
-    def match_reason(self, changed_files: list[str], pr_labels: list[str]) -> str | None:
+    def match_reason(
+        self, changed_files: list[str], pr_labels: list[str]
+    ) -> str | None:
         """Return a human-readable reason this rule matched, or None if it did not.
 
         Checks path globs first, then PR labels. Returns the first match found.
@@ -84,7 +86,9 @@ def load_rules() -> list[Rule]:
     return rules
 
 
-def select_rules(rules: list[Rule], changed_files: list[str], pr_labels: list[str]) -> list[Rule]:
+def select_rules(
+    rules: list[Rule], changed_files: list[str], pr_labels: list[str]
+) -> list[Rule]:
     """Filter rules to only those that match the PR, logging the reason for each match."""
     selected = []
     for rule in rules:

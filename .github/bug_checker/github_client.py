@@ -52,14 +52,18 @@ def _check_gh() -> None:
     result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            "The 'gh' CLI is not authenticated. " "Run 'gh auth login' to authenticate before using --pr."
+            "The 'gh' CLI is not authenticated. "
+            "Run 'gh auth login' to authenticate before using --pr."
         )
 
 
 def _check_git() -> None:
     result = subprocess.run(["git", "--version"], capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError("git is not installed or not on PATH. " "Install git and ensure it is on your PATH.")
+        raise RuntimeError(
+            "git is not installed or not on PATH. "
+            "Install git and ensure it is on your PATH."
+        )
 
 
 def _gh(*args: str, input_data: str | None = None) -> str:
@@ -217,7 +221,10 @@ def _truncate_diff(diff: str, changed_files: list[str]) -> tuple[str, list[str]]
     if len(lines) <= MAX_DIFF_LINES:
         return diff, []
 
-    truncated = "\n".join(lines[:MAX_DIFF_LINES]) + "\n\n# [diff truncated — too large for full analysis]"
+    truncated = (
+        "\n".join(lines[:MAX_DIFF_LINES])
+        + "\n\n# [diff truncated — too large for full analysis]"
+    )
     files_in_truncated = diff_file_paths(truncated)
     truncated_files = [f for f in changed_files if f not in files_in_truncated]
     return truncated, truncated_files

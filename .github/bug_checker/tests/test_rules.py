@@ -110,8 +110,22 @@ def test_select_rules_by_label():
 
 def test_group_rules_isolated():
     rules = [
-        Rule(id="a", file="a.md", severity="warning", suggest_fix=False, model=None, group=None),
-        Rule(id="b", file="b.md", severity="warning", suggest_fix=False, model=None, group=None),
+        Rule(
+            id="a",
+            file="a.md",
+            severity="warning",
+            suggest_fix=False,
+            model=None,
+            group=None,
+        ),
+        Rule(
+            id="b",
+            file="b.md",
+            severity="warning",
+            suggest_fix=False,
+            model=None,
+            group=None,
+        ),
     ]
     groups = group_rules(rules)
     assert len(groups) == 2
@@ -120,9 +134,30 @@ def test_group_rules_isolated():
 
 def test_group_rules_grouped():
     rules = [
-        Rule(id="a", file="a.md", severity="warning", suggest_fix=False, model=None, group="grp"),
-        Rule(id="b", file="b.md", severity="warning", suggest_fix=False, model=None, group="grp"),
-        Rule(id="c", file="c.md", severity="warning", suggest_fix=False, model=None, group=None),
+        Rule(
+            id="a",
+            file="a.md",
+            severity="warning",
+            suggest_fix=False,
+            model=None,
+            group="grp",
+        ),
+        Rule(
+            id="b",
+            file="b.md",
+            severity="warning",
+            suggest_fix=False,
+            model=None,
+            group="grp",
+        ),
+        Rule(
+            id="c",
+            file="c.md",
+            severity="warning",
+            suggest_fix=False,
+            model=None,
+            group=None,
+        ),
     ]
     groups = group_rules(rules)
     assert len(groups) == 2

@@ -10,7 +10,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from bug_checker.github_client import check_prerequisites, fetch_branch_diff, fetch_pr_info
+from bug_checker.github_client import (
+    check_prerequisites,
+    fetch_branch_diff,
+    fetch_pr_info,
+)
 from bug_checker.logger import set_verbose
 from bug_checker.orchestrator import run_bug_check
 

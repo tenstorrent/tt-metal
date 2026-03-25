@@ -93,7 +93,9 @@ def test_format_summary_comment_with_failures():
 
 
 def test_format_summary_comment_with_skipped_rules():
-    summary = format_summary_comment([], skipped_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"])
+    summary = format_summary_comment(
+        [], skipped_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"]
+    )
     assert "2 rule(s) were skipped" in summary
     assert "`ccl-ring-buffer-mismatch`" in summary
     assert "`reshape-dim-check`" in summary

@@ -83,10 +83,16 @@ class LLMSession:
             self.model = os.environ.get("BUG_CHECKER_MODEL", DEFAULT_MODEL)
         if self._client is None:
             if anthropic is None:
-                raise ImportError("The 'anthropic' package is required. Install it with: pip install anthropic")
-            api_key = os.environ.get("BUG_CHECKER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+                raise ImportError(
+                    "The 'anthropic' package is required. Install it with: pip install anthropic"
+                )
+            api_key = os.environ.get("BUG_CHECKER_API_KEY") or os.environ.get(
+                "ANTHROPIC_API_KEY"
+            )
             if not api_key:
-                raise ValueError("Set BUG_CHECKER_API_KEY or ANTHROPIC_API_KEY environment variable")
+                raise ValueError(
+                    "Set BUG_CHECKER_API_KEY or ANTHROPIC_API_KEY environment variable"
+                )
             self._client = anthropic.Anthropic(api_key=api_key)
 
     def analyze_rule(
@@ -103,7 +109,9 @@ class LLMSession:
         Each call is independent — no state is shared with previous calls.
         """
         system_prompt = self._build_system_prompt()
-        user_message = self._build_user_message(rule_content, rule_id, severity, suggest_fix, diff, context_files)
+        user_message = self._build_user_message(
+            rule_content, rule_id, severity, suggest_fix, diff, context_files
+        )
 
         response = self._client.messages.create(
             model=self.model,
@@ -115,9 +123,13 @@ class LLMSession:
             tool_choice={"type": "tool", "name": "report_findings"},
         )
 
-        tool_use_block = next((b for b in response.content if b.type == "tool_use"), None)
+        tool_use_block = next(
+            (b for b in response.content if b.type == "tool_use"), None
+        )
         if tool_use_block is None:
-            logger.warning(f"Rule {rule_id}: expected tool_use response, got none — skipping")
+            logger.warning(
+                f"Rule {rule_id}: expected tool_use response, got none — skipping"
+            )
             return []
 
         return self._build_findings(tool_use_block.input, rule_id, severity)
@@ -152,13 +164,19 @@ class LLMSession:
                 parts.append(f"### {path}\n```\n{content}\n```\n")
 
         if suggest_fix:
-            parts.append("\nPlease include a suggested_fix for each finding. Show the corrected code snippet.\n")
+            parts.append(
+                "\nPlease include a suggested_fix for each finding. Show the corrected code snippet.\n"
+            )
         else:
-            parts.append("\nDo NOT include suggested fixes. Leave suggested_fix null.\n")
+            parts.append(
+                "\nDo NOT include suggested fixes. Leave suggested_fix null.\n"
+            )
 
         return "\n".join(parts)
 
-    def _build_findings(self, tool_input: dict, rule_id: str, severity: str) -> list[Finding]:
+    def _build_findings(
+        self, tool_input: dict, rule_id: str, severity: str
+    ) -> list[Finding]:
         """Build Finding objects from a validated tool use input dict."""
         findings = []
         for item in tool_input.get("findings", []):

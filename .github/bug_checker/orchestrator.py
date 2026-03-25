@@ -41,7 +41,10 @@ def run_bug_check(
         print_findings([])
         return []
 
-    logger.info(f"Matched {len(matched_rules)} rule(s): " f"{', '.join(r.id for r in matched_rules)}")
+    logger.info(
+        f"Matched {len(matched_rules)} rule(s): "
+        f"{', '.join(r.id for r in matched_rules)}"
+    )
 
     all_findings: list[Finding] = []
     rules_used: list[str] = []
@@ -52,9 +55,13 @@ def run_bug_check(
     for rule in matched_rules:
         rules_used.append(rule.id)
         try:
-            filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
+            filtered_diff = _filter_diff_for_rule(
+                pr_info.diff, pr_info.changed_files, rule
+            )
             if not filtered_diff:
-                matched_truncated = {f for f in pr_info.changed_files if rule.matches_pr([f], [])} & truncated_file_set
+                matched_truncated = {
+                    f for f in pr_info.changed_files if rule.matches_pr([f], [])
+                } & truncated_file_set
                 if matched_truncated:
                     truncated_rules.append(rule.id)
                     logger.warning(
@@ -62,7 +69,9 @@ def run_bug_check(
                         f"analysis skipped: {', '.join(sorted(matched_truncated))}"
                     )
                 else:
-                    logger.info(f"Rule {rule.id}: no matching diff sections — skipping LLM call")
+                    logger.info(
+                        f"Rule {rule.id}: no matching diff sections — skipping LLM call"
+                    )
                 continue
             session = LLMSession(model=rule.model or "")
             findings = session.analyze_rule(
@@ -99,7 +108,9 @@ def run_bug_check(
 
     # Output: PR comments
     if post_comments:
-        _post_findings_as_comments(pr_info, all_findings, skipped_rules, truncated_rules)
+        _post_findings_as_comments(
+            pr_info, all_findings, skipped_rules, truncated_rules
+        )
 
     return all_findings
 
@@ -172,14 +183,21 @@ def _post_findings_as_comments(
                 general_posted += 1
         except Exception as e:
             failed += 1
-            logger.warning(f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
+            logger.warning(
+                f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}"
+            )
 
-    logger.info(f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed")
+    logger.info(
+        f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed"
+    )
 
     # Post summary comment
     try:
         summary = format_summary_comment(
-            findings, comment_failures=failed, skipped_rules=skipped_rules, truncated_rules=truncated_rules
+            findings,
+            comment_failures=failed,
+            skipped_rules=skipped_rules,
+            truncated_rules=truncated_rules,
         )
         post_pr_comment(pr_number=pr_info.number, body=summary)
     except Exception as e:
