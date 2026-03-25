@@ -171,6 +171,27 @@ class VectorExportSource(VectorSource):
                 )
                 return None
 
+            # Validate that card_count is present and usable. Downstream filtering
+            # assumes this is known; if it is missing or invalid, disable
+            # machine-based filtering by returning None.
+            card_count = machine_info.get("card_count")
+            if not isinstance(card_count, int) or card_count <= 0:
+                logger.warning(
+                    f"get_machine_info() returned invalid card_count='{card_count}' "
+                    f"— ignoring machine info to avoid incorrect hardware filtering."
+                )
+                return None
+
+            # Optionally sanity-check device_count if provided: if present but
+            # invalid, treat machine info as unusable.
+            if "device_count" in machine_info:
+                device_count = machine_info.get("device_count")
+                if not isinstance(device_count, int) or device_count <= 0:
+                    logger.warning(
+                        f"get_machine_info() returned invalid device_count='{device_count}' "
+                        f"— ignoring machine info to avoid incorrect hardware filtering."
+                    )
+                    return None
             logger.debug(f"Successfully retrieved machine info: {machine_info}")
             return machine_info
         except Exception as e:
