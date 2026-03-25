@@ -313,7 +313,7 @@ def get_gate_outputs(
     logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
     logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
     logger.debug(f"  cum_sum.shape={cum_sum.shape}")
-    return expert_offsets, expert_token_counts, cum_sum
+    return expert_offsets, expert_token_counts, cum_sum, expert_counter
 
 
 def compute_constants(
