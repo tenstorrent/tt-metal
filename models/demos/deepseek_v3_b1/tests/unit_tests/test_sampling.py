@@ -738,11 +738,16 @@ def _run_sampling_topk_mesh(
 
     logger.info(f"Sampling top-K mesh test passed. seed={seed}, k={k}, " f"selected={result_idx}, rand={rand_value}")
 
+def create_fabric_router_config(max_payload_size):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
 
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+    "fabric_router_config": create_fabric_router_config(15232),}],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
@@ -755,7 +760,7 @@ def _run_sampling_topk_mesh(
     ],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
+def test_sampling_topk_mesh_4x2_axis_x(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
     """
     Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
 
@@ -763,8 +768,16 @@ def test_sampling_topk_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fina
     before the final device runs softmax + top-P + random selection.
     Scores are rigged so 32 global winners are spread across devices.
     """
+    mesh_rows, mesh_cols = 4, 2
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    logger.debug(f"Testing sampling top-K mesh: seed={seed}, k=32, p={p}, temperature={temperature}, "
+                 f"final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}")
     _run_sampling_topk_mesh(
-        mesh_device,
+        submesh,
         seed=seed,
         k=32,
         p=p,
