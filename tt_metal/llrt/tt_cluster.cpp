@@ -378,15 +378,14 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
-        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        auto grouped_chips = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
-        uint32_t max_chips_per_mmio = 0;
-        for (const auto& [mmio_device_id, chips] : grouped_chips) {
-            max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
-        }
+        // auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        // auto grouped_chips = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
+        // uint32_t max_chips_per_mmio = 0;
+        // for (const auto& [mmio_device_id, chips] : grouped_chips) {
+        //     max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
+        // }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
-            .sdesc_path = sdesc_path,
+            .num_host_mem_ch_per_mmio_device = 1,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
