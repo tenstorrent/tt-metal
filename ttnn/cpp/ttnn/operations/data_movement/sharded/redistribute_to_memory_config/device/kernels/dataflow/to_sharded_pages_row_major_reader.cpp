@@ -96,7 +96,6 @@ void kernel_main() {
             const auto input_first_page_bytes = input_page_read_info.input_first_page_bytes;
             const auto input_last_page_id = input_page_read_info.input_last_page_id;
             const auto input_last_page_bytes = input_page_read_info.input_last_page_bytes;
-            const auto output_page_valid_data_bytes = input_page_read_info.output_page_valid_data_bytes;
             cb_reserve_back(cb_id_in1, 1);
             uint32_t l1_output_page_write_addr = get_write_ptr(cb_id_in1);
 
