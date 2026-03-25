@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t fill_cb_index = get_compile_time_arg_val(7);
     constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
     constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t batch_size = get_compile_time_arg_val(10);
+    constexpr uint32_t burst_size = get_compile_time_arg_val(10);
 
     constexpr auto src_args = TensorAccessorArgs<11>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes_unaligned);
@@ -50,12 +50,12 @@ void kernel_main() {
     }
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
-        uint32_t sticks_this_batch =
-            (num_sticks - local_stick_idx) < batch_size ? (num_sticks - local_stick_idx) : batch_size;
-        cb_reserve_back(output_cb_index, sticks_this_batch);
+        uint32_t sticks_this_burst =
+            (num_sticks - local_stick_idx) < burst_size ? (num_sticks - local_stick_idx) : burst_size;
+        cb_reserve_back(output_cb_index, sticks_this_burst);
         uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
-        for (uint32_t i = 0; i < sticks_this_batch; i++, local_stick_idx++) {
+        for (uint32_t i = 0; i < sticks_this_burst; i++, local_stick_idx++) {
             const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
 
             const uint32_t batch_idx = global_stick_idx / (input_height * input_width);
@@ -91,6 +91,6 @@ void kernel_main() {
         }
 
         noc_async_read_barrier();
-        cb_push_back(output_cb_index, sticks_this_batch);
+        cb_push_back(output_cb_index, sticks_this_burst);
     }
 }
