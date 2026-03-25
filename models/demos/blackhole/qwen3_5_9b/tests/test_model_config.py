@@ -2,7 +2,7 @@
 """Tests for Qwen3.5-9B model config loading."""
 import pytest
 
-CHECKPOINT_DIR = "/localdev/atupe/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2"
+CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 
 
 class TestQwen35ModelArgs:
