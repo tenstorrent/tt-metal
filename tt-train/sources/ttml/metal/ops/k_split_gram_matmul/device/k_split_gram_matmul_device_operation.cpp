@@ -35,10 +35,6 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K_tiles % 2 == 0, "K dimension ({} tiles) must be even for K-split", K_tiles);
 }
 
-void KSplitGramMatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {
-}
-
 KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
