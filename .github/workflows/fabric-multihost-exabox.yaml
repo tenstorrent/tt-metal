@@ -118,6 +118,7 @@ jobs:
             bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
 
       - name: Delete environment
+        if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-reset
