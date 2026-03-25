@@ -55,12 +55,17 @@ def generate_freq_grid(
 
 
 def get_fractional_positions(indices_grid: torch.Tensor, max_pos: list[int]) -> torch.Tensor:
-    """Normalize position indices to [0, 1] by dividing by max_pos per dimension."""
-    n_pos_dims = indices_grid.shape[-1]
+    """Normalize position indices to [0, 1] by dividing by max_pos per dimension.
+
+    Args:
+        indices_grid: (B, n_dims, N) position indices after averaging start/end
+        max_pos: max position per dimension
+    """
+    n_pos_dims = indices_grid.shape[1]
     assert n_pos_dims == len(
         max_pos
     ), f"Number of position dimensions ({n_pos_dims}) must match max_pos length ({len(max_pos)})"
-    return torch.stack([indices_grid[..., i] / max_pos[i] for i in range(n_pos_dims)], dim=-1)
+    return torch.stack([indices_grid[:, i] / max_pos[i] for i in range(n_pos_dims)], dim=-1)
 
 
 def generate_freqs(
@@ -129,9 +134,6 @@ def split_freqs_cis(freqs: torch.Tensor, pad_size: int, num_attention_heads: int
     # Reshape to per-head: (B, T, H, D_half) -> (B, H, T, D_half)
     cos_freq = cos_freq.reshape(b, t, num_attention_heads, -1).swapaxes(1, 2)
     sin_freq = sin_freq.reshape(b, t, num_attention_heads, -1).swapaxes(1, 2)
-    # Repeat to full head_dim: (B, H, T, D_half) -> (B, H, T, 2*D_half)
-    cos_freq = cos_freq.repeat(1, 1, 1, 2)
-    sin_freq = sin_freq.repeat(1, 1, 1, 2)
     return cos_freq, sin_freq
 
 
@@ -167,7 +169,11 @@ def precompute_freqs_cis(
         max_pos = [20, 2048, 2048]
 
     # n_pos_dims is the number of position dimensions (e.g. 3 for temporal + H + W)
-    n_pos_dims = indices_grid.shape[-1]
+    # For 4D grids (B, n_dims, N, 2), n_pos_dims is shape[1]; for 3D (B, N, n_dims), it's shape[-1]
+    if use_middle_indices_grid and len(indices_grid.shape) == 4:
+        n_pos_dims = indices_grid.shape[1]  # (B, n_dims, N, 2)
+    else:
+        n_pos_dims = indices_grid.shape[-1]
     indices = generate_freq_grid(theta, n_pos_dims, dim)
     freqs = generate_freqs(indices, indices_grid, max_pos, use_middle_indices_grid)
 
