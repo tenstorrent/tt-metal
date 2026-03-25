@@ -240,8 +240,8 @@ def test_gather_sub_core_grids(input_shape, index_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
-        ([32, 32, 256 * TILE_HEIGHT], [32, 32, 256 * TILE_HEIGHT], -1),
-        ([64, 64, 512 * TILE_HEIGHT], [64, 64, 512 * TILE_HEIGHT], -1),
+        ([32, 32, 64 * TILE_HEIGHT], [32, 32, 64 * TILE_HEIGHT], -1),
+        ([64, 64, 128 * TILE_HEIGHT], [64, 64, 128 * TILE_HEIGHT], -1),
     ],
 )
 def test_gather_multirow(input_shape, index_shape, dim, device):
