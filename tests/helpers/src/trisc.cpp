@@ -65,6 +65,9 @@ int main(void)
     *(mailbox_base)        = ckernel::RESET_VAL;
     *(mailbox_base + 1)    = ckernel::RESET_VAL;
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
+#ifdef ARCH_QUASAR
+    *(mailbox_base + 3) = ckernel::RESET_VAL;
+#endif
     device_setup();
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
