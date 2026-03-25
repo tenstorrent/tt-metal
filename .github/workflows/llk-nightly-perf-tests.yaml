@@ -14,5 +14,4 @@ jobs:
     name: "🚀 Nightly Performance Tests"
     uses: ./.github/workflows/llk-run-perf-tests.yaml
     secrets: inherit
-    with:
 
