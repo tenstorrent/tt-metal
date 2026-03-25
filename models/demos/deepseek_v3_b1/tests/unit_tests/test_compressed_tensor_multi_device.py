@@ -32,14 +32,14 @@ def mesh_device():
 
 def _print_per_device_per_core_addresses(ct):
     """Print L1 addresses for all per-device per-core tensors."""
-    for dev_idx in range(ct._num_devices):
-        per_core = ct._multi_device_data_per_core[dev_idx]
+    for coord in ct._iter_mesh_coords():
+        per_core = ct._multi_device_data_per_core[coord]
         addrs = []
         for (cx, cy), tensor in per_core.items():
             core = ttnn.CoreCoord(cx, cy)
-            addr = ct.get_data_l1_address_per_core(core, device_idx=dev_idx)
+            addr = ct.get_data_l1_address_per_core(core, device_coord=coord)
             addrs.append(f"({cx},{cy})={addr:#x}")
-        print(f"  Device {dev_idx}: {', '.join(addrs)}")
+        print(f"  Device {coord}: {', '.join(addrs)}")
 
 
 def _div_up(a, b):
@@ -238,10 +238,10 @@ def test_per_core_per_device_data_independence(mesh_device):
     )
 
     # Each device should have its own set of per-core tensors
-    for dev_idx in range(num_devices):
-        per_core = ct._multi_device_data_per_core[dev_idx]
-        assert len(per_core) > 0, f"Device {dev_idx} has no per-core tensors"
-        print(f"Device {dev_idx}: {len(per_core)} cores with data")
+    for coord in ct._iter_mesh_coords():
+        per_core = ct._multi_device_data_per_core[coord]
+        assert len(per_core) > 0, f"Device {coord} has no per-core tensors"
+        print(f"Device {coord}: {len(per_core)} cores with data")
     _print_per_device_per_core_addresses(ct)
 
     recovered = ct.to_torch()
@@ -273,7 +273,7 @@ def test_per_core_get_data_tensors_flattens_all_devices(mesh_device):
 
     all_tensors = ct.get_data_tensors()
     # Should have tensors from all devices
-    total_cores = sum(len(ct._multi_device_data_per_core[d]) for d in range(num_devices))
+    total_cores = sum(len(pc) for pc in ct._multi_device_data_per_core.values())
     assert len(all_tensors) == total_cores, f"Expected {total_cores} tensors, got {len(all_tensors)}"
     _print_per_device_per_core_addresses(ct)
 
@@ -296,11 +296,11 @@ def test_per_core_tensors_allocated_per_device(mesh_device):
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0)]),
     )
 
-    for dev_idx in range(num_devices):
-        per_core = ct._multi_device_data_per_core[dev_idx]
-        assert len(per_core) > 0, f"Device {dev_idx} has no per-core tensors"
+    for coord in ct._iter_mesh_coords():
+        per_core = ct._multi_device_data_per_core[coord]
+        assert len(per_core) > 0, f"Device {coord} has no per-core tensors"
         for (cx, cy), tensor in per_core.items():
-            assert ttnn.is_tensor_storage_on_device(tensor), f"Device {dev_idx} core ({cx},{cy}) tensor not on device"
+            assert ttnn.is_tensor_storage_on_device(tensor), f"Device {coord} core ({cx},{cy}) tensor not on device"
     _print_per_device_per_core_addresses(ct)
 
 
@@ -361,11 +361,11 @@ def test_get_data_core_range_set_per_device(mesh_device):
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0)]),
     )
 
-    for dev_idx in range(num_devices):
-        crs = ct.get_data_core_range_set(device_idx=dev_idx)
-        print(f"Device {dev_idx} core range set: {crs}")
+    for coord in ct._iter_mesh_coords():
+        crs = ct.get_data_core_range_set(device_coord=coord)
+        print(f"Device {coord} core range set: {crs}")
         # Should have cores with data
-        assert crs.num_cores() > 0, f"Device {dev_idx} has no cores in range set"
+        assert crs.num_cores() > 0, f"Device {coord} has no cores in range set"
     _print_per_device_per_core_addresses(ct)
 
 
@@ -486,4 +486,82 @@ def test_2d_replicate_one_axis(mesh_device_2d):
     assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"2D replicate-rows shard-cols PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} too low"
+
+
+# ---------------------------------------------------------------------------
+# 4D tensor with 2D mesh tests
+# ---------------------------------------------------------------------------
+
+
+def test_4d_lockstep_shard_dim0_dim2(mesh_device_2d):
+    """4D tensor sharded along dim 0 and dim 2 across a 2x2 mesh."""
+    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
+    torch.manual_seed(42)
+    # Shape: (2*mesh_rows, 3, 64*mesh_cols, 128) → per device (2, 3, 64, 128)
+    # Per-device 2D: (2*3*64, 128) = (384, 128), tiles_h=12, tiles_w=4
+    per_dev = (2, 3, 64, 128)
+    x = torch.randn(per_dev[0] * mesh_rows, per_dev[1], per_dev[2] * mesh_cols, per_dev[3])
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    data_mem = _make_sharded_mem_config(
+        (per_dev[0] * per_dev[1] * per_dev[2], per_dev[3]),
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        grid,
+    )
+
+    ct = CompressedTensor.from_torch(
+        x,
+        assigner,
+        device=mesh_device_2d,
+        memory_config=data_mem,
+        per_core_allocation=False,
+        mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(2)]),
+    )
+
+    print(f"{ct}")
+    assert ct._num_devices == mesh_rows * mesh_cols
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D lockstep shard dim0/dim2 PCC: {pcc:.6f}")
+    assert pcc > 0.98, f"PCC {pcc:.6f} too low"
+
+
+def test_4d_per_core_shard_dim0_dim2(mesh_device_2d):
+    """4D tensor per-core sharded along dim 0 and dim 2 across a 2x2 mesh."""
+    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
+    torch.manual_seed(42)
+    per_dev = (2, 3, 64, 128)
+    x = torch.randn(per_dev[0] * mesh_rows, per_dev[1], per_dev[2] * mesh_cols, per_dev[3])
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    data_mem = _make_sharded_mem_config(
+        (per_dev[0] * per_dev[1] * per_dev[2], per_dev[3]),
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        grid,
+    )
+
+    ct = CompressedTensor.from_torch(
+        x,
+        assigner,
+        device=mesh_device_2d,
+        memory_config=data_mem,
+        per_core_allocation=True,
+        mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(2)]),
+    )
+
+    print(f"{ct}")
+    assert ct._num_devices == mesh_rows * mesh_cols
+    assert len(ct._multi_device_data_per_core) == mesh_rows * mesh_cols
+
+    recovered = ct.to_torch()
+    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
+    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
+    print(f"4D per-core shard dim0/dim2 PCC: {pcc:.6f}")
     assert pcc > 0.98, f"PCC {pcc:.6f} too low"

@@ -41,7 +41,7 @@ from .tile_utils import (
     unpack_bfp_tile,
 )
 
-# Format index → mant_bits lookup (matches COMPRESSED_FORMATS ordering)
+# Format index → tile_format lookup (matches COMPRESSED_FORMATS ordering)
 _FMT_IDX_TO_MANT_BITS = {idx: BFP_MANT_BITS[fmt] for idx, fmt in enumerate(COMPRESSED_FORMATS) if fmt in BFP_MANT_BITS}
 
 _bfp_utils = ttnn._ttnn.bfp_utils
@@ -157,7 +157,7 @@ class CompressedTensor:
     Unpacking flow (to_torch):
         Reverses the packing: reads packed bytes from device, iterates tiles in
         shard order (or flat order for non-sharded), unpacks each tile using its
-        stored mant_bits, and places it back into a float32 output tensor.
+        stored tile_format, and places it back into a float32 output tensor.
 
     Multi-device support:
         When mesh_mapper is provided and device is a multi-device mesh:
@@ -199,33 +199,26 @@ class CompressedTensor:
 
         # --- Packed data on device ---
         self.data = None  # ttnn.Tensor: uint8, packed BFP tile bytes (lockstep mode)
-        self._data_per_core = {}  # {(x,y): ttnn.Tensor} per-core mode (single device)
         self.assignment = None  # ttnn.Tensor: uint8, 2-bit packed format indices (lockstep)
-        self._assignment_per_core = {}  # {(x,y): ttnn.Tensor} per-core assignment tensors
         self.spec = None  # ttnn.TensorSpec: logical shape/dtype/layout
         self.max_shard_size = 0  # bytes per shard (max across cores, or global max for multi-device)
 
         # --- Assignment (host-side, for packing/unpacking) ---
         self._assignment_flat = None  # flat row-major int8 — indexed by page (full tensor)
-        self._tile_mant_bits = []  # mant_bits per tile, in pack order (for unpack)
-
-        # --- Shard mapping (populated by _pack_sharded) ---
-        self._shard_mapping = []  # [(CoreCoord, [page_idx, ...]), ...] from C++
-        self._core_assignment = {}  # {(x,y): int8[num_shard_pages]} format index per page on that core
         self._per_core_allocation = per_core_allocation
 
         # --- Multi-device state ---
         self._num_devices = 1
         self._mesh_mapper_config = mesh_mapper_config
         self._mesh_shape = None  # MeshShape of the mesh device
-        self._per_device_shard_mapping = []  # list of per-device shard mappings
-        self._per_device_tile_mant_bits = []  # list of per-device mant_bits lists
-        self._per_device_core_assignment = []  # list of per-device core_assignment dicts
-        self._per_device_assignment_flat = []  # list of per-device assignment arrays
+        self._per_device_shard_mapping = {}  # {MeshCoordinate: shard_mapping}
+        self._per_device_tile_formats = {}  # {MeshCoordinate: tile format list}
+        self._per_device_core_assignment = {}  # {MeshCoordinate: core_assignment dict}
+        self._per_device_assignment_flat = {}  # {MeshCoordinate: assignment array}
         self._per_device_tiles_h = 0  # tile rows per device (same for all devices)
         self._per_device_tiles_w = 0  # tile cols per device (same for all devices)
         self._per_device_shape = ()  # tensor shape per device (same for all devices)
-        # Multi-device per-core: {device_idx: {(x,y): ttnn.Tensor}}
+        # Multi-device per-core: {MeshCoordinate: {(x,y): ttnn.Tensor}}
         self._multi_device_data_per_core = {}
         self._multi_device_assignment_per_core = {}
 
@@ -273,7 +266,7 @@ class CompressedTensor:
             if self._per_core_allocation:
                 return self._unpack_multi_device_per_core()
             else:
-                return self._unpack_multi_device()
+                return self._unpack_multi_device_lock_step()
 
         if self._per_core_allocation:
             return self._unpack_per_core()
@@ -287,34 +280,27 @@ class CompressedTensor:
         """Get assignment as (tiles_h, tiles_w) numpy array."""
         return self._assignment_flat.reshape(self.tiles_h, self.tiles_w)
 
-    def get_assignment_per_shard(self, core_coord, device_idx=0) -> np.ndarray:
+    def get_assignment_per_shard(self, core_coord, device_coord=None) -> np.ndarray:
         """Get flat assignment array for a specific core's shard."""
-        if self._num_devices > 1:
-            assert device_idx < len(self._per_device_core_assignment), f"device_idx {device_idx} out of range"
-            core_key = (core_coord.x, core_coord.y)
-            return self._per_device_core_assignment[device_idx][core_key]
-        assert self.max_shard_size > 0, "Per-shard assignment only for sharded tensors"
+        device_coord = device_coord or self._default_device_coord
+        assert device_coord in self._per_device_core_assignment, f"device_coord {device_coord} not found"
         core_key = (core_coord.x, core_coord.y)
-        assert core_key in self._core_assignment, f"Core {core_coord} not found in shard grid"
-        return self._core_assignment[core_key]
+        return self._per_device_core_assignment[device_coord][core_key]
 
-    def get_data_core_range_set(self, device_idx=0):
+    def get_data_core_range_set(self, device_coord=None):
         """Return CoreRangeSet of cores that have compressed data.
 
         In per_core_allocation mode, only cores with non-zero data are included.
         In lockstep mode, returns the full shard grid.
         """
-        if self._num_devices > 1 and self._per_core_allocation:
-            per_core = self._multi_device_data_per_core.get(device_idx, {})
+        device_coord = device_coord or self._default_device_coord
+        if self._per_core_allocation:
+            per_core = self._multi_device_data_per_core.get(device_coord, {})
             cores = [ttnn.CoreCoord(x, y) for x, y in per_core.keys()]
             return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
-        if self._num_devices > 1:
-            shard_mapping = self._per_device_shard_mapping[device_idx]
+        else:
+            shard_mapping = self._per_device_shard_mapping[device_coord]
             return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _pages in shard_mapping])
-        if self._per_core_allocation:
-            cores = [ttnn.CoreCoord(x, y) for x, y in self._data_per_core.keys()]
-            return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
-        return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _pages in self._shard_mapping])
 
     def get_data_tensors(self) -> list:
         """Return data tensor(s) for use in io_tensors lists (lifetime management).
@@ -323,27 +309,25 @@ class CompressedTensor:
         In lockstep mode, returns a single-element list with self.data.
         For multi-device, flattens all per-device per-core tensors.
         """
-        if self._num_devices > 1 and self._per_core_allocation:
-            result = []
-            for dev_idx in sorted(self._multi_device_data_per_core.keys()):
-                result.extend(self._multi_device_data_per_core[dev_idx].values())
-            return result
         if self._per_core_allocation:
-            return list(self._data_per_core.values())
+            result = []
+            for coord in self._iter_mesh_coords():
+                if coord in self._multi_device_data_per_core:
+                    result.extend(self._multi_device_data_per_core[coord].values())
+            return result
         return [self.data]
 
     def get_assignment_tensors(self) -> list:
         """Return assignment tensor(s). Per-core list or single-element lockstep list."""
-        if self._num_devices > 1 and self._per_core_allocation:
+        if self._per_core_allocation and self._multi_device_assignment_per_core:
             result = []
-            for dev_idx in sorted(self._multi_device_assignment_per_core.keys()):
-                result.extend(self._multi_device_assignment_per_core[dev_idx].values())
+            for coord in self._iter_mesh_coords():
+                if coord in self._multi_device_assignment_per_core:
+                    result.extend(self._multi_device_assignment_per_core[coord].values())
             return result
-        if self._assignment_per_core:
-            return list(self._assignment_per_core.values())
         return [self.assignment] if self.assignment is not None else []
 
-    def cb_descriptor_from_compressed_tensor(self, cb_index, device_idx=0):
+    def cb_descriptor_from_compressed_tensor(self, cb_index, device_coord=None):
         """Create CB descriptor(s) for the compressed data tensor.
 
         In per_core_allocation mode, returns a list of CBDescriptors — one per core,
@@ -353,29 +337,14 @@ class CompressedTensor:
         Each CB's page_size matches its tensor's actual buffer size.
         """
         tile_32x32 = ttnn.Tile([32, 32])
+        device_coord = device_coord or self._default_device_coord
 
-        if self._num_devices > 1 and self._per_core_allocation:
-            per_core = self._multi_device_data_per_core.get(device_idx, {})
+        if self._per_core_allocation:
+            per_core = self._multi_device_data_per_core.get(device_coord, {})
             descs = []
             for core_tensor in per_core.values():
                 desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, core_tensor)
                 core_size = desc.total_size
-                desc.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=cb_index,
-                        data_format=ttnn.bfloat8_b,
-                        page_size=core_size,
-                        tile=ttnn.TileDescriptor(tile_32x32),
-                    )
-                ]
-                descs.append(desc)
-            return descs
-
-        if self._per_core_allocation:
-            descs = []
-            for core_tensor in self._data_per_core.values():
-                desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, core_tensor)
-                core_size = desc.total_size  # set by C++ from tensor.buffer()->aligned_size_per_bank()
                 desc.format_descriptors = [
                     ttnn.CBFormatDescriptor(
                         buffer_index=cb_index,
@@ -409,22 +378,18 @@ class CompressedTensor:
         assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
         return self.data.buffer_address()
 
-    def get_data_l1_address_per_core(self, core_coord, device_idx=0) -> int:
+    def get_data_l1_address_per_core(self, core_coord, device_coord=None) -> int:
         """Get L1 address for a specific core's data shard.
 
         In per_core_allocation mode, each core has its own tensor at its own address.
         In lockstep mode, falls back to the single shared address.
-        For multi-device per-core, use device_idx to select the device.
         """
-        if self._num_devices > 1 and self._per_core_allocation:
-            per_core = self._multi_device_data_per_core.get(device_idx, {})
-            key = (core_coord.x, core_coord.y)
-            assert key in per_core, f"Core {core_coord} not found in per-core data for device {device_idx}"
-            return per_core[key].per_core_buffer_address(core_coord)
+        device_coord = device_coord or self._default_device_coord
         if self._per_core_allocation:
+            per_core = self._multi_device_data_per_core.get(device_coord, {})
             key = (core_coord.x, core_coord.y)
-            assert key in self._data_per_core, f"Core {core_coord} not found in per-core data"
-            return self._data_per_core[key].buffer_address()
+            assert key in per_core, f"Core {core_coord} not found in per-core data for device {device_coord}"
+            return per_core[key].per_core_buffer_address(core_coord)
         return self.data.buffer_address()
 
     def get_assignment_l1_address(self) -> int:
@@ -433,25 +398,20 @@ class CompressedTensor:
         assert ttnn.is_tensor_storage_on_device(self.assignment), "Assignment tensor not on device"
         return self.assignment.buffer_address()
 
-    def get_assignment_l1_address_per_core(self, core_coord, device_idx=0) -> int:
+    def get_assignment_l1_address_per_core(self, core_coord, device_coord=None) -> int:
         """Get L1 address for a specific core's assignment tensor (per-core mode)."""
-        if self._num_devices > 1 and self._per_core_allocation:
-            per_core = self._multi_device_assignment_per_core.get(device_idx, {})
-            key = (core_coord.x, core_coord.y)
-            assert key in per_core, f"Core {core_coord} not found in per-core assignment for device {device_idx}"
-            return per_core[key].per_core_buffer_address(core_coord)
+        device_coord = device_coord or self._default_device_coord
+        per_core = self._multi_device_assignment_per_core.get(device_coord, {})
         key = (core_coord.x, core_coord.y)
-        assert key in self._assignment_per_core, f"Core {core_coord} not found in per-core assignment"
-        return self._assignment_per_core[key].buffer_address()
+        assert key in per_core, f"Core {core_coord} not found in per-core assignment for device {device_coord}"
+        return per_core[key].per_core_buffer_address(core_coord)
 
     @property
     def data_bytes(self) -> int:
-        if self._num_devices > 1:
-            return sum(
-                sum(bfp_tile_packed_size(mb) for mb in dev_mant_bits)
-                for dev_mant_bits in self._per_device_tile_mant_bits
-            )
-        return sum(bfp_tile_packed_size(mb) for mb in self._tile_mant_bits)
+        return sum(
+            sum(bfp_tile_packed_size(mb) for mb in dev_tile_format)
+            for dev_tile_format in self._per_device_tile_formats.values()
+        )
 
     @property
     def num_tiles(self) -> int:
@@ -489,43 +449,58 @@ class CompressedTensor:
 
         num_devices = device.get_num_devices() if mesh_mapper_config is not None and device is not None else 1
         self._num_devices = num_devices
-        if num_devices > 1:
-            self._mesh_shape = device.shape
+        self._mesh_shape = device.shape
 
         if num_devices > 1:
             self._pack_multi_device(tensor, memory_config, assignment_memory_config, device, per_core_allocation)
-            return
+        else:
+            self._pack_single_device(tensor, memory_config, assignment_memory_config, device, per_core_allocation)
 
-        # --- Single-device path (unchanged) ---
+    # ==================================================================
+    # Single-device packing
+    # ==================================================================
+
+    def _pack_single_device(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
+        """Pack data for a single device."""
+        coord0 = self._default_device_coord
         data_np = self._to_2d(tensor)
-        self._shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
-        self._core_assignment = self._build_core_assignment_from(self._shard_mapping, self._assignment_flat)
+        shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
 
-        # Pack each shard's tiles
-        shard_chunks, shard_raw_sizes = [], []
-        for _core, page_indices in self._shard_mapping:
-            packed_list, mant_list, shard_bytes = self._pack_shard_pages(data_np, page_indices)
-            shard_chunks.append(packed_list)
-            shard_raw_sizes.append(shard_bytes)
-            self._tile_mant_bits.extend(mant_list)
+        self._per_device_shard_mapping[coord0] = shard_mapping
+        self._per_device_core_assignment[coord0] = self._build_core_assignment_from(
+            shard_mapping, self._assignment_flat
+        )
+        self._per_device_assignment_flat[coord0] = self._assignment_flat
+
+        # Compress each shard's tiles
+        shard_data, shard_data_sizes = [], []
+        tile_formats = []
+        for _core, page_indices in shard_mapping:
+            tile_data_list, tile_format_list, shard_bytes = self._compress_shard(
+                data_np, page_indices, self._assignment_flat, self.tiles_w, self.tile_hw
+            )
+            shard_data.append(tile_data_list)
+            shard_data_sizes.append(shard_bytes)
+            tile_formats.extend(tile_format_list)
+        self._per_device_tile_formats[coord0] = tile_formats
 
         alignment = _get_alignment(memory_config.buffer_type)
-        self.max_shard_size = _align(max(shard_raw_sizes), alignment)
+        self.max_shard_size = _align(max(shard_data_sizes), alignment)
 
         logical_shape = ttnn.Shape(list(tensor.shape))
         self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
         if per_core_allocation:
-            self._data_per_core = self._create_per_core_tensors(
-                shard_chunks,
-                shard_raw_sizes,
+            self._multi_device_data_per_core[coord0] = self._create_per_core_tensors(
+                shard_data,
+                shard_data_sizes,
                 _bfp_utils.get_dram_alignment(),
                 memory_config,
                 device,
-                self._shard_mapping,
+                shard_mapping,
             )
         else:
-            data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, self.max_shard_size, memory_config)
+            data_torch = self._concat_shards_padded(shard_data, shard_data_sizes, self.max_shard_size, memory_config)
             data_memory_config = self._make_sharded_mem_config(memory_config, self.max_shard_size)
             self.data = ttnn.from_torch(
                 data_torch,
@@ -541,12 +516,12 @@ class CompressedTensor:
                 assignment_memory_config.is_sharded()
             ), "assignment_memory_config must be sharded when data memory_config is sharded"
             if per_core_allocation:
-                self._assignment_per_core = self._create_per_core_assignment_tensors(
+                self._multi_device_assignment_per_core[coord0] = self._create_per_core_assignment_tensors(
                     tensor.shape,
                     memory_config,
                     assignment_memory_config,
                     device,
-                    self._shard_mapping,
+                    shard_mapping,
                     self._assignment_flat,
                 )
             else:
@@ -569,16 +544,27 @@ class CompressedTensor:
     # Multi-device packing
     # ==================================================================
 
-    def _dev_idx_to_mesh_coord(self, dev_idx):
-        """Convert flat device index (row-major) to MeshCoordinate."""
+    @property
+    def _default_device_coord(self):
+        """Return MeshCoordinate with all zeros, matching mesh dimensionality."""
+        return ttnn.MeshCoordinate([0] * self._mesh_shape.dims())
+
+    def _iter_mesh_coords(self):
+        """Iterate MeshCoordinates in row-major order."""
         mesh_shape = self._mesh_shape
-        coords = []
-        remaining = dev_idx
-        for axis in reversed(range(mesh_shape.dims())):
-            coords.append(remaining % mesh_shape[axis])
-            remaining //= mesh_shape[axis]
-        coords.reverse()
-        return ttnn.MeshCoordinate(coords)
+        dims = mesh_shape.dims()
+        sizes = [mesh_shape[i] for i in range(dims)]
+
+        def _recurse(depth):
+            if depth == dims:
+                yield ()
+                return
+            for i in range(sizes[depth]):
+                for rest in _recurse(depth + 1):
+                    yield (i,) + rest
+
+        for coord_tuple in _recurse(0):
+            yield ttnn.MeshCoordinate(list(coord_tuple))
 
     def _split_per_device(self, tensor, device):
         """Split tensor and assignment into per-device slices based on mesh_mapper_config.
@@ -635,29 +621,24 @@ class CompressedTensor:
                 for rest in _iter_coords(axis_sizes[1:]):
                     yield (i,) + rest
 
-        # Build a tile-index tensor: shape matches data tensor but at tile granularity.
-        # tile_idx_nd[...] = flat tile index in the full 2D layout.
-        # Shape: (shape[0]//tile_hw, shape[1]//tile_hw, ..., shape[-1]//tile_hw)
-        # This only works if all dims are tile-aligned.
-        # For the common case (2D tensors), it's always valid.
-        # For ND tensors, we require all dims to be tile-aligned when using multi-device.
-        nd_tile_shape = tuple(s // tile_hw for s in tensor.shape)
-        total_tiles = 1
-        for s in nd_tile_shape:
-            total_tiles *= s
-        assert total_tiles == self.tiles_h * self.tiles_w, (
-            f"Multi-device requires all tensor dims to be tile-aligned (tile_hw={tile_hw}). "
-            f"Shape {tensor.shape} gives ND tiles {nd_tile_shape} = {total_tiles}, "
-            f"but 2D tiles = {self.tiles_h} * {self.tiles_w} = {self.tiles_h * self.tiles_w}"
-        )
-
-        # Create ND tile index tensor and ND assignment tensor
-        # The flat assignment maps 2D tile (tr, tc) → format. The 2D layout is row-major
-        # over the folded height. The ND tile grid folds to 2D as:
-        # tile (i0, i1, ..., i_{n-2}, i_{n-1}) → 2D tile (i0 * prod(nd[1:-1]) * ... + ..., i_{n-1})
-        # which is just the row-major flat index with the last dim as width.
-        # So assignment_flat[flat_idx] where flat_idx is the row-major ND tile index.
-        assign_nd = torch.from_numpy(self._assignment_flat.copy()).reshape(nd_tile_shape)
+        # Build assignment at element level so it can be chunked identically to the data.
+        # Assignment is (tiles_h, tiles_w) over the 2D folded layout. We expand each
+        # assignment entry to cover its tile_hw x tile_hw block, reshape to the ND tensor
+        # shape, chunk along shard dims, then re-derive the per-device 2D assignment.
+        #
+        # To avoid expanding to full element resolution (memory-heavy), we use a hybrid:
+        # repeat each assignment row tile_hw times vertically, giving shape
+        # (tiles_h * tile_hw, tiles_w) = (prod(shape[:-1]), tiles_w).
+        # Then reshape to (*shape[:-1], tiles_w) — matching the ND structure for all
+        # non-last dims at element level, last dim at tile level. This can be chunked
+        # along any shard dim: non-last dims chunk at element level (correct since each
+        # element row maps to exactly one tile row), last dim chunks at tile level.
+        tiles_w = self.tiles_w
+        assign_2d = torch.from_numpy(self._assignment_flat.copy()).reshape(self.tiles_h, tiles_w)
+        # Expand: (tiles_h, tiles_w) → (tiles_h * tile_hw, tiles_w) = (prod(shape[:-1]), tiles_w)
+        assign_expanded = assign_2d.repeat_interleave(tile_hw, dim=0)
+        # Reshape to (*shape[:-1], tiles_w)
+        assign_nd = assign_expanded.reshape(*tensor.shape[:-1], tiles_w)
 
         result = []
         for coord in _iter_coords([s for _, s in axis_info]):
@@ -667,13 +648,20 @@ class CompressedTensor:
                 if shard_dim is not None:
                     dev_t = torch.chunk(dev_t, axis_size, dim=shard_dim)[coord[axis]]
 
-            # Chunk assignment tensor with same shard dims (at tile granularity)
+            # Chunk assignment with same shard dims
+            # Non-last dims: chunk at element level (same as data)
+            # Last dim: chunk at tile level (tiles_w = shape[-1]//tile_hw)
             dev_assign = assign_nd
             for axis, (shard_dim, axis_size) in enumerate(axis_info):
                 if shard_dim is not None:
                     dev_assign = torch.chunk(dev_assign, axis_size, dim=shard_dim)[coord[axis]]
 
-            result.append((dev_t, dev_assign.contiguous().numpy().ravel().astype(np.int8)))
+            # Re-fold to per-device 2D assignment: take one row per tile_hw rows (they're identical)
+            dev_assign_2d = dev_assign.reshape(-1, dev_assign.shape[-1])[::tile_hw]
+            dev_assign_flat = dev_assign_2d.contiguous().numpy().ravel().astype(np.int8)
+
+            mesh_coord = ttnn.MeshCoordinate(list(coord))
+            result.append((mesh_coord, dev_t, dev_assign_flat))
 
         return result
 
@@ -686,7 +674,7 @@ class CompressedTensor:
         assert len(per_device_slices) == num_devices
 
         # All devices have the same per-device shape (even split)
-        per_device_shape = per_device_slices[0][0].shape
+        per_device_shape = per_device_slices[0][1].shape
 
         # Compute per-device 2D geometry
         per_device_2d_h = 1
@@ -700,37 +688,36 @@ class CompressedTensor:
         self._per_device_shape = per_device_shape
 
         # Pack each device independently
-        all_shard_chunks = []
-        all_shard_raw_sizes = []
+        all_shard_data = {}  # {MeshCoordinate: shard_data}
+        all_shard_sizes = {}  # {MeshCoordinate: shard_data_sizes}
 
-        for dev_idx in range(num_devices):
-            dev_tensor, dev_assignment = per_device_slices[dev_idx]
+        for coord, dev_tensor, dev_assignment in per_device_slices:
             dev_data_np = self._to_2d(dev_tensor)
 
             # Compute shard mapping for per-device shape
             shard_mapping = compute_shard_page_mapping(per_device_shape, memory_config, self.tile_hw)
 
             # Pack shards for this device
-            shard_chunks, shard_raw_sizes = [], []
-            tile_mant_bits = []
+            shard_data, shard_data_sizes = [], []
+            tile_formats = []
             for _core, page_indices in shard_mapping:
-                packed_list, mant_list, shard_bytes = self._pack_shard_pages_ex(
+                tile_data_list, tile_format_list, shard_bytes = self._compress_shard(
                     dev_data_np, page_indices, dev_assignment, tiles_w, self.tile_hw
                 )
-                shard_chunks.append(packed_list)
-                shard_raw_sizes.append(shard_bytes)
-                tile_mant_bits.extend(mant_list)
+                shard_data.append(tile_data_list)
+                shard_data_sizes.append(shard_bytes)
+                tile_formats.extend(tile_format_list)
 
-            all_shard_chunks.append(shard_chunks)
-            all_shard_raw_sizes.append(shard_raw_sizes)
-            self._per_device_shard_mapping.append(shard_mapping)
-            self._per_device_tile_mant_bits.append(tile_mant_bits)
-            self._per_device_core_assignment.append(self._build_core_assignment_from(shard_mapping, dev_assignment))
-            self._per_device_assignment_flat.append(dev_assignment)
+            all_shard_data[coord] = shard_data
+            all_shard_sizes[coord] = shard_data_sizes
+            self._per_device_shard_mapping[coord] = shard_mapping
+            self._per_device_tile_formats[coord] = tile_formats
+            self._per_device_core_assignment[coord] = self._build_core_assignment_from(shard_mapping, dev_assignment)
+            self._per_device_assignment_flat[coord] = dev_assignment
 
         # Global max shard size across all devices
         alignment = _get_alignment(memory_config.buffer_type)
-        global_max = max(sz for dev_sizes in all_shard_raw_sizes for sz in dev_sizes)
+        global_max = max(sz for dev_sizes in all_shard_sizes.values() for sz in dev_sizes)
         self.max_shard_size = _align(global_max, alignment)
 
         logical_shape = ttnn.Shape(list(tensor.shape))
@@ -738,15 +725,15 @@ class CompressedTensor:
 
         if per_core_allocation:
             self._pack_multi_device_per_core(
-                all_shard_chunks, all_shard_raw_sizes, memory_config, assignment_memory_config, device
+                all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
             )
         else:
-            self._pack_multi_device_lockstep(
-                all_shard_chunks, all_shard_raw_sizes, memory_config, assignment_memory_config, device
+            self._pack_multi_device_lock_step(
+                all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
             )
 
-    def _pack_multi_device_lockstep(
-        self, all_shard_chunks, all_shard_raw_sizes, memory_config, assignment_memory_config, device
+    def _pack_multi_device_lock_step(
+        self, all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
     ):
         """Create lockstep mesh tensors: pad to global max, concatenate, use ShardTensorToMesh."""
         num_devices = self._num_devices
@@ -754,9 +741,9 @@ class CompressedTensor:
 
         # Concatenate per-device padded data along dim 0
         per_device_torch = []
-        for dev_idx in range(num_devices):
+        for coord in self._iter_mesh_coords():
             dev_torch = self._concat_shards_padded(
-                all_shard_chunks[dev_idx], all_shard_raw_sizes[dev_idx], max_shard_bytes, memory_config
+                all_shard_data[coord], all_shard_sizes[coord], max_shard_bytes, memory_config
             )
             per_device_torch.append(dev_torch)
 
@@ -778,13 +765,13 @@ class CompressedTensor:
         if assignment_memory_config is not None:
             assert assignment_memory_config.is_sharded(), "assignment_memory_config must be sharded"
             per_device_assign_torch = []
-            for dev_idx in range(num_devices):
+            for coord in self._iter_mesh_coords():
                 dev_assign_torch, assign_mem = self._pack_sharded_assignment(
                     self._per_device_shape,
                     memory_config,
                     assignment_memory_config.buffer_type,
                     assignment_memory_config,
-                    self._per_device_assignment_flat[dev_idx],
+                    self._per_device_assignment_flat[coord],
                 )
                 per_device_assign_torch.append(dev_assign_torch)
 
@@ -800,24 +787,22 @@ class CompressedTensor:
             )
 
     def _pack_multi_device_per_core(
-        self, all_shard_chunks, all_shard_raw_sizes, memory_config, assignment_memory_config, device
+        self, all_shard_data, all_shard_sizes, memory_config, assignment_memory_config, device
     ):
         """Create per-device per-core tensors using to_single_device."""
-        num_devices = self._num_devices
         alignment = _bfp_utils.get_dram_alignment()
 
-        for dev_idx in range(num_devices):
-            shard_mapping = self._per_device_shard_mapping[dev_idx]
-            shard_chunks = all_shard_chunks[dev_idx]
-            shard_raw_sizes = all_shard_raw_sizes[dev_idx]
-            coord = self._dev_idx_to_mesh_coord(dev_idx)
+        for coord in self._iter_mesh_coords():
+            shard_mapping = self._per_device_shard_mapping[coord]
+            shard_data = all_shard_data[coord]
+            shard_data_sizes = all_shard_sizes[coord]
 
             per_core = {}
-            for (core, _page_indices), packed_list, raw_size in zip(shard_mapping, shard_chunks, shard_raw_sizes):
+            for (core, _page_indices), core_tile_data, raw_size in zip(shard_mapping, shard_data, shard_data_sizes):
                 if raw_size == 0:
                     continue
                 aligned_size = _align(raw_size, alignment)
-                core_bytes = list(packed_list)
+                core_bytes = list(core_tile_data)
                 pad = aligned_size - raw_size
                 if pad > 0:
                     core_bytes.append(np.zeros(pad, dtype=np.uint8))
@@ -840,15 +825,14 @@ class CompressedTensor:
                     host_tensor, device, coord, core_mem_config
                 )
 
-            self._multi_device_data_per_core[dev_idx] = per_core
+            self._multi_device_data_per_core[coord] = per_core
 
         # Assignment per-core per-device
         if assignment_memory_config is not None:
             assert assignment_memory_config.is_sharded(), "assignment_memory_config must be sharded"
-            for dev_idx in range(num_devices):
-                dev_assignment = self._per_device_assignment_flat[dev_idx]
-                shard_mapping = self._per_device_shard_mapping[dev_idx]
-                coord = self._dev_idx_to_mesh_coord(dev_idx)
+            for coord in self._iter_mesh_coords():
+                dev_assignment = self._per_device_assignment_flat[coord]
+                shard_mapping = self._per_device_shard_mapping[coord]
 
                 if assignment_memory_config is not None:
                     assign_shard_mapping = compute_shard_page_mapping(
@@ -889,25 +873,25 @@ class CompressedTensor:
                         host_tensor, device, coord, core_mem_config
                     )
 
-                self._multi_device_assignment_per_core[dev_idx] = assign_per_core
+                self._multi_device_assignment_per_core[coord] = assign_per_core
 
     # ==================================================================
     # Single-device per-core tensor creation
     # ==================================================================
 
     @staticmethod
-    def _create_per_core_tensors(shard_chunks, shard_raw_sizes, alignment, memory_config, device, shard_mapping):
+    def _create_per_core_tensors(shard_data, shard_data_sizes, alignment, memory_config, device, shard_mapping):
         """Create one single-core ttnn tensor per core with its actual compressed size.
 
         Returns {(x, y): ttnn.Tensor}.
         """
         data_per_core = {}
-        for (core, _page_indices), packed_list, raw_size in zip(shard_mapping, shard_chunks, shard_raw_sizes):
+        for (core, _page_indices), core_tile_data, raw_size in zip(shard_mapping, shard_data, shard_data_sizes):
             if raw_size == 0:
                 continue
             aligned_size = _align(raw_size, alignment)
             # Concatenate packed bytes + padding for this core
-            core_bytes = list(packed_list)
+            core_bytes = list(core_tile_data)
             pad = aligned_size - raw_size
             if pad > 0:
                 core_bytes.append(np.zeros(pad, dtype=np.uint8))
@@ -940,17 +924,17 @@ class CompressedTensor:
             shard_mapping = compute_shard_page_mapping(tensor_shape, assign_memory_config, self.tile_hw)
             mem_cfg = assign_memory_config
         else:
-            shard_mapping = self._shard_mapping
+            shard_mapping = self._per_device_shard_mapping[self._default_device_coord]
             mem_cfg = memory_config
 
-        shard_chunks, shard_raw_sizes = [], []
+        shard_data, shard_data_sizes = [], []
         for _core, page_indices in shard_mapping:
             packed = _pack_assignment(assignment_flat[list(page_indices)].astype(np.uint8))
-            shard_chunks.append([packed])
-            shard_raw_sizes.append(len(packed))
+            shard_data.append([packed])
+            shard_data_sizes.append(len(packed))
 
-        shard_bytes = _align(max(shard_raw_sizes), _get_alignment(buffer_type))
-        assign_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, shard_bytes, mem_cfg)
+        shard_bytes = _align(max(shard_data_sizes), _get_alignment(buffer_type))
+        assign_torch = self._concat_shards_padded(shard_data, shard_data_sizes, shard_bytes, mem_cfg)
         assign_config = self._make_sharded_mem_config(mem_cfg, shard_bytes)
 
         return assign_torch, assign_config
@@ -1014,42 +998,32 @@ class CompressedTensor:
         """Flatten ND tensor to 2D (all-but-last-dim folded into height)."""
         return tensor.detach().float().cpu().numpy().reshape(-1, tensor.shape[-1])
 
-    def _pack_page(self, data_2d: np.ndarray, page_idx: int) -> tuple[np.ndarray, int]:
-        """Pack a single tile by flat page index. Returns (packed_bytes, mant_bits)."""
-        return self._pack_page_ex(data_2d, page_idx, self._assignment_flat, self.tiles_w, self.tile_hw)
-
     @staticmethod
-    def _pack_page_ex(data_2d: np.ndarray, page_idx: int, assignment_flat, tiles_w, tile_hw) -> tuple[np.ndarray, int]:
-        """Pack a single tile by flat page index with explicit params. Returns (packed_bytes, mant_bits)."""
-        mant_bits = _FMT_IDX_TO_MANT_BITS[int(assignment_flat[page_idx])]
-        if mant_bits == 0:
-            return np.array([], dtype=np.uint8), mant_bits
+    def _compress_tile(data_2d: np.ndarray, page_idx: int, assignment_flat, tiles_w, tile_hw) -> tuple[np.ndarray, int]:
+        """Pack a single tile by flat page index with explicit params. Returns (packed_bytes, tile_format)."""
+        tile_format = _FMT_IDX_TO_MANT_BITS[int(assignment_flat[page_idx])]
+        if tile_format == 0:
+            return np.array([], dtype=np.uint8), tile_format
         tr = page_idx // tiles_w
         tc = page_idx % tiles_w
         tile = data_2d[
             tr * tile_hw : (tr + 1) * tile_hw,
             tc * tile_hw : (tc + 1) * tile_hw,
         ]
-        return pack_bfp_tile(tile, mant_bits), mant_bits
-
-    def _pack_shard_pages(self, data_np, page_indices):
-        """Pack all pages for one shard. Returns (packed_chunks, mant_bits_list, total_bytes)."""
-        return self._pack_shard_pages_ex(data_np, page_indices, self._assignment_flat, self.tiles_w, self.tile_hw)
+        return pack_bfp_tile(tile, tile_format), tile_format
 
     @staticmethod
-    def _pack_shard_pages_ex(data_np, page_indices, assignment_flat, tiles_w, tile_hw):
-        """Pack all pages for one shard with explicit params. Returns (packed_chunks, mant_bits_list, total_bytes)."""
-        packed_list, mant_list, total_bytes = [], [], 0
+    def _compress_shard(data_np, page_indices, assignment_flat, tiles_w, tile_hw):
+        """Compress all tiles for one shard. Returns (tile_data_list, tile_format_list, total_bytes)."""
+        tile_data_list, tile_format_list, total_bytes = [], [], 0
         for page_idx in page_indices:
-            packed, mant_bits = CompressedTensor._pack_page_ex(data_np, page_idx, assignment_flat, tiles_w, tile_hw)
-            packed_list.append(packed)
-            mant_list.append(mant_bits)
-            total_bytes += len(packed)
-        return packed_list, mant_list, total_bytes
-
-    def _build_core_assignment(self) -> dict[tuple[int, int], np.ndarray]:
-        """Build {(x, y): flat_assignment_array} from shard mapping."""
-        return self._build_core_assignment_from(self._shard_mapping, self._assignment_flat)
+            tile_data, tile_format = CompressedTensor._compress_tile(
+                data_np, page_idx, assignment_flat, tiles_w, tile_hw
+            )
+            tile_data_list.append(tile_data)
+            tile_format_list.append(tile_format)
+            total_bytes += len(tile_data)
+        return tile_data_list, tile_format_list, total_bytes
 
     @staticmethod
     def _build_core_assignment_from(shard_mapping, assignment_flat) -> dict[tuple[int, int], np.ndarray]:
@@ -1060,23 +1034,23 @@ class CompressedTensor:
         }
 
     @staticmethod
-    def _concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config):
+    def _concat_shards_padded(shard_data, shard_data_sizes, max_shard_bytes, memory_config):
         """Concatenate per-shard packed bytes with padding into a torch tensor.
 
-        shard_chunks has one entry per core (including empty cores).
+        shard_data has one entry per core (including empty cores).
         Tensor shape depends on layout:
           HEIGHT_SHARDED: (num_cores, shard_bytes)
           WIDTH_SHARDED:  (1, num_cores * shard_bytes)
           BLOCK_SHARDED:  (grid_h, grid_w * shard_bytes)
         """
         all_bytes = []
-        for packed_list, raw_size in zip(shard_chunks, shard_raw_sizes):
-            all_bytes.extend(packed_list)
+        for core_tile_data, raw_size in zip(shard_data, shard_data_sizes):
+            all_bytes.extend(core_tile_data)
             pad_size = max_shard_bytes - raw_size
             if pad_size > 0:
                 all_bytes.append(np.zeros(pad_size, dtype=np.uint8))
 
-        num_cores = len(shard_chunks)
+        num_cores = len(shard_data)
         layout = memory_config.memory_layout
         if layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
             shape = (1, num_cores * max_shard_bytes)
@@ -1105,29 +1079,34 @@ class CompressedTensor:
     # ==================================================================
 
     def _unpack_per_core(self):
-        """Unpack per-core tensors back to float32 torch tensor."""
+        """Unpack per-core tensors back to float32 torch tensor (single device)."""
+        coord0 = self._default_device_coord
+        data_per_core = self._multi_device_data_per_core.get(coord0, {})
+        shard_mapping = self._per_device_shard_mapping[coord0]
+        tile_formats = self._per_device_tile_formats[coord0]
+
         out = np.zeros((self.tiles_h * self.tile_hw, self.tiles_w * self.tile_hw), dtype=np.float32)
         mant_idx = 0
         tiles_w, tile_hw = self.tiles_w, self.tile_hw
 
-        for core, page_indices in self._shard_mapping:
+        for core, page_indices in shard_mapping:
             key = (core.x, core.y)
-            if key not in self._data_per_core:
+            if key not in data_per_core:
                 for _ in page_indices:
                     mant_idx += 1
                 continue
-            core_tensor = self._data_per_core[key]
+            core_tensor = data_per_core[key]
             if ttnn.is_tensor_storage_on_device(core_tensor):
                 core_tensor = ttnn.from_device(core_tensor)
             core_np = ttnn.to_torch(core_tensor).squeeze().numpy().astype(np.uint8)
 
             tile_offset = 0
             for page_idx in page_indices:
-                mant_bits = self._tile_mant_bits[mant_idx]
-                size = bfp_tile_packed_size(mant_bits)
-                if mant_bits > 0:
+                tile_format = tile_formats[mant_idx]
+                size = bfp_tile_packed_size(tile_format)
+                if tile_format > 0:
                     tr, tc = page_idx // tiles_w, page_idx % tiles_w
-                    tile = unpack_bfp_tile(core_np[tile_offset : tile_offset + size], mant_bits)
+                    tile = unpack_bfp_tile(core_np[tile_offset : tile_offset + size], tile_format)
                     out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
                 tile_offset += size
                 mant_idx += 1
@@ -1136,19 +1115,23 @@ class CompressedTensor:
 
     def _unpack_sharded(self, flat_np):
         """Unpack a sharded packed buffer (skip shard padding)."""
+        coord0 = self._default_device_coord
+        shard_mapping = self._per_device_shard_mapping[coord0]
+        tile_formats = self._per_device_tile_formats[coord0]
+
         out = np.zeros((self.tiles_h * self.tile_hw, self.tiles_w * self.tile_hw), dtype=np.float32)
         flat_np = flat_np.ravel()
         mant_idx, shard_offset = 0, 0
         tiles_w, tile_hw = self.tiles_w, self.tile_hw
 
-        for _core, page_indices in self._shard_mapping:
+        for _core, page_indices in shard_mapping:
             tile_offset = shard_offset
             for page_idx in page_indices:
-                mant_bits = self._tile_mant_bits[mant_idx]
-                size = bfp_tile_packed_size(mant_bits)
-                if mant_bits > 0:
+                tile_format = tile_formats[mant_idx]
+                size = bfp_tile_packed_size(tile_format)
+                if tile_format > 0:
                     tr, tc = page_idx // tiles_w, page_idx % tiles_w
-                    tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], mant_bits)
+                    tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], tile_format)
                     out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
                 tile_offset += size
                 mant_idx += 1
@@ -1197,12 +1180,12 @@ class CompressedTensor:
         assert len(tensors) == 1
         return tensors[0]
 
-    def _unpack_multi_device(self):
+    def _unpack_multi_device_lock_step(self):
         """Unpack lockstep multi-device mesh tensor back to full float32 tensor."""
         device_tensors = ttnn.get_device_tensors(self.data)
         per_device_results = []
 
-        for dev_idx, dev_tensor in enumerate(device_tensors):
+        for coord, dev_tensor in zip(self._iter_mesh_coords(), device_tensors):
             if ttnn.is_tensor_storage_on_device(dev_tensor):
                 dev_tensor = ttnn.from_device(dev_tensor)
             flat_np = ttnn.to_torch(dev_tensor).squeeze().numpy().astype(np.uint8)
@@ -1210,8 +1193,8 @@ class CompressedTensor:
             dev_tiles_h = self._per_device_tiles_h
             dev_tiles_w = self._per_device_tiles_w
             tile_hw = self.tile_hw
-            shard_mapping = self._per_device_shard_mapping[dev_idx]
-            tile_mant_bits = self._per_device_tile_mant_bits[dev_idx]
+            shard_mapping = self._per_device_shard_mapping[coord]
+            tile_formats = self._per_device_tile_formats[coord]
 
             out = np.zeros((dev_tiles_h * tile_hw, dev_tiles_w * tile_hw), dtype=np.float32)
             flat_np = flat_np.ravel()
@@ -1220,11 +1203,11 @@ class CompressedTensor:
             for _core, page_indices in shard_mapping:
                 tile_offset = shard_offset
                 for page_idx in page_indices:
-                    mant_bits = tile_mant_bits[mant_idx]
-                    size = bfp_tile_packed_size(mant_bits)
-                    if mant_bits > 0:
+                    tile_format = tile_formats[mant_idx]
+                    size = bfp_tile_packed_size(tile_format)
+                    if tile_format > 0:
                         tr, tc = page_idx // dev_tiles_w, page_idx % dev_tiles_w
-                        tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], mant_bits)
+                        tile = unpack_bfp_tile(flat_np[tile_offset : tile_offset + size], tile_format)
                         out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
                     tile_offset += size
                     mant_idx += 1
@@ -1238,13 +1221,13 @@ class CompressedTensor:
         """Unpack per-device per-core tensors back to full float32 tensor."""
         per_device_results = []
 
-        for dev_idx in range(self._num_devices):
+        for coord in self._iter_mesh_coords():
             dev_tiles_h = self._per_device_tiles_h
             dev_tiles_w = self._per_device_tiles_w
             tile_hw = self.tile_hw
-            shard_mapping = self._per_device_shard_mapping[dev_idx]
-            tile_mant_bits = self._per_device_tile_mant_bits[dev_idx]
-            data_per_core = self._multi_device_data_per_core.get(dev_idx, {})
+            shard_mapping = self._per_device_shard_mapping[coord]
+            tile_formats = self._per_device_tile_formats[coord]
+            data_per_core = self._multi_device_data_per_core.get(coord, {})
 
             out = np.zeros((dev_tiles_h * tile_hw, dev_tiles_w * tile_hw), dtype=np.float32)
             mant_idx = 0
@@ -1262,11 +1245,11 @@ class CompressedTensor:
 
                 tile_offset = 0
                 for page_idx in page_indices:
-                    mant_bits = tile_mant_bits[mant_idx]
-                    size = bfp_tile_packed_size(mant_bits)
-                    if mant_bits > 0:
+                    tile_format = tile_formats[mant_idx]
+                    size = bfp_tile_packed_size(tile_format)
+                    if tile_format > 0:
                         tr, tc = page_idx // dev_tiles_w, page_idx % dev_tiles_w
-                        tile = unpack_bfp_tile(core_np[tile_offset : tile_offset + size], mant_bits)
+                        tile = unpack_bfp_tile(core_np[tile_offset : tile_offset + size], tile_format)
                         out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
                     tile_offset += size
                     mant_idx += 1
