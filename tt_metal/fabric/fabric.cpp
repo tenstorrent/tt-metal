@@ -338,6 +338,85 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(Fabri
     return defines;
 }
 
+// Compute fabric connection RT args without any PD mutation.
+// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_ids,
+    const std::vector<uint32_t>& buffer_index_sem_ids) {
+    TT_FATAL(
+        teardown_sem_ids.size() == dst_nodes.size(),
+        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
+        teardown_sem_ids.size(),
+        dst_nodes.size());
+    TT_FATAL(
+        buffer_index_sem_ids.size() == dst_nodes.size(),
+        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
+        buffer_index_sem_ids.size(),
+        dst_nodes.size());
+    TT_FATAL(
+        connection_link_indices.empty() ||
+            (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
+        "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    std::vector<uint32_t> worker_args;
+
+    for (size_t i = 0; i < dst_nodes.size(); i++) {
+        const auto& dst_node = dst_nodes[i];
+
+        // Direction tag
+        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        TT_FATAL(
+            dir_opt.has_value(),
+            "Could not determine forwarding direction from src {} to first hop {}",
+            src_fabric_node_id,
+            dst_node);
+        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+
+        // ETH channel
+        uint32_t link_idx = 0;
+        if (!connection_link_indices.empty()) {
+            link_idx = (connection_link_indices.size() == 1) ? connection_link_indices[0] : connection_link_indices[i];
+        } else {
+            const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
+            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
+            link_idx = links[0];
+        }
+
+        auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
+        const auto candidate_eth_chans =
+            control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+        TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
+        const auto fabric_router_channel = candidate_eth_chans[link_idx];
+
+        // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
+        worker_args.push_back(fabric_router_channel);
+        worker_args.push_back(teardown_sem_ids[i]);
+        worker_args.push_back(buffer_index_sem_ids[i]);
+    }
+
+    // 2D metadata
+    if (fabric_context.is_2D_routing_enabled()) {
+        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+        worker_args.push_back(mesh_shape[1]);                     // ew_dim
+        worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
+        worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
+
+        for (const auto& dst_node : dst_nodes) {
+            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
+            worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
+        }
+    }
+
+    return worker_args;
+}
+
 // Core implementation of routing plane connection setup.
 // When inject_defines is false, skips adding kernel defines to the PD (caller handles them separately).
 template <typename ProgramOrDescriptor>
