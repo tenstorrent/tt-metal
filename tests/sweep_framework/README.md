@@ -1,6 +1,6 @@
 # Sweep Framework
 
-The sweep framework tests TTNN operations across large parameter spaces. It generates all permutations of input parameters, runs each one on device, and records pass/fail status, PCC accuracy, and optional performance/memory metrics.
+The sweep framework tests TTNN operations across large parameter spaces. It generates op parameters, runs ops with the associated parameters on device, and records pass/fail status, PCC accuracy, and optional performance/memory metrics.
 
 ## Quick Start
 
