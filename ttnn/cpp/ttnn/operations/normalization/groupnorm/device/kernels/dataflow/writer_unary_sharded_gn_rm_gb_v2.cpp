@@ -126,7 +126,7 @@ void kernel_main() {
                 const uint32_t scalar_w = get_arg_val<uint32_t>(1);
                 generate_reduce_scaler(cb_in_2, scalar_w);
 
-                constexpr uint32_t ones = 0x3F803F80;
+                constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
                 generate_tile_with_packed_bfloat16_values(cb_ones_id, ones);
 
                 if constexpr (is_mcast_sender) {
