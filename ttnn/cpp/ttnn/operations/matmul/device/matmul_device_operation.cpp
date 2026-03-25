@@ -181,19 +181,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             get_batch_size(b_shape) == 1,
             "The batch bcast variant of matmul requires input tensors of shapes BCMK*11KN=BCMN "
             "or equivalent. Please change the second input tensor or adjust the program config.");
-    } else {
-        // same condition as above, different message
-        TT_FATAL(
-            a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank",
-            "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
-            a_shape.rank(),
-            b_shape.rank());
-        for (auto i = 0; i < a_shape.rank() - 2; i++) {
-            TT_FATAL(
-                a_shape[i] == b_shape[i],
-                "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or equivalent");
-        }
     }
 
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
@@ -216,6 +203,56 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
+
+    // Validate batch dimensions for non-bcast matmul
+    if (!attributes.bcast_batch.value()) {
+        TT_FATAL(
+            a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank",
+            "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
+            a_shape.rank(),
+            b_shape.rank());
+
+        // Check if in0 reuse optimization can be applied
+        // This optimization keeps input A (batch=1) in L1 and reuses it across all input B batches
+        // 1. Program config requirements: must use 1D mcast with specific settings
+        // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
+        // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
+        // 4. Memory layout requirement: inputs must not be sharded
+        auto can_use_in0_reuse = [&]() {
+            if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                    chosen_program_config)) {
+                return false;
+            }
+            const auto& config =
+                std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+            if (config.fuse_batch || config.fused_activation.has_value() || config.mcast_in0) {
+                return false;
+            }
+            if (a_shape.rank() != 4 || b_shape.rank() != 4) {
+                return false;
+            }
+            if (a_shape[1] != 1) {
+                return false;
+            }
+            if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+                return false;
+            }
+            return true;
+        };
+
+        for (auto i = 0; i < a_shape.rank() - 2; i++) {
+            TT_FATAL(
+                a_shape[i] == b_shape[i] || (i == 1 && can_use_in0_reuse()),
+                "bmm (non-bcast matmul) expects input tensors of shapes "
+                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
+                "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
+                "fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 reuse "
+                "optimization)",
+                i,
+                a_shape[i],
+                b_shape[i]);
+        }
+    }
 
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
