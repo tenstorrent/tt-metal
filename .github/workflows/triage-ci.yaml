@@ -3,9 +3,13 @@ name: "(triage) Cursor CLI smoke test"
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   cursor-cli-smoke-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,11 +25,24 @@ jobs:
 
       - name: Install Cursor CLI
         run: |
-          curl https://cursor.com/install -fsS | bash
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
       - name: Run simple Cursor prompt
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          agent -p "Reply with exactly: CURSOR_CI_OK"
+          set -euo pipefail
+          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
+          echo "Agent output: $output"
+          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
+            echo "Unexpected agent output; expected CURSOR_CI_OK"
+            exit 1
+          fi
