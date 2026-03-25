@@ -9,8 +9,8 @@
 #else
 #include "experimental/circular_buffer.h"
 #endif
-#include "experimental/noc.h"
 #include "experimental/tensor.h"
+#include "experimental/noc.h"
 
 // #include "api/debug/dprint.h"
 
@@ -78,12 +78,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w++) {
             for (uint32_t h = 0; h < Ht; h++) {
 #ifdef ARCH_QUASAR
-                dfb_in.reserve_back(onetile);
-
-                noc.async_read(s, dfb_in, tile_bytes, {.page_id = i_tile}, {});
-                noc.async_read_barrier();
-
-                dfb_in.push_back(onetile);
+                dfb_in.read_in(noc, s, {.page_id = i_tile});
 #else
                 cb.reserve_back(onetile);
 

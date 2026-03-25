@@ -32,10 +32,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_tiles; i++) {
 #ifdef ARCH_QUASAR
-        dfb_out.wait_front(onetile);
-        noc.async_write(dfb_out, s, tile_bytes, {}, {.page_id = i});
-        noc.async_write_barrier();
-        dfb_out.pop_front(onetile);
+        dfb_out.write_out(noc, s, {.page_id = i});
 #else
         cb.wait_front(onetile);
         noc.async_write(cb, s, tile_bytes, {}, {.page_id = i});
@@ -43,4 +40,10 @@ void kernel_main() {
         cb.pop_front(onetile);
 #endif
     }
+#ifdef ARCH_QUASAR
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_out_id];
+    for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
+    }
+#endif
 }
