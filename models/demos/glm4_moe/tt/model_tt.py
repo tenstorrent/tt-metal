@@ -1965,16 +1965,21 @@ class Glm4MoeTT:
         logger.info("=== _capture_decode_trace: starting compile warmup ===")
         if use_intrace_main_embed:
             # In-trace embedding: ttnn.embedding(tokens_tt, embed_w) — same as trace capture.
-            x = ttnn.embedding(
-                tokens_tt, self.embed_w,
+            logger.info("  warmup: embedding (host-side for SubDevice compat)...")
+            # Host-side embedding: ttnn.embedding on large vocab (151K) dispatches to
+            # full device grid, crashing with SubDevice active. Do CPU lookup + upload.
+            tokens_host = ttnn.to_torch(tokens_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            tokens_1d = tokens_host[0].to(torch.int32).flatten()[:active]
+            embed_host = self.embed_w_cpu[tokens_1d.long()]  # [B, hidden]
+            x = ttnn.from_torch(
+                embed_host.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),  # [1,1,B,hidden]
+                device=self.device,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
             )
-            if x.layout != ttnn.TILE_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.reshape(x, (1, active, 1, hidden))
-            x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
-            x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
+            logger.info("  warmup: embed block done (host-side)")
         else:
             # Use embed_tt directly (no copy). Skip dealloc of layer 0 input in loop below.
             x = embed_tt
@@ -2173,11 +2178,13 @@ class Glm4MoeTT:
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if x.layout != ttnn.TILE_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.reshape(x, (1, active, 1, hidden))
-            x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
-            x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden])
+            # Skip to_layout — embedding already requests TILE_LAYOUT.
+            # ttnn.to_layout crashes with SubDevice (dispatches to full grid).
+            # Reshape directly to [1,1,B,D] — avoid ttnn.permute which crashes
+            # with SubDevice active (dispatches to full grid).
+            x = ttnn.reshape(x, (1, 1, active, hidden))
+            x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, hidden],
+                           sub_core_grids=_worker_scg if self.prefetcher else None)
         else:
             # Use embed_tt directly — no copy needed. The embed buffer is dedicated
             # to this trace and overwritten (via write_tensor) before each execution.
