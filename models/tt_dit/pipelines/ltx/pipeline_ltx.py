@@ -317,6 +317,21 @@ class LTXPipeline:
                 "Use load_text_encoder() + __call__() for standalone text encoding."
             ) from e
 
+        # Check embedding cache to skip expensive Gemma encoding
+        import hashlib
+        import os
+
+        cache_dir = os.environ.get("TT_DIT_CACHE_DIR", os.path.expanduser("~/.cache"))
+        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
+        os.makedirs(embed_cache_dir, exist_ok=True)
+
+        cache_key = hashlib.md5("||".join(prompts).encode()).hexdigest()
+        cache_path = os.path.join(embed_cache_dir, f"{cache_key}.pt")
+
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached embeddings from {cache_path}")
+            return torch.load(cache_path, weights_only=False)
+
         ledger = ModelLedger(
             dtype=torch.bfloat16,
             device=torch.device("cpu"),
@@ -325,6 +340,10 @@ class LTXPipeline:
         )
         results = encode_prompts(prompts, ledger)
         del ledger
+
+        # Cache for future use
+        torch.save(results, cache_path)
+        logger.info(f"Cached embeddings to {cache_path}")
         return results
 
     def load_vae_decoder(
