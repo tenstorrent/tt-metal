@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 import transformers
+from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -65,9 +66,11 @@ class BgeM3ForEmbedding:
         self.model = None
         self.model_args_list = None
         self.models = None
+        self.data_parallel = None
         self.submeshes = None
         self.state_dict = None
         self.tokenizer = None
+        self.already_warmed_up = False
 
     # Reference: models/tt_transformers/tt/generator.py::create_submeshes
     def _get_num_devices(self) -> int:
@@ -106,6 +109,11 @@ class BgeM3ForEmbedding:
         if tt_data_parallel <= 1:
             return batch_size
         return ((batch_size + tt_data_parallel - 1) // tt_data_parallel) * tt_data_parallel
+
+    # Reference: models/tt_transformers/tt/generator.py::warmup_model_prefill
+    def _get_warmup_supported_seq_lens(self) -> list[int]:
+        warmup_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+        return [seq_len for seq_len in warmup_seq_lens if seq_len <= self.max_seq_len]
 
     @classmethod
     def initialize_vllm_model(
@@ -153,6 +161,8 @@ class BgeM3ForEmbedding:
     # Reference: models/tt_transformers/tt/generator_vllm.py::initialize_vllm_text_transformer
     def _initialize_model(self) -> None:
         if self._is_initialized and self.models is not None and self.model_args_list is not None:
+            if self.data_parallel is None:
+                self.data_parallel = len(self.models)
             return
 
         tt_data_parallel = self._get_effective_tt_data_parallel()
@@ -178,6 +188,7 @@ class BgeM3ForEmbedding:
         self.submeshes = submeshes
         self.model_args_list = model_args_list
         self.models = models
+        self.data_parallel = len(self.models)
         self.tokenizer = self.model_args_list[0].tokenizer
 
         # Preserve current external callers until forward/demo paths switch to list-backed state.
@@ -302,8 +313,40 @@ class BgeM3ForEmbedding:
         counts = mask.sum(dim=1).clamp(min=1)
         return summed / counts
 
+    # Reference: models/tt_transformers/tt/generator.py::warmup_model_prefill
+    def warmup(self) -> None:
+        if self.already_warmed_up:
+            return
+        self.already_warmed_up = True
+        self._initialize_model()
+
+        warmup_seq_lens = self._get_warmup_supported_seq_lens()
+        if not warmup_seq_lens:
+            return
+
+        logger.info(
+            "Starting BGE-M3 warmup for {} sequence lengths with data_parallel={}",
+            len(warmup_seq_lens),
+            self.data_parallel,
+        )
+
+        with torch.no_grad():
+            for seq_len in warmup_seq_lens:
+                logger.info("Warming up BGE-M3 encoder for sequence length: {}", seq_len)
+                input_ids = torch.zeros((1, seq_len), dtype=torch.long)
+                attention_mask = torch.ones_like(input_ids)
+                token_type_ids = torch.zeros_like(input_ids)
+                self._forward_impl(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    position_ids=None,
+                )
+
+        logger.info("BGE-M3 warmup completed")
+
     # Reference: models/tt_transformers/tt/generator.py::torch.chunk(..., self.data_parallel, 0)
-    def forward(
+    def _forward_impl(
         self,
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
@@ -325,42 +368,38 @@ class BgeM3ForEmbedding:
 
         models = self.models if self.models is not None else [self.model]
         submeshes = self.submeshes if self.submeshes is not None else [self.device]
-        input_ids_chunks = torch.chunk(padded_inputs["input_ids"], len(models), dim=0)
-        attention_mask_chunks = torch.chunk(padded_inputs["attention_mask"], len(models), dim=0)
+        data_parallel = self.data_parallel if self.data_parallel is not None else len(models)
+        input_ids_chunks = torch.chunk(padded_inputs["input_ids"], data_parallel, dim=0)
+        attention_mask_chunks = torch.chunk(padded_inputs["attention_mask"], data_parallel, dim=0)
         token_type_id_chunks = (
-            torch.chunk(padded_inputs["token_type_ids"], len(models), dim=0)
+            torch.chunk(padded_inputs["token_type_ids"], data_parallel, dim=0)
             if padded_inputs["token_type_ids"] is not None
-            else [None] * len(models)
+            else [None] * data_parallel
         )
         position_id_chunks = (
-            torch.chunk(padded_inputs["position_ids"], len(models), dim=0)
+            torch.chunk(padded_inputs["position_ids"], data_parallel, dim=0)
             if padded_inputs["position_ids"] is not None
-            else [None] * len(models)
+            else [None] * data_parallel
         )
 
         output_chunks = []
-        for model, submesh, input_ids_chunk, attention_mask_chunk, token_type_ids_chunk, position_ids_chunk in zip(
-            models,
-            submeshes,
-            input_ids_chunks,
-            attention_mask_chunks,
-            token_type_id_chunks,
-            position_id_chunks,
-        ):
-            output = model(
-                input_ids=self._to_ttnn_ids(input_ids_chunk, device=submesh),
-                attention_mask=self._to_ttnn_ids(attention_mask_chunk, device=submesh),
+        for i in range(data_parallel):
+            output = models[i](
+                input_ids=self._to_ttnn_ids(input_ids_chunks[i], device=submeshes[i]),
+                attention_mask=self._to_ttnn_ids(attention_mask_chunks[i], device=submeshes[i]),
                 token_type_ids=(
-                    self._to_ttnn_ids(token_type_ids_chunk, device=submesh)
-                    if token_type_ids_chunk is not None
+                    self._to_ttnn_ids(token_type_id_chunks[i], device=submeshes[i])
+                    if token_type_id_chunks[i] is not None
                     else None
                 ),
                 position_ids=(
-                    self._to_ttnn_ids(position_ids_chunk, device=submesh) if position_ids_chunk is not None else None
+                    self._to_ttnn_ids(position_id_chunks[i], device=submeshes[i])
+                    if position_id_chunks[i] is not None
+                    else None
                 ),
             )
 
-            last_hidden_state = to_torch_auto_compose(output, device=submesh)
+            last_hidden_state = to_torch_auto_compose(output, device=submeshes[i])
             if last_hidden_state.dim() == 4 and last_hidden_state.shape[1] == 1:
                 last_hidden_state = last_hidden_state.squeeze(1)
             output_chunks.append(last_hidden_state)
@@ -371,6 +410,24 @@ class BgeM3ForEmbedding:
             last_hidden_state = last_hidden_state[:batch_size]
 
         return last_hidden_state.to(torch.float32)
+
+    # Reference: models/tt_transformers/tt/generator.py::prefill_forward_text(..., warmup_prefill=True)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        batch_size, seq_len = input_ids.shape
+        self._validate_request(batch_size, self._get_padded_seq_len(seq_len))
+        self.warmup()
+        return self._forward_impl(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+        )
 
     def get_embedding_dim(self) -> int:
         return self.config.hidden_size
