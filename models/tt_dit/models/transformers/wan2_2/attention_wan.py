@@ -387,7 +387,7 @@ class WanAttention(Module):
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
+                    topology=self.ccl_manager.topology,
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),  # Place CCL in last column
                     use_column_major_ccl=True,  # WAN2.2 specific: use column-major CCL allocation
