@@ -87,7 +87,6 @@ class TTNNQwen3Attention(TTNNModule):
         new_attn.is_causal = torch_layer.is_causal
 
         new_attn.sliding_window = getattr(torch_layer, "sliding_window", None)
-        print("TTNN Sliding window copied:", new_attn.sliding_window)
 
         new_attn.init_parameters()
 
@@ -219,9 +218,6 @@ class TTNNQwen3Attention(TTNNModule):
         # Keep full-sequence SDPA output shape [B, H, S, D].
         # The chunked sliding-window path can collapse sequence length in prefill
         # and break residual add shape (e.g., 1024 vs 8192).
-        print("Query shape before SDPA:", query_states.shape)
-        print("Key shape before SDPA:", key_states.shape)
-        print("Value shape before SDPA:", value_states.shape)
         attn_output = self.sdpa(
             self,
             query_states,

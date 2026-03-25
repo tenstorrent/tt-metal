@@ -149,18 +149,29 @@ class TTNNQwenAudioAttentionOptimized(TTNNModule):
 
     def _to_torch_mesh_concat(self, tensor):
         """Mesh-distributed ttnn → torch via ConcatMeshToTensor (required on multi-device)."""
-        if isinstance(tensor, torch.Tensor):
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        # TorchTTNNTensor is a torch.Tensor subclass but may hold mesh-backed ttnn data; do not return .elem alone.
+        if isinstance(tensor, torch.Tensor) and not isinstance(tensor, TorchTTNNTensor):
             return tensor
+        if isinstance(tensor, TorchTTNNTensor):
+            # Uses per-tensor mesh_composer (replicate vs concat), not a guessed ConcatMeshToTensor.
+            return tensor.to_torch
         mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
         return ttnn.to_torch(self._to_ttnn(tensor), mesh_composer=mesh_composer)
 
     def _cu_seqlens_to_torch_int64(self, cu_seqlens):
         """cu_seqlens on mesh must use mesh_composer; take logical replica [0, L] (first device row)."""
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
         if cu_seqlens is None:
             return None
-        if isinstance(cu_seqlens, torch.Tensor):
+        if isinstance(cu_seqlens, TorchTTNNTensor):
+            cu = self._to_torch_mesh_concat(cu_seqlens)
+        elif isinstance(cu_seqlens, torch.Tensor):
             return cu_seqlens.detach().cpu().flatten().to(torch.int64)
-        cu = self._to_torch_mesh_concat(cu_seqlens)
+        else:
+            cu = self._to_torch_mesh_concat(cu_seqlens)
         if self._is_distributed:
             n = self.device.get_num_devices()
             if cu.dim() == 2 and int(cu.shape[0]) == n:
@@ -211,9 +222,15 @@ class TTNNQwenAudioAttentionOptimized(TTNNModule):
         cu_seqlens=None,
         **kwargs,
     ):
-        seq_len = self._leading_seq_len(hidden_states)
-
         cu_flat = self._cu_seqlens_to_torch_int64(cu_seqlens)
+        # HF packed audio: cumulative lengths end at the true packed seq length. On mesh,
+        # hidden_states.shape can reflect shard/replica layout and mis-infer seq (e.g. vs device count);
+        # trusting cu_flat[-1] matches Qwen3OmniMoeAudioAttention's seq_length from hidden_states.size().
+        if cu_flat is not None and cu_flat.numel() >= 2:
+            seq_len = int(cu_flat[-1].item())
+        else:
+            seq_len = self._leading_seq_len(hidden_states)
+
         allows_single_segment = self._cu_seqlens_allows_ttnn_from_flat(cu_flat, seq_len)
 
         # Multi-segment packed sequence: TTNN SDPA + HF-style block mask (no torch fallback).
