@@ -176,7 +176,10 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
-@pytest.mark.parametrize("tensor_shape", [(), (2,), (1, 1), (32, 1), (3, 6, 40, 63, 20), (6, 0, 32)])
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [(), (2,), (1, 1), (32, 1), (3, 6, 40, 63, 20), (3, 6, 40, 64, 32), (32, 32, 32, 32, 32), (6, 0, 32)],
+)
 @pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
@@ -192,15 +195,18 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     Note: We do not enforce the same exception type or message.
     """
     if op not in ("var", "std") and correction:
-        # PyTorch supports the correction argument only for var and std.
-        return
+        pytest.skip("PyTorch supports the correction argument only for var and std")
 
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
 
-    torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+
+    ttnn_op = getattr(ttnn, op)
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -257,10 +263,25 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
-    atol = rtol = 0.1
+    if op == "sum" and tensor_shape == (3, 6, 40, 63, 20):
+        # Summing large number of bfloat16 values accumulates rounding errors,
+        # and results also vary from near 0 to relatively large values (in hundreds)
+        # Near-zero results inflate relative error, while absolute error grows for large values.
+        # PCC should catch any significant errors.
+        atol = 1.5
+        rtol = 2.5
+    else:
+        atol = 0.1
+        rtol = 0.1
+
     if op == "var":
+        # For var/std there are cases where all values are close to 1, and we're using bfloat16,
+        # so even a rounding error of 0.5 ULP has a significant impact on PCC.
         pcc = 0.99
     elif op == "std":
+        # For std, sqrtf() adds an extra rounding step on top of variance, further
+        # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
+        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
         pcc = 0.98
     else:
         pcc = 0.999

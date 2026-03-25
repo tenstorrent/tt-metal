@@ -746,8 +746,7 @@ def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
         pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
 
     if op not in ("var", "std") and correction:
-        # PyTorch supports the correction argument only for var and std.
-        return
+        pytest.skip("PyTorch supports the correction argument only for var and std")
 
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -766,14 +765,17 @@ def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
-    if op == "sum":
-        # sum may compute mix of some large values and some small values, so we need to
-        # allow for larger errors. PCC should catch any significant errors.
+    if op == "sum" and shape == (3, 4, 8, 56, 33):
+        # Summing large number of bfloat16 values accumulates rounding errors,
+        # and results also vary from near 0 to relatively large values (in hundreds)
+        # Near-zero results inflate relative error, while absolute error grows for large values.
+        # PCC should catch any significant errors.
         atol = 25
         rtol = 0.4
     else:
         atol = 0.1
         rtol = 0.1
+
     if op == "var":
         # For var/std there are cases where all values are close to 1, and we're using bfloat16,
         # so even a rounding error of 0.5 ULP has a significant impact on PCC.
