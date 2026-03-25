@@ -18,14 +18,12 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // Reader CTArgs
     using CTArgs = PipelineStageSync::ReaderCTArgs<
+        get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
+        get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
         get_named_compile_time_arg_val("is_stalling_device_equal_signalling_device"),
         get_named_compile_time_arg_val("stalling_device_chip_id"),
         get_named_compile_time_arg_val("stalling_device_mesh_id"),
-        get_named_compile_time_arg_val("fabric_arg_base"),
-        get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
-        get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
-        get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
-        get_named_compile_time_arg_val("run_signalling_logic_on_brisc")>;
+        get_named_compile_time_arg_val("fabric_arg_base")>;
 
     // Reader runtime args (from common args)
     PipelineStageSync::ReaderArgs rt_args = {
@@ -37,14 +35,12 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     // Writer CTArgs
     using CTArgs = PipelineStageSync::WriterCTArgs<
+        get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
+        get_named_compile_time_arg_val("run_signalling_logic_on_brisc"),
         get_named_compile_time_arg_val("is_stalling_device_equal_signalling_device"),
         get_named_compile_time_arg_val("stalling_device_chip_id"),
         get_named_compile_time_arg_val("stalling_device_mesh_id"),
-        get_named_compile_time_arg_val("fabric_arg_base"),
-        get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
-        get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
-        get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
-        get_named_compile_time_arg_val("run_signalling_logic_on_brisc")>;
+        get_named_compile_time_arg_val("fabric_arg_base")>;
 
     // Writer runtime args (from common args)
     PipelineStageSync::WriterArgs rt_args =

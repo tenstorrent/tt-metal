@@ -34,17 +34,13 @@ struct PipelineStageSync {
     template <
         uint32_t runStallingLogicOnNCRISC,
         uint32_t runSignallingLogicOnNCRISC,
-        uint32_t runStallingLogicOnBRISC,
-        uint32_t runSignallingLogicOnBRISC,
         uint32_t isStallingDeviceEqualSignallingDevice,
         uint32_t stallingDeviceChipID,
         unit32_t stallingDeviceMeshID,
         uint32_t fabricArgBase>
-    struct WriterCTArgs {
+    struct ReaderCTArgs {
         static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
         static constexpr bool run_signalling_logic_on_ncrsic = runSignallingLogicOnNCRISC == 1;
-        static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
-        static constexpr bool run_signalling_logic_on_brsic = runSignallingLogicOnBRISC == 1;
         static constexpr bool is_stalling_device_equal_signalling_device = isStallingDeviceEqualSignallingDevice == 1;
         static constexpr uint32_t stalling_device_chip_id = stallingDeviceChipID;
         static constexpr uint32_t stalling_device_mesh_id = stallingDeviceMeshID;
@@ -53,8 +49,6 @@ struct PipelineStageSync {
 
     // Writer CTArgs (BRISC)
     template <
-        uint32_t runStallingLogicOnNCRISC,
-        uint32_t runSignallingLogicOnNCRISC,
         uint32_t runStallingLogicOnBRISC,
         uint32_t runSignallingLogicOnBRISC,
         uint32_t isStallingDeviceEqualSignallingDevice,
@@ -62,8 +56,6 @@ struct PipelineStageSync {
         unit32_t stallingDeviceMeshID,
         uint32_t fabricArgBase>
     struct WriterCTArgs {
-        static constexpr bool run_stalling_logic_on_ncrisc = runStallingLogicOnNCRISC == 1;
-        static constexpr bool run_signalling_logic_on_ncrsic = runSignallingLogicOnNCRISC == 1;
         static constexpr bool run_stalling_logic_on_brisc = runStallingLogicOnBRISC == 1;
         static constexpr bool run_signalling_logic_on_brsic = runSignallingLogicOnBRISC == 1;
         static constexpr bool is_stalling_device_equal_signalling_device = isStallingDeviceEqualSignallingDevice == 1;
@@ -165,10 +157,10 @@ struct PipelineStageSync {
         }
 
         void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader)
             // ================================================================
-#if defined(COMPILE_FOR_NCRISC)
             if constexpr (CTArgs::run_stalling_logic_on_ncrisc) {
                 stalling_impl(args.stalling_device_semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_ncrisc) {
@@ -180,12 +172,16 @@ struct PipelineStageSync {
                     CTArgs::stalling_device_mesh_id,
                     CTArgs::is_stalling_device_equal_signalling_device CTArgs::fabric_arg_base);
             }
-#endif
 
+#elif defined(COMPILE_FOR_TRISC)
+            // ================================================================
+            // TRISC - No-op
+            // ================================================================
+
+#elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer)
             // ================================================================
-#if defined(COMPILE_FOR_BRISC)
             if constexpr (CTArgs::run_stalling_logic_on_brisc) {
                 stalling_impl(args.stalling_device_semaphore_l1_addr);
             } else if constexpr (CTArgs::run_signalling_logic_on_brisc) {
@@ -197,12 +193,6 @@ struct PipelineStageSync {
                     CTArgs::stalling_device_mesh_id,
                     CTArgs::is_stalling_device_equal_signalling_device CTArgs::fabric_arg_base);
             }
-#endif
-
-#elif defined(COMPILE_FOR_TRISC)
-            // ================================================================
-            // TRISC - No-op
-            // ================================================================
 #endif
         }
     };
