@@ -86,8 +86,6 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = 0;
@@ -95,17 +93,13 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(operation_attributes.ring_size - 1);
                 backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
             }
             if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices.at(i + 1);
                 forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
                 forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }

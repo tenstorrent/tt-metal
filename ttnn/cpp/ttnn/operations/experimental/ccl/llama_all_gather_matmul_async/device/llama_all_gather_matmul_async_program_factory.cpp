@@ -84,8 +84,6 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         }
     }
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
 
@@ -94,17 +92,13 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         if (devices_to_use.at(i) == sender_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (args.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(args.ring_size - 1);
                 backward_fabric_node_id = fabric_node_ids.at(args.ring_size - 1);
             }
             if (i != args.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
                 forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (args.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
                 forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }

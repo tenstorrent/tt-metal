@@ -302,8 +302,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     const uint32_t num_devices = ring_size;
 
     uint32_t ring_index = 0;  // Initialize device index
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
 
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
@@ -318,18 +316,14 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
                 backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
             }
 
             if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
                 forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
                 forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
