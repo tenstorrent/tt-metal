@@ -9,5 +9,5 @@
 namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::generic::detail {
-void bind_patched_generic_op(nb::module_& mod);
+void bind_patchable_generic_op(nb::module_& mod);
 }  // namespace ttnn::operations::experimental::generic::detail

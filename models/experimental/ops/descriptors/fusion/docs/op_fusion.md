@@ -2571,10 +2571,10 @@ ops' CBs because each invocation may allocate new GlobalCBs at different L1
 addresses — the hash does not include the actual pointer, only whether one
 is present.
 
-When `generic_op` dispatches the cached `FusedOp`, it calls
+When `patchable_generic_op` dispatches the cached `FusedOp`, it calls
 `override_runtime_arguments` on the underlying cached `Program`, which copies
-the patched RT args and CB buffer pointers into the program's device-side
-buffers.
+the updated RT args and CB buffer pointers into the program's device-side
+buffers (slot-based patching on cache hits).
 
 ### Cache Miss: Full Build
 

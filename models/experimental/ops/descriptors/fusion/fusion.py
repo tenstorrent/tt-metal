@@ -5,7 +5,7 @@
 """
 High-Level Fusion API: Sequential and Parallel.
 
-Fused execution uses ``patched_generic_op`` so the device program cache can patch
+Fused execution uses ``patchable_generic_op`` so the device program cache can patch
 only tensor-address slots on repeat launches.
 
 **Fusion build cache** (``_BUILD_CACHE``): single stable integer key per
@@ -20,12 +20,12 @@ current branch ops' tensors. This avoids pinning device buffers in the cache.
 The cache key includes **mesh identity** (:meth:`MeshDevice.id` when available,
 else Python ``id`` of the device object) from ``build(device=...)`` or inferred
 from branch tensors, so entries never cross different open meshes — required
-because the device program cache behind ``patched_generic_op`` is tied to a
+because the device program cache behind ``patchable_generic_op`` is tied to a
 specific mesh.
 
 **Steady state:** each ``build()`` call creates new branch descriptors (cheap:
 params + hash, no factory), gets a cache hit (reuses the fused
-``ProgramDescriptor``), and ``launch()`` dispatches via ``patched_generic_op``
+``ProgramDescriptor``), and ``launch()`` dispatches via ``patchable_generic_op``
 which patches only changed tensor-address slots.
 
 **Launch path:** :meth:`FusedOp.launch` copies merged IO from the branch ops
@@ -68,7 +68,7 @@ class _CacheEntry:
     without re-running codegen/merge. No tensor references are held.
     """
 
-    cached_descriptor: Any  # ProgramDescriptor — dispatched via patched_generic_op on hit
+    cached_descriptor: Any  # ProgramDescriptor — dispatched via patchable_generic_op on hit
     semaphores: tuple  # Keeps GlobalSemaphore L1 alive
     kernel_labels: tuple  # For _apply_kernel_dir file naming
     # (op_idx, tensor_idx) per merged output; None when the fused op has no outputs.
@@ -208,7 +208,7 @@ def _coerce_mutable_io_opdescriptor(op: OpDescriptor) -> OpDescriptor:
 
 def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_source_map) -> _CacheEntry:
     """Record a slim cache entry from a freshly-built FusedOp (no tensor refs)."""
-    # Memoize the descriptor hash so patched_generic_op skips the full
+    # Memoize the descriptor hash so patchable_generic_op skips the full
     # kernel/CB/semaphore walk on every launch (O(1) instead of O(descriptor)).
     desc = fused_op.descriptor
     if desc.custom_program_hash is None:
@@ -362,7 +362,7 @@ class FusedOp:
         return self.op.output_tensors
 
     def launch(self, *branch_ops_override: Any):
-        """Enqueue via ``patched_generic_op`` using merged IO; return outputs.
+        """Enqueue via ``patchable_generic_op`` using merged IO; return outputs.
 
         With no positional arguments, merged IO is copied from the branch ops
         captured at ``build()`` (so in-place updates to branch tensor lists are
@@ -371,14 +371,14 @@ class FusedOp:
 
         On program cache hits, the device program factory patches only runtime-arg
         and CB slots that hold ``io_tensors`` buffer addresses when those addresses
-        change (see ``PatchedGenericMeshProgramFactory``).
+        change (see ``PatchableGenericMeshProgramFactory``).
         """
         if branch_ops_override:
             self.refresh_merged_io(list(branch_ops_override))
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn._ttnn.operations.experimental.patched_generic_op(io_tensors, self.descriptor)
+        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor)
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:

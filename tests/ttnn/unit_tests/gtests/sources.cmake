@@ -65,6 +65,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_device_storage_ownership.cpp
     tensor/test_distributed_tensor.cpp
     tensor/test_tensor_topology.cpp
+    tensor/test_tensor_hash.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_partition.cpp
     tensor/test_tensor_layout.cpp

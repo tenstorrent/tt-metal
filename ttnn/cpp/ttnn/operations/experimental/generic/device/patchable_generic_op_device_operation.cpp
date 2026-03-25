@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device_operation.hpp"
-#include "patched_generic_op_device_operation.hpp"
+#include "patchable_generic_op_device_operation.hpp"
 #include "tools/profiler/host_dispatch_microbench.hpp"
 
 #include <tt_stl/reflection.hpp>
@@ -17,29 +17,29 @@ namespace ttnn::operations::experimental::generic {
 
 using namespace tt::tt_metal;
 
-void PatchedGenericOpDeviceOperation::validate_on_program_cache_miss(
+void PatchableGenericOpDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t&) {}
 
-void PatchedGenericOpDeviceOperation::validate_on_program_cache_hit(
+void PatchableGenericOpDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t&) {}
 
-patched_spec_return_value_t PatchedGenericOpDeviceOperation::compute_output_specs(
+patchable_spec_return_value_t PatchableGenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output_tensor.tensor_spec();
 }
 
-patched_tensor_return_value_t PatchedGenericOpDeviceOperation::create_output_tensors(
+patchable_tensor_return_value_t PatchableGenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output_tensor;
 }
 
-ttsl::hash::hash_t PatchedGenericOpDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PatchableGenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patched_program_hash_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchedComputeProgramHashOnly);
+    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patchable_program_hash_timer(
+        tt::tt_metal::host_dispatch_microbench::Slot::PatchableComputeProgramHashOnly);
     // Must differ from GenericOpDeviceOperation::compute_program_hash — same descriptor would
     // otherwise hit the wrong cached_mesh_workload_t layout (segfault in override).
-    size_t hash = ttsl::hash::type_hash<PatchedGenericOpDeviceOperation>;
+    size_t hash = ttsl::hash::type_hash<PatchableGenericOpDeviceOperation>;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         ttsl::hash::hash_combine(hash, mesh_coord_range);
         ttsl::hash::hash_combine(hash, ttnn::operations::generic::compute_program_descriptor_hash(program_descriptor));
@@ -50,12 +50,12 @@ ttsl::hash::hash_t PatchedGenericOpDeviceOperation::compute_program_hash(
 }  // namespace ttnn::operations::experimental::generic
 
 namespace ttnn::prim {
-ttnn::operations::experimental::generic::patched_tensor_return_value_t patched_generic_op(
+ttnn::operations::experimental::generic::patchable_tensor_return_value_t patchable_generic_op(
     const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::experimental::generic::patched_operation_attributes_t& operation_attributes) {
-    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patched_prim_launch_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchedPrimThroughLaunch);
-    using OperationType = ttnn::operations::experimental::generic::PatchedGenericOpDeviceOperation;
+    const ttnn::operations::experimental::generic::patchable_operation_attributes_t& operation_attributes) {
+    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patchable_prim_launch_timer(
+        tt::tt_metal::host_dispatch_microbench::Slot::PatchablePrimThroughLaunch);
+    using OperationType = ttnn::operations::experimental::generic::PatchableGenericOpDeviceOperation;
     TT_FATAL(
         io_tensors.size() >= 2,
         "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",

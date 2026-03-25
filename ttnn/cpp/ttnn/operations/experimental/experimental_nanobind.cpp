@@ -66,7 +66,7 @@
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
-#include "ttnn/operations/experimental/generic/patched_generic_op_nanobind.hpp"
+#include "ttnn/operations/experimental/generic/patchable_generic_op_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -155,7 +155,7 @@ void py_module(nb::module_& mod) {
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     // Fused generic op with source-descriptor-based override
-    generic::detail::bind_patched_generic_op(mod);
+    generic::detail::bind_patchable_generic_op(mod);
 }
 
 }  // namespace ttnn::operations::experimental

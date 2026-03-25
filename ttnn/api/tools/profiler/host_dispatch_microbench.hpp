@@ -13,20 +13,20 @@
 namespace tt::tt_metal::host_dispatch_microbench {
 
 enum class Slot : int {
-    // Python nanobind entry (mesh descriptor assembly only; excludes prim::patched_generic_op).
-    PatchedNanobindMeshSetup = 0,
-    // ttnn::prim::patched_generic_op (C++ entry through device_operation::launch return).
-    PatchedPrimThroughLaunch,
-    // PatchedGenericOpDeviceOperation::compute_program_hash (subset of mesh workload hash).
-    PatchedComputeProgramHashOnly,
-    // Program cache miss: PatchedGenericMeshProgramFactory::create_at excluding discover.
-    PatchedCreateAtProgramBuild,
+    // Python nanobind entry (mesh descriptor assembly only; excludes prim::patchable_generic_op).
+    PatchableNanobindMeshSetup = 0,
+    // ttnn::prim::patchable_generic_op (C++ entry through device_operation::launch return).
+    PatchablePrimThroughLaunch,
+    // PatchableGenericOpDeviceOperation::compute_program_hash (subset of mesh workload hash).
+    PatchableComputeProgramHashOnly,
+    // Program cache miss: PatchableGenericMeshProgramFactory::create_at excluding discover.
+    PatchableCreateAtProgramBuild,
     // Program cache miss: discover_address_slots only.
-    PatchedDiscoverAddressSlots,
+    PatchableDiscoverAddressSlots,
     // Program cache hit: collect_io_tensor_addresses inside patch_program_from_io_tensors.
-    PatchedCollectIoTensorAddresses,
+    PatchableCollectIoTensorAddresses,
     // Program cache hit: patch per-core + common RT args + dynamic CB addresses.
-    PatchedApplySlotPatches,
+    PatchableApplySlotPatches,
     // Shared mesh launch path (all device ops using MeshDeviceOperationAdapter).
     MeshComputeWorkloadHash,
     MeshProgramCacheContains,
@@ -41,13 +41,13 @@ enum class Slot : int {
 
 inline const char* slot_name(Slot s) {
     static constexpr const char* kNames[] = {
-        "patched_nanobind_mesh_setup",
-        "patched_prim_through_launch",
-        "patched_compute_program_hash_only",
-        "patched_create_at_program_build",
-        "patched_discover_address_slots",
-        "patched_collect_io_tensor_addresses",
-        "patched_apply_slot_patches",
+        "patchable_nanobind_mesh_setup",
+        "patchable_prim_through_launch",
+        "patchable_compute_program_hash_only",
+        "patchable_create_at_program_build",
+        "patchable_discover_address_slots",
+        "patchable_collect_io_tensor_addresses",
+        "patchable_apply_slot_patches",
         "mesh_compute_workload_hash",
         "mesh_program_cache_contains",
         "mesh_cache_hit_override_runtime_args",
@@ -124,7 +124,7 @@ inline std::string format_report() {
     std::string out;
     out.append(
         "TTNN_HOST_DISPATCH_MICROBENCH report (TTNN_HOST_DISPATCH_MICROBENCH=1). "
-        "Note: some slots nest (e.g. mesh_compute_workload_hash includes patched_compute_program_hash_only); "
+        "Note: some slots nest (e.g. mesh_compute_workload_hash includes patchable_compute_program_hash_only); "
         "do not sum all rows for a total.\n");
     uint64_t any_samples = 0;
     for (int i = 0; i < static_cast<int>(Slot::Count); ++i) {

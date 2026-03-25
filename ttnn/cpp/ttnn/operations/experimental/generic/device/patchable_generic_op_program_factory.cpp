@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "tools/profiler/host_dispatch_microbench.hpp"
 
-#include "patched_generic_op_program_factory.hpp"
+#include "patchable_generic_op_program_factory.hpp"
 
 namespace ttnn::operations::experimental::generic::program {
 using namespace tt::tt_metal;
@@ -24,7 +24,7 @@ namespace {
 
 using OptionalAddr = std::optional<std::uint32_t>;
 
-std::vector<OptionalAddr> collect_io_tensor_addresses(const patched_tensor_args_t& tensor_args) {
+std::vector<OptionalAddr> collect_io_tensor_addresses(const patchable_tensor_args_t& tensor_args) {
     std::vector<OptionalAddr> addrs;
     addrs.reserve(tensor_args.io_tensors.size());
     for (const auto& t : tensor_args.io_tensors) {
@@ -50,13 +50,13 @@ std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, const std
 void discover_address_slots(
     const ProgramDescriptor& desc,
     const std::vector<OptionalAddr>& tensor_addrs,
-    PatchedGenericMeshProgramFactory::shared_variables_t& out) {
+    PatchableGenericMeshProgramFactory::shared_variables_t& out) {
     for (size_t ki = 0; ki < desc.kernels.size(); ++ki) {
         const auto& kd = desc.kernels[ki];
         for (const auto& [coord, args] : kd.runtime_args) {
             for (size_t ai = 0; ai < args.size(); ++ai) {
                 if (auto ti = find_io_tensor_index(args[ai], tensor_addrs)) {
-                    out.per_core_runtime_arg_slots.push_back(PatchedGenericMeshProgramFactory::PerCoreRuntimeArgSlot{
+                    out.per_core_runtime_arg_slots.push_back(PatchableGenericMeshProgramFactory::PerCoreRuntimeArgSlot{
                         .kernel_idx = static_cast<std::uint32_t>(ki),
                         .core = coord,
                         .arg_idx = static_cast<std::uint32_t>(ai),
@@ -67,7 +67,7 @@ void discover_address_slots(
         }
         for (size_t ai = 0; ai < kd.common_runtime_args.size(); ++ai) {
             if (auto ti = find_io_tensor_index(kd.common_runtime_args[ai], tensor_addrs)) {
-                out.common_runtime_arg_slots.push_back(PatchedGenericMeshProgramFactory::CommonRuntimeArgSlot{
+                out.common_runtime_arg_slots.push_back(PatchableGenericMeshProgramFactory::CommonRuntimeArgSlot{
                     .kernel_idx = static_cast<std::uint32_t>(ki),
                     .arg_idx = static_cast<std::uint32_t>(ai),
                     .io_tensor_index = *ti,
@@ -80,7 +80,7 @@ void discover_address_slots(
         const auto* buf = desc.cbs[ci].buffer;
         if (buf != nullptr) {
             if (auto ti = find_io_tensor_index(buf->address(), tensor_addrs)) {
-                out.cb_tensor_slots.push_back(PatchedGenericMeshProgramFactory::CBTensorSlot{
+                out.cb_tensor_slots.push_back(PatchableGenericMeshProgramFactory::CBTensorSlot{
                     .cb_idx = static_cast<std::uint32_t>(ci), .io_tensor_index = *ti});
             }
         }
@@ -90,7 +90,7 @@ void discover_address_slots(
 /// Flatten io_tensor addresses into a flat uint32_t vector (0 for null buffers).
 /// Unlike collect_io_tensor_addresses (which returns optional), this is cheaper
 /// to compare against prev_io_addresses.
-std::vector<std::uint32_t> collect_io_addresses_flat(const patched_tensor_args_t& tensor_args) {
+std::vector<std::uint32_t> collect_io_addresses_flat(const patchable_tensor_args_t& tensor_args) {
     std::vector<std::uint32_t> addrs;
     addrs.reserve(tensor_args.io_tensors.size());
     for (const auto& t : tensor_args.io_tensors) {
@@ -102,11 +102,11 @@ std::vector<std::uint32_t> collect_io_addresses_flat(const patched_tensor_args_t
 
 void patch_program_from_io_tensors(
     Program& program,
-    PatchedGenericMeshProgramFactory::shared_variables_t& shared_vars,
-    const patched_tensor_args_t& tensor_args) {
+    PatchableGenericMeshProgramFactory::shared_variables_t& shared_vars,
+    const patchable_tensor_args_t& tensor_args) {
     const auto cur_addrs = [&tensor_args]() {
         tt::tt_metal::host_dispatch_microbench::ScopedTimer _collect_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchedCollectIoTensorAddresses);
+            tt::tt_metal::host_dispatch_microbench::Slot::PatchableCollectIoTensorAddresses);
         return collect_io_addresses_flat(tensor_args);
     }();
 
@@ -114,12 +114,12 @@ void patch_program_from_io_tensors(
     const bool have_prev = prev.size() == cur_addrs.size();
 
     tt::tt_metal::host_dispatch_microbench::ScopedTimer _apply_patches_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchedApplySlotPatches);
+        tt::tt_metal::host_dispatch_microbench::Slot::PatchableApplySlotPatches);
 
     const auto check_io_index = [&](std::uint32_t io_idx, const char* ctx) {
         TT_FATAL(
             io_idx < cur_addrs.size(),
-            "patched_generic_op: {} io_tensor_index {} out of range ({} io tensors)",
+            "patchable_generic_op: {} io_tensor_index {} out of range ({} io tensors)",
             ctx,
             io_idx,
             cur_addrs.size());
@@ -152,7 +152,7 @@ void patch_program_from_io_tensors(
             continue;
         }
         auto* buf = tensor_args.io_tensors[slot.io_tensor_index].buffer();
-        TT_FATAL(buf != nullptr, "patched_generic_op: CB patch tensor has no buffer");
+        TT_FATAL(buf != nullptr, "patchable_generic_op: CB patch tensor has no buffer");
         auto cb_handle = shared_vars.cb_handles[slot.cb_idx];
         UpdateDynamicCircularBufferAddress(program, cb_handle, *buf);
     }
@@ -162,14 +162,14 @@ void patch_program_from_io_tensors(
 
 }  // namespace
 
-PatchedGenericMeshProgramFactory::cached_program_t PatchedGenericMeshProgramFactory::create_at(
-    const ProgramDescriptor& program_descriptor, const patched_tensor_args_t& tensor_args) {
+PatchableGenericMeshProgramFactory::cached_program_t PatchableGenericMeshProgramFactory::create_at(
+    const ProgramDescriptor& program_descriptor, const patchable_tensor_args_t& tensor_args) {
     Program program{program_descriptor};
     shared_variables_t shared_vars;
 
     {
         tt::tt_metal::host_dispatch_microbench::ScopedTimer _program_build_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchedCreateAtProgramBuild);
+            tt::tt_metal::host_dispatch_microbench::Slot::PatchableCreateAtProgramBuild);
         auto cbs = program.circular_buffers();
         shared_vars.cb_handles.reserve(cbs.size());
         for (const auto& cb : cbs) {
@@ -179,7 +179,7 @@ PatchedGenericMeshProgramFactory::cached_program_t PatchedGenericMeshProgramFact
 
     {
         tt::tt_metal::host_dispatch_microbench::ScopedTimer _discover_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchedDiscoverAddressSlots);
+            tt::tt_metal::host_dispatch_microbench::Slot::PatchableDiscoverAddressSlots);
         const auto tensor_addrs = collect_io_tensor_addresses(tensor_args);
         discover_address_slots(program_descriptor, tensor_addrs, shared_vars);
     }
@@ -187,11 +187,11 @@ PatchedGenericMeshProgramFactory::cached_program_t PatchedGenericMeshProgramFact
     return {std::move(program), std::move(shared_vars)};
 }
 
-PatchedGenericMeshProgramFactory::cached_mesh_workload_t PatchedGenericMeshProgramFactory::create_mesh_workload(
-    const patched_operation_attributes_t& operation_attributes,
+PatchableGenericMeshProgramFactory::cached_mesh_workload_t PatchableGenericMeshProgramFactory::create_mesh_workload(
+    const patchable_operation_attributes_t& operation_attributes,
     const MeshCoordinateRangeSet& /*tensor_coords*/,
-    const patched_tensor_args_t& tensor_args,
-    patched_tensor_return_value_t& /*tensor_return_value*/) {
+    const patchable_tensor_args_t& tensor_args,
+    patchable_tensor_return_value_t& /*tensor_return_value*/) {
     MeshWorkload mesh_workload;
     std::unordered_map<MeshCoordinateRange, mesh_shared_variables_t> mesh_shared_variables;
 
@@ -204,11 +204,11 @@ PatchedGenericMeshProgramFactory::cached_mesh_workload_t PatchedGenericMeshProgr
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(mesh_shared_variables)};
 }
 
-void PatchedGenericMeshProgramFactory::override_runtime_arguments(
+void PatchableGenericMeshProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_mesh_workload,
-    const patched_operation_attributes_t& operation_attributes,
-    const patched_tensor_args_t& tensor_args,
-    patched_tensor_return_value_t& /*tensor_return_value*/) {
+    const patchable_operation_attributes_t& operation_attributes,
+    const patchable_tensor_args_t& tensor_args,
+    patchable_tensor_return_value_t& /*tensor_return_value*/) {
     auto& workload_programs = cached_mesh_workload.workload.get_programs();
     const auto& mesh_programs = operation_attributes.mesh_programs;
 

@@ -104,7 +104,7 @@ class OpDescriptor(NamedTuple):
     name: str = ""
 
     def launch(self):
-        """Dispatch via ``generic_op`` (not the fused ``patched_generic_op`` path)."""
+        """Dispatch via ``generic_op`` (not the fused ``patchable_generic_op`` path)."""
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
         ttnn.generic_op(io_tensors, self.descriptor)
         return self.output_tensors

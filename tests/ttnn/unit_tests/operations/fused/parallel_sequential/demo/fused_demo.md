@@ -24,13 +24,13 @@ All timing measured on Wormhole n300 (single chip), BF16.
 
 ### `device_fw` — What does the hardware actually cost?
 
-Single dispatch, no timing loops. Designed for Tracy device profiling (`TT_METAL_DEVICE_PROFILER=1`). Tracy's CSV reports `DEVICE FW DURATION [ns]` (firmware setup + kernel + teardown) and `DEVICE KERNEL DURATION [ns]` (pure Tensix execution). Fused ops appear as one `PatchedGenericOpDeviceOperation` row; unfused ops appear as one row per `ttnn.*` dispatch (sum for total). This is the ground truth for whether fusion saves device cycles — it strips away all host overhead.
+Single dispatch, no timing loops. Designed for Tracy device profiling (`TT_METAL_DEVICE_PROFILER=1`). Tracy's CSV reports `DEVICE FW DURATION [ns]` (firmware setup + kernel + teardown) and `DEVICE KERNEL DURATION [ns]` (pure Tensix execution). Fused ops appear as one `PatchableGenericOpDeviceOperation` row; unfused ops appear as one row per `ttnn.*` dispatch (sum for total). This is the ground truth for whether fusion saves device cycles — it strips away all host overhead.
 
 ### `e2e` — What does the user see in steady state?
 
-Measured by `_time_e2e()`: 5 warmup iterations (discarded), then 100 timed iterations, all caches warm. Reports `total_ms / 100`. This captures the full host→device→host round-trip per iteration, including host dispatch overhead, `patched_generic_op` argument patching, and NOC transfers. This measures the op's total time in a pipelined environment.
+Measured by `_time_e2e()`: 5 warmup iterations (discarded), then 100 timed iterations, all caches warm. Reports `total_ms / 100`. This captures the full host→device→host round-trip per iteration, including host dispatch overhead, `patchable_generic_op` argument patching, and NOC transfers. This measures the op's total time in a pipelined environment.
 
-The fused E2E path uses `run()`, which calls `build()` once (cache miss on first call, cache hit thereafter) and `launch()` each iteration. `launch()` dispatches via `patched_generic_op`, which patches only the tensor-address slots that changed since the previous dispatch — skipping unchanged slots entirely.
+The fused E2E path uses `run()`, which calls `build()` once (cache miss on first call, cache hit thereafter) and `launch()` each iteration. `launch()` dispatches via `patchable_generic_op`, which patches only the tensor-address slots that changed since the previous dispatch — skipping unchanged slots entirely.
 
 ### `cold_start` — How long until first output?
 
@@ -129,7 +129,7 @@ Unfused breakdown: RMS FW=9.0 us + LN FW=13.7 us = 22.7 us.
 | E2E steady state | 0.059 ms | 0.072 ms | **1.22x** |
 | Cold start | 1948 ms | 3188 ms | **1.64x** |
 
-At the device level, fused and unfused FW are nearly identical. The **1.22x E2E speedup** comes from `patched_generic_op`'s selective slot-patching dispatch, which is lightweight enough that the fused single-dispatch path is faster than two individual `ttnn.rms_norm`/`ttnn.layer_norm` dispatches with their native program-cache fast paths.
+At the device level, fused and unfused FW are nearly identical. The **1.22x E2E speedup** comes from `patchable_generic_op`'s selective slot-patching dispatch, which is lightweight enough that the fused single-dispatch path is faster than two individual `ttnn.rms_norm`/`ttnn.layer_norm` dispatches with their native program-cache fast paths.
 
 ### H=1536 (compute-dominated)
 
@@ -184,7 +184,7 @@ Unfused breakdown: LN FW=44.7 us + matmul FW=18.5 us + RMS FW=26.9 us + matmul F
 | E2E steady state | 0.072 ms | 0.163 ms | **2.26x** |
 | Cold start | 1870 ms | 4348 ms | **2.33x** |
 
-The **1.55x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.7+18.5 = 63 us) and Chain B (RMS+MM = 26.9+18.1 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **2.26x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1) and benefits from `patched_generic_op`'s lightweight cache-hit path.
+The **1.55x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.7+18.5 = 63 us) and Chain B (RMS+MM = 26.9+18.1 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **2.26x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1) and benefits from `patchable_generic_op`'s lightweight cache-hit path.
 
 **PCC:** Chain A = 1.0000, Chain B = 1.0000
 
@@ -239,7 +239,7 @@ Unfused breakdown (13 dispatches): ln_stem FW=42.7 us + 2 slices FW=11.9 us + 2 
 | E2E steady state | 0.152 ms | 0.500 ms | **3.29x** |
 | Cold start | 2150 ms | 6088 ms | **2.83x** |
 
-The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **3.29x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches plus the lightweight `patched_generic_op` cache-hit path. The **2.83x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
+The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **3.29x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches plus the lightweight `patchable_generic_op` cache-hit path. The **2.83x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
 
 **PCC:** 1.000000 (leaf LN output vs unfused reference)
 
@@ -290,7 +290,7 @@ Unfused breakdown (6 dispatches): stem LN FW=41.0 us + 2 slices FW=20.5 us + 2 b
 | E2E steady state | 0.160 ms | 0.268 ms | **1.68x** |
 | Cold start | 2265 ms | 5588 ms | **2.47x** |
 
-The **1.23x device speedup** comes from the left branch (Slice+RMS+RMS ~ 10+26+26 us) running in parallel with the right branch (Slice+LN ~ 10+36 us). Fused time ~ stem (41 us) + max(62, 46) = 103 us kernel + barriers. The **1.68x E2E speedup** additionally saves per-dispatch overhead (6 dispatches → 1) with `patched_generic_op`'s cache-hit path handling the single fused dispatch efficiently.
+The **1.23x device speedup** comes from the left branch (Slice+RMS+RMS ~ 10+26+26 us) running in parallel with the right branch (Slice+LN ~ 10+36 us). Fused time ~ stem (41 us) + max(62, 46) = 103 us kernel + barriers. The **1.68x E2E speedup** additionally saves per-dispatch overhead (6 dispatches → 1) with `patchable_generic_op`'s cache-hit path handling the single fused dispatch efficiently.
 
 **PCC:** Left chain = 1.0000, Right LN = 0.9998
 
@@ -364,7 +364,7 @@ Sequential(*[noop_op for _ in range(N)]).run()
 **Setup:**
 - Each phase has 3 kernels (reader, compute, writer) with empty bodies
 - No CBs, no DRAM I/O, no compute -- barrier transitions dominate
-- A single dummy DRAM tensor satisfies the `patched_generic_op` tensor requirement
+- A single dummy DRAM tensor satisfies the `patchable_generic_op` tensor requirement
 - Parametrized over `num_phases` (2-6) and `num_cores` (1, 8, 16, 64)
 
 **Methodology:** All numbers are E2E steady-state (`_time_e2e`: 5 warmup + 100 timed iterations, host-side wall clock including dispatch and device sync). Per-barrier cost = `(fused_N - fused_1) / (N - 1)`, where `fused_1` is a 1-phase baseline that captures fixed kernel launch overhead. At low N the baseline noise is a large fraction of the total, so per-barrier appears inflated; at high N (5-6) it converges to the true mechanism cost.
