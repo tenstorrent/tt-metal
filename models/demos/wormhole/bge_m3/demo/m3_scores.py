@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+
 """
 BGE-M3 sparse and ColBERT score utilities (backbone-only).
 Uses ttnn for all tensor ops; scatter-by-token-id remains on host (no ttnn equivalent).
@@ -291,7 +292,7 @@ def compute_score_from_hidden_states_tt_only(
     """Compute sparse and colbert scores from TT hidden states; all ops in ttnn; to_torch_fn only for final lists."""
     unused_ids = _get_special_token_ids(tokenizer, vocab_size)
 
-    # Sparse path: all ttnn
+    # Sparse path: keep TT norm + scatter, then normalize on host.
     norm_q_tt = _norm_weights_ttnn(tt_q, enc_q["attention_mask"], device)
     norm_p_tt = _norm_weights_ttnn(tt_p, enc_p["attention_mask"], device)
     input_ids_q_tt = ttnn.from_torch(
@@ -308,10 +309,13 @@ def compute_score_from_hidden_states_tt_only(
     )
     sparse_q_tt = _sparse_embedding_scatter_ttnn(device, norm_q_tt, input_ids_q_tt, vocab_size, unused_ids)
     sparse_p_tt = _sparse_embedding_scatter_ttnn(device, norm_p_tt, input_ids_p_tt, vocab_size, unused_ids)
-    tt_qs = _l2_normalize_sparse_ttnn(sparse_q_tt, device)
-    tt_ps = _l2_normalize_sparse_ttnn(sparse_p_tt, device)
-    qs = to_torch_fn(tt_qs).float()
-    ps = to_torch_fn(tt_ps).float()
+    # Temporary workaround: device sparse normalization inflates scores, using pytorch instead.
+    # sparse_q_tt = _l2_normalize_sparse_ttnn(sparse_q_tt, device)
+    # sparse_p_tt = _l2_normalize_sparse_ttnn(sparse_p_tt, device)
+    qs = to_torch_fn(sparse_q_tt).float()
+    ps = to_torch_fn(sparse_p_tt).float()
+    qs = torch.nn.functional.normalize(qs, dim=-1)
+    ps = torch.nn.functional.normalize(ps, dim=-1)
     sm = torch.matmul(qs, ps.T)
     sparse_list = np.diag(sm.cpu().numpy()).tolist()
 
