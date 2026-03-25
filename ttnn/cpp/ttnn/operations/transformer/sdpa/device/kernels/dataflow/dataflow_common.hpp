@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {

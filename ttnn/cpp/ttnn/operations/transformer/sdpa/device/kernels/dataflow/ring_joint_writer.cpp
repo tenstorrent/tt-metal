@@ -346,9 +346,10 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t is_causal = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t is_balanced = get_compile_time_arg_val(26) == 1;
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(27);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
 
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<29>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -488,8 +489,9 @@ void kernel_main() {
                 return TRID_INNER;
             };
 
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-                const uint32_t q_index = global_q_chunk - global_q_start;
+            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
@@ -615,7 +617,9 @@ void kernel_main() {
             // No global write_barrier — per-trid barriers in the Q loop
             // ensure each save has landed before its data is read back.
         } else {
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;

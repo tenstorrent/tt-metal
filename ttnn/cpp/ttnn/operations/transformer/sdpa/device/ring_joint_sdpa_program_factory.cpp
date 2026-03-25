@@ -386,6 +386,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // log scale
     log_debug(tt::LogOp, "scale: {}", scale_union.f);
 
+    // Enable per-head zigzag for load balancing in balanced causal mode
+    // Requires even num_q_chunks for symmetric light/heavy work distribution
+    const bool enable_zigzag_balancing = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -409,7 +413,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         qk_out_subblock_h,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -462,6 +467,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)use_streaming_compute,
         args.is_causal,
         args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing),
         (std::uint32_t)out_out_subblock_h,
     };
 
@@ -519,7 +525,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

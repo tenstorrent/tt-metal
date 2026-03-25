@@ -31,8 +31,9 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<23>();
+    constexpr auto q_args = TensorAccessorArgs<24>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -206,7 +207,9 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
         }
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+        for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {
+            uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
