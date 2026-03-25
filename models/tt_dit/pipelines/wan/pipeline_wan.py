@@ -137,6 +137,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_use_cache: bool = True,
+        sdpa_t_fracture_w_only: bool = False,
     ):
         super().__init__()
 
@@ -253,6 +254,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
             dtype=vae_dtype,
+            sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
         )
 
         if self.dynamic_load:
@@ -303,6 +305,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp=None,
         pipeline_class=None,
         vae_use_cache=None,
+        sdpa_t_fracture_w_only=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -339,6 +342,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
+                "sdpa_t_fracture_w_only": True,
             }
             config = device_configs[tuple(mesh_device.shape)]
         else:
@@ -396,6 +400,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
             vae_use_cache=vae_use_cache if vae_use_cache is not None else config.get("vae_use_cache", True),
+            sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
+            if sdpa_t_fracture_w_only is not None
+            else config.get("sdpa_t_fracture_w_only", False),
         )
 
     def _prepare_text_encoder(self):
