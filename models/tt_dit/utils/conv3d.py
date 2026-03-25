@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
+import hashlib
 from itertools import repeat
 
 import torch
@@ -36,10 +37,10 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
             (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
             (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
             (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
-            (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
-            (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
-            (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+            (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
+            (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
+            (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
+            (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
         }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
@@ -62,20 +63,29 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
     )
 
 
-def count_convs(module: Module) -> int:
-    """
-    Recursively count the total number of WanCausalConv3d instances in a class and its attributes.
-
-    Args:
-        module: The `Module` to search through
-
-    Returns:
-        int: Total count of WanCausalConv3d instances found
-    """
-    count = 1 if module.__class__.__name__ == "WanCausalConv3d" else 0
+def _walk_conv3d_modules(module: Module):
+    """Yield every child module that has a conv_config (i.e. conv3d layers)."""
+    if hasattr(module, "conv_config"):
+        yield module
     for _, child in module.named_children():
-        count += count_convs(child)
-    return count
+        yield from _walk_conv3d_modules(child)
+
+
+def conv3d_blocking_hash(module: Module) -> str:
+    """Build a cache key suffix from C_in_block values of all conv3d layers.
+
+    prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
+    are only valid for the same blocking configuration.
+    """
+    cin_blocks = [str(m.conv_config.C_in_block) for m in _walk_conv3d_modules(module)]
+    if not cin_blocks:
+        return ""
+    return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+
+
+def count_convs(module: Module) -> int:
+    """Count the total number of conv3d modules in a module tree."""
+    return sum(1 for _ in _walk_conv3d_modules(module))
 
 
 def conv_pad_height(tensor_BTHWC, h_factor):
