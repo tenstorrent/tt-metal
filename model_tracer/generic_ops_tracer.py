@@ -35,6 +35,9 @@ from tqdm import tqdm
 import argparse
 from datetime import datetime
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_base_dir():
@@ -115,7 +118,8 @@ def get_machine_info():
                 board_type = "Unknown"
             pyluwen_device_count = len(pci_interfaces)
     except Exception:
-        pass
+        # pyluwen is an optional dependency; on any failure we fall back to tt-smi below.
+        logger.debug("pyluwen-based arch detection failed; falling back to tt-smi.", exc_info=True)
 
     # --- Step 2: device series & card count via tt-smi JSON snapshot ---------
     try:
