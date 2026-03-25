@@ -170,9 +170,11 @@ class Qwen35GatedDeltaNet:
         self.cached_masks = create_chunk_masks(self.prefill_chunk_size, device)
 
         # The Neumann approximation overflows at chunk_size=256, but we now use
-        # exact forward substitution (CPU triangular solve) which is numerically
-        # stable at any chunk size. Larger chunks = fewer CPU round-trips.
-        self.long_prefill_chunk_size = 256
+        # exact forward substitution (LAPACK triangular solve) which is numerically
+        # stable at any chunk size. chunk_size=128 balances device compute (128x128
+        # matmuls) vs sub-chunk count (8 per 1024-token outer chunk) vs LAPACK
+        # solve cost ([256, 128, 128] = 16MB transfer).
+        self.long_prefill_chunk_size = 128
         self.cached_masks_long = create_chunk_masks(self.long_prefill_chunk_size, device)
 
         self.recurrent_state = None
