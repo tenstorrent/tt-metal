@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -88,6 +88,7 @@ class TokenAccuracy:
         # Flatten to 1D for convenience
         self._prompt_1d = self.prompt_tokens[0].to(torch.long).contiguous()
         self._gt_gen_1d = self.generated_tokens[0].to(torch.long).contiguous()
+        self._reference_1d = torch.cat([self._prompt_1d, self._gt_gen_1d], dim=0)
 
         # Collected TT predictions (one per generated token position)
         self._pred_tokens: List[int] = []
@@ -96,6 +97,45 @@ class TokenAccuracy:
         # Optional token id metadata for nicer debugging / fallbacks
         meta = payload.get("token_ids_meta", {}) if isinstance(payload.get("token_ids_meta", {}), dict) else {}
         self.eos_id: Optional[int] = int(meta["eos_id"]) if "eos_id" in meta and meta["eos_id"] is not None else None
+
+        self.topk_candidate_k = 0
+        self.topk_candidate_generated_prefix_len = 0
+        self.topk_candidate_token_ids: Optional[torch.Tensor] = None
+        self.topk_candidate_probs: Optional[torch.Tensor] = None
+        topk_candidates = payload.get("topk_candidates")
+        if topk_candidates is not None:
+            if not isinstance(topk_candidates, dict):
+                raise ValueError(f"topk_candidates must be a dict when present. File={self.reference_file}")
+            token_ids = topk_candidates.get("token_ids")
+            probs = topk_candidates.get("probs")
+            k = int(topk_candidates.get("k", 0))
+            generated_prefix_len = int(topk_candidates.get("generated_prefix_len", 0))
+            if (
+                not isinstance(token_ids, torch.Tensor)
+                or token_ids.dim() != 2
+                or not isinstance(probs, torch.Tensor)
+                or probs.dim() != 2
+                or token_ids.shape != probs.shape
+            ):
+                raise ValueError(
+                    f"topk_candidates must contain matching 2D token_ids/probs tensors, got "
+                    f"{getattr(token_ids, 'shape', None)} and {getattr(probs, 'shape', None)}. "
+                    f"File={self.reference_file}"
+                )
+            if token_ids.shape[1] != k:
+                raise ValueError(
+                    f"topk_candidates k={k} does not match stored width {token_ids.shape[1]}. "
+                    f"File={self.reference_file}"
+                )
+            if token_ids.shape[0] != generated_prefix_len:
+                raise ValueError(
+                    f"topk_candidates generated_prefix_len={generated_prefix_len} does not match stored rows "
+                    f"{token_ids.shape[0]}. File={self.reference_file}"
+                )
+            self.topk_candidate_k = k
+            self.topk_candidate_generated_prefix_len = generated_prefix_len
+            self.topk_candidate_token_ids = token_ids.to(torch.long).contiguous()
+            self.topk_candidate_probs = probs.to(torch.float32).contiguous()
 
     def reset(self) -> None:
         """Reset internal cursor/prediction buffer so the same instance can be reused safely."""
@@ -110,6 +150,110 @@ class TokenAccuracy:
 
     def num_pred_tokens(self) -> int:
         return len(self._pred_tokens)
+
+    def _resolve_pred_tokens(self, pred_tokens: Optional[List[int]] = None) -> List[int]:
+        if pred_tokens is None:
+            return self._pred_tokens
+        return [int(tok) for tok in pred_tokens]
+
+    def has_garbage_check(self) -> bool:
+        return self.topk_candidate_token_ids is not None and self.topk_candidate_probs is not None
+
+    def num_garbage_check_tokens(self, pred_tokens: Optional[List[int]] = None) -> int:
+        if not self.has_garbage_check():
+            return 0
+        return min(
+            len(self._resolve_pred_tokens(pred_tokens)),
+            self.num_gt_tokens(),
+            self.topk_candidate_generated_prefix_len,
+        )
+
+    def get_garbage_token_details(
+        self,
+        pred_tokens: Optional[List[int]] = None,
+        *,
+        context_window: int = 16,
+        tail_width: int = 5,
+    ) -> List[Dict[str, Any]]:
+        if not self.has_garbage_check():
+            return []
+
+        pred_tokens_resolved = self._resolve_pred_tokens(pred_tokens)
+        total_checked = self.num_garbage_check_tokens(pred_tokens_resolved)
+        details: List[Dict[str, Any]] = []
+        assert self.topk_candidate_token_ids is not None
+        assert self.topk_candidate_probs is not None
+
+        for step in range(total_checked):
+            tt_pred = int(pred_tokens_resolved[step])
+            candidate_ids_row = self.topk_candidate_token_ids[step]
+            candidate_probs_row = self.topk_candidate_probs[step]
+            candidate_ids = candidate_ids_row.tolist()
+            if tt_pred in candidate_ids:
+                continue
+
+            pos = self.tf_prompt_len + step
+            context_start = max(0, pos - context_window)
+            details.append(
+                {
+                    "generated_step": step,
+                    "position": pos,
+                    "predicted_id": tt_pred,
+                    "true_id": int(self._gt_gen_1d[step].item()),
+                    "context_token_ids": self._reference_1d[context_start:pos].tolist(),
+                    "top5_ids": self.top5_tokens[pos].tolist(),
+                    "topk_k": self.topk_candidate_k,
+                    "topk_tail_prob": float(candidate_probs_row[-1].item()),
+                    "topk_head_ids": candidate_ids[: min(5, len(candidate_ids))],
+                    "topk_tail_ids": candidate_ids[max(0, len(candidate_ids) - tail_width) :],
+                }
+            )
+
+        return details
+
+    @staticmethod
+    def _sanitize_decoded(text: str) -> str:
+        return repr(text)[1:-1]
+
+    def format_garbage_token_details(
+        self,
+        tokenizer,
+        pred_tokens: Optional[List[int]] = None,
+        *,
+        context_window: int = 16,
+        tail_width: int = 5,
+    ) -> List[str]:
+        lines = []
+        for detail in self.get_garbage_token_details(
+            pred_tokens,
+            context_window=context_window,
+            tail_width=tail_width,
+        ):
+            context_text = self._sanitize_decoded(
+                tokenizer.decode(detail["context_token_ids"], skip_special_tokens=False)
+            )
+            predicted_text = self._sanitize_decoded(
+                tokenizer.decode([detail["predicted_id"]], skip_special_tokens=False)
+            )
+            true_text = self._sanitize_decoded(tokenizer.decode([detail["true_id"]], skip_special_tokens=False))
+            top5_text = ", ".join(
+                self._sanitize_decoded(tokenizer.decode([tok], skip_special_tokens=False)) for tok in detail["top5_ids"]
+            )
+            tail_text = ", ".join(
+                self._sanitize_decoded(tokenizer.decode([tok], skip_special_tokens=False))
+                for tok in detail["topk_tail_ids"]
+            )
+            lines.append(
+                f"step {detail['generated_step']} pos {detail['position']}: "
+                f"context='{context_text}' "
+                f"predicted='{predicted_text}' (id={detail['predicted_id']}) "
+                f"not in teacher top-{detail['topk_k']}; "
+                f"true='{true_text}' (id={detail['true_id']}); "
+                f"top5=[{top5_text}]; "
+                f"tail_prob={detail['topk_tail_prob']:.3e}; "
+                f"tail=[{tail_text}]"
+            )
+        return lines
 
     def collect_predicted_tokens(self, tt_pred_token: int) -> int:
         """
