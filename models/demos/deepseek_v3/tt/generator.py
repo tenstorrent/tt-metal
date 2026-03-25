@@ -200,8 +200,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 )
                 self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
         self.enable_mtp = bool(enable_mtp)
-        # self.hf_config.num_hidden_layers = 5
-        logger.info(f"num_hidden_layers: {self.hf_config.num_hidden_layers}")
 
         if not self.enable_mtp and hasattr(self.hf_config, "num_nextn_predict_layers"):
             self.hf_config.num_nextn_predict_layers = 0
@@ -285,12 +283,23 @@ class DeepseekGenerator(WarmupForwardMixin):
         enable_trace: bool = False,
         enable_mtp: bool = False,
     ) -> None:
-        # sampling values of all users are assumed to be the same default values if not provided.
-        if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-            logger.info("Sampling generator already initialized, skipping initialization")
+        if enable_mtp and sample_on_device:
+            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+
+        current_sampling_params = getattr(self, "sampling_params", None)
+        if not self._are_sampling_params_same(sampling_params, current_sampling_params):
+            logger.info("Sampling parameters changed, resetting sampling generator")
+            self.sampling_generator = None
+            self.sampling_params = None
+
+        if self.sampling_generator is not None:
+            logger.info(
+                "Sampling generator already initialized and sampling parameters are same, skipping reinitialization"
+            )
             return
 
         self.sample_on_device = sample_on_device
+        # sampling params of all users are assumed to be the same default values if not provided.
         self.sampling_params = (
             sampling_params
             if sampling_params is not None
@@ -324,8 +333,22 @@ class DeepseekGenerator(WarmupForwardMixin):
             + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
         )
 
-        if enable_mtp and sample_on_device:
-            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+    def _are_sampling_params_same(
+        self, new_sampling_params: SamplingParams | None, current_sampling_params: SamplingParams | None
+    ) -> bool:
+        """Return True when both sampling params are equivalent after formatting.
+
+        Both inputs are normalized with ``format_sampling_params`` so scalar/list
+        representations compare consistently for the configured batch size.
+        If either input is ``None``, this returns ``False``.
+        """
+
+        if new_sampling_params is None or current_sampling_params is None:
+            return False  # if either is None, we can't compare values so return False
+
+        normalized_new = format_sampling_params(new_sampling_params, max_batch_size=self.batch_size)
+        normalized_current = format_sampling_params(current_sampling_params, max_batch_size=self.batch_size)
+        return normalized_new == normalized_current
 
     @staticmethod
     def _shape_or_type(value):
@@ -2157,7 +2180,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         local_user_id: int | None = None,
         prompt_len: int | None = None,
         return_last_hidden: bool = False,
-        sampling_params: SamplingParams | None = None,
         sample_on_device: bool = False,
     ) -> ttnn.Tensor | torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run prefill for the full prompt sequence.
@@ -2170,7 +2192,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         Returns:
             logits ttnn.Tensor on device if sample_on_device is True, otherwise logits torch.Tensor on host
         """
-        self._log_sampling_params("prefill in generator", sampling_params, sample_on_device)
+        logger.info(f"prefill sample_on_device: {sample_on_device}, user_id: {user_id}")
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
@@ -2672,16 +2694,12 @@ class DeepseekGenerator(WarmupForwardMixin):
         enable_trace: bool = False,
         page_table: torch.Tensor | None = None,
         kv_cache: None = None,
-        read_from_device: bool = False,
-        sampling_params: SamplingParams = None,
         sample_on_device: bool = False,
     ) -> ttnn.Tensor | torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
-
-        # todo, handle kv_cache?, read_from_device, sampling_params
-        # handle here or in generator_vllm? Pratik
+        logger.info(f"decode_forward sample_on_device: {sample_on_device}, enable_trace: {enable_trace}")
 
         if not enable_trace:
             return self._decode_step(tokens, start_pos, page_table, sample_on_device)
