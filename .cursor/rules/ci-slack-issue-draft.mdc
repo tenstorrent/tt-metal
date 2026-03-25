@@ -1,11 +1,11 @@
 ---
-description: Draft Slack messages for pipelines channel using CI issue evidence plus exported Slack auto-triage when relevant.
+description: Draft Slack messages for pipelines channel using CI issue evidence plus exported Slack auto-triage when relevant, including multi-issue unified drafts.
 alwaysApply: false
 ---
 
-# Draft Slack Message for CI Issue
+# Draft Slack Message for CI Issue(s)
 
-Use this rule when drafting a Slack message to inform people about a filed CI maintenance issue (e.g. for a pipelines channel).
+Use this rule when drafting a Slack message to inform people about one or many filed CI maintenance issues (e.g. for a pipelines channel).
 
 ## Required Scope
 
@@ -24,6 +24,31 @@ Use this rule when drafting a Slack message to inform people about a filed CI ma
 
 Auto-triage guidance must be treated as strong only if it explicitly contains `HIGH CONFIDENCE`. Lower-confidence triage is weak signal and should not drive owner selection by itself.
 
+## Multi-Issue Aggregation
+
+When multiple issues are provided, produce **one unified Slack message**, not one message per issue.
+
+1. Build a normalized record per issue:
+   - workflow
+   - job name / job family
+   - terminal failure signature (from latest failing job logs on `main`)
+   - latest failing job URL
+   - optional linked PR
+2. Cluster issues that are "similar enough" to communicate together:
+   - same workflow and same/similar job family, and
+   - same terminal failure signature/error pattern.
+3. Prefer a **single compact cluster** when possible:
+   - If issues share the same terminal failure kind/signature, collapse them into one combined section.
+   - In that combined section, provide one shared failure summary and one list of all issue URLs.
+   - Only split into multiple clusters when failure kinds are materially different.
+4. For each resulting cluster, include:
+   - issue URL list (raw `https`)
+   - one concise cluster failure description
+   - 1-2 representative job URLs
+   - owner pings scoped to that cluster only if they differ materially.
+5. If clusters share the same likely owners, keep mentions consolidated to avoid noisy repetition.
+6. If only one issue remains after filtering/grouping, fall back to single-issue structure.
+
 **Infra-dominated failures:** When logs or the issue point at **runner or environment** problems—read-only filesystem / `EROFS` / errno 30 on shared mounts, missing or unwritable cache dirs (e.g. under `/mnt/…`), runner disk space, image or agent misconfiguration, pre-seeded artifact/cache absent on a read-only volume—**do not** default to **workflow or model `CODEOWNERS`** (the people who own the test suite or product area) as the primary pings. Prefer whoever **owns the runners, host images, and mounts** for that job’s SKU/label (issue body, infra contacts named there, recent `git log` on `.github/workflows/` or `infra/` when clearly related). Add workflow/product owners **only** if a **workflow or env change** (paths, env vars, timeouts) is clearly part of the fix alongside infra.
 
 ## URLs in the message (required)
@@ -36,32 +61,40 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 ## Structure
 
 1. **Heads-up line**
-   One sentence: deterministic CI failure descriptor + raw **https** link to the GitHub issue (you may also say `#39837` for readability if the URL appears nearby).
-   Example: `Heads up on this deterministic CI failure for a llama3.3-70b test — https://github.com/tenstorrent/tt-metal/issues/39837`
+   One sentence: deterministic CI failure descriptor + raw **https** issue URL(s).
+   - Single-issue example: `Heads up on this deterministic CI failure for a llama3.3-70b test — https://github.com/tenstorrent/tt-metal/issues/39837`
+   - Multi-issue example: `Heads up on a batch of similar deterministic CI failures (same Blackhole health gate signature) across these issues: https://github.com/tenstorrent/tt-metal/issues/40742, https://github.com/tenstorrent/tt-metal/issues/40743`
 
 2. **Context paragraph(s)**
-   - First sentence: workflow and job in plain language (e.g. "(Blackhole) Demo tests → llama3.3-70b batch-1 TP device perf prefill (layers=2) has been failing repeatedly on main.").
-   - Next: brief root-cause or area (e.g. device profiler buffer sizing, op_support_count, large seq len). Keep it short and actionable.
-   - Include the latest failing **job** as a raw **https** URL (must be job-level `.../runs/<run_id>/job/<job_id>`, not only workflow run URL).
+   - Single issue: keep existing behavior (workflow/job + root-cause/area + latest failing job URL).
+   - Multi issue (default): keep compact:
+     - one combined issue URL list,
+     - one shared failure-kind/root-cause line,
+     - 1-2 representative latest failing **job** URL(s) as raw **https**.
+   - Only use multiple grouped sections when failure kinds differ materially.
 
 3. **Failure excerpt**
-   Single line or short block: the actual error from latest job logs (or issue when logs are unavailable).
+   Single issue: one line/short block from latest job logs.
+   Multi issue: one shared excerpt when all issues match; otherwise one excerpt per materially different group.
    Prefix with `failure: ` if it's one line. Preserve the gist; trim long stack traces.
 
 4. **PR + review ask (optional)**
-   If a PR (draft or open) is linked and would close the issue:
+   If PR(s) (draft or open) are linked and would close the issue(s):
    - Include the raw PR URL, e.g. `And here's an auto-generated PR trying to address it: https://github.com/tenstorrent/tt-metal/pull/12345`
    - "Appreciate an extra set of eyes"
 
 5. **Mentions**
-   Suggest 2-4 people most relevant to the issue. Use failure logs, issue body (workflow/job/path), labels, `.github/CODEOWNERS`, and recent commits to pick owners.
+   - Single issue: suggest 2-4 people most relevant to the issue.
+   - Multi issue: suggest one compact owner set that covers all included issues (typically 2-4 people total if one shared failure kind; 3-6 if multiple distinct groups). Add group-specific mentions only when ownership differs significantly.
+   Use failure logs, issue body (workflow/job/path), labels, `.github/CODEOWNERS`, and recent commits to pick owners.
    Apply **Infra-dominated failures** (see Evidence Priority): for mount/ROFS/cache-on-runner failures, **prioritize infra/runner ownership** over the workflow’s product CODEOWNERS; say so in the context line if helpful (e.g. “looks infra-side: RO tt_cache on shared mount”).
    For each selected GitHub login, resolve profile name via `gh api users/<login>` and output mention as `@<human name>` (for example, `@salar hosseini`).
    Do not output GitHub handles (for example, `@skhorasganiTT`) and do not output Slack IDs.
 
 6. **Auto-triage reference (optional)**
-   If a relevant auto-triage message/reply is found in the exported month of data **and** has `HIGH CONFIDENCE`, add:
+   If relevant auto-triage message(s)/reply(s) are found in the exported month of data **and** have `HIGH CONFIDENCE`, add:
    - `This auto-triage report may be of relevance:` followed by the raw Slack archive **https** permalink (no angle-bracket formatting)
+   - In multi-issue mode, include one permalink per group when available; omit for groups without high-confidence matches.
    If nothing relevant with `HIGH CONFIDENCE` exists, **do not mention auto-triage at all** in the Slack message—no line, no footnote, and **never** say things like "no high-confidence triage found" or that you searched Slack. Pipelines readers only need the permalink when it exists.
 
 7. **Disable warning (deadline)**
@@ -80,3 +113,5 @@ Auto-triage guidance must be treated as strong only if it explicitly contains `H
 - User will copy-paste into Slack and may edit. Output should be easy to copy as one block.
 - Use double-newline spacing between logical lines/sections to preserve readability in Slack.
 - If no relevant high-confidence triage is found in the 30-day export, still draft the message using issue/log/ownership evidence only; the copy-paste block must stay silent on auto-triage (no negative disclaimer).
+- In multi-issue mode, avoid flooding the channel with one line per issue; summarize by group while still listing raw issue URLs.
+- In multi-issue mode, default to "one error kind + one issue list" when possible; expand to multiple groups only for materially different failures.
