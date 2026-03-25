@@ -5,18 +5,20 @@
 """
 Sweep matmul program-config parameters for Deepseek V3 prefill and print timing.
 
+Requires Tracy for device-level profiling. Set the env vars before running pytest:
+
 Usage:
+  export TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
   pytest models/demos/deepseek_v3_d_p/tests/didt/sweep_deepseek_v3_matmul_tune.py -v -s --didt-workload-iterations 1000
   pytest ... -k "dense_mlp_w1" --didt-workload-iterations 100
   pytest ... --timeout=7200
 
-DRAM tensors, 11×10 grid. MLA/Gate: HiFi2; MoE: LoFi. With Tracy env vars set
-(TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1,
-TT_METAL_PROFILER_CPP_POST_PROCESS=1), timing and core count come from Tracy;
-otherwise wall-clock and config grid. Default timeout 3600s.
+DRAM tensors, 11×10 grid. MLA/Gate: HiFi2; MoE: LoFi. Timing and core count
+come from Tracy device profiler data. Default timeout 3600s.
 """
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -367,11 +369,13 @@ def _run_single_config(
         tracy_duration_ns, tracy_core_count = _get_tracy_timing_and_cores(test.device_ids[0])
         grid = program_config.compute_with_storage_grid_size
         config_cores = grid[0] * grid[1] if isinstance(grid, (tuple, list)) else grid.x * grid.y
-        if tracy_duration_ns is not None:
-            duration_per_iter_ns = tracy_duration_ns
-            duration_ns = tracy_duration_ns * iterations
-        else:
-            duration_per_iter_ns = duration_ns // iterations
+        if tracy_duration_ns is None:
+            pytest.fail(
+                "Tracy device profiler data unavailable. "
+                "Make sure Tracy env vars are exported before running pytest."
+            )
+        duration_per_iter_ns = tracy_duration_ns
+        duration_ns = tracy_duration_ns * iterations
         num_cores_used = tracy_core_count if tracy_core_count is not None else config_cores
         # Utilization vs full grid (110 cores) so configs are comparable
         grid_x, grid_y = GRID_SIZE
@@ -431,9 +435,27 @@ def test_sweep_deepseek_v3_matmul_tune(
     mesh_device: Any,
     didt_workload_iterations: int,
 ) -> None:
-    """Sweep program configs per workload; print timing and utilization. Use -s for output."""
+    """Sweep program configs per workload; print timing and utilization. Use -s for output.
+
+    Requires Tracy env vars to be exported before running pytest. See module docstring for usage.
+    """
+    _required_env = {
+        "TT_METAL_DEVICE_PROFILER": "1",
+        "TT_METAL_PROFILER_MID_RUN_DUMP": "1",
+        "TT_METAL_PROFILER_CPP_POST_PROCESS": "1",
+    }
+    missing = [k for k, v in _required_env.items() if os.environ.get(k) != v]
+    if missing:
+        pytest.fail(
+            f"Tracy env vars not set: {', '.join(missing)}. "
+            "These must be exported before launching pytest:\n"
+            "  export TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1\n"
+            "  pytest <this_file> -v -s --didt-workload-iterations N"
+        )
+
     iterations = max(1, min(didt_workload_iterations, 1000))
-    workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1]
+    _debug_ids = {"gate", "routed_expert_w1", "routed_expert_w3"}  # TEMP: remove after testing
+    workloads = [w for w in _deepseek_v3_workloads() if w.batch == 1 and w.workload_id in _debug_ids]
 
     print(SWEEP_CSV_HEADER, flush=True)
     all_results: list[SweepResult] = []
@@ -457,17 +479,24 @@ def test_sweep_deepseek_v3_matmul_tune(
             all_results.append(res)
             print(res.to_csv_row(), flush=True)
 
-    # Summary: best config per workload by compute utilization (% vs full grid)
-    print("\n# Best config per workload (highest compute utilization % vs full grid):", flush=True)
+    # Summary: best config(s) per workload — includes all configs within 1% of best duration
+    print("\n# Best config(s) per workload (within 1% of fastest duration):", flush=True)
     by_workload: dict[str, list[SweepResult]] = {}
     for r in all_results:
         by_workload.setdefault(r.workload_id, []).append(r)
     for wid, results in sorted(by_workload.items()):
-        best = max(results, key=lambda x: x.utilization_pct)
-        print(
-            f"  {wid}: in0_block_w={best.in0_block_w} "
-            f"out_subblock_h={best.out_subblock_h} out_subblock_w={best.out_subblock_w} "
-            f"cores={best.core_count} [{best.memory_configs}] "
-            f"-> {best.utilization_pct:.2f}% util, {best.duration_per_iter_ns} ns/iter ({best.duration_per_iter_ns/1e3:.2f} us)",
-            flush=True,
-        )
+        ranked = sorted(results, key=lambda x: x.duration_per_iter_ns)
+        best_ns = ranked[0].duration_per_iter_ns
+        threshold = best_ns * 1.01
+        top = [r for r in ranked if r.duration_per_iter_ns <= threshold]
+        shape = f"{top[0].M}x{top[0].K}x{top[0].N}"
+        print(f"\n  {wid} ({shape}) — {len(top)} config(s) within 1%:", flush=True)
+        for i, r in enumerate(top):
+            tag = "*" if i == 0 else " "
+            print(
+                f"    {tag} in0_block_w={r.in0_block_w} "
+                f"out_subblock_h={r.out_subblock_h} out_subblock_w={r.out_subblock_w} "
+                f"cores={r.core_count} [{r.memory_configs}] "
+                f"-> {r.utilization_pct:.2f}% util, {r.duration_per_iter_ns} ns/iter ({r.duration_per_iter_ns/1e3:.2f} us)",
+                flush=True,
+            )
