@@ -28,8 +28,8 @@ Three blocking sets compared:
   Wall-clock timing, single device, in-process. Results in `sweep_results_v2/`.
 
 "Orig us" = original blocking measured on the same shape by the brute-force sweep (apples-to-apples).
-"—" for conv_in = original W_out_block=32 exceeds per-device W=7, causes device hang.
-"—" for others = brute-force pending, original not yet measured on these shapes.
+"—" = original blocking not yet measured on this shape (brute-force filtered `W_out_block <= W`
+for safety, but the op may accept larger values). Will be measured in a follow-up pass.
 
 | Layer | C_in→C_out | Kernel | (T,H,W) | Cnt | Original | Orig us | Staged | Staged us | Brute-force | BF us | BF vs Orig | BF vs Staged |
 |-------|-----------|--------|---------|-----|----------|---------|--------|-----------|-------------|-------|------------|--------------|
@@ -60,8 +60,7 @@ Three blocking sets compared:
 | **Subtotal (7 layers)** | **144,331** | **129,572** | **117,659** | **1.23x** | **1.10x** |
 
 Notes:
-- Original blockings were not mesh-aware. Several have H/W_out_block exceeding per-device dims
-  for 4x32 mesh, causing device hangs. This is why mesh-specific blockings are necessary.
+- Original blockings were not mesh-aware (single table for all mesh configs).
 - The original→staged improvement comes mainly from the time_conv default `(384,32,1,1,1)`.
 - The staged→brute-force improvement comes mainly from up1 resblocks where the greedy staged search
   was locked to C_in=128 from baseline but C_in=96,C_out=128 is optimal.
