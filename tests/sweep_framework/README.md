@@ -306,7 +306,7 @@ python tests/sweep_framework/sweeps_runner.py \
 | `--vector-source` | `vectors_export` (default) or `file` |
 | `--file-path <path>` | JSON path (required when `--vector-source file`) |
 | `--result-dest` | `results_export` (default) or `superset` |
-| `--tag <tag>` | Filter vectors by tag |
+| `--tag <tag>` | Reserved; tag field is stored in vectors but not used for filtering yet |
 | `--skip-modules <a,b>` | Skip these modules when running all |
 | `--perf` | Measure end-to-end performance |
 | `--device-perf` | Measure device-level performance (requires profiler build) |
