@@ -2912,6 +2912,7 @@ class TTNNBailingMoEAttention(TTNNModule):
         position_embeddings: tuple,
         attention_mask: Optional[ttnn.Tensor] = None,
         past_key_values=None,
+        past_key_value=None,  # legacy single KV cache for compatibility, ignored if past_key_values is provided
         cache_position: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
@@ -2933,7 +2934,8 @@ class TTNNBailingMoEAttention(TTNNModule):
         # Handle TorchTTNNTensor input
         if hasattr(hidden_states, "to_ttnn"):
             hidden_states = hidden_states.to_ttnn
-
+        if past_key_value is not None and past_key_values is None:
+            past_key_values = past_key_value  # Support legacy single KV cache argument
         seq_length = hidden_states.shape[1]
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
 
