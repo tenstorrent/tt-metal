@@ -241,13 +241,12 @@ Tensor from_flatbuffer(
 
     // NOTE: Existing tensor cache files may not have a tensor topology.
     // Create tensor topology from flatbuffer if it exists, otherwise create a fully replicated topology.
-    tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
     const auto* fb_topology = fb_tensor->tensor_topology();
     tt::tt_metal::TensorTopology topology =
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(std::move(host_storage), spec, std::move(topology));
+    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn
