@@ -6,6 +6,7 @@ print_usage() {
     echo
     echo "  --image <image>       (Optional) Docker image to use"
     echo "  --empty-entrypoint    (Optional) Pass --entrypoint=\"\" to docker run"
+    echo "  --volume <path>       (Optional) Extra host path to mount into the container (repeatable)"
     echo "  --print               Print the command alongside execution"
     echo "  --print-only          Print the command without executing it"
     echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
@@ -40,6 +41,7 @@ print_usage() {
 default() {
     local image="ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
     local empty_entrypoint=false
+    local extra_volumes=""
     local print_flag=false
     local print_only=false
 
@@ -57,6 +59,15 @@ default() {
                 ;;
             --empty-entrypoint)
                 empty_entrypoint=true
+                shift
+                ;;
+            --volume)
+                extra_volumes="$extra_volumes -v ${2}:${2}"
+                shift 2
+                ;;
+            --volume=*)
+                local vol="${1#--volume=}"
+                extra_volumes="$extra_volumes -v ${vol}:${vol}"
                 shift
                 ;;
             --print)
@@ -233,7 +244,7 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
         mpirun_segments+=("bash -c '$docker_cmd'")
@@ -306,7 +317,7 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
             mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
