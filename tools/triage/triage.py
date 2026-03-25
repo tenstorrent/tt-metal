@@ -385,11 +385,11 @@ def format_failure_message_lines(message: str | None, indent: str = "    ") -> l
     return [f"{indent}{line}" if line.strip() else indent for line in message.splitlines()]
 
 
-def get_failed_dependencies(script: "TriageScript") -> list["TriageScript"]:
+def get_failed_dependencies(script: TriageScript) -> list[TriageScript]:
     return [dep for dep in script.depends if dep.failed]
 
 
-def build_dependency_failure_lines(script: "TriageScript") -> list[str]:
+def build_dependency_failure_lines(script: TriageScript) -> list[str]:
     failed_dependencies = get_failed_dependencies(script)
     if not failed_dependencies:
         return ["No failed dependencies were recorded."]
