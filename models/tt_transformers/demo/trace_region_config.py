@@ -106,7 +106,7 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "Qwen3-32B": {
             "T3K": 90000000,
-            "TG": 10000000,
+            "TG": 11000000,
             "P150": 90000000,
             "P300": 90000000,
             "P150x4": 90000000,
