@@ -4,7 +4,7 @@
 
 """
 Pipeline orchestration: configuration, factory functions, Pipeline.
-Stage kinds (Embedding, LMHead, Passthrough) live in stage.py.
+Stage kinds (Embedding, LMHead, Passthrough) live in stage.py; decoder/dense blocks in decoder_stage.py.
 """
 
 from __future__ import annotations
