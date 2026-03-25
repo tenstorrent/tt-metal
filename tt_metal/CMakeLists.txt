@@ -109,6 +109,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        tt_metal_noc_estimator
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools

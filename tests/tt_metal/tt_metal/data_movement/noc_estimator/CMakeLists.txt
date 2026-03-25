@@ -17,7 +17,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal/api
 )
 
-target_link_libraries(generate_noc_latencies PRIVATE yaml-cpp)
+target_link_libraries(generate_noc_latencies PRIVATE yaml-cpp::yaml-cpp)
 
 set_target_properties(
     generate_noc_latencies
@@ -29,15 +29,7 @@ set_target_properties(
 # Test estimator
 add_executable(test_noc_estimator ${CMAKE_CURRENT_SOURCE_DIR}/test_noc_estimator.cpp)
 
-target_include_directories(
-    test_noc_estimator
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/api
-)
-
-target_link_libraries(test_noc_estimator PRIVATE tt_metal_noc_estimator)
+target_link_libraries(test_noc_estimator PRIVATE tt_metal)
 
 set_target_properties(
     test_noc_estimator

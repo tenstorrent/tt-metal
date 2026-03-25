@@ -4,7 +4,7 @@
 
 include(sources.cmake)
 
-add_library(tt_metal_noc_estimator STATIC ${NOC_ESTIMATOR_SRCS})
+add_library(tt_metal_noc_estimator OBJECT ${NOC_ESTIMATOR_SRCS})
 
 target_include_directories(
     tt_metal_noc_estimator
@@ -12,7 +12,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/impl
-        ${PROJECT_SOURCE_DIR}/tt_metal/api
 )
 
-target_link_libraries(tt_metal_noc_estimator PUBLIC yaml-cpp)
+target_link_libraries(tt_metal_noc_estimator PRIVATE yaml-cpp::yaml-cpp)
