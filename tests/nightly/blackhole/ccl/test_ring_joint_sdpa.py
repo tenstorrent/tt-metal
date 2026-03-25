@@ -96,14 +96,38 @@ MODEL_CONFIGS = {
         q_chunk_sizes=[224, 256, 288],
         k_chunk_sizes=[128, 256, 512],
     ),
-    # VideogenModel1 — 1×Galaxy deployment (115,200 total tokens)
+    # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
     # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
-    "videogen_model1": ModelConfig(
+    # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
+    "videogen_model1_720p": ModelConfig(
         galaxy_seq_per_device=14400,
         non_galaxy_seq_per_device=13440,
         heads_per_device=10,
         head_dim=128,
         q_chunk_sizes=[224],
+        k_chunk_sizes=[512],
+    ),
+    # VideogenModel1 480p — 1×Galaxy deployment (49,920 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Galaxy: 6240/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    "videogen_model1_480p": ModelConfig(
+        galaxy_seq_per_device=6240,
+        non_galaxy_seq_per_device=5760,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[288],
+        k_chunk_sizes=[512],
+    ),
+    # VideogenModel1 768×512 — 1×Galaxy deployment (49,152 total tokens)
+    # q288 chosen for zero slot waste on Galaxy (22 chunks / 11 cores = 2 each).
+    # Zero K pad waste (6144 = 12×512 exactly).
+    # Galaxy: 6144/dev, q_per_core=2. QB: 5760/dev, q_per_core=2.
+    "videogen_model1_768x512": ModelConfig(
+        galaxy_seq_per_device=6144,
+        non_galaxy_seq_per_device=5760,
+        heads_per_device=10,
+        head_dim=128,
+        q_chunk_sizes=[288],
         k_chunk_sizes=[512],
     ),
 }
