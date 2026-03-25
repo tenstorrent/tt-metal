@@ -265,8 +265,8 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, value1, value2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -286,5 +286,5 @@ def test_mac_ttnn(input_shapes, device):
     golden_fn = ttnn.get_golden_function(ttnn.mac)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=1)
