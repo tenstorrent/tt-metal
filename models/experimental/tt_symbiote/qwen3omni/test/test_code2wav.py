@@ -7,7 +7,7 @@ import ttnn
 from transformers import Qwen3OmniMoeForConditionalGeneration
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.qwen3omni.tt.audio_attention import TTNNQwenAudioAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.audio_attention import TTNNQwenAudioAttention
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import Qwen3OmniMoeAudioAttention
@@ -104,7 +104,7 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
 # TT implementation
-from models.experimental.qwen3omni.tt.tt_code2wav import (
+from models.experimental.tt_symbiote.qwen3omni.tt.code2wav_attn import (
     TTNNQwen3OmniMoeCode2WavAttention,
 )
 

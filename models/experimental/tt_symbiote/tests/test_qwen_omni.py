@@ -37,6 +37,7 @@ Symbiote registration (``register_qwen_omni_symbiote_modules``) replaces:
 - **Talker** text MoE with ``TTNNQwen3TalkerMoE`` (same pattern as ``test_qwen3_talker_moe.py``)
 - **Talker** self-attention with ``TTNNQwen3Attention`` (same implementation pattern as ``test_talker.py``)
 - **Thinker** audio encoder self-attention with ``TTNNQwenAudioAttention`` (see ``audio_attention.py`` / ``test_audio.py``)
+- **Code2Wav** pre-transformer self-attention with ``TTNNQwen3OmniMoeCode2WavAttention`` (see ``code2wav_attn.py`` / ``test_code2wav.py``)
 
 Vision encoder stays on stock PyTorch modules.
 
@@ -57,6 +58,7 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.qwen3omni.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
 from models.experimental.tt_symbiote.qwen3omni.tt.audio_attention import TTNNQwenAudioAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.code2wav_attn import TTNNQwen3OmniMoeCode2WavAttention
 from models.experimental.tt_symbiote.qwen3omni.tt.talker_attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.qwen3omni.tt.thinker_attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.utils.device_management import set_device
@@ -75,22 +77,31 @@ def _require_symbiote_run_mode():
 
 
 def _patch_thinker_talker_device_dtype(model):
-    """HF generate() reads thinker/talker .device/.dtype; TTNN submodules don't support .to()."""
+    """HF generate() reads thinker/talker/code2wav .device/.dtype; TTNN submodules don't support .to()."""
     _cpu = torch.device("cpu")
     _dtype = torch.bfloat16
-    for sub in (getattr(model, "thinker", None), getattr(model, "talker", None)):
-        if sub is not None:
-            cls = type(sub)
-            if not hasattr(cls, "_tt_symbiote_device_patched"):
-                if isinstance(getattr(cls, "device", None), property):
-                    cls.device = property(lambda self, d=_cpu: d)
-                if isinstance(getattr(cls, "dtype", None), property):
-                    cls.dtype = property(lambda self, d=_dtype: d)
-                cls._tt_symbiote_device_patched = True
+    for sub in (
+        getattr(model, "thinker", None),
+        getattr(model, "talker", None),
+        getattr(model, "code2wav", None),
+    ):
+        if sub is None:
+            continue
+        cls = type(sub)
+        if hasattr(cls, "_tt_symbiote_device_patched"):
+            continue
+        # HF may call .to(submodule.device); expose stable host placeholders (same as thinker/talker).
+        dev_attr = getattr(cls, "device", None)
+        if dev_attr is None or isinstance(dev_attr, property):
+            cls.device = property(lambda self, d=_cpu: d)
+        dtype_attr = getattr(cls, "dtype", None)
+        if dtype_attr is None or isinstance(dtype_attr, property):
+            cls.dtype = property(lambda self, d=_dtype: d)
+        cls._tt_symbiote_device_patched = True
 
 
 def register_qwen_omni_symbiote_modules(model) -> dict:
-    """Replace thinker/talker MoE + attention and thinker audio attention with TTNN modules."""
+    """Replace thinker/talker MoE + attention, thinker audio attention, and code2wav attention with TTNN modules."""
     thinker_mlp_class = type(model.thinker.model.layers[0].mlp)
     thinker_attn_class = type(model.thinker.model.layers[0].self_attn)
     audio_attn_class = type(model.thinker.audio_tower.layers[0].self_attn)
@@ -113,7 +124,17 @@ def register_qwen_omni_symbiote_modules(model) -> dict:
         },
         model_config=None,
     )
-    return {**r_thinker, **r_talker}
+    out = {**r_thinker, **r_talker}
+    code2wav = getattr(model, "code2wav", None)
+    if code2wav is not None and getattr(code2wav, "pre_transformer", None) is not None:
+        code2wav_attn_class = type(code2wav.pre_transformer.layers[0].self_attn)
+        r_code2wav = register_module_replacement_dict(
+            code2wav,
+            {code2wav_attn_class: TTNNQwen3OmniMoeCode2WavAttention},
+            model_config=None,
+        )
+        out = {**out, **r_code2wav}
+    return out
 
 
 _MESH_SHAPE_BY_ENV = {
@@ -200,9 +221,19 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             layer.self_attn, TTNNQwenAudioAttention
         ), f"thinker.audio_tower.layers[{i}].self_attn expected TTNNQwenAudioAttention, got {type(layer.self_attn)}"
 
+    code2wav = getattr(model, "code2wav", None)
+    n_code2wav = 0
+    if code2wav is not None and getattr(code2wav, "pre_transformer", None) is not None:
+        n_code2wav = len(code2wav.pre_transformer.layers)
+        for i, layer in enumerate(code2wav.pre_transformer.layers):
+            assert isinstance(
+                layer.self_attn, TTNNQwen3OmniMoeCode2WavAttention
+            ), f"code2wav.pre_transformer.layers[{i}].self_attn expected TTNNQwen3OmniMoeCode2WavAttention, got {type(layer.self_attn)}"
+
     print(
         f"Replacements OK: thinker {n_thinker} (MoE + attn) + "
         f"audio_tower {n_audio} (attn) + "
+        f"code2wav {n_code2wav} (attn) + "
         f"talker {n_talker} (attn) + "
         f"talker MoE layers {len(talker_moe_layer_indices)}/{n_talker} "
         f"(mesh {mesh_device.get_num_devices()} device(s))"
