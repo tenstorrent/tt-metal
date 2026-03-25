@@ -615,7 +615,7 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                         f"Operation '{op_name}', config_hash '{config_hash}', "
                         f"execution index {exec_idx}: missing required fields: {', '.join(missing)}. "
                         f"Re-trace with generic_ops_tracer.py to produce complete execution data."
-                        f"Ensure that generic_ops_tracer.py is generating configuration according to model_tracer/README.md"
+                        f" Ensure that generic_ops_tracer.py is generating configuration according to model_tracer/README.md"
                     )
 
                 # Parse source to get model info
