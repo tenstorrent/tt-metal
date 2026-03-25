@@ -237,9 +237,6 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
 
     y_torch = ttnn.to_torch(y)
 
-    print("y_torch.shape:", y.shape)
-    print("y_torch.padded_shape:", y.padded_shape)
-
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
@@ -248,9 +245,6 @@ def test_to_sharded_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_ro
     check_mem_config(y_sharded, sharded_memory_config, is_nd_sharded=True)
 
     y_sharded_torch = ttnn.to_torch(y_sharded)
-
-    print("y_sharded_torch.shape:", y_sharded.shape)
-    print("y_sharded_torch.padded_shape:", y_sharded.padded_shape)
 
     assert_equal(y_torch, y_sharded_torch)
 

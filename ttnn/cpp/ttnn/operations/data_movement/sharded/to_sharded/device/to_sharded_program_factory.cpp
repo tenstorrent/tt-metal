@@ -28,9 +28,6 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
-    // Keep explicit bool init to match legacy behavior which forced it true
-    // bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
-
     tt::tt_metal::Program program{};
 
     const auto& output_distribution_spec = output.buffer()->buffer_distribution_spec().value();
@@ -49,11 +46,7 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
         num_input_pages_in_row = tt::div_up(elements_per_tensor_row, input_shard_width);
         elements_per_input_page = input_shard_width;
     }
-    if (output.is_sharded() &&
-        output.memory_config().memory_layout() !=
-            TensorMemoryLayout::HEIGHT_SHARDED) {  // This favtory is meant to convert things to ND sharded, but if we
-                                                   // decide to make this apply to even converting to legacy sharded,
-                                                   // thenm having this branch lets us handle that case too.
+    if (output.is_sharded() && output.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t output_shard_width =
             (output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                              : output.nd_shard_spec().value().shard_shape[-1]);
@@ -88,25 +81,8 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
     const auto num_cores = ordered_cores_with_data.size();
     const auto& ordered_cores_with_data_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    // std::cout << "num_cores: " << num_cores << std::endl;
-    // Creating CBs
-    // uint32_t max_number_of_input_pages_overlapping_an_output_page = 1;
-    // if (elements_per_input_page < elements_per_output_page) {
-    //     max_number_of_input_pages_overlapping_an_output_page =
-    //         static_cast<uint32_t>(elements_per_output_page / elements_per_input_page) +
-    //         2;  // +2 because the output page can overlap the end of the first input page and the beginning of the
-    //         last
-    //             // input page
-    // } else if (elements_per_input_page > elements_per_output_page) {
-    //     max_number_of_input_pages_overlapping_an_output_page =
-    //         2;  // 2 because the output page can overlap the end of the first input page and the beginning of the
-    //         last
-    //             // input page
-    // }
-
     // Configuring the CB that store input pages
-    const auto input_page_size =
-        input.buffer()->page_size();  //  Input page size must be aligned to avoid alignment errors in the reader kernel
+    const auto input_page_size = input.buffer()->page_size();
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::tt_metal::CircularBufferConfig input_pages_cb_config =
         tt::tt_metal::CircularBufferConfig(input_page_size, {{input_pages_cb_index, input_cb_data_format}})
@@ -115,8 +91,8 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
 
     // Configuring the CB that stores output pages
     const auto aligned_output_page_size =
-        output.buffer()->aligned_page_size();  // Output page size doesn't need to be aligned, since we are only writing
-                                               // the valis nonpadding page data to the output buffer in the kernel
+        output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
+                                               // the noc_write reads from an aligned address in the CB
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::tt_metal::CircularBufferConfig output_pages_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -154,19 +130,6 @@ ToShardedRowMajorProgramFactory::cached_program_t ToShardedRowMajorProgramFactor
 
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    // std::cout << "num_output_shards: " << num_output_shards << std::endl;
-    // std::cout << "num_input_shards: " << input.buffer()->buffer_distribution_spec().value().num_shards() <<
-    // std::endl; std::cout<<"output_padded_shape: " << output.padded_shape() << std::endl;
-    // std::cout<<"input_padded_shape: " << input.padded_shape() << std::endl;
-    // std::cout<<"output_logical_shape: " << output.logical_shape() << std::endl;
-    // std::cout<<"input_logical_shape: " << input.logical_shape() << std::endl;
-    // std::cout << "elements_per_output_page: " << elements_per_output_page << std::endl;
-    // std::cout << "elements_per_input_page: " << elements_per_input_page << std::endl;
-    // std::cout << "elements_per_tensor_row: " << elements_per_tensor_row << std::endl;
-    // std::cout << "bytes_per_element: " << bytes_per_element << std::endl;
-    // std::cout << "num_output_pages_in_row: " << num_output_pages_in_row << std::endl;
-    // std::cout << "num_input_pages_in_row: " << num_input_pages_in_row << std::endl;
-    // std::cout << "num_cores: " << num_cores << std::endl;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/to_sharded_pages_row_major_reader.cpp",

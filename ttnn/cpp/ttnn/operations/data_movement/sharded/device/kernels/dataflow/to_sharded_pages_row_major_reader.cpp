@@ -61,7 +61,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t num_shards = get_compile_time_arg_val(2);
     constexpr uint32_t num_cores = get_compile_time_arg_val(3);
-    // constexpr uint32_t max_num_input_pages_per_output_page = get_compile_time_arg_val(4);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(4);
     constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(5);
     constexpr uint32_t elements_per_output_page = get_compile_time_arg_val(6);
@@ -104,12 +103,8 @@ void kernel_main() {
             // Read the input pages into the CB
             const auto input_pages_to_read = input_last_page_id - input_first_page_id + 1;
 
-            // cb_reserve_back(cb_id_in0, input_pages_to_read);
-
             for (uint32_t input_page_id_offset = 0; input_page_id_offset < input_pages_to_read;
                  ++input_page_id_offset) {
-                // cb_reserve_back(cb_id_in0, 1);
-                // uint32_t input_pages_l1_write_addr = get_write_ptr(cb_id_in0);
                 uint32_t input_page_overlapping_bytes_with_output_page = input_page_size_bytes;
                 uint32_t input_page_offset_bytes = 0;
                 if (input_page_id_offset == 0) {
@@ -128,18 +123,13 @@ void kernel_main() {
                 noc_async_read(input_page_noc_addr, input_pages_l1_write_addr, input_page_size_bytes);
                 noc_async_read_barrier();
 
-                // cb_push_back(cb_id_in0, 1);
-                // cb_wait_front(cb_id_in0, 1);
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     l1_output_page_write_addr,
                     input_pages_l1_write_addr + input_page_offset_bytes,
                     input_page_overlapping_bytes_with_output_page);
                 l1_output_page_write_addr += input_page_overlapping_bytes_with_output_page;
-                // cb_pop_front(cb_id_in0, 1);
             }
             cb_push_back(cb_id_in1, 1);
-            // cb_wait_front(cb_id_in0, input_pages_to_read);
-            // cb_pop_front(cb_id_in0, input_pages_to_read);
         }
     }
     cb_push_back(cb_id_in0, 1);

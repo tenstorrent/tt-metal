@@ -30,15 +30,7 @@ void ToShardedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
     }
 
-    // TT_FATAL(
-    //     input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-    //     "Input tensor memory layout must be INTERLEAVED but got {}",
-    //     input_tensor.memory_config().memory_layout()); // AL: we might not have to restrict this to interleaved
-    //     inputs only!
     TT_FATAL(output_mem_config.is_sharded(), "Output memory config must be sharded");
-    // if (output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-    //     TT_FATAL(output_mem_config.buffer_type() == BufferType::L1, "We don't support DRAM block sharding");
-    // }
 
     // AL: The way I wrote the kernel should work with unaligned sizes too
     // if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -66,9 +58,8 @@ ToShardedDeviceOperation::spec_return_value_t ToShardedDeviceOperation::compute_
         operation_attributes.output_dtype, PageConfig(input_tensor.layout()), operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a
-    // different
-    // padded_shape due to having a differrent shard_spec.
-    // std::cout << "output_padded_shape: " << output_padded_shape << std::endl;
+    // different padded_shape due to having a different shard_spec.
+
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
