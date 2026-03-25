@@ -14,23 +14,25 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_expert_dispatch_table, extract_mesh_config
 
 
-def torch_masked_bincount(indices: torch.Tensor, expert_mask: torch.Tensor, n_routed_experts: int) -> torch.Tensor:
+def torch_masked_bincount(
+    indices: torch.Tensor, expert_dispatch_table: torch.Tensor, n_routed_experts: int
+) -> torch.Tensor:
     """
-    Reference implementation: count expert occurrences masked by expert_mask.
+    Reference implementation: count expert occurrences masked by expert_dispatch_table.
 
     Args:
         indices: [sp_dim, topk] int tensor of expert indices.
-        expert_mask: [n_routed_experts] int tensor (nonzero = present).
+        expert_dispatch_table: [n_routed_experts] int32 tensor (>= 0 = present, -1 = absent).
         n_routed_experts: number of experts (output size).
 
     Returns:
         [n_routed_experts] int tensor of masked histogram counts.
     """
     counts = torch.bincount(indices.flatten().to(torch.int64), minlength=n_routed_experts).to(torch.int32)
-    mask = (expert_mask > 0).to(torch.int32)
+    mask = (expert_dispatch_table >= 0).to(torch.int32)
     return counts[:n_routed_experts] * mask
 
 
@@ -82,10 +84,11 @@ def test_masked_bincount(
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
+    num_dispatch_groups = mesh_config.num_dispatch_groups
 
     logger.info(
         f"Testing masked_bincount: {mesh_device.shape=}, {sp_dim=}, {topk=}, "
-        f"{n_routed_experts=}, {mask_all_present=}"
+        f"{n_routed_experts=}, {mask_all_present=}, {num_dispatch_groups=}"
     )
     ttnn.visualize_mesh_device(mesh_device)
 
@@ -95,19 +98,24 @@ def test_masked_bincount(
     total_sp = dispatch_group_size * sp_dim
     indices = torch.randint(0, n_routed_experts, (total_sp, topk), dtype=torch.int32)
 
-    # Expert mask
-    if mask_all_present:
-        expert_mask = torch.ones(n_routed_experts, dtype=torch.int32)
-    else:
-        expert_mask = torch.randint(0, 2, (n_routed_experts,), dtype=torch.int32)
+    # Expert dispatch table: maps expert_id -> chip_id (>= 0) or -1 (absent)
+    dispatch_table = create_expert_dispatch_table(
+        num_routed_experts=n_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    if not mask_all_present:
+        absent = torch.randint(0, 2, (n_routed_experts,)).bool()
+        dispatch_table[:, absent] = -1
 
-    # Compute torch reference per chip (each chip owns a contiguous sp_dim slice)
-    torch_histograms = []
-    for chip in range(dispatch_group_size):
-        chip_indices = indices[chip * sp_dim : (chip + 1) * sp_dim]
-        hist = torch_masked_bincount(chip_indices, expert_mask, n_routed_experts)
-        torch_histograms.append(hist)
-    torch_histograms = torch.stack(torch_histograms)  # [dispatch_group_size, n_routed_experts]
+    # Compute torch reference per (dispatch_group, chip) pair
+    # torch_histograms[group][chip] = histogram for that group/chip combination
+    torch_histograms = {}
+    for group in range(num_dispatch_groups):
+        for chip in range(dispatch_group_size):
+            chip_indices = indices[chip * sp_dim : (chip + 1) * sp_dim]
+            hist = torch_masked_bincount(chip_indices, dispatch_table[group], n_routed_experts)
+            torch_histograms[(group, chip)] = hist
 
     # Height-shard config matching the gate module pattern: 8x8 core grid
     num_cores = 64
@@ -136,18 +144,33 @@ def test_masked_bincount(
     )
     tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
-    tt_expert_mask = ttnn.from_torch(
-        expert_mask,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    # Dispatch table -> UINT32 for kernel (-1 in int32 becomes 0xFFFFFFFF in uint32)
+    if num_dispatch_groups == 1:
+        tt_dispatch_table = ttnn.from_torch(
+            dispatch_table[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    else:
+        tt_dispatch_table = ttnn.from_torch(
+            dispatch_table,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                mesh_shape=mesh_device.shape,
+                dims=(None, 0),
+            ),
+        )
 
     # Run ttnn op
-    tt_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(tt_indices, tt_expert_mask, n_routed_experts)
+    tt_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(tt_indices, tt_dispatch_table, n_routed_experts)
 
-    # Compare per-device (TP replicas in the same dispatch row should match)
+    # Compare per-device
     device_tensors = ttnn.get_device_tensors(tt_histograms)
     n_cols = mesh_device.shape[1]
     all_passed = True
@@ -158,7 +181,10 @@ def test_masked_bincount(
         row = device_id // n_cols
         col = device_id % n_cols
         chip_idx = row if sp_axis == 0 else col
-        ref_hist = torch_histograms[chip_idx]
+        group_idx = col if sp_axis == 0 else row
+        if num_dispatch_groups == 1:
+            group_idx = 0
+        ref_hist = torch_histograms[(group_idx, chip_idx)]
 
         matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)
         if not matches:

@@ -23,14 +23,17 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor must have a shard spec!");
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
 
-    TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::UINT32, "Expert mask must be UINT32!");
-    TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert mask must be ROW_MAJOR!");
+    TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::UINT32, "Expert dispatch table must be UINT32!");
+    TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert dispatch table must be ROW_MAJOR!");
     const auto& mask_shape = expert_mask.padded_shape();
+    bool valid_1d = mask_shape.size() == 1 && mask_shape[0] == args.n_routed_experts;
+    bool valid_2d = mask_shape.size() == 2 && mask_shape[0] == 1 && mask_shape[1] == args.n_routed_experts;
     TT_FATAL(
-        mask_shape.size() == 1 && mask_shape[0] == args.n_routed_experts,
-        "Expert mask must have shape [n_routed_experts={}], got [{}]",
+        valid_1d || valid_2d,
+        "Expert dispatch table must have shape [{}] or [1, {}], got {}D tensor",
         args.n_routed_experts,
-        mask_shape[0]);
+        args.n_routed_experts,
+        mask_shape.size());
 }
 
 MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation::compute_output_specs(

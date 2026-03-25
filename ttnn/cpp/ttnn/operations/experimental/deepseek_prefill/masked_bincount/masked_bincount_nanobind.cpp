@@ -15,13 +15,14 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
         mod,
         R"doc(
             Counts occurrences of each expert index in a height-sharded input tensor (bincount / histogram),
-            masked by a per-expert presence vector.
+            masked by an expert dispatch table that maps experts to chip IDs.
 
             Input tensor must be a 2D UINT16 height-sharded ROW_MAJOR tensor of shape [sp_dim, topk_dim]
             containing expert indices selected for each token.
 
-            Expert mask must be a 1D UINT32 ROW_MAJOR tensor of shape [n_routed_experts] where non-zero
-            means the expert is present (counted) and zero means it is absent (skipped).
+            Expert dispatch table must be a UINT32 ROW_MAJOR tensor of shape [n_routed_experts] or
+            [1, n_routed_experts]. Values encode chip placement: 0xFFFFFFFF (-1 as int32) means the
+            expert is absent (skipped), any other value means the expert is present (counted).
 
             Returns a 1D UINT32 tensor of shape [n_routed_experts] where each element is the
             count of how many times the corresponding expert index appears in the input,
@@ -29,7 +30,7 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
 
             Args:
                 * :attr:`input_tensor`: 2D UINT16 height-sharded tensor of expert indices [sp_dim, topk_dim].
-                * :attr:`expert_mask`: 1D UINT32 tensor of shape [n_routed_experts] (0 = skip, nonzero = count).
+                * :attr:`expert_mask`: UINT32 tensor of shape [n_routed_experts] or [1, n_routed_experts] (0xFFFFFFFF = skip, other = count).
                 * :attr:`n_routed_experts`: Number of routed experts (output dimension size).
 
         )doc",

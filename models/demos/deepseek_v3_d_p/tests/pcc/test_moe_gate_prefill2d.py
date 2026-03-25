@@ -11,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_expert_dispatch_table, create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     adjust_shapes_for_testing,
@@ -147,6 +147,37 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
+    n_sp_devices = mesh_device.shape[0]
+    n_tp_devices = mesh_device.shape[1]
+    n_routed_experts = config.n_routed_experts
+
+    dispatch_table = create_expert_dispatch_table(
+        num_routed_experts=n_routed_experts,
+        dispatch_group_size=n_sp_devices,
+        num_dispatch_groups=n_tp_devices,
+    )
+    if n_tp_devices == 1:
+        tt_model.expert_dispatch_table = ttnn.from_torch(
+            dispatch_table[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    else:
+        tt_model.expert_dispatch_table = ttnn.from_torch(
+            dispatch_table,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0),
+                mesh_shape=mesh_device.shape,
+            ),
+        )
+
     # Reshape reference outputs to match device mesh structure upfront
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
     reference_logits_reshaped = reference_logits.view(mesh_device.shape[0], seq_len_per_device, -1)
@@ -210,34 +241,38 @@ def test_forward_pass(
                 f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.99"
             )
 
-    # Compute reference dispatch offsets from tt_topk_indices using get_gate_outputs
-    n_sp_devices = mesh_device.shape[0]
-    n_tp_devices = mesh_device.shape[1]
-    n_routed_experts = config.n_routed_experts
-    experts_per_chip = n_routed_experts // n_sp_devices
-
+    # Compute reference dispatch offsets from tt_topk_indices, masked by dispatch table
     indices_for_gate = torch.zeros(n_sp_devices, seq_len_per_device, config.n_activated_experts, dtype=torch.int32)
     for row in range(n_sp_devices):
         device_id = row * n_tp_devices
         indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
 
-    expert_offsets, _, cum_sum = get_gate_outputs(
-        indices=indices_for_gate,
-        dispatch_group_size=n_sp_devices,
-        num_routed_experts=n_routed_experts,
-        experts_per_chip=experts_per_chip,
-        seq_len_per_chip=seq_len_per_device,
-        num_experts_per_tok=config.n_activated_experts,
-    )
+    # Unmasked expert counter: same for all dispatch groups (all groups see the same tokens)
+    expert_counter = torch.zeros((n_sp_devices, n_routed_experts), dtype=torch.int32)
+    for chip in range(n_sp_devices):
+        for token in range(seq_len_per_device):
+            for k in range(config.n_activated_experts):
+                expert_id = indices_for_gate[chip, token, k].item()
+                expert_counter[chip, expert_id] += 1
 
-    reference_offsets = expert_offsets.long()
-    reference_totals = cum_sum[-1:].long()
+    # Per-dispatch-group masked offsets and totals
+    per_group_offsets = {}
+    per_group_totals = {}
+    for group in range(n_tp_devices):
+        group_mask = dispatch_table[group] >= 0
+        masked_counter = expert_counter.clone()
+        masked_counter[:, ~group_mask] = 0
+        cum_sum = torch.cumsum(masked_counter, dim=0)
+        offsets = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
+        per_group_offsets[group] = offsets.long()
+        per_group_totals[group] = cum_sum[-1:].long()
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
         tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
+        reference_offsets = per_group_offsets[col]
 
         offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
         status_char = "✅" if offsets_match else "❌"
@@ -264,6 +299,7 @@ def test_forward_pass(
         tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
+        reference_totals = per_group_totals[col]
 
         totals_match = torch.equal(tt_totals_torch, reference_totals)
         status_char = "✅" if totals_match else "❌"

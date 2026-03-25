@@ -10,8 +10,9 @@
 // Inputs:
 //   - input [sp_dim, topk_dim]: UINT16 height-sharded tensor of expert indices
 //     selected for each token (one row per token, one column per top-k slot).
-//   - expert_mask [n_routed_experts]: UINT32 tensor where nonzero means the
-//     expert is present on this device and should be counted, zero means skip.
+//   - expert_dispatch_table [n_routed_experts]: UINT32 tensor mapping experts to
+//     chip IDs. 0xFFFFFFFF (-1 as int32) means absent (skip), any other value
+//     means present (count).
 //
 // Output:
 //   - histogram [n_routed_experts]: UINT32 count of token assignments per expert.
@@ -118,7 +119,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
         for (uint32_t w = 0; w < W; w++) {
             uint32_t expert_idx = row[w];
-            if (expert_idx < n_routed_experts && mask[expert_idx] != 0) {
+            if (expert_idx < n_routed_experts && mask[expert_idx] != 0xFFFFFFFF) {
                 uint64_t noc_addr = get_noc_addr(out_addr + expert_idx * sizeof(uint32_t));
                 noc_semaphore_inc(noc_addr, 1);
             }
