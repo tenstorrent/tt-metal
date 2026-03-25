@@ -25,28 +25,23 @@ inline void llk_math_deepseek_top32_rm_local_sort(
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool idir = false>
-inline void llk_math_deepseek_top32_rm_merge(uint dst_index, int vector_mode = (int)VectorMode::RC_custom) {
+inline void llk_math_deepseek_top32_rm_merge(
+    uint dst_index, bool across_tiles, int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::_bitonic_top32_merge_<APPROXIMATE, is_fp32_dest_acc_en, idir>, dst_index, vector_mode);
+        ckernel::sfpu::_bitonic_top32_merge_<APPROXIMATE, is_fp32_dest_acc_en, idir>,
+        dst_index,
+        vector_mode,
+        across_tiles);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_deepseek_top32_rm_rebuild(
-    uint dst_index,
-    bool idir,
-    int m_iter,
-    int k,
-    int logk,
-    int skip_second,
-    int vector_mode = (int)VectorMode::RC_custom) {
+    uint dst_index, bool idir, bool skip_second, int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_bitonic_top32_rebuild_<APPROXIMATE, is_fp32_dest_acc_en>,
         dst_index,
         vector_mode,
         idir,
-        m_iter,
-        k,
-        logk,
         skip_second);
 }
 

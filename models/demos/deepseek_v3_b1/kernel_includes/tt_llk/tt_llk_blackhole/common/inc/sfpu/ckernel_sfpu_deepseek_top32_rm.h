@@ -294,58 +294,14 @@ inline void _bitonic_top32_phases_steps_(const int idir) {
         datums_compared += 16;
         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
     }
-
-    // produce final sequence len=64
-    num_steps = 6;  // log(64)
-    start_step = num_steps;
-    end_step = 4;
-    sorted_seq_length = 1 << num_steps;  // 64
-    datums_compared = 0;
-    total_datums_to_compare = 64;
-    for (std::uint32_t ss = start_step; ss > end_step; ss--) {
-        // Steps N to 5
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        dir = idir;
-        std::uint32_t dist = (ss == 5) ? 16 : 32;
-        std::uint32_t inner_d =
-            dist >> 3;  // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
-        datums_compared = 0;
-        while (datums_compared < total_datums_to_compare) {
-            for (std::uint32_t ii = 0; ii < inner_d; ii++) {
-                bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
-                bitonic_top32_step_N(dir);
-                bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
-                std::uint32_t dst_inc = 8;
-                bool dst_cr = false;
-                if (ii == (inner_d - 1)) {
-                    dst_cr = true;
-                    dst_inc = 2 * dist;
-                }
-                bitonic_top32_inc_x8_dest(dst_inc, dst_cr);
-                datums_compared += 16;
-            }
-            dir = (datums_compared == sorted_seq_length) ? !dir : dir;
-        }
-    }
-    // steps 4 to 1
-    dir = idir;
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    datums_compared = 0;
-    while (datums_compared < total_datums_to_compare) {
-        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(dir);
-        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
-        datums_compared += 16;
-        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
-    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min>
-inline void _bitonic_top32_merge_() {
-    std::uint32_t dist = 64;
+inline void _bitonic_top32_merge_(const bool across_tiles) {
+    std::uint32_t dist = across_tiles ? 64 : 32;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int d = 0; d < 8; d++) {
+    for (int d = 0; d < 4; d++) {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
         bitonic_top32_step_N(top_min);
         bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
@@ -354,138 +310,44 @@ inline void _bitonic_top32_merge_() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _bitonic_top32_rebuild_(
-    const bool idir, const int m_iter, const int k, const int logk, const int skip_second) {
-    std::uint32_t dst_addr_offset = 0;
-    for (int face = 0; face < 2; face++) {
-        for (int col = 0; col < 2; col++) {
-            std::uint32_t total_datums_shift = (skip_second & 0x1);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-            std::uint32_t rebuild_m = m_iter + 1;
-            std::uint32_t total_datums_to_compare =
-                ((64 >> rebuild_m) < 2 * k)
-                    ? 2 * k
-                    : (64 >>
-                       rebuild_m);  // max(2*k, 64/(2^m)) total datums to compare; there's always at least 2*K datums
-            total_datums_to_compare = total_datums_to_compare >> total_datums_shift;  // Reduce by 2 if skipping last
-            std::uint32_t dist = (k << rebuild_m) > 32 ? 32 : (k << rebuild_m);       // min(32, k*2^k)
-            std::uint32_t ld_offset = (dist >> 4) * 32 + (dist & 0xF);
-            std::uint32_t ld_dist;
-            int ph = logk - 1;
-            bool dir = idir;
-            std::uint32_t datums_compared = 0;
+inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second) {
+    std::uint32_t total_datums_to_compare = 64 >> (skip_second ? 1 : 0);
+    std::uint32_t datums_compared = 0;
+    constexpr std::uint32_t start_step = 5;
+    constexpr std::uint32_t end_step = 4;
+    constexpr std::uint32_t sorted_seq_length = 32;
 
-            switch (ph) {
-                case 0: break;
-                case 1:
-                    if (m_iter >= 2) {
-                        while (datums_compared < total_datums_to_compare) {
-                            // Groups of 8 datums being sorted at the same time
-                            bitonic_top32_load8<is_fp32_dest_acc_en>(0, ld_offset);
-                            bitonic_top32_ph1_st2_to_1();
-                            bitonic_top32_store8<is_fp32_dest_acc_en>(0, ld_offset);
-                            bitonic_top32_inc_x8_dest(64, false);
-                            datums_compared += 16;
-                        }
-                        break;
-                    } else {
-                        ld_dist = (ld_offset < 16) ? 4 * ld_offset : 2 * ld_offset;
-                        while (datums_compared < total_datums_to_compare) {
-                            bitonic_top32_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
-                            bitonic_top32_ph1_st2_to_1();
-                            bitonic_top32_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
-                            datums_compared += 16;
-                        }
-                        break;
-                    }
-                case 2:
-                    while (datums_compared < total_datums_to_compare) {
-                        bitonic_top32_load16<is_fp32_dest_acc_en>(4, ld_offset);
-                        bitonic_top32_ph2_st3_to_1();
-                        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        datums_compared += 16;
-                    }
-                    break;
-                case 3:
-                    while (datums_compared < total_datums_to_compare) {
-                        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-                        bitonic_top32_ph3_st4_to_1(dir);
-                        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        TTI_INCRWC(0, 8, 0, 0);
-                        datums_compared += 16;
-                        dir = !dir;
-                    }
-                    break;
-                default:
-                    std::uint32_t num_steps = ph + 1;
-                    std::uint32_t start_step = num_steps;
-                    std::uint32_t end_step = 4;
-                    std::uint32_t sorted_seq_length = 1 << num_steps;
-                    std::uint32_t total_datums_to_compare = 64;
-                    for (std::uint32_t ss = start_step; ss > end_step; ss--) {
-                        // Steps N to 5
-                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                        dir = idir;
-                        datums_compared = 0;
-                        std::uint32_t dist = (ss == 5) ? 16 : 32;
-                        std::uint32_t inner_d =
-                            dist >> 3;  // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
-                        std::uint32_t dst_offset = 0;
-                        while (datums_compared < total_datums_to_compare) {
-                            for (std::uint32_t ii = 0; ii < inner_d; ii++) {
-                                bitonic_top32_load16<is_fp32_dest_acc_en>(
-                                    4, 2 * dist);  // load/store with offset of face 1 (in row major face layout)
-                                bitonic_top32_step_N(dir);
-                                bitonic_top32_store16<is_fp32_dest_acc_en, false>(
-                                    4, 2 * dist);  // load/store with offset of face 1 (in row major face layout)
-                                std::uint32_t dst_inc = 8;
-                                dst_offset += dst_inc;
-                                bool dst_cr = false;
-                                if (ii == (inner_d - 1)) {
-                                    dst_cr = true;
-                                    dst_inc = 4 * dist;
-                                    dst_offset = 2 * dist;
-                                } else if (dst_offset == 16) {
-                                    dst_cr = true;
-                                    dst_inc = 32;
-                                }
-                                bitonic_top32_inc_x8_dest(dst_inc, dst_cr);
-                                datums_compared += 16;
-                            }
-                            dir = (datums_compared == sorted_seq_length)
-                                      ? !dir
-                                      : dir;  // total_sorted = total_loops * 16; if total_sorted == sorted_seq_length
-                        }
-                    }
-                    // steps 4 to 1
-                    dir = idir;
-                    datums_compared = 0;
-                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                    while (datums_compared < total_datums_to_compare) {
-                        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-                        bitonic_top32_ph3_st4_to_1(dir);
-                        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
-                        datums_compared += 16;
-                        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
-                    }
+    bool dir = idir;
+    // Step 5
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    constexpr std::uint32_t dist = 16;
+    constexpr std::uint32_t inner_d = dist >> 3;
+    while (datums_compared < total_datums_to_compare) {
+        for (std::uint32_t ii = 0; ii < inner_d; ii++) {
+            bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
+            bitonic_top32_step_N(dir);
+            bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
+            std::uint32_t dst_inc = 8;
+            bool dst_cr = false;
+            if (ii == (inner_d - 1)) {
+                dst_cr = true;
+                dst_inc = 2 * dist;
             }
-
-            dst_addr_offset += 2;
-            set_dst_write_addr_offset(dst_addr_offset);
+            bitonic_top32_inc_x8_dest(dst_inc, dst_cr);
+            datums_compared += 16;
         }
-        dst_addr_offset = 16;
-        set_dst_write_addr_offset(dst_addr_offset);
+        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+    }
+    // steps 4 to 1
+    dir = idir;
+    datums_compared = 0;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    while (datums_compared < total_datums_to_compare) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        datums_compared += 16;
+        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
     }
 }
 
