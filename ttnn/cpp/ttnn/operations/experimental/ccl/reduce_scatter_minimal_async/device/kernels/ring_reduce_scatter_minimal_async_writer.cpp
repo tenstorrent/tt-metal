@@ -228,12 +228,15 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
+    static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+    uint64_t remote_noc_addrs[4] = {0, 0, 0, 0};
+    uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
     fabric_unicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         pkt_scatter_hdr,
         static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-        page_size * 2);
+        NocUnicastScatterCommandHeader(remote_noc_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+        page_size * num_tiles_to_write_per_packet);
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
         pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
@@ -246,12 +249,13 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
         for (uint32_t i = 0; i < ring_size; ++i) {
-            const bool full_slice = false;
+            const bool full_slice = false;                                               // TODO ...
+            const bool do_fabric_send = (i < (ring_size - 1));                           // TODO ...
+            uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;  // TODO ...
 
             // slice_idx = slice_idx % ring_size
             if (direction) {
@@ -260,10 +264,8 @@ void kernel_main() {
                 slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
             }
 
-            // If not the last slice, write what's on cb_output_id forward
-            uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
-            if (i < (ring_size - 1)) {
-                chunk_count = 0;
+            if (do_fabric_send) {
+                uint32_t chunk_count = 0;
 
                 uint32_t intermediate_tile_id_start;
                 if constexpr (dim == 3) {
@@ -308,61 +310,44 @@ void kernel_main() {
 
                         cb_wait_front(cb_output_id, tile_granularity);
                         size_t l1_read_addr = get_read_ptr(cb_output_id);
-                        while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
-                            uint32_t tiles_remaining_to_read_in_current_direction =
-                                tiles_to_read_in_current_direction - tiles_read_in_current_direction;
+                        for (uint32_t j = 0; j < tiles_to_read_in_current_direction;
+                             j += num_tiles_to_write_per_packet) {
                             uint32_t tiles_to_put_in_current_packet =
-                                std::min(tiles_remaining_to_read_in_current_direction, num_tiles_to_write_per_packet);
+                                std::min(tiles_to_read_in_current_direction - j, num_tiles_to_write_per_packet);
 
-                            uint32_t intermediate_tile_one_id =
-                                intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                            // DPRINT << "W: interm_tile_id0=" << intermediate_tile_one_id << ENDL();
-                            intermediate_pages_read_in_row++;
-                            if (intermediate_pages_read_in_row == slice_Wt) {
-                                intermediate_row_offset += input_tensor_Wt;
-                                intermediate_pages_read_in_row -= slice_Wt;
-                            }
-                            auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                intermediate_addrgen, intermediate_tile_one_id, 0);
-
-                            // Will have more cases once scatter-write supports more than 2 distinct addresses
-                            switch (tiles_to_put_in_current_packet) {
-                                case 2: {
-                                    uint32_t intermediate_tile_two_id = intermediate_tile_id_start +
-                                                                        intermediate_row_offset +
-                                                                        intermediate_pages_read_in_row;
-                                    intermediate_pages_read_in_row++;
-                                    if (intermediate_pages_read_in_row == slice_Wt) {
-                                        intermediate_row_offset += input_tensor_Wt;
-                                        intermediate_pages_read_in_row -= slice_Wt;
-                                    }
-
-                                    auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                        intermediate_addrgen, intermediate_tile_two_id, 0);
-                                    fabric_unicast_noc_scatter_write_with_state<
-                                        UnicastScatterWriteUpdateMask::DstAddrs>(
-                                        fabric_direction_connection,
-                                        pkt_scatter_hdr,
-                                        l1_read_addr,
-                                        NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-                                    l1_read_addr += page_size * 2;
-                                    tiles_read += 2;
-                                    tiles_read_in_current_direction += 2;
-                                    break;
+                            for (uint32_t k = 0; k < tiles_to_put_in_current_packet; ++k) {
+                                uint32_t tile_id = intermediate_tile_id_start + intermediate_row_offset +
+                                                   intermediate_pages_read_in_row;
+                                intermediate_pages_read_in_row++;
+                                if (intermediate_pages_read_in_row == slice_Wt) {
+                                    intermediate_row_offset += input_tensor_Wt;
+                                    intermediate_pages_read_in_row -= slice_Wt;
                                 }
-                                case 1:
-                                default: {
-                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                        fabric_direction_connection,
-                                        pkt_unicast_hdr,
-                                        l1_read_addr,
-                                        NocUnicastCommandHeader{noc_address0});
-                                    l1_read_addr += page_size;
-                                    tiles_read++;
-                                    tiles_read_in_current_direction++;
-                                    break;
-                                }
+
+                                remote_noc_addrs[k] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                    intermediate_addrgen, tile_id, 0);
                             }
+
+                            if (tiles_to_put_in_current_packet > 1) {
+                                fabric_unicast_noc_scatter_write_with_state<
+                                    UnicastScatterWriteUpdateMask::DstAddrs |
+                                    UnicastScatterWriteUpdateMask::ChunkSizes |
+                                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                                    fabric_direction_connection,
+                                    pkt_scatter_hdr,
+                                    l1_read_addr,
+                                    NocUnicastScatterCommandHeader(
+                                        remote_noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                                    page_size * tiles_to_put_in_current_packet);
+                            } else {
+                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                    fabric_direction_connection,
+                                    pkt_unicast_hdr,
+                                    l1_read_addr,
+                                    NocUnicastCommandHeader{remote_noc_addrs[0]});
+                            }
+                            l1_read_addr += page_size * tiles_to_put_in_current_packet;
+                            tiles_read += tiles_to_put_in_current_packet;
                             noc_async_writes_flushed();
                         }
                         cb_pop_front(cb_output_id, tile_granularity);
@@ -388,8 +373,9 @@ void kernel_main() {
                             tiles_read += tiles_to_read_in_other_direction;
                         }
 
-                        chunk_count++;
-                        if (chunk_count % chunks_per_sync == 0) {
+                        // ++chunk_count % chunks_per_sync
+                        chunk_count = (chunk_count == chunks_per_sync) ? 0 : (chunk_count + 1);
+                        if (chunk_count == chunks_per_sync) {
                             // 2. unicast output ready semaphore
                             uint64_t out_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -402,7 +388,7 @@ void kernel_main() {
                     intermediate_tile_id_start += input_channel_num_pages;
                 }
 
-                if (chunk_count % chunks_per_sync != 0) {
+                if (chunk_count != chunks_per_sync) {
                     // 2. unicast output ready semaphore
                     uint64_t out_ready_sem_noc_addr_in_pkt =
                         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
