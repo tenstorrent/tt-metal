@@ -110,10 +110,10 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;  // E[x] partial reduce
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;    // E[x] partial reduce
     constexpr uint32_t cb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
-    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;// E[x] partial reduce
-    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;// E[x] global reduce
+    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;            // E[x] partial reduce
+    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;    // E[x] global reduce
     constexpr uint32_t cb_ex2_id = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex2_global_id = tt::CBIndex::c_14;
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
