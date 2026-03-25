@@ -3,6 +3,7 @@
 
 from itertools import product
 
+from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.dump import TensixDump
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import (
@@ -44,6 +45,8 @@ def get_valid_dest_acc(to_from_int8: bool) -> bool:
     )
 
 
+@skip_for_wormhole
+@skip_for_blackhole
 @parametrize(
     formats=generate_valid_formats(
         [

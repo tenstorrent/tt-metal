@@ -13,9 +13,10 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
-from .device import BootMode, wait_for_tensix_operations_finished
+from .device import BootMode
 from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
+from .logger import logger
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import ProfilerBuild, TestConfig, TestMode
@@ -25,6 +26,10 @@ from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplatePa
 
 
 def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+
+    if frame.empty:
+        return pd.DataFrame()
+
     mask = frame["marker"] == "TILE_LOOP"
 
     if not mask.any():
@@ -234,7 +239,11 @@ def combine_perf_reports():
         if regular_files:
             dfs_regular = []
             for file in sorted(regular_files):
-                df = pd.read_csv(file)
+                logger.info(f"Raw appending: {file}")
+                try:
+                    df = pd.read_csv(file)
+                except:
+                    continue
                 dfs_regular.append(df)
 
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
@@ -247,7 +256,11 @@ def combine_perf_reports():
         if post_files:
             dfs_post = []
             for file in sorted(post_files):
-                df = pd.read_csv(file)
+                logger.info(f"Post appending: {file}")
+                try:
+                    df = pd.read_csv(file)
+                except:
+                    continue
                 dfs_post.append(df)
 
             combined_post = pd.concat(dfs_post, ignore_index=True)
@@ -361,8 +374,8 @@ class PerfConfig(TestConfig):
             variant_raw_data = []
             for run_index in range(run_count):
                 self.write_runtimes_to_L1(location)
-                elfs = self.run_elf_files(location)
-                wait_for_tensix_operations_finished(elfs, location)
+                self.run_elf_files(location)
+                self.wait_for_tensix_operations_finished(location)
 
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, location

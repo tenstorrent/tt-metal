@@ -15,7 +15,6 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
-from .device import wait_for_tensix_operations_finished
 from .fused_operation import FusedOperation
 from .llk_params import DestAccumulation, DestSync, PerfRunType
 from .logger import logger
@@ -149,8 +148,8 @@ class FuserConfig:
 
             logger.info("Running perf test for run type: {}", run_type.name)
             for run_index in range(run_count):
-                elfs = test_config.run_elf_files(location)
-                wait_for_tensix_operations_finished(elfs, location)
+                test_config.run_elf_files(location)
+                test_config.wait_for_tensix_operations_finished(location)
 
                 meta = Profiler._get_meta(test_config.test_name, test_config.variant_id)
                 buffer_data = [
@@ -199,8 +198,8 @@ class FuserConfig:
         if TestConfig.MODE == TestMode.PRODUCE:
             return
 
-        elfs = test_config.run_elf_files(location)
-        wait_for_tensix_operations_finished(elfs, location)
+        test_config.run_elf_files(location)
+        test_config.wait_for_tensix_operations_finished(location)
         collect_pipeline_results(self.pipeline)
         golden = FusedGolden()
         assert golden.check_pipeline(self)

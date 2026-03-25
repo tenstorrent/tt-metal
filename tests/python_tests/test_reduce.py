@@ -205,7 +205,6 @@ def test_reduce(
             ),
             custom_atol=tolerances[formats.output_format].atol * tile_cnt_A,
             custom_rtol=tolerances[formats.output_format].rtol * tile_cnt_A,
-            print_errors=True,
         ), "Assert against golden failed"
     else:
         # Use default target_pcc = 0.99
@@ -214,7 +213,6 @@ def test_reduce(
             res_tensor,
             formats.output_format,
             tile_shape=tile_shape,
-            print_errors=True,
         ), "Assert against golden failed"
 
 
@@ -378,7 +376,6 @@ def test_reduce_bfp4_b(
             ),
             custom_atol=tolerances[formats.output_format].atol * tile_cnt_A,
             custom_rtol=tolerances[formats.output_format].rtol * tile_cnt_A,
-            print_errors=True,
         ), "Assert against golden failed"
     else:
         # Use default target_pcc = 0.99
@@ -387,5 +384,4 @@ def test_reduce_bfp4_b(
             res_tensor,
             formats.output_format,
             tile_shape=tile_shape,
-            print_errors=True,
         ), "Assert against golden failed"

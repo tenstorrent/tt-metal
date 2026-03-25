@@ -36,7 +36,7 @@ def test_profiler_overhead(workers_tensix_coordinates):
     configuration.generate_variant_hash()
     configuration.build_elfs()
     configuration.run_elf_files(workers_tensix_coordinates)
-
+    configuration.wait_for_tensix_operations_finished(workers_tensix_coordinates)
     runtime = Profiler.get_data(
         configuration.test_name, configuration.variant_id, workers_tensix_coordinates
     )
