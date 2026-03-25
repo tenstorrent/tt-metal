@@ -237,13 +237,19 @@ class LTXPipeline:
 
         Returns list of encoding results with .video_encoding and .audio_encoding attributes.
         """
-        import sys
+        try:
+            import sys
 
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
-        from ltx_pipelines.utils.helpers import encode_prompts
-        from ltx_pipelines.utils.model_ledger import ModelLedger
+            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
+            torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
+            from ltx_pipelines.utils.helpers import encode_prompts
+            from ltx_pipelines.utils.model_ledger import ModelLedger
+        except ImportError as e:
+            raise ImportError(
+                "encode_prompts_reference() requires the LTX-2 reference package. "
+                "Use load_text_encoder() + __call__() for standalone text encoding."
+            ) from e
 
         ledger = ModelLedger(
             dtype=torch.bfloat16,
@@ -401,22 +407,17 @@ class LTXPipeline:
         Uses the official LTX-2 VideoLatentPatchifier for positions, matching the reference
         pipeline's precompute_freqs_cis with SPLIT rotation. No trans_mat needed.
         """
-        import sys
+        from ...utils.ltx import VideoLatentShape, get_pixel_coords, video_get_patch_grid_bounds
+        from ..models.transformers.ltx.rope_ltx import precompute_freqs_cis
 
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        from ltx_core.components.patchifiers import VideoLatentPatchifier, get_pixel_coords
-        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-        from ltx_core.model.transformer.rope import generate_freq_grid_np
-        from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
-        from ltx_core.types import VideoLatentShape
-
-        v_patchifier = VideoLatentPatchifier(patch_size=1)
         v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
-        v_coords = v_patchifier.get_patch_grid_bounds(output_shape=v_shape, device="cpu")
+        v_coords = video_get_patch_grid_bounds(v_shape)
         v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
         v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
 
-        cos_freq, sin_freq = ref_precompute(
+        from ..models.transformers.ltx.rope_ltx import LTXRopeType
+
+        cos_freq, sin_freq = precompute_freqs_cis(
             v_positions.bfloat16(),
             dim=self.inner_dim,
             out_dtype=torch.float32,
@@ -424,8 +425,7 @@ class LTXPipeline:
             max_pos=self.positional_embedding_max_pos,
             use_middle_indices_grid=True,
             num_attention_heads=self.num_attention_heads,
-            rope_type=RefRopeType.SPLIT,
-            freq_grid_generator=generate_freq_grid_np,
+            rope_type=LTXRopeType.SPLIT,
         )  # (1, num_heads, N, D_half)
 
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -604,20 +604,14 @@ class LTXPipeline:
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Compute audio RoPE using AudioPatchifier time-in-seconds positions with SPLIT rotation."""
-        import sys
 
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        from ltx_core.components.patchifiers import AudioPatchifier
-        from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
-        from ltx_core.model.transformer.rope import generate_freq_grid_np
-        from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
-        from ltx_core.types import AudioLatentShape
+        from ...utils.ltx import AudioLatentShape, audio_get_patch_grid_bounds
+        from ..models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 
-        a_patchifier = AudioPatchifier(patch_size=1)
         a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
-        a_positions = a_patchifier.get_patch_grid_bounds(output_shape=a_shape, device="cpu").float()
+        a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
 
-        a_cos, a_sin = ref_precompute(
+        a_cos, a_sin = precompute_freqs_cis(
             a_positions.bfloat16(),
             dim=2048,
             out_dtype=torch.float32,
@@ -625,8 +619,7 @@ class LTXPipeline:
             max_pos=[20],  # 1D temporal only
             use_middle_indices_grid=True,
             num_attention_heads=32,
-            rope_type=RefRopeType.SPLIT,
-            freq_grid_generator=generate_freq_grid_np,
+            rope_type=LTXRopeType.SPLIT,
         )  # (1, 32, audio_N_real, D_half)
 
         # Pad to audio_N if needed
@@ -683,10 +676,7 @@ class LTXPipeline:
         seed: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent)."""
-        import sys
-
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        from ltx_core.types import AudioLatentShape, VideoPixelShape
+        from ...utils.ltx import AudioLatentShape, VideoPixelShape
 
         B = 1
         latent_frames = (num_frames - 1) // 8 + 1
