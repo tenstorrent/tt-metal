@@ -19,6 +19,7 @@ class BgeM3EmbeddingsConfig:
     max_position_embeddings: int
     hidden_size: int
     pad_token_id: int
+    mesh_device: ttnn.MeshDevice | None = None
     embedding_dtype: ttnn.DataType | None = None
     embedding_memcfg: ttnn.MemoryConfig | None = None
 
@@ -185,7 +186,14 @@ def _resolve_embeddings_config(config: BgeM3EmbeddingsConfig) -> BgeM3Embeddings
     ]
     if weight_devices and any(device != weight_devices[0] for device in weight_devices):
         raise ValueError("All embedding weights must target the same device")
-    mesh_device = weight_devices[0] if weight_devices else ttnn.GetDefaultDevice()
+    if config.mesh_device is not None and weight_devices and weight_devices[0] != config.mesh_device:
+        raise ValueError("All embedding weights must target the configured mesh_device")
+
+    mesh_device = (
+        config.mesh_device
+        if config.mesh_device is not None
+        else (weight_devices[0] if weight_devices else ttnn.GetDefaultDevice())
+    )
 
     embedding_dtype = to_set.get("embedding_dtype", config.embedding_dtype)
     embedding_memcfg = to_set.get("embedding_memcfg", config.embedding_memcfg)
