@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
     if (argc > 2) {
         model_name = argv[2];
     } else {
-        model_name = "models/experimental/deit/deit_cpp/deit_model/deit_teacher_model.pt";
+        model_name = "models/experimental/deit/deit_cpp/deit_model/manifest.json";
     }
     auto test_infra = deit_inference::create_test_infra(device.get(), batch_size, model_name);
 

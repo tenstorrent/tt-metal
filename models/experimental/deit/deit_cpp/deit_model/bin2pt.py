@@ -2,118 +2,147 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from pathlib import Path
+
 import torch
-from PIL import Image
-from transformers import (
-    ViTFeatureExtractor,
-    DeiTModel,
-    DeiTForImageClassification,
-    DeiTForImageClassificationWithTeacher,
-)
-
-# Define model name (download from Hugging Face Hub online)
-model_name = "facebook/deit-base-distilled-patch16-224"
-
-# 1. Load models and their weights
-print("Loading DeiT encoder model from Hugging Face Hub...")
-encoder_model = DeiTModel.from_pretrained(model_name)
-encoder_model.eval()  # Switch to evaluation mode
-
-print("Loading DeiT classification model from Hugging Face Hub...")
-classifier_model = DeiTForImageClassification.from_pretrained(model_name)
-classifier_model.eval()  # Switch to evaluation mode
-
-print("Loading DeiT Teacher classification model from Hugging Face Hub...")
-teacher_model = DeiTForImageClassificationWithTeacher.from_pretrained(model_name)
-teacher_model.eval()  # Switch to evaluation mode
-
-# 2. Load feature extractor
-print("Loading feature extractor from Hugging Face Hub...")
-feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-
-# 3. Create example input
-print("Creating example input...")
-dummy_image = Image.new("RGB", (224, 224), color="red")
-inputs = feature_extractor(images=dummy_image, return_tensors="pt", size=224)
-example_input = inputs["pixel_values"]
-
-print(f"Input tensor shape: {example_input.shape}")
+from transformers import DeiTForImageClassificationWithTeacher
 
 
-# Create encoder wrapper to return last_hidden_state
-class EncoderWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, x):
-        outputs = self.model(x)
-        # Return last_hidden_state instead of the entire dictionary
-        return outputs.last_hidden_state
+MODEL_NAME = "/data/hf_cache/Deit/deit-tiny/deit-tiny"
+OUTPUT_DIR = Path(__file__).resolve().parent
+WEIGHTS_DIR = OUTPUT_DIR / "weights"
+MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
 
-# Create classifier wrapper to return logits
-class ClassifierWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, x):
-        outputs = self.model(x)
-        # Return classification logits instead of the entire dictionary
-        return outputs.logits
+def _reshape_patch_projection_weight(weight: torch.Tensor) -> torch.Tensor:
+    padded = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, 1))
+    return padded.permute(2, 3, 1, 0).reshape(
+        1, 1, padded.shape[2] * padded.shape[3] * padded.shape[1], padded.shape[0]
+    )
 
 
-# Create Teacher classifier wrapper to return three outputs
-class TeacherWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, x):
-        outputs = self.model(x)
-        # Return (logits, cls_logits, distillation_logits) instead of the entire dictionary
-        return outputs.logits, outputs.cls_logits, outputs.distillation_logits
+def _reshape_patch_projection_bias(bias: torch.Tensor) -> torch.Tensor:
+    return bias.reshape(1, 1, 1, bias.shape[0])
 
 
-# Use wrappers
-wrapped_encoder = EncoderWrapper(encoder_model)
-wrapped_encoder.eval()
+def _reshape_linear_weight(weight: torch.Tensor) -> torch.Tensor:
+    return weight.transpose(-2, -1)
 
-wrapped_classifier = ClassifierWrapper(classifier_model)
-wrapped_classifier.eval()
 
-wrapped_teacher = TeacherWrapper(teacher_model)
-wrapped_teacher.eval()
+def _reshape_linear_bias(bias: torch.Tensor) -> torch.Tensor:
+    return bias.reshape(1, 1, 1, bias.shape[0])
 
-# Export encoder model using torch.jit.trace
-print("Starting torch.jit.trace for encoder model...")
-traced_encoder = torch.jit.trace(wrapped_encoder, example_input)
 
-# Save encoder model to file
-encoder_filename = "deit_encoder_model.pt"
-traced_encoder.save(encoder_filename)
-print(f"Encoder model successfully exported as {encoder_filename}")
+def _reshape_layernorm_parameter(parameter: torch.Tensor) -> torch.Tensor:
+    return parameter.reshape(1, 1, parameter.shape[0] // 32, 32)
 
-# Export classifier model using torch.jit.trace
-print("Starting torch.jit.trace for classifier model...")
-traced_classifier = torch.jit.trace(wrapped_classifier, example_input)
 
-# Save classifier model to file
-classifier_filename = "deit_classifier_model.pt"
-traced_classifier.save(classifier_filename)
-print(f"Classifier model successfully exported as {classifier_filename}")
+def _reshape_token(token: torch.Tensor) -> torch.Tensor:
+    return token
 
-# Export Teacher classifier model using torch.jit.trace
-print("Starting torch.jit.trace for Teacher classifier model...")
-traced_teacher = torch.jit.trace(wrapped_teacher, example_input)
 
-# Save Teacher classifier model to file
-teacher_filename = "deit_teacher_model.pt"
-traced_teacher.save(teacher_filename)
-print(f"Teacher classifier model successfully exported as {teacher_filename}")
+def _reshape_position_embeddings(position_embeddings: torch.Tensor) -> torch.Tensor:
+    return position_embeddings
 
-print("All three models have been successfully exported!")
-print(f"- Encoder model (with feature extraction): {encoder_filename}")
-print(f"- Classifier model (with classifier.weight): {classifier_filename}")
-print(f"- Teacher classifier model (with dual classifiers and distillation): {teacher_filename}")
+
+def _tensor_to_file(tensor: torch.Tensor, relative_path: Path) -> dict:
+    tensor = tensor.detach().to(torch.float32).contiguous()
+    output_path = WEIGHTS_DIR / relative_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(tensor.numpy().tobytes())
+    return {"file": relative_path.as_posix(), "shape": list(tensor.shape)}
+
+
+def _export_manifest() -> None:
+    print(f"Loading DeiT teacher model from Hugging Face Hub: {MODEL_NAME}")
+    model = DeiTForImageClassificationWithTeacher.from_pretrained(MODEL_NAME)
+    model.eval()
+
+    state_dict = model.state_dict()
+    manifest = {"model_name": MODEL_NAME, "weights_dir": "weights", "tensors": {}}
+
+    special_tensors = {
+        "deit.embeddings.cls_token": _reshape_token(state_dict["deit.embeddings.cls_token"]),
+        "deit.embeddings.distillation_token": _reshape_token(state_dict["deit.embeddings.distillation_token"]),
+        "deit.embeddings.position_embeddings": _reshape_position_embeddings(
+            state_dict["deit.embeddings.position_embeddings"]
+        ),
+        "deit.embeddings.patch_embeddings.projection.weight": _reshape_patch_projection_weight(
+            state_dict["deit.embeddings.patch_embeddings.projection.weight"]
+        ),
+        "deit.embeddings.patch_embeddings.projection.bias": _reshape_patch_projection_bias(
+            state_dict["deit.embeddings.patch_embeddings.projection.bias"]
+        ),
+        "deit.layernorm.weight": _reshape_layernorm_parameter(state_dict["deit.layernorm.weight"]),
+        "deit.layernorm.bias": _reshape_layernorm_parameter(state_dict["deit.layernorm.bias"]),
+        "cls_classifier.weight": _reshape_linear_weight(state_dict["cls_classifier.weight"]),
+        "cls_classifier.bias": _reshape_linear_bias(state_dict["cls_classifier.bias"]),
+        "distillation_classifier.weight": _reshape_linear_weight(state_dict["distillation_classifier.weight"]),
+        "distillation_classifier.bias": _reshape_linear_bias(state_dict["distillation_classifier.bias"]),
+    }
+
+    for tensor_name, tensor in special_tensors.items():
+        relative_path = Path(*tensor_name.split(".")).with_suffix(".bin")
+        manifest["tensors"][tensor_name] = _tensor_to_file(tensor, relative_path)
+
+    for layer_idx in range(model.config.num_hidden_layers):
+        prefix = f"deit.encoder.layer.{layer_idx}"
+
+        query_weight = state_dict[f"{prefix}.attention.attention.query.weight"]
+        key_weight = state_dict[f"{prefix}.attention.attention.key.weight"]
+        value_weight = state_dict[f"{prefix}.attention.attention.value.weight"]
+        qkv_weight = torch.cat(
+            [
+                _reshape_linear_weight(query_weight),
+                _reshape_linear_weight(key_weight),
+                _reshape_linear_weight(value_weight),
+            ],
+            dim=-1,
+        )
+
+        query_bias = state_dict[f"{prefix}.attention.attention.query.bias"]
+        key_bias = state_dict[f"{prefix}.attention.attention.key.bias"]
+        value_bias = state_dict[f"{prefix}.attention.attention.value.bias"]
+        qkv_bias = _reshape_linear_bias(torch.cat([query_bias, key_bias, value_bias], dim=0))
+
+        layer_tensors = {
+            f"{prefix}.layernorm_before.weight": _reshape_layernorm_parameter(
+                state_dict[f"{prefix}.layernorm_before.weight"]
+            ),
+            f"{prefix}.layernorm_before.bias": _reshape_layernorm_parameter(
+                state_dict[f"{prefix}.layernorm_before.bias"]
+            ),
+            f"{prefix}.attention.attention.qkv.weight": qkv_weight,
+            f"{prefix}.attention.attention.qkv.bias": qkv_bias,
+            f"{prefix}.attention.output.dense.weight": _reshape_linear_weight(
+                state_dict[f"{prefix}.attention.output.dense.weight"]
+            ),
+            f"{prefix}.attention.output.dense.bias": _reshape_linear_bias(
+                state_dict[f"{prefix}.attention.output.dense.bias"]
+            ),
+            f"{prefix}.layernorm_after.weight": _reshape_layernorm_parameter(
+                state_dict[f"{prefix}.layernorm_after.weight"]
+            ),
+            f"{prefix}.layernorm_after.bias": _reshape_layernorm_parameter(
+                state_dict[f"{prefix}.layernorm_after.bias"]
+            ),
+            f"{prefix}.intermediate.dense.weight": _reshape_linear_weight(
+                state_dict[f"{prefix}.intermediate.dense.weight"]
+            ),
+            f"{prefix}.intermediate.dense.bias": _reshape_linear_bias(state_dict[f"{prefix}.intermediate.dense.bias"]),
+            f"{prefix}.output.dense.weight": _reshape_linear_weight(state_dict[f"{prefix}.output.dense.weight"]),
+            f"{prefix}.output.dense.bias": _reshape_linear_bias(state_dict[f"{prefix}.output.dense.bias"]),
+        }
+
+        for tensor_name, tensor in layer_tensors.items():
+            relative_path = Path(*tensor_name.split(".")).with_suffix(".bin")
+            manifest["tensors"][tensor_name] = _tensor_to_file(tensor, relative_path)
+
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Exported DeiT manifest to {MANIFEST_PATH}")
+    print(f"Exported {len(manifest['tensors'])} tensor blobs to {WEIGHTS_DIR}")
+
+
+if __name__ == "__main__":
+    _export_manifest()

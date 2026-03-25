@@ -1,326 +1,276 @@
 #include "deit_test_infra.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/functions.hpp"
-#include <torch/torch.h>
-#include <torch/script.h>
+#include "ttnn/operations/creation.hpp"
+
+#include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <unordered_map>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
 
 namespace deit_inference {
+namespace {
 
-// Helper to convert torch::Tensor to ttnn::Tensor
-ttnn::Tensor from_torch_tensor(
-    torch::Tensor t,
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+
+std::vector<uint32_t> json_shape_to_vector(const json& shape_json) {
+    std::vector<uint32_t> shape;
+    shape.reserve(shape_json.size());
+    for (const auto& dim : shape_json) {
+        shape.push_back(dim.get<uint32_t>());
+    }
+    return shape;
+}
+
+size_t volume(const std::vector<uint32_t>& shape) {
+    size_t elements = 1;
+    for (uint32_t dim : shape) {
+        elements *= dim;
+    }
+    return elements;
+}
+
+std::string require_string(const json& object, const char* key) {
+    if (!object.contains(key) || !object.at(key).is_string()) {
+        throw std::runtime_error(std::string("Missing string field: ") + key);
+    }
+    return object.at(key).get<std::string>();
+}
+
+const json& require_object(const json& object, const char* key) {
+    if (!object.contains(key) || !object.at(key).is_object()) {
+        throw std::runtime_error(std::string("Missing object field: ") + key);
+    }
+    return object.at(key);
+}
+
+const json& require_array(const json& object, const char* key) {
+    if (!object.contains(key) || !object.at(key).is_array()) {
+        throw std::runtime_error(std::string("Missing array field: ") + key);
+    }
+    return object.at(key);
+}
+
+}  // namespace
+
+ttnn::Tensor DeitTestInfra::create_tensor_from_vector(
+    const std::vector<float>& data,
+    const std::vector<uint32_t>& shape,
     ttnn::DataType dtype,
     ttnn::Layout layout,
-    ttnn::MeshDevice* device = nullptr,
-    std::optional<ttnn::MemoryConfig> memory_config = std::nullopt) {
-    t = t.contiguous().cpu();
+    std::optional<ttnn::MemoryConfig> memory_config) const {
+    const bool block_float = dtype == ttnn::DataType::BFLOAT4_B || dtype == ttnn::DataType::BFLOAT8_B;
+    const auto host_layout = block_float ? ttnn::TILE_LAYOUT : ttnn::ROW_MAJOR_LAYOUT;
+    const ttnn::TensorSpec spec(
+        ttnn::Shape(shape), ttnn::TensorLayout(dtype, ttnn::PageConfig(host_layout), ttnn::MemoryConfig{}));
 
-    std::vector<uint32_t> shape_vec;
-    for (int i = 0; i < t.dim(); ++i) {
-        shape_vec.push_back(t.size(i));
-    }
-    ttnn::Shape shape(shape_vec);
+    auto tensor = ttnn::Tensor::from_vector(data, spec);
 
-    size_t num_elements = t.numel();
-    std::vector<bfloat16> data(num_elements);
-
-    if (t.scalar_type() == torch::kFloat32) {
-        float* ptr = t.data_ptr<float>();
-        for (size_t i = 0; i < num_elements; ++i) {
-            data[i] = bfloat16(ptr[i]);
-        }
-    } else if (t.scalar_type() == torch::kBFloat16) {
-        auto* ptr = t.data_ptr<at::BFloat16>();
-        for (size_t i = 0; i < num_elements; ++i) {
-            data[i] = bfloat16(static_cast<float>(ptr[i]));
-        }
-    } else {
-        auto t_float = t.to(torch::kFloat32);
-        float* ptr = t_float.data_ptr<float>();
-        for (size_t i = 0; i < num_elements; ++i) {
-            data[i] = bfloat16(ptr[i]);
-        }
+    if (!block_float && layout == ttnn::TILE_LAYOUT) {
+        tensor = ttnn::to_layout(tensor, ttnn::TILE_LAYOUT, dtype, memory_config);
     }
 
-    auto host_buffer = tt::tt_metal::HostBuffer{data};
-    auto tt_tensor = ttnn::Tensor(host_buffer, shape, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
+    return ttnn::to_device(tensor, device_, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+}
 
-    if (layout == ttnn::Layout::TILE) {
-        tt_tensor = ttnn::to_layout(tt_tensor, ttnn::Layout::TILE, dtype, memory_config);
-    } else {
-        if (dtype != ttnn::DataType::BFLOAT16) {
-            tt_tensor = ttnn::typecast(tt_tensor, dtype);
+std::vector<float> DeitTestInfra::read_tensor_data(
+    const std::string& weights_root, const std::string& relative_path) const {
+    const fs::path full_path = fs::path(weights_root) / relative_path;
+    std::ifstream stream(full_path, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error("Failed to open tensor data file: " + full_path.string());
+    }
+
+    stream.seekg(0, std::ios::end);
+    const std::streamsize bytes = stream.tellg();
+    stream.seekg(0, std::ios::beg);
+
+    if (bytes < 0 || bytes % static_cast<std::streamsize>(sizeof(float)) != 0) {
+        throw std::runtime_error("Invalid tensor data size: " + full_path.string());
+    }
+
+    std::vector<float> values(static_cast<size_t>(bytes) / sizeof(float));
+    if (!stream.read(reinterpret_cast<char*>(values.data()), bytes)) {
+        throw std::runtime_error("Failed to read tensor data file: " + full_path.string());
+    }
+
+    return values;
+}
+
+ttnn::Tensor DeitTestInfra::load_tensor_from_manifest(
+    const std::string& tensor_name,
+    const std::unordered_map<std::string, std::string>& tensor_files,
+    const std::unordered_map<std::string, std::vector<uint32_t>>& tensor_shapes,
+    const std::string& weights_root,
+    ttnn::DataType dtype,
+    ttnn::Layout layout,
+    std::optional<ttnn::MemoryConfig> memory_config) const {
+    const auto file_it = tensor_files.find(tensor_name);
+    const auto shape_it = tensor_shapes.find(tensor_name);
+    if (file_it == tensor_files.end() || shape_it == tensor_shapes.end()) {
+        throw std::runtime_error("Tensor missing from manifest: " + tensor_name);
+    }
+
+    auto data = read_tensor_data(weights_root, file_it->second);
+    if (data.size() != volume(shape_it->second)) {
+        throw std::runtime_error("Tensor volume mismatch for: " + tensor_name);
+    }
+
+    return create_tensor_from_vector(data, shape_it->second, dtype, layout, memory_config);
+}
+
+std::vector<float> DeitTestInfra::pad_channels_to_four(
+    const std::vector<float>& nchw, int batch, int height, int width) const {
+    std::vector<float> padded(static_cast<size_t>(batch) * height * width * 4, 0.0f);
+    for (int n = 0; n < batch; ++n) {
+        for (int h = 0; h < height; ++h) {
+            for (int w = 0; w < width; ++w) {
+                for (int c = 0; c < 3; ++c) {
+                    const size_t src = ((static_cast<size_t>(n) * 3 + c) * height + h) * width + w;
+                    const size_t dst = (((static_cast<size_t>(n) * height + h) * width + w) * 4) + c;
+                    padded[dst] = nchw[src];
+                }
+            }
         }
     }
-    if (device != nullptr) {
-        tt_tensor = ttnn::to_device(tt_tensor, device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return padded;
+}
+
+std::vector<float> DeitTestInfra::reshape_for_patch_input(
+    const std::vector<float>& nhwc_padded, int batch, int height, int width) const {
+    constexpr int patch_size = 16;
+    const int patch_columns = width / patch_size;
+    std::vector<float> reshaped(static_cast<size_t>(batch) * height * patch_columns * (4 * patch_size));
+
+    for (int n = 0; n < batch; ++n) {
+        for (int h = 0; h < height; ++h) {
+            for (int patch_col = 0; patch_col < patch_columns; ++patch_col) {
+                for (int i = 0; i < patch_size; ++i) {
+                    for (int c = 0; c < 4; ++c) {
+                        const int w = patch_col * patch_size + i;
+                        const size_t src = (((static_cast<size_t>(n) * height + h) * width + w) * 4) + c;
+                        const size_t dst =
+                            ((((static_cast<size_t>(n) * height + h) * patch_columns + patch_col) * (4 * patch_size)) +
+                             i * 4 + c);
+                        reshaped[dst] = nhwc_padded[src];
+                    }
+                }
+            }
+        }
     }
 
-    return tt_tensor;
+    return reshaped;
+}
+
+std::vector<float> DeitTestInfra::make_attention_mask(int sequence_size) const {
+    return std::vector<float>(static_cast<size_t>(batch_size_) * sequence_size, 1.0f);
+}
+
+std::vector<float> DeitTestInfra::make_deterministic_input(int batch, int channels, int height, int width) const {
+    std::vector<float> input(static_cast<size_t>(batch) * channels * height * width);
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>((i % 251) - 125) / 125.0f;
+    }
+    return input;
 }
 
 DeitTestInfra::DeitTestInfra(ttnn::MeshDevice* device, int batch_size, const std::string& model_name) :
     device_(device), batch_size_(batch_size) {
-    // Initialize config
     update_model_config(config_, batch_size);
 
-    // Load model weights
-    std::string weights_path = model_name;
-    std::unordered_map<std::string, torch::Tensor> state_dict;
-
-    try {
-        torch::jit::script::Module module = torch::jit::load(weights_path);
-        for (const auto& param : module.named_parameters()) {
-            std::string name = param.name;
-            // Remove "model." prefix if present (artifact of tracing wrapper)
-            if (name.rfind("model.", 0) == 0) {
-                name = name.substr(6);
-            }
-            state_dict[name] = param.value;
-        }
-    } catch (const c10::Error& e) {
-        std::cerr << "Error loading model from " << weights_path << ": " << e.what() << std::endl;
-        throw;
+    const fs::path manifest_path = model_name;
+    std::ifstream manifest_stream(manifest_path);
+    if (!manifest_stream) {
+        throw std::runtime_error("Failed to open DeiT manifest: " + manifest_path.string());
     }
 
-    // --- Process weights for ttnn ---
+    const json manifest = json::parse(manifest_stream);
+    const std::string weights_root = (manifest_path.parent_path() / require_string(manifest, "weights_dir")).string();
 
-    // 1. Special tokens (cls, distillation, position)
-    auto process_special_token = [&](const std::string& name, bool is_position = false) {
-        torch::Tensor t = state_dict[name];
-        if (batch_size_ > 1) {
-            std::vector<int64_t> expand_shape = t.sizes().vec();
-            expand_shape[0] = batch_size_;
-            t = t.expand(expand_shape).contiguous();
-        }
-        ttnn::DataType dtype = is_position ? ttnn::DataType::BFLOAT8_B : ttnn::DataType::BFLOAT16;
-        ttnn::Layout layout = is_position ? ttnn::Layout::TILE : ttnn::Layout::ROW_MAJOR;
-        return from_torch_tensor(t, dtype, layout, device_);
-    };
+    std::unordered_map<std::string, std::string> tensor_files;
+    std::unordered_map<std::string, std::vector<uint32_t>> tensor_shapes;
 
-    cls_token_ = process_special_token("deit.embeddings.cls_token");
-    distillation_token_ = process_special_token("deit.embeddings.distillation_token");
-    position_embeddings_ = process_special_token("deit.embeddings.position_embeddings", true);
-
-    // 2. Linear weights helper
-    // Transpose [out, in] -> [in, out] -> reshape [1, 1, in, out] for ttnn::linear
-    auto to_ttnn_linear_weight = [&](torch::Tensor t) {
-        // t is [out, in]
-        auto t_transposed = t.t().contiguous();  // [in, out]
-        auto t_reshaped = t_transposed.reshape({1, 1, t_transposed.size(0), t_transposed.size(1)});
-        return from_torch_tensor(t_reshaped, ttnn::DataType::BFLOAT8_B, ttnn::Layout::TILE, device_);
-    };
-
-    auto to_ttnn_bias = [&](torch::Tensor t) {
-        // t is [out] -> [1, 1, 1, out]
-        auto t_reshaped = t.reshape({1, 1, 1, t.size(0)});
-        return from_torch_tensor(t_reshaped, ttnn::DataType::BFLOAT8_B, ttnn::Layout::TILE, device_);
-    };
-
-    // 3. Patch Embeddings
-    {
-        // PyTorch: [192, 3, 16, 16]
-        // Target: Compatible with folded input [N, 196, 1024] (16*16*4)
-        // We need to pad channels 3->4, then flatten to [192, 1024], then transpose to [1024, 192]
-        torch::Tensor w = state_dict["deit.embeddings.patch_embeddings.projection.weight"];
-        torch::Tensor b = state_dict["deit.embeddings.patch_embeddings.projection.bias"];
-
-        // Pad channel dim (1) from 3 to 4
-        // PadFuncOptions padding is (left, right, top, bottom, front, back, ...) for last 3 dims?
-        // Actually it's (W_left, W_right, H_top, H_bottom, C_front, C_back, ...) working backwards.
-        // Input is [192, 3, 16, 16].
-        // We want to pad dim 1 (channels).
-        // 16, 16 are dims 2, 3.
-        // Padding args: (0,0) for dim 3, (0,0) for dim 2, (0,1) for dim 1.
-        w = torch::constant_pad_nd(w, {0, 0, 0, 0, 0, 1}, 0);
-
-        // Now w is [192, 4, 16, 16]
-        // Permute to [192, 16, 16, 4] to match NHWC folding?
-        // Wait, input preprocessing: Permute NHWC -> Pad C -> Reshape (N, H, W/P, 4*P).
-        // It seems complex to match exactly without running data.
-        // But assuming the standard transformation:
-        // We want a linear weight that maps the 1024-sized input vector to 192.
-        // Input vector corresponds to a 16x16 patch with 4 channels.
-        // We flatten the weight to [192, 1024].
-        // But the order of 1024 elements must match the input folding order.
-        // Input folding: NHWC -> Pad C -> Reshape.
-        // So pixels are ordered by channel last?
-        // Yes, permute(0, 2, 3, 1) makes it NHWC.
-        // So we should permute weight to [192, 16, 16, 4] then flatten.
-        w = w.permute({0, 2, 3, 1}).contiguous().reshape({192, -1});  // [192, 1024]
-
-        parameters_["deit.embeddings.patch_embeddings.projection.weight"] = to_ttnn_linear_weight(w);
-        parameters_["deit.embeddings.patch_embeddings.projection.bias"] = to_ttnn_bias(b);
+    const json& tensors = require_object(manifest, "tensors");
+    for (const auto& [name, tensor_info] : tensors.items()) {
+        tensor_files[name] = require_string(tensor_info, "file");
+        tensor_shapes[name] = json_shape_to_vector(require_array(tensor_info, "shape"));
     }
 
-    // 4. Layers
-    for (int i = 0; i < 12; ++i) {
-        std::string prefix = "deit.encoder.layer." + std::to_string(i) + ".";
+    cls_token_ = load_tensor_from_manifest(
+        "deit.embeddings.cls_token",
+        tensor_files,
+        tensor_shapes,
+        weights_root,
+        ttnn::DataType::BFLOAT16,
+        ttnn::Layout::ROW_MAJOR);
+    distillation_token_ = load_tensor_from_manifest(
+        "deit.embeddings.distillation_token",
+        tensor_files,
+        tensor_shapes,
+        weights_root,
+        ttnn::DataType::BFLOAT16,
+        ttnn::Layout::ROW_MAJOR);
+    position_embeddings_ = load_tensor_from_manifest(
+        "deit.embeddings.position_embeddings",
+        tensor_files,
+        tensor_shapes,
+        weights_root,
+        ttnn::DataType::BFLOAT8_B,
+        ttnn::Layout::TILE);
 
-        // QKV
-        auto qw = state_dict[prefix + "attention.attention.query.weight"];
-        auto kw = state_dict[prefix + "attention.attention.key.weight"];
-        auto vw = state_dict[prefix + "attention.attention.value.weight"];
-        auto qb = state_dict[prefix + "attention.attention.query.bias"];
-        auto kb = state_dict[prefix + "attention.attention.key.bias"];
-        auto vb = state_dict[prefix + "attention.attention.value.bias"];
+    for (const auto& [name, shape] : tensor_shapes) {
+        if (name == "deit.embeddings.cls_token" || name == "deit.embeddings.distillation_token" ||
+            name == "deit.embeddings.position_embeddings") {
+            continue;
+        }
 
-        // Combine Q, K, V weights with interleaved head layout to match Python:
-        //   torch.cat([q.reshape(num_heads, head_size, -1),
-        //              k.reshape(num_heads, head_size, -1),
-        //              v.reshape(num_heads, head_size, -1)], dim=1)
-        //        .reshape(hidden_size, -1)
-        // This produces [Q_h0, K_h0, V_h0, Q_h1, K_h1, V_h1, ...] layout
-        // required by split_query_key_value_and_split_heads.
-        int num_heads = 3;
-        int head_size = 64;
-        int hidden_size = num_heads * head_size * 3;
-        auto qkv_w = torch::cat(
-                         {qw.reshape({num_heads, head_size, -1}),
-                          kw.reshape({num_heads, head_size, -1}),
-                          vw.reshape({num_heads, head_size, -1})},
-                         1)
-                         .reshape({hidden_size, -1});  // [576, 192]
-        auto qkv_b = torch::cat(
-                         {qb.reshape({num_heads, head_size}),
-                          kb.reshape({num_heads, head_size}),
-                          vb.reshape({num_heads, head_size})},
-                         1)
-                         .reshape({hidden_size});  // [576]
+        const bool layer_norm_bias = name.find("layernorm") != std::string::npos || name == "deit.layernorm.weight" ||
+                                     name == "deit.layernorm.bias";
+        const bool use_row_major = name.find("patch_embeddings") == std::string::npos &&
+                                   (name.ends_with(".bias") || name == "cls_classifier.weight" ||
+                                    name == "distillation_classifier.weight" || name == "classifier.weight");
 
-        parameters_[prefix + "attention.attention.qkv.weight"] = to_ttnn_linear_weight(qkv_w);
-        parameters_[prefix + "attention.attention.qkv.bias"] = to_ttnn_bias(qkv_b);
-
-        // Output Dense
-        parameters_[prefix + "attention.output.dense.weight"] =
-            to_ttnn_linear_weight(state_dict[prefix + "attention.output.dense.weight"]);
-        parameters_[prefix + "attention.output.dense.bias"] =
-            to_ttnn_bias(state_dict[prefix + "attention.output.dense.bias"]);
-
-        // MLP
-        parameters_[prefix + "intermediate.dense.weight"] =
-            to_ttnn_linear_weight(state_dict[prefix + "intermediate.dense.weight"]);
-        parameters_[prefix + "intermediate.dense.bias"] = to_ttnn_bias(state_dict[prefix + "intermediate.dense.bias"]);
-        parameters_[prefix + "output.dense.weight"] = to_ttnn_linear_weight(state_dict[prefix + "output.dense.weight"]);
-        parameters_[prefix + "output.dense.bias"] = to_ttnn_bias(state_dict[prefix + "output.dense.bias"]);
-
-        // LayerNorms
-        auto ln_w_before = state_dict[prefix + "layernorm_before.weight"].reshape({1, 1, 1, 192});
-        auto ln_b_before = state_dict[prefix + "layernorm_before.bias"].reshape({1, 1, 1, 192});
-        parameters_[prefix + "layernorm_before.weight"] =
-            from_torch_tensor(ln_w_before, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
-        parameters_[prefix + "layernorm_before.bias"] =
-            from_torch_tensor(ln_b_before, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
-
-        auto ln_w_after = state_dict[prefix + "layernorm_after.weight"].reshape({1, 1, 1, 192});
-        auto ln_b_after = state_dict[prefix + "layernorm_after.bias"].reshape({1, 1, 1, 192});
-        parameters_[prefix + "layernorm_after.weight"] =
-            from_torch_tensor(ln_w_after, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
-        parameters_[prefix + "layernorm_after.bias"] =
-            from_torch_tensor(ln_b_after, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
+        parameters_[name] = load_tensor_from_manifest(
+            name,
+            tensor_files,
+            tensor_shapes,
+            weights_root,
+            layer_norm_bias ? ttnn::DataType::BFLOAT16 : ttnn::DataType::BFLOAT8_B,
+            (layer_norm_bias || use_row_major) ? ttnn::Layout::ROW_MAJOR : ttnn::Layout::TILE);
     }
 
-    // 5. Final LN
-    auto final_ln_w = state_dict["deit.layernorm.weight"].reshape({1, 1, 1, 192});
-    auto final_ln_b = state_dict["deit.layernorm.bias"].reshape({1, 1, 1, 192});
-    parameters_["deit.layernorm.weight"] =
-        from_torch_tensor(final_ln_w, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
-    parameters_["deit.layernorm.bias"] =
-        from_torch_tensor(final_ln_b, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device_);
-
-    // 6. Classifiers
-    // Need to pad 1000 -> 1152 (or aligned size)
-    // 1152 is used in deit_inference.cpp
-    auto process_classifier = [&](const std::string& name) {
-        torch::Tensor w = state_dict[name + ".weight"];
-        torch::Tensor b = state_dict[name + ".bias"];
-        // Pad output dim (0) from 1000 to 1152
-        int padding = 1152 - 1000;
-        if (padding > 0) {
-            w = torch::constant_pad_nd(
-                w, {0, 0, 0, padding}, 0);  // Pad last dim (in) 0,0; second last (out) 0,padding?
-            // w is [1000, 192]. Dim 0 is out.
-            // constant_pad_nd operates from last dim.
-            // {0, 0, 0, padding} -> dim 1 (192) +0,+0; dim 0 (1000) +0,+padding.
-            b = torch::constant_pad_nd(b, {0, padding}, 0);
-        }
-        parameters_[name + ".weight"] = to_ttnn_linear_weight(w);
-        parameters_[name + ".bias"] = to_ttnn_bias(b);
-    };
-
-    process_classifier("cls_classifier");
-    process_classifier("distillation_classifier");
-
-    // Setup head masks (attention masks)
-    // Python: torch_attention_mask = torch.ones(self.config.num_hidden_layers, sequence_size, dtype=torch.float32)
-    // Sequence size for attention mask usually matches the sequence length (198 for DeiT tiny)
-    // Python code uses 224.
-    // The C++ implementation pads the sequence to 224 (multiple of 32).
-    int sequence_size = 224;
-
-    // Create ones tensor
-    // Shape: [batch, 1, 1, sequence_size]
-    auto torch_mask = torch::ones({batch_size, 1, 1, sequence_size}, torch::dtype(torch::kFloat32));
-
+    const auto attention_mask_data = make_attention_mask(224);
     for (int i = 0; i < config_.num_layers; ++i) {
-        auto tt_mask = from_torch_tensor(
-            torch_mask, ttnn::DataType::BFLOAT8_B, ttnn::Layout::TILE, device_, ttnn::L1_MEMORY_CONFIG);
-        head_masks_.push_back(tt_mask);
+        head_masks_.push_back(create_tensor_from_vector(
+            attention_mask_data,
+            {static_cast<uint32_t>(batch_size_), 1, 1, 224},
+            ttnn::DataType::BFLOAT8_B,
+            ttnn::Layout::TILE,
+            ttnn::L1_MEMORY_CONFIG));
     }
 
-    // Create synthetic data for initialization
-    torch_pixel_values_ = torch::randn({batch_size, 3, 224, 224}, torch::dtype(torch::kFloat32));
+    input_pixels_ = make_deterministic_input(batch_size_, 3, 224, 224);
 }
 
-std::pair<ttnn::Tensor, ttnn::MemoryConfig> DeitTestInfra::setup_l1_sharded_input(
-    const std::optional<torch::Tensor>& torch_pixel_values) {
-    torch::Tensor x_raw = torch_pixel_values.has_value() ? torch_pixel_values.value() : torch_pixel_values_;
+std::pair<ttnn::Tensor, ttnn::MemoryConfig> DeitTestInfra::setup_l1_sharded_input() {
+    const auto padded = pad_channels_to_four(input_pixels_, batch_size_, 224, 224);
+    const auto reshaped = reshape_for_patch_input(padded, batch_size_, 224, 224);
 
-    // NHWC permutation
-    torch::Tensor x = x_raw.permute({0, 2, 3, 1});  // [N, C, H, W] -> [N, H, W, C]
+    ttnn::Tensor tt_inputs_host = create_tensor_from_vector(
+        reshaped,
+        {static_cast<uint32_t>(batch_size_), 224, 14, 64},
+        ttnn::DataType::BFLOAT16,
+        ttnn::Layout::ROW_MAJOR,
+        std::nullopt);
+    tt_inputs_host = ttnn::from_device(tt_inputs_host);
 
-    // Channel padding (3 -> 4)
-    // x is [N, H, W, 3]
-    // Pad last dim by 1.
-    x = torch::constant_pad_nd(x, {0, 1}, 0);  // [N, H, W, 4]
-
-    // Patching reshape
-    // Python: x.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
-    int batch = x.size(0);
-    int h = x.size(1);
-    int w = x.size(2);
-    int patch_size = 16;
-    x = x.reshape({batch, h, w / patch_size, 4 * patch_size});
-
-    // Convert to ttnn tensor (DRAM)
-    ttnn::Tensor tt_inputs_host = from_torch_tensor(x, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
-
-    // Shard spec configuration
-    // Matches Python logic exactly:
-    // shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(batch_size - 1, 3))})
-    int N_dim = x.size(0);
-    int H_dim = x.size(1);
-    int W_dim = x.size(2);
-    int C_dim = x.size(3);
-
-    // Python: ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(batch_size - 1, 3))
-    // Note: This grid (batch_size, 4) is larger than the compute grid (3, batch_size) used in the model.
-    // However, we strictly follow the Python test infrastructure here as requested.
-    ttnn::CoreRangeSet shard_grid({ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(batch - 1, 3))});
-
-    int n_cores = batch * 3;
+    const int n_cores = batch_size_ * 3;
+    ttnn::CoreRangeSet shard_grid({ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(batch_size_ - 1, 3))});
     std::array<uint32_t, 2> shard_shape = {
-        static_cast<uint32_t>((N_dim * H_dim * W_dim) / n_cores), static_cast<uint32_t>(C_dim)};
+        static_cast<uint32_t>((batch_size_ * 224 * 14) / n_cores),
+        64,
+    };
 
     tt::tt_metal::ShardSpec shard_spec(shard_grid, shard_shape, ttnn::ShardOrientation::ROW_MAJOR);
     ttnn::MemoryConfig input_mem_config(ttnn::TensorMemoryLayout::HEIGHT_SHARDED, ttnn::BufferType::L1, shard_spec);
@@ -329,28 +279,40 @@ std::pair<ttnn::Tensor, ttnn::MemoryConfig> DeitTestInfra::setup_l1_sharded_inpu
 }
 
 std::tuple<ttnn::Tensor, ttnn::MemoryConfig, ttnn::MemoryConfig> DeitTestInfra::setup_dram_sharded_input(
-    const std::optional<torch::Tensor>& torch_input_tensor) {
-    torch::Tensor input = torch_input_tensor.has_value() ? torch_input_tensor.value() : torch_pixel_values_;
+    const std::optional<ttnn::Tensor>& tt_input_tensor) {
+    if (tt_input_tensor.has_value()) {
+        auto dram_grid_size = device_->dram_grid_size();
+        ttnn::CoreRangeSet dram_grid(
+            {ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))});
 
-    auto [tt_inputs_host, input_mem_config] = setup_l1_sharded_input(input);
+        const auto [default_host, input_mem_config] = setup_l1_sharded_input();
+        const uint32_t width = tt_input_tensor->logical_shape()[-1];
+        const uint32_t volume_value = tt_input_tensor->logical_volume();
+        const uint32_t height = volume_value / width;
+        const uint32_t shard_height = (height + dram_grid_size.x - 1) / dram_grid_size.x;
+        tt::tt_metal::ShardSpec dram_shard_spec(
+            dram_grid, {shard_height, width}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        ttnn::MemoryConfig sharded_mem_config_dram(
+            ttnn::TensorMemoryLayout::HEIGHT_SHARDED, ttnn::BufferType::DRAM, dram_shard_spec);
+        return {*tt_input_tensor, sharded_mem_config_dram, input_mem_config};
+    }
+
+    auto [tt_inputs_host, input_mem_config] = setup_l1_sharded_input();
 
     auto dram_grid_size = device_->dram_grid_size();
     ttnn::CoreRangeSet dram_grid(
         {ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))});
-
-    // DRAM shard spec
-    // Python: [divup(volume // width, dram_grid.x), width]
-    // width is shape[-1] (64)
     uint32_t width = tt_inputs_host.logical_shape()[-1];
-    uint32_t volume = tt_inputs_host.logical_volume();
-    uint32_t height = volume / width;
-    uint32_t shard_height = (height + dram_grid_size.x - 1) / dram_grid_size.x;  // divup
+    uint32_t volume_value = tt_inputs_host.logical_volume();
+    uint32_t height = volume_value / width;
+    uint32_t shard_height = (height + dram_grid_size.x - 1) / dram_grid_size.x;
 
-    tt::tt_metal::ShardSpec dram_shard_spec(dram_grid, {shard_height, width}, ttnn::ShardOrientation::ROW_MAJOR);
-    ttnn::MemoryConfig sharded_mem_config_DRAM(
+    tt::tt_metal::ShardSpec dram_shard_spec(
+        dram_grid, {shard_height, width}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    ttnn::MemoryConfig sharded_mem_config_dram(
         ttnn::TensorMemoryLayout::HEIGHT_SHARDED, ttnn::BufferType::DRAM, dram_shard_spec);
 
-    return {tt_inputs_host, sharded_mem_config_DRAM, input_mem_config};
+    return {tt_inputs_host, sharded_mem_config_dram, input_mem_config};
 }
 
 ttnn::Tensor DeitTestInfra::run(const std::optional<ttnn::Tensor>& tt_input_tensor) {
@@ -360,12 +322,9 @@ ttnn::Tensor DeitTestInfra::run(const std::optional<ttnn::Tensor>& tt_input_tens
 
     output_tuple =
         deit(config_, input_tensor, head_masks_, cls_token_, distillation_token_, position_embeddings_, parameters_);
-
-    // Unpack tuple
     logits = std::get<0>(output_tuple);
     cls_logits = std::get<1>(output_tuple);
     distillation_logits = std::get<2>(output_tuple);
-
     output_tensor = logits;
     return output_tensor;
 }

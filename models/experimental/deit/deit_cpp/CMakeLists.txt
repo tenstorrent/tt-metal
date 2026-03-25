@@ -7,23 +7,9 @@ add_executable(
 
 target_include_directories(deit_cpp_demo PRIVATE tt_cpp)
 
-if(BUILD_DEIT_OPENCV)
-    target_include_directories(deit_cpp_demo PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(
-        deit_cpp_demo
-        PRIVATE
-            TT::Metalium
-            TTNN::CPP
-            torch::torch
-            opencv_core
-            opencv_imgproc
-            opencv_imgcodecs
-    )
-else()
-    target_link_libraries(
-        deit_cpp_demo
-        PRIVATE
-            TT::Metalium
-            TTNN::CPP
-    )
-endif()
+target_link_libraries(
+    deit_cpp_demo
+    PRIVATE
+        TT::Metalium
+        TTNN::CPP
+)

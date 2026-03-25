@@ -20,6 +20,7 @@ option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" OFF)
 option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI)" ON)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
+option(BUILD_DEIT_CPP "Enables build of the DeiT C++ demo" OFF)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 
 ###########################################################################################

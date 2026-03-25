@@ -8,6 +8,8 @@ This directory contains a C++ TTNN port of the optimized DeiT demo flow, aligned
 
 The goal of this port is to reproduce the optimized Wormhole DeiT inference path with C++ TTNN APIs, including model preprocessing, sharded execution, and 2CQ trace-based performance measurement.
 
+Unlike the earlier TorchScript-based prototype, the current flow does **not** depend on LibTorch or OpenCV. Model assets are exported as a `manifest.json` file plus raw tensor blobs under `weights/`, and the C++ demo reads those native artifacts directly.
+
 ## Files
 
 - `deit_inference.h` / `deit_inference.cpp`
@@ -16,9 +18,13 @@ The goal of this port is to reproduce the optimized Wormhole DeiT inference path
   - program config construction for Wormhole sharded execution
 
 - `deit_test_infra.hpp` / `deit_test_infra.cpp`
-  - model loading and parameter preprocessing
+  - manifest-driven model loading and parameter preprocessing
   - input setup for L1 sharded / DRAM sharded execution
   - C++ equivalent of the Python test infra wrapper
+
+- `deit_model/bin2pt.py`
+  - exports Hugging Face DeiT teacher weights to `manifest.json` + `weights/*.bin`
+  - reshapes and fuses tensors into the exact parameter names/layouts consumed by `deit_inference.cpp`
 
 - `demo_deit_ttnn_inference_perf_e2e_2cq_trace.cpp`
   - end-to-end performance demo
@@ -31,7 +37,7 @@ This C++ demo has been validated to:
 - build successfully through the repo-root build
 - initialize device / mesh successfully
 - run compile, cache, trace capture, warmup, and measurement successfully
-- execute end-to-end inference on the provided DeiT teacher model
+- execute end-to-end inference on the provided DeiT teacher manifest
 
 The current implementation already includes the important fixes needed to match the optimized Python path more closely, including:
 
@@ -41,13 +47,27 @@ The current implementation already includes the important fixes needed to match 
 - valid matmul multicast `out_block_h` / `out_block_w` settings
 - 2CQ trace demo flow with host-to-device copies and replay-time `reshard_out` reuse
 
-## Build
+## Export model assets
 
+Generate the native DeiT manifest and tensor blobs from the repository root using the repo Python environment:
+
+```bash
+python models/experimental/deit/deit_cpp/deit_model/bin2pt.py
+```
+
+This writes:
+
+```text
+models/experimental/deit/deit_cpp/deit_model/manifest.json
+models/experimental/deit/deit_cpp/deit_model/weights/
+```
+
+## Build
 
 Build from the repository root:
 
 ```bash
-cmake --build build --target deit_cpp_demo -j4
+./build_metal.sh --build-deit-cpp
 ```
 
 Expected binary:
@@ -60,10 +80,27 @@ build_Release/bin/deit_cpp_demo
 
 ## Run
 
+Command format from repo root:
+
+```bash
+./build_Release/bin/deit_cpp_demo <batch_size> <manifest_path>
+```
+
+- `<batch_size>`: first CLI argument, for example `1`
+- `<manifest_path>`: optional path to the exported `manifest.json`
+
 Example run from repo root:
 
 ```bash
-./build_Release/bin/deit_cpp_demo  models/experimental/deit/deit_cpp/deit_model/deit_teacher_model.pt
+./build_Release/bin/deit_cpp_demo 1 models/experimental/deit/deit_cpp/deit_model/manifest.json
+```
+
+Here, `1` is the batch size passed as the first CLI argument. If omitted, the demo defaults to batch size `1`.
+
+If no manifest path is provided, the demo defaults to:
+
+```text
+models/experimental/deit/deit_cpp/deit_model/manifest.json
 ```
 
 ## Expected Runtime Flow
