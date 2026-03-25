@@ -23,15 +23,12 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_hit(
 
 KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& ta) {
-    // Output: [1, 1, padded_M, (grid_dim+1)*Mpc*TILE_W] — extra column for helper partials
     auto* device = ta.input_tensor.device();
     auto device_grid = device->compute_with_storage_grid_size();
     uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
     uint32_t M_tiles = ta.input_tensor.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t Mpc = tt::round_up(M_tiles, grid_dim) / grid_dim;
-    uint32_t padded_M = grid_dim * Mpc * tt::constants::TILE_HEIGHT;
-    uint32_t padded_N = (grid_dim + 1) * Mpc * tt::constants::TILE_WIDTH;
-    auto shape = ttnn::Shape({1, 1, padded_M, padded_N});
+    uint32_t padded_M = tt::round_up(M_tiles, grid_dim) * tt::constants::TILE_HEIGHT;
+    auto shape = ttnn::Shape({1, 1, padded_M, padded_M});
     return ttnn::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));

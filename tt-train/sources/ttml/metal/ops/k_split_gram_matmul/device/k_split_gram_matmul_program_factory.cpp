@@ -168,8 +168,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t block_sz = K_block_tiles * M_block;
     uint32_t cb_size = db_factor * block_sz;
     uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per nsb pass
-    // Output tensor width includes extra helper column
-    uint32_t padded_out_tiles = (grid_dim + 1) * Mpc;
+    uint32_t padded_out_tiles = padded_M_tiles;
     uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per nsb pass
 
     // CB for sender output: c_3 (per-msb) or c_5 (per-nsb)
