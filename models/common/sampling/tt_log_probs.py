@@ -4,6 +4,7 @@
 
 import inspect
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -27,24 +28,30 @@ class LogProbsResult:
     index in ``topk_indices``.
 
     Attributes:
-        topk_logprobs: Tensor of shape (1, 1, batch_size, DEVICE_TOP_K)
+        topk_logprobs: Optional ttnn.Tensor of shape (1, 1, batch_size, DEVICE_TOP_K)
             containing logprobs for the gathered top-k tokens.
-        topk_indices: Tensor of shape (1, 1, batch_size, DEVICE_TOP_K)
+        topk_indices: Optional ttnn.Tensor of shape (1, 1, batch_size, DEVICE_TOP_K)
             containing global vocabulary indices for the gathered top-k tokens.
-        topk_logprobs_host: Host tensor after to_cpu, or None.
-        topk_indices_host: Host tensor after to_cpu, or None.
+        topk_logprobs_host: Optional ttnn.Tensor on host of shape (1, 1, batch_size, DEVICE_TOP_K)
+            containing logprobs for the gathered top-k tokens after moving to host.
+        topk_indices_host: Optional ttnn.Tensor on host of shape (1, 1, batch_size, DEVICE_TOP_K)
+            containing global vocabulary indices for the gathered top-k tokens after moving to host.
     """
 
-    topk_logprobs: ttnn.Tensor
-    topk_indices: ttnn.Tensor
-    topk_logprobs_host: torch.Tensor
-    topk_indices_host: torch.Tensor
+    topk_logprobs: Optional[ttnn.Tensor]
+    topk_indices: Optional[ttnn.Tensor]
+    topk_logprobs_host: Optional[ttnn.Tensor]
+    topk_indices_host: Optional[ttnn.Tensor]
 
-    def to_cpu(self, blocking: bool = False) -> "LogProbsResult":
+    def cpu(self, blocking: bool = True) -> "LogProbsResult":
         """Transfer device tensors to host CPU.
 
-        Returns a NEW LogProbsResult so that each iteration gets its own host
-        tensor references (avoids race with trace-captured singletons).
+        Args:
+            blocking: If True, wait for the host tensor to be ready before returning.
+
+        Returns:
+            A new LogProbsResult so that each iteration gets its own host
+            tensor references (avoids race with trace-captured singletons).
         """
         return LogProbsResult(
             topk_logprobs=None,
@@ -52,6 +59,63 @@ class LogProbsResult:
             topk_logprobs_host=self.topk_logprobs.cpu(blocking=blocking),
             topk_indices_host=self.topk_indices.cpu(blocking=blocking),
         )
+
+    def extract_user(self, user_batch_idx: int) -> "LogProbsResult":
+        """Extract a single user's top-K logprobs from a batched host result.
+
+        Args:
+            user_batch_idx: Index of the user within the batch dimension.
+
+        Returns:
+            A new LogProbsResult with host tensors sliced to shape (1, DEVICE_TOP_K).
+        """
+        lp_torch = ttnn.to_torch(ttnn.get_device_tensors(self.topk_logprobs_host)[0])
+        idx_torch = ttnn.to_torch(ttnn.get_device_tensors(self.topk_indices_host)[0])
+        return LogProbsResult(
+            topk_logprobs=None,
+            topk_indices=None,
+            topk_logprobs_host=lp_torch[0, 0, user_batch_idx, :].unsqueeze(0),
+            topk_indices_host=idx_torch[0, 0, user_batch_idx, :].unsqueeze(0),
+        )
+
+    def to_torch_pair(self):
+        """Convert host tensors to a (logprobs, indices) pair of torch tensors.
+
+        Returns:
+            Tuple of (logprobs_tensor, indices_tensor), each of shape (DEVICE_TOP_K,).
+        """
+        lp = self.topk_logprobs_host
+        idx = self.topk_indices_host
+        if isinstance(lp, torch.Tensor):
+            return lp.reshape(-1)[:DEVICE_TOP_K].float(), idx.reshape(-1)[:DEVICE_TOP_K].int()
+        return ttnn.to_torch(lp).reshape(-1)[:DEVICE_TOP_K].float(), ttnn.to_torch(idx).reshape(-1)[:DEVICE_TOP_K].int()
+
+
+def reformat_logprobs(output_log_probs, batch_size):
+    """Convert a list of per-user logprobs into the format expected by vLLM.
+
+    Args:
+        output_log_probs: List of LogProbsResult, torch.Tensor, float, int, or None per user.
+        batch_size: Total batch size.
+
+    Returns:
+        For new path (LogProbsResult): tuple of (topk_lp[B, DEVICE_TOP_K], topk_idx[B, DEVICE_TOP_K])
+        For old path: flat tensor of shape [B]
+    """
+    has_logprobs_result = any(isinstance(lp, LogProbsResult) for lp in output_log_probs)
+    if has_logprobs_result:
+        all_lp = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.float32)
+        all_idx = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.int32)
+        for i, lp in enumerate(output_log_probs):
+            if isinstance(lp, LogProbsResult) and lp.topk_logprobs_host is not None:
+                all_lp[i], all_idx[i] = lp.to_torch_pair()
+        return (all_lp, all_idx)
+    else:
+        flat_lp = torch.ones(batch_size, dtype=torch.float32)
+        for i, lp in enumerate(output_log_probs):
+            if lp is not None and isinstance(lp, (torch.Tensor, float, int)):
+                flat_lp[i] = float(lp)
+        return flat_lp
 
 
 class LogProbsCalculator:

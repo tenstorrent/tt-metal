@@ -24,7 +24,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
-from models.common.sampling.tt_log_probs import LogProbsResult
+from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
@@ -723,12 +723,6 @@ class Generator(WarmupForwardMixin):
                     logits,
                     enable_trace=False,
                 )
-                # process logprobs to call .cpu()
-                host_log_probs = None
-                if isinstance(tt_log_probs, LogProbsResult):
-                    host_log_probs = tt_log_probs.to_cpu(blocking=False)
-                elif tt_log_probs is not None:
-                    host_log_probs = tt_log_probs.cpu(blocking=False)
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -736,7 +730,7 @@ class Generator(WarmupForwardMixin):
                         "last_token_idx": last_token_idx,
                         "logits": [
                             tt_tokens.cpu(blocking=False),
-                            host_log_probs,
+                            tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
                         ],
                         "sampling": sampling_enabled,
                     }
@@ -775,19 +769,7 @@ class Generator(WarmupForwardMixin):
                         )  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
                     ]
                     if isinstance(tt_log_probs, LogProbsResult):
-                        # New path: LogProbsResult has host tensors [1,1,B,32]
-                        # Extract user's logprobs from the batch
-                        user_batch_idx = last_token_idx % 32
-                        lp_host = tt_log_probs.topk_logprobs_host
-                        idx_host = tt_log_probs.topk_indices_host
-                        lp_torch = ttnn.to_torch(ttnn.get_device_tensors(lp_host)[0])
-                        idx_torch = ttnn.to_torch(ttnn.get_device_tensors(idx_host)[0])
-                        log_probs_host = LogProbsResult(
-                            topk_logprobs=None,
-                            topk_indices=None,
-                            topk_logprobs_host=lp_torch[0, 0, user_batch_idx, :].unsqueeze(0),
-                            topk_indices_host=idx_torch[0, 0, user_batch_idx, :].unsqueeze(0),
-                        )
+                        log_probs_host = tt_log_probs.extract_user(last_token_idx % 32)
                     elif tt_log_probs is not None:
                         log_probs_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
                             (last_token_idx % 32)
@@ -804,34 +786,7 @@ class Generator(WarmupForwardMixin):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
-            # Convert output_log_probs list to format expected by vLLM:
-            # - New path (LogProbsResult): tuple of (topk_lp[B,32], topk_idx[B,32])
-            # - Old path: flat tensor [B]
-            has_logprobs_result = any(isinstance(lp, LogProbsResult) for lp in output_log_probs)
-            if has_logprobs_result:
-                from models.common.sampling.tt_log_probs import DEVICE_TOP_K
-
-                all_lp = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.float32)
-                all_idx = torch.zeros(batch_size, DEVICE_TOP_K, dtype=torch.int32)
-                for i, lp in enumerate(output_log_probs):
-                    if isinstance(lp, LogProbsResult) and lp.topk_logprobs_host is not None:
-                        lp_vals = lp.topk_logprobs_host
-                        idx_vals = lp.topk_indices_host
-                        if isinstance(lp_vals, torch.Tensor):
-                            all_lp[i] = lp_vals.reshape(-1)[:DEVICE_TOP_K].float()
-                            all_idx[i] = idx_vals.reshape(-1)[:DEVICE_TOP_K].int()
-                        else:
-                            # ttnn host tensor
-                            all_lp[i] = ttnn.to_torch(lp_vals).reshape(-1)[:DEVICE_TOP_K].float()
-                            all_idx[i] = ttnn.to_torch(idx_vals).reshape(-1)[:DEVICE_TOP_K].int()
-                return output_tokens, (all_lp, all_idx)
-            else:
-                # Old path: build flat tensor from list
-                flat_lp = torch.ones(batch_size, dtype=torch.float32)
-                for i, lp in enumerate(output_log_probs):
-                    if lp is not None and isinstance(lp, (torch.Tensor, float, int)):
-                        flat_lp[i] = float(lp)
-                return output_tokens, flat_lp
+            return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
 
@@ -1550,27 +1505,15 @@ class Generator(WarmupForwardMixin):
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
         tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
         """
-        from models.common.sampling.tt_log_probs import LogProbsResult
 
-        def _read_logprobs_sync(lp):
-            """Non-async: .cpu() with no extra args, matching old behavior."""
+        def _read_logprobs(lp, blocking: bool = True):
             if lp is None:
                 return None
-            if isinstance(lp, LogProbsResult):
-                return lp.to_cpu(blocking=True)
-            return lp.cpu()
-
-        def _read_logprobs_async(lp):
-            """Async: .cpu(blocking=False) matching old behavior."""
-            if lp is None:
-                return None
-            if isinstance(lp, LogProbsResult):
-                return lp.to_cpu(blocking=False)
-            return lp.cpu(blocking=False)
+            return lp.cpu(blocking=blocking)
 
         if not async_read:
             if isinstance(tt_out[0], tuple):
-                return [(out[0].cpu(), _read_logprobs_sync(out[1])) for out in tt_out]
+                return [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
             elif isinstance(tt_out[0], ttnn.Tensor):
                 return [out.cpu() for out in tt_out]
 
@@ -1580,7 +1523,7 @@ class Generator(WarmupForwardMixin):
             if isinstance(tt_out[i], tuple):
                 outputs = (
                     tt_out[i][0].cpu(blocking=False),
-                    _read_logprobs_async(tt_out[i][1]),
+                    _read_logprobs(tt_out[i][1], blocking=False),
                 )
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
@@ -1594,9 +1537,18 @@ class Generator(WarmupForwardMixin):
     # Note: This function is called by vLLM
     def process_decode_output_host(self, tt_out, is_tokens=False):
         """
-        Converts the input ttnn host tensors to a torch tensor.
+        Converts the input ttnn host tensors to torch tensors.
         The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
-        For LogProbsResult (new path), returns the result as-is for vLLM to unpack.
+        When the decode output includes logprobs:
+           * Old path: a single logprobs tensor is converted to a torch tensor.
+           * New path (LogProbsResult): the LogProbsResult is converted into a
+            tuple of torch tensors (topk_lp, topk_idx), where each has shape [batch, top_k].
+         Returns:
+           * If using the old path: (logits, log_probs) where both are torch tensors
+             concatenated across data-parallel ranks.
+           * If any rank uses the new path: (logits, (topk_lp, topk_idx)), where
+             logits, topk_lp, and topk_idx are torch tensors concatenated across
+             data-parallel ranks.
         """
         from models.common.sampling.tt_log_probs import LogProbsResult
 
