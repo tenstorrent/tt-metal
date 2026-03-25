@@ -43,17 +43,21 @@ CONFIG_TIMEOUT = 600  # seconds per config subprocess
 # ---------------------------------------------------------------------------
 
 MESH_CONFIGS = {
-    "bh_2x2": dict(h_factor=2, w_factor=2, physical=(2, 2), desc="BH QB sp0tp1"),
-    "bh_2x4": dict(h_factor=2, w_factor=4, physical=(2, 4), desc="BH LB sp1tp0"),
-    "bh_4x8": dict(h_factor=4, w_factor=8, physical=(4, 8), desc="BH Galaxy sp1tp0"),
-    "bh_4x32": dict(h_factor=4, w_factor=32, physical=(4, 32), desc="BH Galaxy 6U sp1tp0"),
-    "wh_4x8": dict(h_factor=4, w_factor=8, physical=(4, 8), desc="WH Galaxy sp1tp0"),
+    "bh_2x2": dict(h_factor=2, w_factor=2, physical=(2, 2), desc="BH QB sp0tp1", grid_override=None),
+    "bh_2x4": dict(h_factor=2, w_factor=4, physical=(2, 4), desc="BH LB sp1tp0", grid_override=None),
+    "bh_4x8": dict(h_factor=4, w_factor=8, physical=(4, 8), desc="BH Galaxy sp1tp0", grid_override=(12, 10)),
+    "bh_4x32": dict(h_factor=4, w_factor=32, physical=(4, 32), desc="BH Galaxy 6U sp1tp0", grid_override=(12, 10)),
+    "wh_4x8": dict(h_factor=4, w_factor=8, physical=(4, 8), desc="WH Galaxy sp1tp0", grid_override=None),
 }
 
 RESOLUTIONS = {
-    "480p": (4, 128, (480, 832)),
-    "720p": (4, 128, (720, 1280)),
+    "480p": (480, 832),
+    "720p": (720, 1280),
 }
+
+# WAN 2.2 production: 81 output frames → latent T = (81-1)//4 + 1 = 21
+NUM_FRAMES = 81
+LATENT_T = (NUM_FRAMES - 1) // 4 + 1  # 21
 
 MESH_RESOLUTIONS = {
     "bh_2x2": ["480p"],
@@ -91,44 +95,87 @@ def valid_cout(c, C_out):
 
 
 def build_conv_configs(h_factor, w_factor, resolution_key, cached=False):
-    T0_uncached, T0_cached, (H_out, W_out) = RESOLUTIONS[resolution_key]
-    T0 = T0_cached if cached else T0_uncached
-    H0 = math.ceil(H_out // h_factor / 8) * 8
-    W0 = W_out // w_factor
+    """Build conv3d configs with correct production shapes.
+
+    Shapes verified by tracing actual WAN 2.2 VAE decoder runs (see CONV3D_PRODUCTION_SHAPES.md).
+    T, H, W include all external padding (causal T pad, spatial H/W pad) because the sweep
+    calls conv3d with padding=(0,0,0).
+
+    Uncached temporal flow (81 frames, latent T=21):
+      Latent: T=23 (21+2 causal) → time_conv: T=22 (20+2) → upsample3d → T=41
+      Mid: T=43 (41+2 causal) → time_conv: T=42 (40+2) → upsample3d → T=81
+      Output: T=83 (81+2 causal)
+
+    Cached: all convs see T=3 (1 frame + CACHE_T=2).
+    """
+    (H_out, W_out) = RESOLUTIONS[resolution_key]
+    # Per-device dims: go through latent space then scale back up.
+    # The decoder downscales spatially by 8x (vae_spatial_scale), processes per-device,
+    # then upscales 8x. So per-device full-res dims = per-device latent dims * 8.
+    vae_spatial_scale = 8
+    latent_H = H_out // vae_spatial_scale
+    latent_W = W_out // vae_spatial_scale
+    H_per_dev_latent = math.ceil(latent_H / h_factor)
+    W_per_dev_latent = latent_W // w_factor
+    H0 = H_per_dev_latent * vae_spatial_scale
+    W0 = W_per_dev_latent * vae_spatial_scale
     tag = f"{'cached' if cached else 'uncached'}_{resolution_key}"
 
-    # (case_id, T, H, W, C_in, kernel_size, C_out, Blocking baseline)
+    # Temporal dims at each decoder stage
+    if cached:
+        # Cached mode: all convs see T=3 (1 frame + CACHE_T=2)
+        T_lat = 3  # 3x3x3 convs at latent level
+        T_tc0 = 3  # time_conv up0 (3x1x1)
+        T_133_mid = 3  # 1x3x3 conv after first upsample3d
+        T_mid = 3  # 3x3x3 convs at mid level
+        T_tc1 = 3  # time_conv up1 (3x1x1)
+        T_133_hi = 3  # 1x3x3 conv after second upsample3d
+        T_hi = 3  # 3x3x3 convs at hi level
+        T_133_full = 3  # 1x3x3 conv after upsample2d
+        T_full = 3  # 3x3x3 convs at output level
+    else:
+        # Uncached mode: full T pass-through with temporal upsampling
+        T_lat = LATENT_T + 2  # 23: latent T=21 + 2 causal pad
+        T_tc0 = (LATENT_T - 1) + 2  # 22: frames[1:]=20 + 2 causal pad
+        T_after_up0 = 2 * (LATENT_T - 1) + 1  # 41: temporal upsample
+        T_133_mid = T_after_up0  # 41: 1x3x3, no T padding
+        T_mid = T_after_up0 + 2  # 43: + 2 causal pad
+        T_tc1 = (T_after_up0 - 1) + 2  # 42: frames[1:]=40 + 2 causal pad
+        T_after_up1 = 2 * (T_after_up0 - 1) + 1  # 81: temporal upsample
+        T_133_hi = T_after_up1  # 81: 1x3x3, no T padding
+        T_hi = T_after_up1 + 2  # 83: + 2 causal pad
+        T_133_full = T_after_up1  # 81: upsample2d doesn't change T
+        T_full = T_after_up1 + 2  # 83: + 2 causal pad
+
+    # Spatial dims per stage (with +2 padding for 3x3x3 and 1x3x3 kernels)
+    H_lat, W_lat = H0 // 8, W0 // 8
+    H_mid, W_mid = H0 // 4, W0 // 4
+    H_hi, W_hi = H0 // 2, W0 // 2
+    H_full, W_full = H0, W0
+
     B = Blocking
     return [
-        # Latent resolution layers
-        (f"384x384_k333_{tag}", 3, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
-        (f"384x32_k333_{tag}", 3, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 32, B(384, 32, 1, 4, 4)),
-        (f"32x384_k333_lat_{tag}", T0 // 4 + 2, H0 // 8 + 2, W0 // 8 + 2, 32, (3, 3, 3), 384, B(32, 384, 1, 8, 8)),
-        # Time convs (no spatial padding for 3x1x1)
-        (f"384x768_k311_{tag}", T0 // 4 + 2, H0 // 8, W0 // 8, 384, (3, 1, 1), 768, B(32, 32, 1, 1, 1)),
-        (f"384x768_k311_up_{tag}", T0 // 2 + 2, H0 // 4, W0 // 4, 384, (3, 1, 1), 768, B(32, 32, 1, 1, 1)),
-        (f"192x384_k311_{tag}", T0 // 2 + 2, H0 // 4, W0 // 4, 192, (3, 1, 1), 384, B(192, 128, 1, 1, 32)),
-        # After first spatial upsample
-        (f"192x384_k333_{tag}", 3, H0 // 4 + 2, W0 // 4 + 2, 192, (3, 3, 3), 384, B(96, 128, 1, 32, 1)),
-        (f"384x384_k333_up_{tag}", 3, H0 // 4 + 2, W0 // 4 + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
-        # After second upsample
-        (f"96x192_k333_{tag}", 3, H0 // 2 + 2, W0 // 2 + 2, 96, (3, 3, 3), 192, B(96, 192, 1, 4, 4)),
-        (f"192x192_k333_{tag}", 3, H0 // 2 + 2, W0 // 2 + 2, 192, (3, 3, 3), 192, B(96, 96, 1, 8, 4)),
-        # 1x3x3 upsample convs
-        (f"384x192_k133_{tag}", 3, H0 // 4 + 2, W0 // 4 + 2, 384, (1, 3, 3), 192, B(128, 64, 1, 32, 4)),
-        (f"192x96_k133_{tag}", 3, H0 // 2 + 2, W0 // 2 + 2, 192, (1, 3, 3), 96, B(192, 96, 1, 8, 4)),
-        # Output resolution layers
-        (f"32x96_k333_{tag}", 3, H0 + 2, W0 + 2, 32, (3, 3, 3), 96, B(32, 96, 1, 4, 4)),
-        (f"96x96_k333_{tag}", 3, H0 + 2, W0 + 2, 96, (3, 3, 3), 96, B(96, 96, 1, 8, 8)),
-        (f"96x32_k333_{tag}", 3, H0 + 2, W0 + 2, 96, (3, 3, 3), 32, B(96, 32, 1, 16, 8)),
-        (f"96x3_k333_{tag}", 3, H0 + 2, W0 + 2, 96, (3, 3, 3), 3, B(96, 32, 1, 16, 8)),
-        # Cached temporal variants
-        (f"384x384_k333_t_{tag}", T0 // 4 + 2, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
-        (f"192x384_k333_t_{tag}", T0 // 2 + 2, H0 // 4 + 2, W0 // 4 + 2, 192, (3, 3, 3), 384, B(96, 128, 1, 32, 1)),
-        (f"384x384_k333_t2_{tag}", T0 // 2 + 2, H0 // 4 + 2, W0 // 4 + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
-        (f"192x192_k333_t_{tag}", T0 + 2, H0 // 2 + 2, W0 // 2 + 2, 192, (3, 3, 3), 192, B(96, 96, 1, 8, 4)),
-        (f"96x96_k333_t_{tag}", T0 + 2, H0 + 2, W0 + 2, 96, (3, 3, 3), 96, B(96, 96, 1, 8, 8)),
-        (f"96x32_k333_t_{tag}", T0 + 2, H0 + 2, W0 + 2, 96, (3, 3, 3), 32, B(96, 32, 1, 16, 8)),
+        # --- Latent resolution (conv_in + mid + up0 resblocks) ---
+        (f"32x384_k333_{tag}", T_lat, H_lat + 2, W_lat + 2, 32, (3, 3, 3), 384, B(32, 64, 1, 4, 16)),
+        (f"384x384_k333_lat_{tag}", T_lat, H_lat + 2, W_lat + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
+        # --- Time conv up0 (3x1x1, no spatial padding) ---
+        (f"384x768_k311_{tag}", T_tc0, H_lat, W_lat, 384, (3, 1, 1), 768, B(32, 32, 1, 1, 1)),
+        # --- 1x3x3 spatial conv after up0 upsample3d ---
+        (f"384x192_k133_{tag}", T_133_mid, H_mid + 2, W_mid + 2, 384, (1, 3, 3), 192, B(128, 64, 1, 32, 4)),
+        # --- Mid resolution (up1 resblocks) ---
+        (f"192x384_k333_{tag}", T_mid, H_mid + 2, W_mid + 2, 192, (3, 3, 3), 384, B(96, 128, 1, 32, 1)),
+        (f"384x384_k333_mid_{tag}", T_mid, H_mid + 2, W_mid + 2, 384, (3, 3, 3), 384, B(128, 128, 1, 8, 2)),
+        # --- Time conv up1 (3x1x1, no spatial padding) ---
+        (f"384x768_k311_up_{tag}", T_tc1, H_mid, W_mid, 384, (3, 1, 1), 768, B(32, 32, 1, 1, 1)),
+        # --- 1x3x3 spatial conv after up1 upsample3d ---
+        (f"384x192_k133_hi_{tag}", T_133_hi, H_hi + 2, W_hi + 2, 384, (1, 3, 3), 192, B(128, 64, 1, 32, 4)),
+        # --- Hi resolution (up2 resblocks) ---
+        (f"192x192_k333_{tag}", T_hi, H_hi + 2, W_hi + 2, 192, (3, 3, 3), 192, B(96, 96, 1, 8, 4)),
+        # --- 1x3x3 spatial conv after up2 upsample2d ---
+        (f"192x96_k133_{tag}", T_133_full, H_full + 2, W_full + 2, 192, (1, 3, 3), 96, B(192, 96, 1, 8, 4)),
+        # --- Output resolution (up3 resblocks + conv_out) ---
+        (f"96x96_k333_{tag}", T_full, H_full + 2, W_full + 2, 96, (3, 3, 3), 96, B(96, 96, 1, 8, 8)),
+        (f"96x3_k333_{tag}", T_full, H_full + 2, W_full + 2, 96, (3, 3, 3), 3, B(96, 32, 1, 16, 8)),
     ]
 
 
@@ -150,9 +197,15 @@ def run_config_worker(config_json, physical_shape, result_path):
     kernel_size = tuple(cfg["kernel_size"])
     baseline = Blocking(*cfg["baseline"])
     padded_C_in = aligned_channels(C_in)
+    grid_override = cfg.get("grid_override")
+    if grid_override:
+        grid_override = tuple(grid_override)
 
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(*physical_shape))
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    if grid_override:
+        grid_size = ttnn.CoreCoord(*grid_override)
+    else:
+        grid_size = mesh_device.compute_with_storage_grid_size()
     ckc = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -339,18 +392,27 @@ def main():
         default=None,
         help="Physical mesh shape: '2x4', '4x8', or 'auto' (opens target mesh). Default: 1x1",
     )
+    parser.add_argument("--resolution", default=None, choices=["480p", "720p"], help="Run only this resolution")
+    parser.add_argument("--mode", default=None, choices=["cached", "uncached"], help="Run only cached or uncached")
     parser.add_argument("--force", action="store_true", help="Re-run configs even if JSON exists")
     parser.add_argument("--timeout", type=int, default=CONFIG_TIMEOUT, help="Timeout per config (seconds)")
+    parser.add_argument(
+        "--grid-size", type=str, default=None, help="Override compute grid size, e.g. '12x10' for Galaxy"
+    )
     # Internal flag: run a single config in-process (used by subprocess)
     parser.add_argument("--_run-config", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--_physical-shape", type=str, help=argparse.SUPPRESS)
     parser.add_argument("--_result-path", type=str, help=argparse.SUPPRESS)
+    parser.add_argument("--_grid-size", type=str, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # Subprocess mode: run single config and exit
     if args._run_config:
         shape = tuple(int(x) for x in args._physical_shape.split("x"))
-        run_config_worker(args._run_config, shape, args._result_path)
+        cfg = json.loads(args._run_config)
+        if args._grid_size:
+            cfg["grid_override"] = tuple(int(x) for x in args._grid_size.split("x"))
+        run_config_worker(json.dumps(cfg), shape, args._result_path)
         return
 
     # Orchestrator mode
@@ -365,8 +427,17 @@ def main():
     else:
         physical_shape = tuple(int(x) for x in args.physical_mesh.split("x"))
 
+    # Resolve grid size override
+    if args.grid_size:
+        grid_override = args.grid_size
+    elif mesh_cfg.get("grid_override"):
+        grid_override = f"{mesh_cfg['grid_override'][0]}x{mesh_cfg['grid_override'][1]}"
+    else:
+        grid_override = None
+
     print(f"Target mesh: {args.mesh} ({mesh_cfg['desc']}), h_factor={h_factor}, w_factor={w_factor}")
     print(f"Physical mesh: {physical_shape[0]}x{physical_shape[1]}")
+    print(f"Grid override: {grid_override or 'auto (device default)'}")
     print(f"Resolutions: {resolutions}")
     print(f"Timeout per config: {args.timeout}s")
 
@@ -374,10 +445,15 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Build and dedup configs
+    if args.resolution:
+        resolutions = [args.resolution]
+
     all_configs = []
     for res in resolutions:
-        all_configs.extend(build_conv_configs(h_factor, w_factor, res, cached=False))
-        all_configs.extend(build_conv_configs(h_factor, w_factor, res, cached=True))
+        if args.mode in (None, "uncached"):
+            all_configs.extend(build_conv_configs(h_factor, w_factor, res, cached=False))
+        if args.mode in (None, "cached"):
+            all_configs.extend(build_conv_configs(h_factor, w_factor, res, cached=True))
 
     seen = {}
     deduped = []
@@ -427,6 +503,8 @@ def main():
             "--_result-path",
             str(result_file),
         ]
+        if grid_override:
+            cmd.extend(["--_grid-size", grid_override])
 
         try:
             proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
