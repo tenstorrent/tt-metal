@@ -25,7 +25,6 @@
 #include <tt_stl/fmt.hpp>
 #include "context/metal_env_impl.hpp"
 #include "core_coord.hpp"
-#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -39,6 +38,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
+#include "hostdev/debug_ring_buffer_common.h"
 
 using namespace tt::tt_metal;
 
@@ -390,10 +390,13 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
         data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
-        // Initialize debug ring buffer to a known init val, we'll check against this to see if any
-        // data has been written.
-        data.debug_ring_buf().current_ptr() = DEBUG_RING_BUFFER_STARTING_INDEX;
-        data.debug_ring_buf().wrapped() = 0;
+        // Initialize debug ring buffer. Quasar MPSC buffer is already zeroed on create.
+        // WH/BH SPSC buffer needs current_ptr set to -1 as sentinel.
+        if (hal.get_arch() != tt::ARCH::QUASAR) {
+            auto* ring_buf = reinterpret_cast<debug_spsc_ring_buf_msg_t*>(data.debug_ring_buf().data().data());
+            ring_buf->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
+            ring_buf->wrapped = 0;
+        }
     }
 
     // Initialize Debug Delay feature

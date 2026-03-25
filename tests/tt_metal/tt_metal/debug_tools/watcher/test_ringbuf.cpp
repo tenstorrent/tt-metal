@@ -20,7 +20,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/debug/debug_helpers.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.
@@ -28,21 +31,66 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-std::vector<std::string> expected = {
-    "debug_ring_buffer=",
-    "[0x00270028,0x00260027,0x00250026,0x00240025,0x00230024,0x00220023,0x00210022,0x00200021,",
-    " 0x001f0020,0x001e001f,0x001d001e,0x001c001d,0x001b001c,0x001a001b,0x0019001a,0x00180019,",
-    " 0x00170018,0x00160017,0x00150016,0x00140015,0x00130014,0x00120013,0x00110012,0x00100011,",
-    " 0x000f0010,0x000e000f,0x000d000e,0x000c000d,0x000b000c,0x000a000b,0x0009000a,0x00080009,",
-    "]"
-};
+constexpr uint32_t NUM_PUSHES_SINGLE = 40;  // Single-thread tests push 40 values
+constexpr uint32_t NUM_PUSHES_MULTI = 4;    // Multi-DM test: 4 pushes per DM (8 DMs x 4 = 32 total)
+
+// Generate expected ring buffer data for TRISC/ERISC/BH/WH tests
+// Pattern: (idx << 16) | (idx + 1), buffer holds 32, newest first (40 down to 9)
+std::vector<uint32_t> get_expected_data() {
+    std::vector<uint32_t> data;
+    for (uint32_t idx = NUM_PUSHES_SINGLE - 1; idx >= NUM_PUSHES_SINGLE - 32; idx--) {
+        data.push_back((idx << 16) | (idx + 1));
+    }
+    return data;
+}
+
+// Generate expected ring buffer data for Quasar single-DM tests
+// Pattern: (thread_idx << 16) | seq, buffer holds 32, newest first
+std::vector<uint32_t> get_expected_data_dm(uint32_t thread_idx) {
+    std::vector<uint32_t> data;
+    for (uint32_t seq = NUM_PUSHES_SINGLE - 1; seq >= NUM_PUSHES_SINGLE - 32; seq--) {
+        data.push_back((thread_idx << 16) | seq);
+    }
+    return data;
+}
+
+// Expected strings for BH/WH (SPSC format)
+std::vector<std::string> get_expected_spsc() {
+    auto data = get_expected_data();
+    std::vector<std::string> result = {"debug_ring_buffer="};
+    auto lines = FormatRingBuffer(data);
+    result.insert(result.end(), lines.begin(), lines.end());
+    return result;
+}
+
+// Expected strings for Quasar single-DM (MPSC format with processor prefix)
+std::vector<std::string> get_expected_mpsc(HalProgrammableCoreType core_type, uint32_t thread_idx) {
+    auto data = get_expected_data_dm(thread_idx);
+    std::vector<uint32_t> thread_indices(data.size(), thread_idx);  // All from same thread in test
+    std::vector<std::string> result = {"debug_ring_buffer="};
+    auto lines = FormatRingBuffer(data, thread_indices, core_type);
+    result.insert(result.end(), lines.begin(), lines.end());
+    return result;
+}
+
+// Expected strings for Quasar multi-DM test (MPSC format)
+// Verifies all 8 DMs wrote entries with matching [DMx] prefix and data
+std::vector<std::string> get_expected_multi_dm() {
+    std::vector<std::string> expected = {"debug_ring_buffer="};
+    for (uint32_t dm = 0; dm < 8; dm++) {
+        // First push from each DM: (dm << 16) | 0
+        expected.push_back(fmt::format("[DM{}]0x{:08x}", dm, (dm << 16) | 0));
+    }
+    return expected;
+}
 
 namespace {
 
 void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    HalProcessorIdentifier processor) {
+    HalProcessorIdentifier processor,
+    bool multi_dm_test = false) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -50,6 +98,7 @@ void RunTest(
     workload.add_program(device_range, {});
     auto& program = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
+    bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc
@@ -60,31 +109,59 @@ void RunTest(
             virtual_core = device->worker_core_from_logical_core(logical_core);
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
-                    DataMovementConfig dm_config{};
-                    switch (processor.processor_type) {
-                        case 0:
-                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_0;
-                            dm_config.noc = tt_metal::NOC::RISCV_0_default;
-                            break;
-                        case 1:
-                            dm_config.processor = tt_metal::DataMovementProcessor::RISCV_1;
-                            dm_config.noc = tt_metal::NOC::RISCV_1_default;
-                            break;
-                        default: TT_THROW("Unsupported DM processor type {}", processor.processor_type);
+                    if (is_quasar) {
+                        uint32_t num_pushes = multi_dm_test ? NUM_PUSHES_MULTI : NUM_PUSHES_SINGLE;
+                        std::vector<uint32_t> compile_args =
+                            multi_dm_test ? std::vector<uint32_t>{num_pushes}
+                                          : std::vector<uint32_t>{num_pushes, processor.processor_type};
+                        std::map<std::string, std::string> defines =
+                            multi_dm_test ? std::map<std::string, std::string>{{"MULTI_DM_TEST", "1"}}
+                                          : std::map<std::string, std::string>{};
+                        tt::tt_metal::experimental::quasar::CreateKernel(
+                            program,
+                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                            logical_core,
+                            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                                .num_threads_per_cluster = 8, .compile_args = compile_args, .defines = defines});
+                    } else {
+                        DataMovementConfig dm_config{};
+                        dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
+                        dm_config.noc = (processor.processor_type == 0) ? tt_metal::NOC::RISCV_0_default
+                                                                        : tt_metal::NOC::RISCV_1_default;
+                        dm_config.compile_args = {NUM_PUSHES_SINGLE};
+                        CreateKernel(
+                            program,
+                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                            logical_core,
+                            dm_config);
                     }
-                    CreateKernel(
-                        program,
-                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                        logical_core,
-                        dm_config);
                     break;
                 }
                 case HalProcessorClassType::COMPUTE:
-                    CreateKernel(
-                        program,
-                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
-                        logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                    if (is_quasar) {
+                        uint32_t num_threads = multi_dm_test ? 4 : 1;
+                        uint32_t num_pushes = multi_dm_test ? NUM_PUSHES_MULTI : NUM_PUSHES_SINGLE;
+                        std::map<std::string, std::string> defines =
+                            multi_dm_test ? std::map<std::string, std::string>{{"MULTI_DM_TEST", "1"}}
+                                          : std::map<std::string, std::string>{
+                                                {fmt::format("TRISC{}", processor.processor_type), "1"}};
+                        tt::tt_metal::experimental::quasar::CreateKernel(
+                            program,
+                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                            logical_core,
+                            experimental::quasar::QuasarComputeConfig{
+                                .num_threads_per_cluster = num_threads,
+                                .compile_args = {num_pushes},
+                                .defines = defines});
+                    } else {
+                        CreateKernel(
+                            program,
+                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                            logical_core,
+                            ComputeConfig{
+                                .compile_args = {NUM_PUSHES_SINGLE},
+                                .defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                    }
                     break;
             }
             break;
@@ -99,7 +176,7 @@ void RunTest(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {NUM_PUSHES_SINGLE}});
             break;
         case HalProgrammableCoreType::IDLE_ETH:
             if (device->get_inactive_ethernet_cores().empty()) {
@@ -112,7 +189,8 @@ void RunTest(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
+                EthernetConfig{
+                    .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {NUM_PUSHES_SINGLE}});
             break;
         case HalProgrammableCoreType::DRAM:
             log_info(LogTest, "Skipping: DRAM cores do not support watcher ring buffer tests.");
@@ -127,12 +205,24 @@ void RunTest(
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
-    EXPECT_TRUE(
-        FileContainsAllStringsInOrder(
-            fixture->log_file_name,
-            expected
-        )
-    );
+    if (is_quasar) {
+        if (multi_dm_test) {
+            EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, get_expected_multi_dm()));
+        } else {
+            // Thread index for DM is processor_type (0-7), for TRISC it's 8+ based on HAL mapping
+            uint32_t thread_idx = processor.processor_type;
+            if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+                // Compute processors start after DM processors in the HAL index
+                const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+                thread_idx =
+                    hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
+            }
+            EXPECT_TRUE(FileContainsAllStringsInOrder(
+                fixture->log_file_name, get_expected_mpsc(processor.core_type, thread_idx)));
+        }
+    } else {
+        EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, get_expected_spsc()));
+    }
 }
 
 using enum HalProgrammableCoreType;
@@ -207,6 +297,20 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiDM) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        if (device->arch() != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Multi-DM MPSC test is Quasar-only";
+        }
+        this->RunTestOnDevice(
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, DM, 0}, /*multi_dm_test=*/true);
             },
             mesh_device);
     }

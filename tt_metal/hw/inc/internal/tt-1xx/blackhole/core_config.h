@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "hostdev/debug_ring_buffer_common.h"
 
 enum ProgrammableCoreType {
     TENSIX = 0,
@@ -40,3 +41,6 @@ constexpr uint8_t tensix_harvest_axis = 0x2;
 constexpr uint8_t subordinate_map_size = sizeof(subordinate_map_t);
 #define LOG_BASE_2_OF_DRAM_ALIGNMENT 6
 #define LOG_BASE_2_OF_L1_ALIGNMENT 4
+
+// Debug ring buffer structs/constants are in debug_ring_buffer_common.h
+constexpr uint32_t debug_ring_buf_size = sizeof(debug_spsc_ring_buf_msg_t);
