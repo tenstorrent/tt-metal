@@ -143,7 +143,7 @@ class MoEGate(AbstractModule):
         """
 
         if mode == "decode":
-            memory_config = ttnn.L1_MEMORY_CONFIG
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
 
             return {
                 "gate_proj": LinearConfig(
