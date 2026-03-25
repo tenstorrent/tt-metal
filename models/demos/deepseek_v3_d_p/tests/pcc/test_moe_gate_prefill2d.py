@@ -221,7 +221,7 @@ def test_forward_pass(
         device_id = row * n_tp_devices
         indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
 
-    expert_offsets, _, cum_sum = get_gate_outputs(
+    expert_offsets, _, _ = get_gate_outputs(
         indices=indices_for_gate,
         dispatch_group_size=n_sp_devices,
         num_routed_experts=n_routed_experts,
@@ -231,7 +231,6 @@ def test_forward_pass(
     )
 
     reference_offsets = expert_offsets.long()
-    reference_totals = cum_sum[-1:].long()
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):

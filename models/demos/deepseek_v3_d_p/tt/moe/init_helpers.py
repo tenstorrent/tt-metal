@@ -288,7 +288,8 @@ def get_gate_outputs(
             Shape: (dispatch_group_size, num_routed_experts)
         expert_token_counts: Total tokens per expert per chip
             Shape: (dispatch_group_size, experts_per_chip)
-        cum_sum: Cumulative sum of token counts across chips
+        expert_counter: Per-chip token counts for each expert (debug only).
+            Shows how many tokens from each chip route to each expert.
             Shape: (dispatch_group_size, num_routed_experts)
     """
     # Count tokens per expert per chip
@@ -312,8 +313,7 @@ def get_gate_outputs(
     logger.debug(f"  expert_counter.shape={expert_counter.shape}")
     logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
     logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
-    logger.debug(f"  cum_sum.shape={cum_sum.shape}")
-    return expert_offsets, expert_token_counts, cum_sum, expert_counter
+    return expert_offsets, expert_token_counts, expert_counter
 
 
 def compute_constants(
