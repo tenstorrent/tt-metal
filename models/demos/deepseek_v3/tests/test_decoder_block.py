@@ -21,6 +21,7 @@ from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fab
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
+    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -44,6 +45,7 @@ def generate_reference_io(
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
+        state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(state_dict)
     else:
         state_dict = reference_model.state_dict()
