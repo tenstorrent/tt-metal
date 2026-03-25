@@ -306,6 +306,7 @@ class VisionAttention(LightweightModule):
             scale=self.scale,
             program_config=sdpa_config,
             compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self._sdpa_program_config(seq_len),
         )
 
         ttnn.deallocate(q)
