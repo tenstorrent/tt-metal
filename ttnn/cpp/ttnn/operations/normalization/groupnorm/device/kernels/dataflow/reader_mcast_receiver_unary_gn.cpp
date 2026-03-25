@@ -114,9 +114,9 @@ void kernel_main() {
     constexpr uint32_t cb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
     constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;            // E[x] partial reduce
     constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;    // E[x] global reduce
-    constexpr uint32_t cb_ex2_id = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex2_global_id = tt::CBIndex::c_14;
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_ex2_id = tt::CBIndex::c_13;          // E[x]^2 partial reduce
+    constexpr uint32_t cb_ex2_global_id = tt::CBIndex::c_14;   // E[x]^2 global reduce
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;           // input cb
     constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
