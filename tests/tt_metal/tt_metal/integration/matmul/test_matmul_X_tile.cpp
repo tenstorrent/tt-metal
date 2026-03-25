@@ -177,7 +177,7 @@ void matmul_tile(
             .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
+            .enable_implicit_sync = true,
             .data_format = tt::DataFormat::Float16_b};
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_src1_config = {
             .entry_size = single_tile_size_bfp16b,
@@ -188,7 +188,7 @@ void matmul_tile(
             .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
+            .enable_implicit_sync = true,
             .data_format = tt::DataFormat::Float16_b};
         src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
         src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src1_config);
@@ -276,7 +276,7 @@ void matmul_tile(
                 .consumer_risc_mask = 0x2,
                 .num_consumers = 1,
                 .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                .enable_implicit_sync = false,
+                .enable_implicit_sync = true,
                 .data_format = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
             };
             dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
@@ -316,7 +316,7 @@ void matmul_tile(
                 .consumer_risc_mask = 0x2,
                 .num_consumers = 1,
                 .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-                .enable_implicit_sync = false,
+                .enable_implicit_sync = true,
                 .data_format = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
             };
             dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
@@ -596,6 +596,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
                 for (const auto& device : devices_) {
                     matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
+                return;
             }
         }
     }

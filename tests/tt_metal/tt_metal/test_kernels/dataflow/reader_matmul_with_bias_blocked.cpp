@@ -55,16 +55,16 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_blocks; i++) {
 #ifdef ARCH_QUASAR
-        dfb_in0.reserve_back(in0_block_tile_cnt);
-        dfb_in1.reserve_back(in1_block_tile_cnt);
-
-        noc.async_read(dram, dfb_in0, in0_block_size_bytes, {.bank_id = src0_dram_bank_id, .addr = src0_addr}, {});
-        noc.async_read(dram, dfb_in1, in1_block_size_bytes, {.bank_id = src1_dram_bank_id, .addr = src1_addr}, {});
-
-        noc.async_read_barrier();
-
-        dfb_in0.push_back(in0_block_tile_cnt);
-        dfb_in1.push_back(in1_block_tile_cnt);
+        uint32_t src0_tile_addr = src0_addr;
+        uint32_t src1_tile_addr = src1_addr;
+        for (uint32_t tile_idx = 0; tile_idx < in0_block_tile_cnt; ++tile_idx) {
+            dfb_in0.read_in(noc, dram, {.bank_id = src0_dram_bank_id, .addr = src0_tile_addr});
+            src0_tile_addr += dfb_in0.get_entry_size();
+        }
+        for (uint32_t tile_idx = 0; tile_idx < in1_block_tile_cnt; ++tile_idx) {
+            dfb_in1.read_in(noc, dram, {.bank_id = src1_dram_bank_id, .addr = src1_tile_addr});
+            src1_tile_addr += dfb_in1.get_entry_size();
+        }
 #else
         uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_dram_bank_id, src0_addr);
         uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_dram_bank_id, src1_addr);

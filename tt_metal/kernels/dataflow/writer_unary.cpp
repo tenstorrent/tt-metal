@@ -9,6 +9,7 @@
 #include "experimental/circular_buffer.h"
 #endif
 #include "experimental/endpoints.h"
+#include "experimental/noc.h"
 
 void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
@@ -17,6 +18,7 @@ void kernel_main() {
 
 #ifdef ARCH_QUASAR
     experimental::DataflowBuffer dfb_out(2);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
 #else
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
     experimental::CircularBuffer cb(cb_id_out0);
@@ -34,15 +36,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-        dfb_out.wait_front(ublock_size_tiles);
-        noc.async_write(
-            dfb_out,
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
-            ublock_size_bytes,
-            {},
-            {.bank_id = bank_id, .addr = dst_addr});
-        noc.async_write_barrier();
-        dfb_out.pop_front(ublock_size_tiles);
+        dfb_out.write_out(noc, dst_dram, {.bank_id = bank_id, .addr = dst_addr});
 #else
         cb.wait_front(ublock_size_tiles);
         noc.async_write(
@@ -56,4 +50,11 @@ void kernel_main() {
 #endif
         dst_addr += ublock_size_bytes;
     }
+#ifdef ARCH_QUASAR
+    // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[dfb_out.get_id()];
+    for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
+    }
+#endif
 }
