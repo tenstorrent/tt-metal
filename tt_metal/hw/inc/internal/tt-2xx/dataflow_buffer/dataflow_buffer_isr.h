@@ -7,6 +7,9 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 
+inline __attribute__((always_inline)) void enable_dfb_tile_isr();
+inline __attribute__((always_inline)) void disable_dfb_tile_isr();
+
 inline __attribute__((always_inline)) void dfb_tile_poster_irq_handler() {
 #ifndef COMPILE_FOR_TRISC
     uint64_t fired_trids =
