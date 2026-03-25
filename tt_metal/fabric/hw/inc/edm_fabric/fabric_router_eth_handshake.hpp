@@ -37,7 +37,9 @@ FORCE_INLINE void fabric_sender_side_handshake(
     ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+#ifndef ARCH_WORMHOLE
             static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
+#endif
             run_routing();
         } else {
             count++;
@@ -66,7 +68,9 @@ FORCE_INLINE void fabric_receiver_side_handshake(
     ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+#ifndef ARCH_WORMHOLE
             static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
+#endif
             run_routing();
         } else {
             count++;

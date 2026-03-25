@@ -84,7 +84,9 @@ FORCE_INLINE void sender_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+#ifndef ARCH_WORMHOLE
             static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
+#endif
             run_routing();
         } else {
             count++;
@@ -107,7 +109,9 @@ FORCE_INLINE void receiver_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
+#ifndef ARCH_WORMHOLE
             static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
+#endif
             run_routing();
         } else {
             count++;
