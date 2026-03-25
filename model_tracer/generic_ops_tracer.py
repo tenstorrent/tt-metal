@@ -135,7 +135,7 @@ def get_machine_info():
             data = json.loads(result.stdout)
             devices = data.get("device_info", [])
 
-            if board_type is None and devices:
+            if (board_type is None or board_type == "Unknown") and devices:
                 board_type = _infer_board_type_from_arch(devices[0].get("arch", ""))
 
             device_count = pyluwen_device_count or len(devices)
