@@ -1094,6 +1094,8 @@ static bool add_forbidden_for_used_asics_to_all_groupings(
 
 // TODO: Optimize constraints for maximum usage
 // https://github.com/tenstorrent/tt-metal/issues/40639
+// FIXME: Issue is we can't guarantee that the right groupings get chosen for optimial fit, need to be able to backout
+// and try a different set of groupings on failure https://github.com/tenstorrent/tt-metal/issues/40781
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
