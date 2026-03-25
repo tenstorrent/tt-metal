@@ -127,10 +127,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         # MLA norm
-        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
-        mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
-        if _has_distinct_buffer(mla_norm_in, x):
-            ttnn.deallocate(mla_norm_in)
+        mla_norm_out = DistributedRMSNorm.forward_decode(x, cfg["mla_norm"], **cfg["mla_norm_reshard"])
 
         # MLA
         mla_reshard_memory_config = ttnn.create_sharded_memory_config(
@@ -146,10 +143,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         ttnn.deallocate(mla_out)
 
         # MLP norm
-        mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
-        mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
-        if _has_distinct_buffer(mlp_norm_in, x):
-            ttnn.deallocate(mlp_norm_in)
+        mlp_norm_out = DistributedRMSNorm.forward_decode(x, cfg["mlp_norm"], **cfg["mlp_norm_reshard"])
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])

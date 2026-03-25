@@ -37,6 +37,13 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
+def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
+    try:
+        return a.buffer_address() != b.buffer_address()
+    except Exception:
+        return a is not b
+
+
 class DistributedRMSNorm(RMSNormBase):
     @classmethod
     def convert_weights(
@@ -215,15 +222,48 @@ class DistributedRMSNorm(RMSNormBase):
         return ttnn.rms_norm_post_all_gather(x, stats, program_config=program_config, **cfg["rms_norm_post_all_gather"])
 
     @classmethod
-    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
-        """Forward pass of the embedding.
+    def _rmsnorm_forward_decode(
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig, memory_config: ttnn.MemoryConfig
+    ) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for decode mode.
 
         Args:
-            x: Input tensor (token indices)
-            cfg: RunConfig containing weights and op configurations
+            x: Input tensor
+            cfg: RunDecodeConfig containing weights and op configurations
+            memory_config: Memory configuration for the input tensor
 
         Returns:
-            Output tensor after embedding lookup
+            Output tensor after RMSNorm computation
+        """
+        tensor_in = ttnn.to_memory_config(x, memory_config)
+
+        program_config = cls._get_pc(tensor_in.memory_config())
+        # Run distributed rmsnorm part 1
+        tt_stats = cls._fwd_rms_norm_pre_all_gather(tensor_in, cfg, program_config=program_config)
+
+        # AllGather stats
+        ccl = cfg["ccl"]
+        tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
+        ttnn.deallocate(tt_stats)
+
+        # Run distributed rmsnorm part 2
+        tt_out = cls._fwd_rms_norm_post_all_gather(tensor_in, tt_gathered_stats, cfg, program_config=program_config)
+        if _has_distinct_buffer(x, tensor_in):
+            ttnn.deallocate(tensor_in)
+        ttnn.deallocate(tt_gathered_stats)
+
+        return tt_out
+
+    @classmethod
+    def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for prefill mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunPrefillConfig containing weights and op configurations
+
+        Returns:
+            Output tensor after RMSNorm computation
         """
 
         program_config = cls._get_pc(x.memory_config())
