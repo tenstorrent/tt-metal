@@ -28,4 +28,15 @@ enum class AttentionMaskType {
  */
 enum class StochasticRounding : bool { Disabled = false, Enabled = true };
 
+/**
+ * Specifies the output mode for symmetric gram matmul (G = X @ X^T).
+ *
+ * - UpperTriangle: Write only upper triangle + diagonal (lower triangle is uninitialized)
+ * - Full: Write full symmetric matrix (upper + transposed mirror to lower triangle)
+ */
+enum class OutputMode : uint32_t {
+    UpperTriangle = 0,
+    Full = 1,
+};
+
 }  // namespace ttml::metal
