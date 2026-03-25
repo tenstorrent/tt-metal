@@ -45,7 +45,7 @@ TEST_F(DeviceStorageOwnershipTest, CopySharesOwnership) {
     EXPECT_TRUE(tensor1.device_storage().is_sole_owner_of_device_memory());
 
     // Copy constructor shares ownership
-    Tensor tensor2 = tensor1;
+    Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
     EXPECT_FALSE(tensor1.device_storage().is_sole_owner_of_device_memory());
     EXPECT_FALSE(tensor2.device_storage().is_sole_owner_of_device_memory());
 
@@ -59,7 +59,7 @@ TEST_F(DeviceStorageOwnershipTest, SoleOwnerRestoredAfterCopyDestroyed) {
     Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     {
-        Tensor tensor2 = tensor1;
+        Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
         EXPECT_FALSE(tensor1.device_storage().is_sole_owner_of_device_memory());
     }
 
@@ -135,10 +135,15 @@ TEST_F(DeviceStorageOwnershipTest, GettersThrowWhenDeallocated) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, TensorShardsShareOwnership) {
+    const auto num_devices = mesh_device_->num_devices();
+    if (num_devices < 2) {
+        GTEST_SKIP() << "Test requires at least 2 devices";
+    }
+
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     auto shards = get_device_tensors(tensor);
 
-    ASSERT_THAT(shards, SizeIs(2));
+    ASSERT_THAT(shards, SizeIs(num_devices));
 
     // Original and all shards share ownership
     EXPECT_FALSE(tensor.device_storage().is_sole_owner_of_device_memory());
@@ -150,7 +155,9 @@ TEST_F(DeviceStorageOwnershipTest, TensorShardsShareOwnership) {
     // Force deallocate through shard affects all
     shards[0].deallocate(/*force=*/true);
     EXPECT_FALSE(tensor.is_allocated());
-    EXPECT_FALSE(shards[1].is_allocated());
+    for (size_t i = 1; i < shards.size(); ++i) {
+        EXPECT_FALSE(shards[i].is_allocated());
+    }
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorageViewSharesOwnership) {

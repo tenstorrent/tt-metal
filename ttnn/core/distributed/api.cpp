@@ -73,7 +73,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     }
-    if (is_device_tensor(tensor)) {
+    if (is_device_tensor(tensor) && tensor.is_allocated()) {
         const auto& device_storage = tensor.device_storage();
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.get_coords().size());
