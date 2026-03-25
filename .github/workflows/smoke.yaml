@@ -27,6 +27,10 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
 
 jobs:
   smoke:
@@ -119,6 +123,12 @@ jobs:
           echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+
+      - name: Set up env vars for LLK asserts
+        if: ${{ inputs.enable-llk-asserts == true }}
+        run: |
+          echo "Enabling TT Metal LLK Asserts"
+          echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
 
       - name: Run a test
         id: test

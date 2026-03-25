@@ -18,6 +18,12 @@ run-name: >-
 
 on:
   workflow_dispatch:
+    inputs:
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
   pull_request:
     types:
       - opened
@@ -196,6 +202,7 @@ jobs:
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ttnn-smoke-tests:
     needs: [find-changes, build-tsan]
@@ -219,6 +226,7 @@ jobs:
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
@@ -266,6 +274,7 @@ jobs:
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ttnn-basic-tests:
     needs: [build-asan, find-changes]
@@ -288,6 +297,7 @@ jobs:
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-nn
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
@@ -304,6 +314,7 @@ jobs:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       merge-gate-call: true
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
@@ -327,6 +338,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   fabric-unit-tests:
     needs: [build, find-changes]
@@ -350,6 +362,7 @@ jobs:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   fabric-cpu-only-unit-tests:
     needs: [build, find-changes]
@@ -402,6 +415,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.

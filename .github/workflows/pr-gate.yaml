@@ -52,6 +52,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
   pull_request:
     types:
       - opened
@@ -170,6 +175,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -194,6 +200,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
