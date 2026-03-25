@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from .github_client import PRInfo, post_pr_comment
+from .github_client import PRInfo, diff_line_numbers, post_pr_comment
 from .llm import Finding, LLMSession
 from .logger import logger
 from .output import (
@@ -15,7 +15,7 @@ from .output import (
     print_findings,
     write_sarif,
 )
-from .rules import group_rules, load_rules, select_rules
+from .rules import load_rules, select_rules
 
 
 def run_bug_check(
@@ -43,36 +43,51 @@ def run_bug_check(
 
     logger.info(f"Matched {len(matched_rules)} rule(s): " f"{', '.join(r.id for r in matched_rules)}")
 
-    rule_groups = group_rules(matched_rules)
     all_findings: list[Finding] = []
     rules_used: list[str] = []
+    skipped_rules: list[str] = []
+    truncated_rules: list[str] = []
+    truncated_file_set = set(pr_info.truncated_files)
 
-    for group in rule_groups:
+    for rule in matched_rules:
+        rules_used.append(rule.id)
         try:
-            session = LLMSession(model=group[0].model or "")
+            filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
+            if not filtered_diff:
+                matched_truncated = {f for f in pr_info.changed_files if rule.matches_pr([f], [])} & truncated_file_set
+                if matched_truncated:
+                    truncated_rules.append(rule.id)
+                    logger.warning(
+                        f"Rule {rule.id}: matched file(s) were truncated from diff — "
+                        f"analysis skipped: {', '.join(sorted(matched_truncated))}"
+                    )
+                else:
+                    logger.info(f"Rule {rule.id}: no matching diff sections — skipping LLM call")
+                continue
+            session = LLMSession(model=rule.model or "")
+            findings = session.analyze_rule(
+                rule_content=rule.content,
+                rule_id=rule.id,
+                severity=rule.severity,
+                suggest_fix=rule.suggest_fix,
+                diff=filtered_diff,
+            )
+            all_findings.extend(findings)
+            logger.info(f"Rule {rule.id}: {len(findings)} finding(s)")
         except Exception:
-            # Fail open: if session creation fails, skip this entire group
-            rule_ids = ", ".join(r.id for r in group)
-            logger.exception(f"Failed to create LLM session for rules: {rule_ids}")
-            rules_used.extend(r.id for r in group)
-            continue
+            skipped_rules.append(rule.id)
+            logger.exception(f"Rule {rule.id} failed — skipping")
 
-        for rule in group:
-            rules_used.append(rule.id)
-            try:
-                filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
-                findings = session.analyze_rule(
-                    rule_content=rule.content,
-                    rule_id=rule.id,
-                    severity=rule.severity,
-                    suggest_fix=rule.suggest_fix,
-                    diff=filtered_diff,
-                )
-                all_findings.extend(findings)
-                logger.info(f"Rule {rule.id}: {len(findings)} finding(s)")
-            except Exception:
-                # Fail open: log warning with traceback, skip rule, continue
-                logger.exception(f"Rule {rule.id} failed")
+    if skipped_rules:
+        logger.warning(
+            f"{len(skipped_rules)} rule(s) skipped due to errors: "
+            f"{', '.join(skipped_rules)}. Results may be incomplete."
+        )
+    if truncated_rules:
+        logger.warning(
+            f"{len(truncated_rules)} rule(s) not run because matched files were truncated: "
+            f"{', '.join(truncated_rules)}."
+        )
 
     # Output: CLI
     print_findings(all_findings)
@@ -84,50 +99,88 @@ def run_bug_check(
 
     # Output: PR comments
     if post_comments:
-        _post_findings_as_comments(pr_info, all_findings)
+        _post_findings_as_comments(pr_info, all_findings, skipped_rules, truncated_rules)
 
     return all_findings
 
 
 def _filter_diff_for_rule(diff: str, changed_files: list[str], rule) -> str:
-    """Return only the diff sections for files that match this rule's path patterns."""
+    """Return only the diff sections for files matching this rule's path patterns.
+
+    Parses the diff line by line, collecting each per-file section and keeping
+    only those whose path matches one of the rule's glob patterns. Returns an
+    empty string if no sections match.
+    """
     matched = {f for f in changed_files if rule.matches_pr([f], [])}
-    sections = re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE)
-    kept = []
-    for section in sections:
-        if not section.startswith("diff --git "):
-            kept.append(section)
-            continue
-        m = re.match(r"^diff --git a/\S+ b/(\S+)", section)
-        if m and m.group(1) in matched:
-            kept.append(section)
+    if not matched:
+        return ""
+
+    kept: list[str] = []
+    current_lines: list[str] = []
+    current_file: str | None = None
+
+    for line in diff.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            # Flush the completed section if its file was matched
+            if current_file in matched:
+                kept.extend(current_lines)
+            m = re.match(r"^diff --git a/\S+ b/(\S+)", line)
+            current_file = m.group(1) if m else None
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    # Flush the final section
+    if current_file in matched:
+        kept.extend(current_lines)
+
     return "".join(kept)
 
 
-def _post_findings_as_comments(pr_info: PRInfo, findings: list[Finding]) -> None:
-    """Post findings as inline PR comments plus a summary comment."""
-    inline_posted = 0
-    inline_failed = 0
-    for finding in findings or []:
-        try:
-            body = format_pr_comment(finding)
-            post_pr_comment(
-                pr_number=pr_info.number,
-                body=body,
-                path=finding.file,
-                line=finding.line,
-                commit_sha=pr_info.head_sha,
-            )
-            inline_posted += 1
-        except Exception as e:
-            inline_failed += 1
-            logger.warning(f"Failed to post inline comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
+def _post_findings_as_comments(
+    pr_info: PRInfo,
+    findings: list[Finding],
+    skipped_rules: list[str],
+    truncated_rules: list[str],
+) -> None:
+    """Post findings as PR comments (inline where valid, general otherwise) plus a summary."""
+    valid_diff_lines = diff_line_numbers(pr_info.diff)
 
-    logger.info(f"Inline comments: {inline_posted} posted, {inline_failed} failed")
+    inline_posted = 0
+    general_posted = 0
+    failed = 0
+
+    for finding in findings or []:
+        line_in_diff = finding.line in valid_diff_lines.get(finding.file, set())
+        body = format_pr_comment(finding)
+        try:
+            if line_in_diff:
+                post_pr_comment(
+                    pr_number=pr_info.number,
+                    body=body,
+                    path=finding.file,
+                    line=finding.line,
+                    commit_sha=pr_info.head_sha,
+                )
+                inline_posted += 1
+            else:
+                logger.debug(
+                    f"Rule {finding.rule_id}: line {finding.line} in {finding.file!r} "
+                    "is not in the diff — posting as general comment"
+                )
+                post_pr_comment(pr_number=pr_info.number, body=body)
+                general_posted += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
+
+    logger.info(f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed")
 
     # Post summary comment
     try:
-        summary = format_summary_comment(findings, inline_failed=inline_failed)
+        summary = format_summary_comment(
+            findings, comment_failures=failed, skipped_rules=skipped_rules, truncated_rules=truncated_rules
+        )
         post_pr_comment(pr_number=pr_info.number, body=summary)
     except Exception as e:
         logger.warning(f"Failed to post summary comment: {e}")

@@ -10,9 +10,105 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 4. Each matching rule is sent to Claude along with the PR diff. Claude analyzes the diff against the bug pattern described in the rule's markdown file.
 5. Findings are reported in three formats: CLI stdout, inline PR comments, and SARIF for GitHub Code Scanning.
 
-Rules run in isolation by default (separate LLM session each). Rules with the same `group` in the manifest share a conversation, so later rules see earlier analysis.
+```mermaid
+flowchart TD
+    CI["CI Path\nfetch_pr_info()"]
+    LOCAL["Local Path\nfetch_branch_diff()"]
 
-The tool **fails open** — if an LLM call fails, the rule is skipped and the overall check still passes. PRs are never blocked by infrastructure failures.
+    CI --> PRINFO
+    LOCAL --> PRINFO
+
+    PRINFO(["PRInfo dataclass"])
+    PRINFO --> ORCH
+
+    ORCH["Orchestrator\nrun_bug_check()"]
+    ORCH --> RULES
+
+    RULES["Rule Engine\nload_rules() → select_rules() → group_rules()"]
+    RULES --> LLM
+
+    LLM["LLM Analysis\nLLMSession.analyze_rule()"]
+    LLM --> OUT
+
+    OUT["Output Dispatch\nprint_findings() · write_sarif() · post_pr_comment()"]
+    OUT --> EXIT
+
+    EXIT["Exit Code\nexit 1 if blocking, else 0"]
+
+    classDef ci fill:#1a0e00,stroke:#f97316,stroke-width:2px,color:#f97316
+    classDef local fill:#001a1f,stroke:#22d3ee,stroke-width:2px,color:#22d3ee
+    classDef shared fill:#0f0a1f,stroke:#a78bfa,stroke-width:2px,color:#a78bfa
+    classDef llm fill:#1a0815,stroke:#f472b6,stroke-width:2px,color:#f472b6
+    classDef output fill:#001a10,stroke:#34d399,stroke-width:2px,color:#34d399
+    classDef exitcode fill:#111827,stroke:#64748b,stroke-width:2px,color:#94a3b8
+    classDef prinfo fill:#111827,stroke:#94a3b8,stroke-width:2px,color:#e2e8f0
+
+    class CI ci
+    class LOCAL local
+    class PRINFO prinfo
+    class ORCH,RULES shared
+    class LLM llm
+    class OUT output
+    class EXIT exitcode
+```
+
+### Component Reference
+
+#### CI Path — `github_client.py` : `fetch_pr_info()` (41–76)
+
+- Triggered by `--pr`
+- Calls `gh pr view` and `gh pr diff` via the GitHub API
+- Gets the real PR title, labels, SHAs, diff, and changed file list
+
+#### Local Path — `github_client.py` : `fetch_branch_diff()` (79–129)
+
+- Triggered by `--branch`
+- Runs `git merge-base` + `git diff` locally
+- PR number is set to `0`, labels default to `[]` unless `--labels` is passed
+
+#### PRInfo dataclass — `github_client.py` (16–25)
+
+- The shared data structure both input paths produce
+- Fields: `number`, `title`, `base_sha`, `head_sha`, `diff`, `changed_files`, `labels`
+- Everything downstream operates on this single type regardless of input source
+- Diffs exceeding 8000 lines (`MAX_DIFF_LINES`) are truncated with a warning
+
+#### Orchestrator — `orchestrator.py` : `run_bug_check()` (21–89)
+
+- Central coordinator that sequences the entire pipeline:
+  load rules → select matching → group by model → per-rule LLM analysis → collect findings → dispatch outputs
+- Fails open — if an LLM call fails, the rule is skipped and the check still passes
+
+#### Rule Engine — `rules.py` + `manifest.yaml` + `rules/*.md`
+
+- `load_rules()` reads `manifest.yaml` and the markdown content of each rule
+- `select_rules()` filters by file-glob and label match against `PRInfo`
+- `group_rules()` batches rules that share a `group` name into a single LLM session
+- Current rules:
+  - `ccl-ring-buffer-mismatch` — blocking, paths: `ccl/**`
+  - `reshape-dim-check` — warning, paths: `data_movement/**`
+
+#### LLM Analysis — `llm.py` : `LLMSession.analyze_rule()` (31–194)
+
+- Creates an Anthropic client (`claude-sonnet-4-6`, `max_tokens: 4096`, `temperature: 0`)
+- Per matched rule:
+  1. `_filter_diff_for_rule()` narrows the diff to files matching the rule's path globs
+  2. Builds a system prompt requiring structured `` ```finding `` blocks
+  3. Builds a user message with the rule's markdown + filtered diff
+  4. Calls `client.messages.create()`
+  5. Parses the response into `Finding` objects
+
+#### Output Dispatch — `output.py` + `github_client.py`
+
+- **CLI stdout** — `print_findings()` — always runs, colorized with loguru
+- **SARIF file** — `write_sarif()` — if `--sarif`, for GitHub Code Scanning
+- **PR comments** — `post_pr_comment()` — if `--post-comments`, posts inline review comments + a summary comment
+
+#### Exit Code — `__main__.py` (86–87)
+
+- `exit 1` if any finding has `severity == "blocking"`, `exit 0` otherwise
+
+Rules run in isolation by default (separate LLM session each). Rules with the same `group` in the manifest share a conversation, so later rules see earlier analysis.
 
 ## Usage
 

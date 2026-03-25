@@ -16,6 +16,46 @@ from bug_checker.logger import logger
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 4096
 
+REPORT_FINDINGS_TOOL = {
+    "name": "report_findings",
+    "description": (
+        "Report all bugs found in the PR diff that match the rule pattern. "
+        "Call with an empty findings list if no issues are found."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "description": "Bugs found. Empty list if none.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "description": "Relative file path where the bug is located",
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number in the new (post-diff) code",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Clear explanation of the bug and why it matches the pattern",
+                        },
+                        "suggested_fix": {
+                            "type": "string",
+                            "description": "Corrected code snippet, or null if not requested",
+                        },
+                    },
+                    "required": ["file", "line", "message"],
+                },
+            }
+        },
+        "required": ["findings"],
+    },
+}
+
 
 @dataclass
 class Finding:
@@ -29,10 +69,13 @@ class Finding:
 
 @dataclass
 class LLMSession:
-    """Manages a conversation with Claude for one rule or group of rules."""
+    """Thin wrapper over the Anthropic client for running rule analyses.
+
+    Each call to analyze_rule is a fully independent, stateless API request.
+    No conversation history is retained between calls.
+    """
 
     model: str = ""
-    messages: list[dict] = field(default_factory=list)
     _client: object = field(default=None, repr=False)
 
     def __post_init__(self):
@@ -55,38 +98,34 @@ class LLMSession:
         diff: str,
         context_files: dict[str, str] | None = None,
     ) -> list[Finding]:
-        """Run a single rule against the diff. Returns findings."""
+        """Run a single rule against the diff. Returns findings.
+
+        Each call is independent — no state is shared with previous calls.
+        """
         system_prompt = self._build_system_prompt()
         user_message = self._build_user_message(rule_content, rule_id, severity, suggest_fix, diff, context_files)
-
-        self.messages.append({"role": "user", "content": user_message})
 
         response = self._client.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
             temperature=0,
             system=system_prompt,
-            messages=self.messages,
+            messages=[{"role": "user", "content": user_message}],
+            tools=[REPORT_FINDINGS_TOOL],
+            tool_choice={"type": "tool", "name": "report_findings"},
         )
 
-        assistant_text = response.content[0].text
-        self.messages.append({"role": "assistant", "content": assistant_text})
+        tool_use_block = next((b for b in response.content if b.type == "tool_use"), None)
+        if tool_use_block is None:
+            logger.warning(f"Rule {rule_id}: expected tool_use response, got none — skipping")
+            return []
 
-        return self._parse_findings(assistant_text, rule_id, severity)
+        return self._build_findings(tool_use_block.input, rule_id, severity)
 
     def _build_system_prompt(self) -> str:
         return (
             "You are a code review assistant specialized in finding bugs in C++ and Python code "
             "for the Tenstorrent tt-metal project. You analyze PR diffs against known bug patterns.\n\n"
-            "When you find a potential bug, report it in the following structured format, one per finding:\n\n"
-            "```finding\n"
-            "file: <relative file path>\n"
-            "line: <line number in the new code>\n"
-            "message: <clear explanation of the bug>\n"
-            "suggested_fix: <code fix, or NONE if not requested>\n"
-            "```\n\n"
-            "If you find no issues matching the rule, respond with exactly:\n"
-            "NO_FINDINGS\n\n"
             "Be precise. Only report findings that clearly match the described bug pattern. "
             "Do not report style issues or speculative problems."
         )
@@ -113,82 +152,25 @@ class LLMSession:
                 parts.append(f"### {path}\n```\n{content}\n```\n")
 
         if suggest_fix:
-            parts.append("\nPlease include a suggested_fix for each finding. " "Show the corrected code snippet.\n")
+            parts.append("\nPlease include a suggested_fix for each finding. Show the corrected code snippet.\n")
         else:
-            parts.append("\nDo NOT include suggested fixes. Set suggested_fix to NONE.\n")
+            parts.append("\nDo NOT include suggested fixes. Leave suggested_fix null.\n")
 
         return "\n".join(parts)
 
-    def _parse_findings(self, response_text: str, rule_id: str, severity: str) -> list[Finding]:
-        """Parse structured findings from the LLM response."""
-        if "NO_FINDINGS" in response_text and "```finding" not in response_text:
-            return []
-
+    def _build_findings(self, tool_input: dict, rule_id: str, severity: str) -> list[Finding]:
+        """Build Finding objects from a validated tool use input dict."""
         findings = []
-        blocks = response_text.split("```finding")
-        for block in blocks[1:]:  # skip text before first finding block
-            end = block.find("```")
-            if end == -1:
-                content = block
-            else:
-                content = block[:end]
-
-            finding = self._parse_finding_block(content, rule_id, severity)
-            if finding:
-                findings.append(finding)
-
-        return findings
-
-    def _parse_finding_block(self, block: str, rule_id: str, severity: str) -> Finding | None:
-        """Parse a single finding block."""
-        fields: dict[str, str] = {}
-        current_key = None
-        current_lines: list[str] = []
-
-        for line in block.strip().splitlines():
-            stripped = line.strip()
-            # Check if this line starts a new field
-            for key in ("file", "line", "message", "suggested_fix"):
-                if stripped.startswith(f"{key}:"):
-                    if current_key:
-                        fields[current_key] = "\n".join(current_lines).strip()
-                    current_key = key
-                    current_lines = [stripped[len(key) + 1 :].strip()]
-                    break
-            else:
-                if current_key:
-                    current_lines.append(line.rstrip("\n"))
-
-        if current_key:
-            fields[current_key] = "\n".join(current_lines).strip()
-
-        file_path = fields.get("file", "").strip()
-        line_str = fields.get("line", "0").strip()
-        message = fields.get("message", "").strip()
-
-        if not file_path or not message:
-            missing = [f for f, v in (("file", file_path), ("message", message)) if not v]
-            logger.warning(
-                f"Dropping malformed finding block in rule {rule_id} — "
-                f"missing required field(s): {', '.join(missing)}. "
-                f"Block (first 200 chars): {block.strip()[:200]!r}"
+        for item in tool_input.get("findings", []):
+            suggested_fix = item.get("suggested_fix") or None
+            findings.append(
+                Finding(
+                    rule_id=rule_id,
+                    file=item["file"],
+                    line=item.get("line", 0),
+                    message=item["message"],
+                    severity=severity,
+                    suggested_fix=suggested_fix,
+                )
             )
-            return None
-
-        try:
-            line_num = int(line_str)
-        except ValueError:
-            line_num = 0
-
-        suggested_fix = fields.get("suggested_fix", "").strip()
-        if suggested_fix == "NONE":
-            suggested_fix = None
-
-        return Finding(
-            rule_id=rule_id,
-            file=file_path,
-            line=line_num,
-            message=message,
-            severity=severity,
-            suggested_fix=suggested_fix,
-        )
+        return findings

@@ -155,7 +155,12 @@ def format_pr_comment(finding: Finding) -> str:
     return "\n".join(parts)
 
 
-def format_summary_comment(findings: list[Finding], inline_failed: int = 0) -> str:
+def format_summary_comment(
+    findings: list[Finding],
+    comment_failures: int = 0,
+    skipped_rules: list[str] | None = None,
+    truncated_rules: list[str] | None = None,
+) -> str:
     """Format a summary comment for the PR."""
     blocking = [f for f in findings if f.severity == "blocking"]
     warnings = [f for f in findings if f.severity == "warning"]
@@ -163,21 +168,30 @@ def format_summary_comment(findings: list[Finding], inline_failed: int = 0) -> s
     lines = ["## Bug Checker Results\n"]
     if not findings:
         lines.append("No issues found.")
-        return "\n".join(lines)
+    else:
+        if blocking:
+            lines.append(f"**{len(blocking)} blocking issue(s) found.**\n")
+        if warnings:
+            lines.append(f"{len(warnings)} warning(s) found.\n")
+        for f in findings:
+            tag = "BLOCKING" if f.severity == "blocking" else "WARNING"
+            lines.append(f"- [{tag}] `{f.rule_id}` in `{f.file}:{f.line}`: {f.message}")
 
-    if blocking:
-        lines.append(f"**{len(blocking)} blocking issue(s) found.**\n")
-    if warnings:
-        lines.append(f"{len(warnings)} warning(s) found.\n")
-
-    for f in findings:
-        tag = "BLOCKING" if f.severity == "blocking" else "WARNING"
-        lines.append(f"- [{tag}] `{f.rule_id}` in `{f.file}:{f.line}`: {f.message}")
-
-    if inline_failed:
+    if truncated_rules:
+        rule_list = ", ".join(f"`{r}`" for r in truncated_rules)
         lines.append(
-            f"\n> **Note:** {inline_failed} inline comment(s) could not be posted "
-            "(the line may no longer exist in the latest commit). See the list above for all findings."
+            f"\n> **Warning:** {len(truncated_rules)} rule(s) could not run because the diff was "
+            f"truncated before their matched files: {rule_list}. Consider breaking this PR into smaller pieces."
         )
+
+    if skipped_rules:
+        rule_list = ", ".join(f"`{r}`" for r in skipped_rules)
+        lines.append(
+            f"\n> **Warning:** {len(skipped_rules)} rule(s) were skipped due to errors "
+            f"and may not have been checked: {rule_list}. Results may be incomplete."
+        )
+
+    if comment_failures:
+        lines.append(f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors.")
 
     return "\n".join(lines)

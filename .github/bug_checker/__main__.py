@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from bug_checker.github_client import fetch_branch_diff, fetch_pr_info
+from bug_checker.github_client import check_prerequisites, fetch_branch_diff, fetch_pr_info
 from bug_checker.logger import set_verbose
 from bug_checker.orchestrator import run_bug_check
 
@@ -69,8 +69,10 @@ def main() -> int:
         parser.error("--post-comments requires --pr.")
 
     if args.pr:
+        check_prerequisites(need_gh=True)
         pr_info = fetch_pr_info(args.pr)
     else:
+        check_prerequisites(need_git=True)
         pr_info = fetch_branch_diff(base=args.branch)
         if args.labels:
             pr_info.labels = args.labels
