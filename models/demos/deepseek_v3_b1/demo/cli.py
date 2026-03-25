@@ -114,6 +114,14 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Enable pipeline monitor HTTP server on PORT+mesh_id (e.g. 8400). "
+        "Connect with: python -m models.demos.deepseek_v3_b1.demo.monitor <num_stages> --base-port PORT",
+    )
     return parser
 
 
@@ -133,6 +141,7 @@ def run_demo(
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    monitor_port: int | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -149,6 +158,7 @@ def run_demo(
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            monitor_port=monitor_port,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -207,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
+        monitor_port=args.monitor_port,
     )
     print(file=sys.stdout, flush=True)
     return 0

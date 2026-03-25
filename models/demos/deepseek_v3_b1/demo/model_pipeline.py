@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
+from models.demos.deepseek_v3_b1.demo.stage import StagePhase
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
     StateDictWeightProvider,
@@ -35,6 +36,7 @@ class ModelPipeline:
         lm_head_persistent_mode: bool = True,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
+        monitor_port: int | None = None,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -77,7 +79,7 @@ class ModelPipeline:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
 
         logger.info("Building pipeline")
-        self.pipeline = config.build_pipeline(self.mesh_device)
+        self.pipeline = config.build_pipeline(self.mesh_device, monitor_port=monitor_port)
 
         logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
@@ -95,10 +97,10 @@ class ModelPipeline:
 
     def prefill_forward(self, tokens: list[int]) -> int:
         """Prefill 1 user's prompt tokens and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
+        self.pipeline.info.transition(StagePhase.PREFILLING)
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
         prompt_token_tensors = [
             to_padded_input(
@@ -115,10 +117,12 @@ class ModelPipeline:
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
+        info = self.pipeline.info
+        info.transition(StagePhase.DECODING)
+        info.iteration += 1
         output = self.model.decode_step(
             torch.tensor([[input_token]], dtype=torch.int32),
         )
@@ -141,7 +145,9 @@ class ModelPipeline:
             raise RuntimeError("run_inference() should only be called on mesh id 0")
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
-        # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+        self.pipeline.info.total_iterations = max_new_tokens
+        self.pipeline.info.iteration = 0
+
         next_token_id = self.prefill_forward(prompt_token_ids)
         if on_token is not None:
             on_token(next_token_id)

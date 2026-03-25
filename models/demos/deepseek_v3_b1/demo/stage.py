@@ -8,8 +8,9 @@ Stage kinds for the pod pipeline: Embedding, LMHead, Passthrough.
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -36,6 +37,55 @@ ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 4
 PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
 
 
+class StagePhase(Enum):
+    INIT = "init"
+    CONFIGURING = "configuring_block"
+    CONFIGURED = "block_configured"
+    SETTING_UP = "setting_up"
+    READY = "ready"
+    PIPELINE_STARTING = "pipeline_starting"
+    PIPELINE_RUNNING = "pipeline_running"
+    COMPUTING = "computing"
+    PREFILLING = "prefilling"
+    DECODING = "decoding"
+    ERROR = "error"
+    TERMINATED = "terminated"
+
+
+@dataclass
+class StageInfo:
+    """Mutable status tracked per pipeline stage, readable by the monitor."""
+
+    mesh_id: int
+    stage_type: str
+    phase: StagePhase = StagePhase.INIT
+    iteration: int = 0
+    total_iterations: int = 0
+    started_at: float = field(default_factory=time.monotonic)
+    last_phase_change: float = field(default_factory=time.monotonic)
+    phase_durations: dict[str, float] = field(default_factory=dict)
+    error: str | None = None
+
+    def transition(self, phase: StagePhase) -> None:
+        now = time.monotonic()
+        self.phase_durations[self.phase.value] = now - self.last_phase_change
+        self.phase = phase
+        self.last_phase_change = now
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mesh_id": self.mesh_id,
+            "stage_type": self.stage_type,
+            "phase": self.phase.value,
+            "iteration": self.iteration,
+            "total_iterations": self.total_iterations,
+            "uptime_s": round(time.monotonic() - self.started_at, 2),
+            "seconds_in_phase": round(time.monotonic() - self.last_phase_change, 2),
+            "phase_durations": {k: round(v, 3) for k, v in self.phase_durations.items()},
+            "error": self.error,
+        }
+
+
 @dataclass
 class StageContext:
     """Bundles arguments passed to StageKind methods."""
@@ -43,6 +93,7 @@ class StageContext:
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
     my_mesh_id: int
+    info: StageInfo | None = None
 
 
 class StageKind(ABC):

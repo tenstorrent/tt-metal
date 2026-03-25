@@ -14,13 +14,16 @@ from typing import Any, Callable
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.demo.monitor import StageMonitor
 from models.demos.deepseek_v3_b1.demo.stage import (
     EmbeddingStage,
     LMHeadStage,
     PassthroughPayload,
     PassthroughStage,
     StageContext,
+    StageInfo,
     StageKind,
+    StagePhase,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
@@ -213,52 +216,84 @@ class PipelineConfiguration:
     def num_stages(self) -> int:
         return len(self._stage_factories)
 
-    def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
-        """Create a Pipeline for this process's stage (determined by mesh_id)."""
+    def build_pipeline(self, mesh_device: ttnn.MeshDevice, *, monitor_port: int | None = None) -> Pipeline:
+        """Create a Pipeline for this process's stage (determined by mesh_id).
+
+        If *monitor_port* is not None, a lightweight HTTP monitor is started on
+        ``monitor_port + mesh_id``.
+        """
         my_mesh_id = mesh_device.get_system_mesh_id()
         stage = self._stage_factories[my_mesh_id](mesh_device)
-        return Pipeline(mesh_device, stage)
+        return Pipeline(mesh_device, stage, monitor_port=monitor_port)
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        *,
+        monitor_port: int | None = None,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
         self._my_mesh_id = mesh_device.get_system_mesh_id()
         self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+
+        self._info = StageInfo(
+            mesh_id=self._my_mesh_id,
+            stage_type=type(stage_kind).__name__,
+        )
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
             my_mesh_id=self._my_mesh_id,
+            info=self._info,
         )
         self._pipeline_block: PipelineBlock | None = None
+
+        self._monitor: StageMonitor | None = None
+        if monitor_port is not None:
+            self._monitor = StageMonitor(self._info, base_port=monitor_port)
+            self._monitor.start()
 
     @property
     def my_mesh_id(self) -> int:
         return self._my_mesh_id
 
+    @property
+    def info(self) -> StageInfo:
+        return self._info
+
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
+        self._info.transition(StagePhase.CONFIGURING)
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
+        self._info.transition(StagePhase.CONFIGURED)
 
     def setup(self) -> None:
         """Phase 2: Allocate tensors, weights, semaphores on device."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before setup()")
+        self._info.transition(StagePhase.SETTING_UP)
         self._stage_kind.setup(self._ctx, self._pipeline_block)
+        self._info.transition(StagePhase.READY)
 
     def start_pipeline(self) -> None:
         """Phase 3: Start pipeline block kernels (socket interfaces)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
+        self._info.transition(StagePhase.PIPELINE_STARTING)
         self._pipeline_block.run()
+        self._info.transition(StagePhase.PIPELINE_RUNNING)
 
     def start_compute(self) -> None:
         """Phase 4: Launch stage compute (e.g. LMHeadSampling.op)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
+        self._info.transition(StagePhase.COMPUTING)
         self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
 
     def setup_and_run(self) -> None:
@@ -296,5 +331,9 @@ class Pipeline:
 
     def terminate(self) -> None:
         """Terminate the pipeline block if it was created (e.g. for one-shot tests)."""
+        self._info.transition(StagePhase.TERMINATED)
+        if self._monitor is not None:
+            self._monitor.stop()
+            self._monitor = None
         if self._pipeline_block is not None:
             self._pipeline_block.terminate()
