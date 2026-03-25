@@ -12,7 +12,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import StageContext, StageKind
+from models.demos.deepseek_v3_b1.demo.stage import (
+    ACTIVATION_FIFO_SIZE,
+    ACTIVATION_PAGE_SIZE_BYTES,
+    PIPELINE_CORE_COORD,
+    StageContext,
+    StageKind,
+)
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -26,13 +32,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import crea
 class DecoderStage(StageKind):
     """Shared implementation for MoE and dense decoder pipeline stages."""
 
-    PIPELINE_CORE = ttnn.CoreCoord(12, 8)
     MOE_SENDER_CORE = ttnn.CoreCoord(12, 9)
-    M = 1
-    K = 7168
-    EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
-    TOKEN_SIZE_BYTES = 64
 
     def __init__(
         self,
@@ -82,11 +82,11 @@ class DecoderStage(StageKind):
 
         return PipelineBlock(
             mesh_device,
-            self.PIPELINE_CORE,
-            upstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            upstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
-            downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
         )
