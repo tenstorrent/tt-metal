@@ -459,7 +459,9 @@ Tensor reduce(
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
 
-    if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
+    // fast_reduce_nc ignores `scalar`; use reduce_impl when scaling so the scaler is applied in-kernel
+    // (avoids a separate multiply op and matches torch sum(scalar * x, ...)).
+    if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
