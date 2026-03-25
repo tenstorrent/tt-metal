@@ -12,8 +12,8 @@ KSplitGramMatmulDeviceOperation::program_factory_t KSplitGramMatmulDeviceOperati
 }
 
 void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& ta) {
-    uint32_t K_tiles = ta.input_tensor.logical_shape()[-1] / tt::constants::TILE_WIDTH;
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    uint32_t K_tiles = tensor_args.input_tensor.logical_shape()[-1] / tt::constants::TILE_WIDTH;
     TT_FATAL(K_tiles % 2 == 0, "K dimension ({} tiles) must be even for K-split", K_tiles);
 }
 
@@ -22,9 +22,8 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_hit(
 }
 
 KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& ta) {
-    // Output: square [1, 1, M, M] with logical input dimensions. Writers skip out-of-bounds tiles.
-    uint32_t M = ta.input_tensor.logical_shape()[-2];
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
     auto shape = ttnn::Shape({1, 1, M, M});
     return ttnn::TensorSpec(
         shape,
@@ -32,8 +31,9 @@ KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOpera
 }
 
 KSplitGramMatmulDeviceOperation::tensor_return_value_t KSplitGramMatmulDeviceOperation::create_output_tensors(
-    const operation_attributes_t& oa, const tensor_args_t& ta) {
-    return create_device_tensor(compute_output_specs(oa, ta), ta.input_tensor.device());
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 }  // namespace ttml::metal::ops::k_split_gram_matmul::device
