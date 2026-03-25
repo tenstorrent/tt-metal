@@ -189,8 +189,11 @@ void enqueue_mesh_workload(
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     [[maybe_unused]] bool program_cache_hit = false) {
-    // Generate runtime_id (always, for dispatcher)
+    // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+    for (auto& [_, program] : workload.get_programs()) {
+        program.set_runtime_id(runtime_id);
+    }
 
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
@@ -198,20 +201,15 @@ void enqueue_mesh_workload(
 
         std::vector<TensorSpec> spec_copies;
         if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
-            size_t specs_count = tt::stl::reflection::count_object_of_type<Tensor>(tensor_args);
+            size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
             spec_copies.reserve(specs_count);
 
-            tt::stl::reflection::visit_object_of_type<Tensor>(
+            ttsl::reflection::visit_object_of_type<Tensor>(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies));
-    }
-
-    // Set runtime_id on all programs (for dispatcher, always)
-    for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(runtime_id);
     }
 
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
