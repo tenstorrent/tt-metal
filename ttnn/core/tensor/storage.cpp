@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <numeric>
 #include <functional>
 #include <unordered_set>
 #include <vector>
