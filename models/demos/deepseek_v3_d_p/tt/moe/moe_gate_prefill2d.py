@@ -11,6 +11,8 @@ from tracy import signpost
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+MASKED_BINCOUNT_CORE_COUNT = 64
+
 
 @dataclass
 class MoEGateConfig:
@@ -112,7 +114,7 @@ class MoEGatePrefill(LightweightModule):
         )
 
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=(config.sp_dim // 64, self.topk),
+            shape=(config.sp_dim // MASKED_BINCOUNT_CORE_COUNT, self.topk),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
@@ -203,15 +205,12 @@ class MoERoutingSetup(LightweightModule):
         # indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
-            # ttnn_top_k_experts_indices.shape
-            # Shape([4096, 8])
-            # ttnn_top_k_experts_indices.tensor_topology()
+            # ttnn_top_k_experts_indices (isl_per_chip, num_experts_per_tok)
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 mesh_shape=self.mesh_device.shape,
                 dims=(0, None),  # shard cols; replicate rows
             )
-            # TensorTopology(distribution_shape=MeshShape([4, 2]), placements=SmallVector([PlacementShard(0), PlacementReplicate()]), mesh_coords=MeshCoordinate([0, 0]), MeshCoordinate([0, 1]), MeshCoordinate([1, 0]), MeshCoordinate([1, 1]), MeshCoordinate([2, 0]), MeshCoordinate([2, 1]), MeshCoordinate([3, 0]), MeshCoordinate([3, 1]))
             ttnn_top_k_experts_indices = ttnn.from_torch(
                 ttnn_top_k_experts_indices,
                 device=self.mesh_device,
@@ -230,7 +229,7 @@ class MoERoutingSetup(LightweightModule):
         )
 
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=(seq_len_per_chip // 64, num_routed_experts),
+            shape=(seq_len_per_chip // MASKED_BINCOUNT_CORE_COUNT, num_routed_experts),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
