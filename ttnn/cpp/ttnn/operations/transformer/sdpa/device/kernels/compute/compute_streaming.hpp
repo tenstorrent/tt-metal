@@ -410,13 +410,13 @@ void salad_correct_fused(
         tile_regs_wait();
         dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_mop_config_minimal_custom(out_out_cb, cur_cols)));
+        PACK((llk_pack_set_mop_outer_loop(out_out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
             pack_tile<true>(dst_index, out_out_cb, out_tile_index);
             dst_index += cur_cols;
         }
-        PACK((llk_pack_mop_config_minimal_custom(out_out_cb, 1)));
+        PACK((llk_pack_set_mop_outer_loop(out_out_cb, 1)));
 #else
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < cur_cols; j++) {
