@@ -77,32 +77,48 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def _infer_board_type_from_arch(arch_str):
+    """Map a tt-smi ``arch`` string (e.g. ``"wormhole_b0"``) to a board type."""
+    if not arch_str:
+        return None
+    lower = arch_str.lower()
+    if "wormhole" in lower:
+        return "Wormhole"
+    if "blackhole" in lower:
+        return "Blackhole"
+    return None
+
+
 def get_machine_info():
     """Get machine info (board type, device series, card count, and device count).
 
-    Uses the pyluwen Python API for chip arch detection and
-    ``tt-smi -s --snapshot_no_tty`` (structured JSON) for device series
-    and card count — no table parsing, immune to tt-smi formatting changes.
+    Tries the pyluwen Python API first (authoritative PCI-level arch
+    detection), then falls back to ``tt-smi -s --snapshot_no_tty``
+    (structured JSON) so that machine metadata is available even when
+    pyluwen is not installed.
     """
+    board_type = None
+    pyluwen_device_count = None
+
+    # --- Step 1: attempt arch detection via pyluwen --------------------------
     try:
-        # --- Arch detection via pyluwen (authoritative, no parsing) ----------
         from pyluwen import PciChip, pci_scan
 
         pci_interfaces = pci_scan()
-        if not pci_interfaces:
-            return None
+        if pci_interfaces:
+            chip = PciChip(pci_interface=pci_interfaces[0])
+            if chip.as_wh() is not None:
+                board_type = "Wormhole"
+            elif chip.as_bh() is not None:
+                board_type = "Blackhole"
+            else:
+                board_type = "Unknown"
+            pyluwen_device_count = len(pci_interfaces)
+    except Exception:
+        pass
 
-        chip = PciChip(pci_interface=pci_interfaces[0])
-        if chip.as_wh() is not None:
-            board_type = "Wormhole"
-        elif chip.as_bh() is not None:
-            board_type = "Blackhole"
-        else:
-            board_type = "Unknown"
-
-        device_count = len(pci_interfaces)
-
-        # --- Device series & card count via tt-smi JSON snapshot -------------
+    # --- Step 2: device series & card count via tt-smi JSON snapshot ---------
+    try:
         from collections import Counter
 
         result = subprocess.run(
@@ -111,41 +127,47 @@ def get_machine_info():
             text=True,
             timeout=15,
         )
-        if result.returncode != 0 or not result.stdout.strip():
-            # Fallback: we have arch and device count from pyluwen
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            devices = data.get("device_info", [])
+
+            if board_type is None and devices:
+                board_type = _infer_board_type_from_arch(devices[0].get("arch", ""))
+
+            device_count = pyluwen_device_count or len(devices)
+
+            series_counts = Counter()
+            for d in devices:
+                bt = d.get("board_info", {}).get("board_type", "")
+                if bt:
+                    series_counts[bt] += 1
+
+            if series_counts:
+                board_series_raw, card_count = series_counts.most_common(1)[0]
+                device_series = board_series_raw.rstrip(" LR").strip()
+            else:
+                device_series = board_type.lower() if board_type else "unknown"
+                card_count = None
+
             return {
                 "board_type": board_type,
-                "device_series": board_type.lower(),
-                "card_count": device_count,
+                "device_series": device_series,
+                "card_count": card_count,
                 "device_count": device_count,
             }
+    except Exception:
+        pass
 
-        data = json.loads(result.stdout)
-        devices = data.get("device_info", [])
-
-        # Count devices by board series (e.g. "tt-galaxy-wh L", "n150 S")
-        series_counts = Counter()
-        for d in devices:
-            bt = d.get("board_info", {}).get("board_type", "")
-            if bt:
-                series_counts[bt] += 1
-
-        if series_counts:
-            board_series_raw, card_count = series_counts.most_common(1)[0]
-            # Strip optional L/R suffix (e.g. "tt-galaxy-wh L" → "tt-galaxy-wh")
-            device_series = board_series_raw.rstrip(" LR").strip()
-        else:
-            device_series = board_type.lower()
-            card_count = device_count
-
+    # --- Step 3: pyluwen-only fallback (tt-smi unavailable) ------------------
+    if board_type and pyluwen_device_count:
         return {
             "board_type": board_type,
-            "device_series": device_series,
-            "card_count": card_count,
-            "device_count": device_count,
+            "device_series": board_type.lower(),
+            "card_count": None,
+            "device_count": pyluwen_device_count,
         }
-    except Exception:
-        return None
+
+    return None
 
 
 def load_valid_operations():

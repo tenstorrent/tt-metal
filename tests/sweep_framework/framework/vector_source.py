@@ -158,14 +158,16 @@ class VectorExportSource(VectorSource):
                 logger.warning("get_machine_info() returned None - tt-smi might have failed")
                 return None
 
-            # Validate that board_type looks like an actual board name (e.g. "Wormhole",
-            # "Blackhole") rather than a PCI address or device path, which indicates
-            # the tt-smi output parser misaligned columns.
+            # Validate that board_type is a recognized arch name (e.g. "Wormhole",
+            # "Blackhole"). Reject PCI addresses, device paths, and "Unknown"
+            # (which pyluwen returns when the chip arch is unrecognised) —
+            # an unknown board type would cause lead-model strict matching to
+            # filter out every vector.
             board = machine_info.get("board_type", "")
-            if not board or ":" in board or "/" in board:
+            if not board or ":" in board or "/" in board or board.lower() == "unknown":
                 logger.warning(
                     f"get_machine_info() returned suspicious board_type='{board}' "
-                    f"(likely a tt-smi parsing issue). Ignoring machine info."
+                    f"— ignoring machine info to avoid incorrect hardware filtering."
                 )
                 return None
 
