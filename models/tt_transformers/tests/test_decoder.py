@@ -107,7 +107,7 @@ def test_decoder_inference(
         model_args.rope_scaling,
         model_args.use_qk_fused,
         prefetcher=prefetcher,
-        model_args.partial_rotary_factor,
+        partial_rotary_factor=model_args.partial_rotary_factor,
     )
 
     if model_args.rope_theta_local is not None:

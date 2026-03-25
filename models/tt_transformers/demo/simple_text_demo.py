@@ -927,6 +927,8 @@ def test_demo_text(
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
+    use_hf_rope = True
+    enable_trace = False
     is_device_perf_test = "device-perf" in test_id
 
     if stress_test and token_accuracy:
