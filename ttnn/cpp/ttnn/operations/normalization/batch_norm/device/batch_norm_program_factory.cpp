@@ -151,14 +151,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto f_data_format =
         bias_has_value ? datatype_to_dataformat_converter(bias_tensor->dtype()) : DataFormat::Float16_b;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-
     const bool any_float32 =
         (a_data_format == DataFormat::Float32 || b_data_format == DataFormat::Float32 ||
          c_data_format == DataFormat::Float32 || d_data_format == DataFormat::Float32 ||
          e_data_format == DataFormat::Float32 || f_data_format == DataFormat::Float32);
-    const bool use_fp32_acc = fp32_dest_acc_en || any_float32;
     auto interm_data_format = any_float32 ? DataFormat::Float32 : a_data_format;
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
@@ -285,8 +281,11 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (use_fp32_acc) {
+    if (fp32_dest_acc_en) {
         for (const auto cb_index :
              {input_tensor_cb,
               batch_mean_tensor_cb,
@@ -321,11 +320,11 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         fmt::format(
             "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
-            any_float32 ? "sfpu_kernel" : "kernel"),
+            (fp32_dest_acc_en || any_float32) ? "sfpu_kernel" : "kernel"),
         all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = use_fp32_acc,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
