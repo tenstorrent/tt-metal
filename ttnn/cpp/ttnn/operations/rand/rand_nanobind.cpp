@@ -5,8 +5,10 @@
 #include "rand_nanobind.hpp"
 
 #include <cstdint>
+#include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -37,6 +39,11 @@ void bind_rand_operation(nb::module_& mod) {
             high (float, optional): The upper bound of the range (exclusive).
             seed (int, optional): An optional seed to initialize the random number generator
                                 for reproducible results. Defaults to 0.
+            mesh_mapper (ttnn.MeshMapperConfig, optional): Distribution strategy for multi-device tensors.
+                Use ``ttnn.MeshMapperConfig([ttnn.PlacementShard(dim)])`` to shard across mesh devices along the
+                given tensor dimension, or ``ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])`` to replicate.
+                When sharding, each device generates unique random values; when replicating with a fixed seed,
+                all devices produce the same values. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
@@ -54,6 +61,7 @@ void bind_rand_operation(nb::module_& mod) {
         nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
         nb::arg("low") = 0.0f,
         nb::arg("high") = 1.0f,
-        nb::arg("seed") = 0);
+        nb::arg("seed") = 0,
+        nb::arg("mesh_mapper") = nb::none());
 }
 }  // namespace ttnn::operations::rand

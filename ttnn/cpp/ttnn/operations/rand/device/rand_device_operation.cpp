@@ -61,11 +61,12 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed) {
+    uint32_t seed,
+    bool unique_per_device) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
+            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed, unique_per_device},
         OperationType::tensor_args_t{});
 }
 }  // namespace ttnn::prim

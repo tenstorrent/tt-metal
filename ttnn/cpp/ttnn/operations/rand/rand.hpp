@@ -4,6 +4,7 @@
 
 #pragma once
 #include "ttnn/decorators.hpp"
+#include <ttnn/distributed/distributed_configs.hpp>
 
 namespace ttnn {
 
@@ -15,6 +16,7 @@ Tensor rand(
     const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
     float from = 0.0f,
     float to = 1.0f,
-    uint32_t seed = 0);
+    uint32_t seed = 0,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper = std::nullopt);
 
 }  // namespace ttnn

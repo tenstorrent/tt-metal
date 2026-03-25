@@ -20,8 +20,26 @@ std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max(
 
 auto get_random_seed() -> uint32_t { return distribution(rng); }
 
-RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::ProgramFactory::create(
+using Factory = RandDeviceOperation::RandMeshWorkloadFactory;
+
+Factory::cached_mesh_workload_t Factory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, output);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+}
+
+Factory::cached_program_t Factory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     IDevice* device = output.device();
@@ -87,6 +105,16 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
             .compile_args = compute_compile_time_args,
         });
 
+    // When unique_per_device is set (i.e. sharded mesh_mapper), derive a per-device seed
+    // offset from the mesh coordinate so each device in the mesh generates a distinct
+    // random sequence.  The offset is scaled by the number of cores so that core-level
+    // seed ranges never overlap across devices.
+    uint32_t device_seed_offset = 0;
+    if (operation_attributes.unique_per_device) {
+        auto linear_idx = mesh_coordinate.to_linear_index(operation_attributes.device->shape());
+        device_seed_offset = static_cast<uint32_t>(linear_idx) * static_cast<uint32_t>(cores.size());
+    }
+
     uint32_t tile_offset = 0;
     for (int i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -103,8 +131,11 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
         const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-        // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        // Each core gets its own seed to increase entropy across the output tensor.
+        // With a user-supplied seed (!=0) the value is deterministic; with seed==0
+        // a fresh random seed is drawn from the host RNG for every core invocation.
+        uint32_t seed =
+            operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset : get_random_seed();
 
         std::vector<uint32_t> compute_runtime_args = {seed, from_bits, to_bits, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
@@ -120,33 +151,41 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         {.compute_kernel_id = compute_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
 }
 
-void RandDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+void Factory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
-
-    const uint32_t output_addr = output.buffer()->address();
-
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    for (int i = 0; i < cores.size(); ++i) {
-        {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
-            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-            runtime_args[1] = from_bits;
-            runtime_args[2] = to_bits;
+    size_t device_index = 0;
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        auto& cores = shared_vars.cores;
+
+        const uint32_t output_addr = output.buffer()->address();
+
+        uint32_t device_seed_offset = 0;
+        if (operation_attributes.unique_per_device) {
+            device_seed_offset = static_cast<uint32_t>(device_index) * static_cast<uint32_t>(cores.size());
         }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-            runtime_args[0] = output_addr;
+
+        for (int i = 0; i < cores.size(); ++i) {
+            {
+                auto& runtime_args = GetRuntimeArgs(program, shared_vars.compute_kernel_id, cores[i]);
+                runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i + device_seed_offset
+                                                                 : get_random_seed();
+                runtime_args[1] = from_bits;
+                runtime_args[2] = to_bits;
+            }
+            {
+                auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, cores[i]);
+                runtime_args[0] = output_addr;
+            }
         }
+        ++device_index;
     }
 }
 

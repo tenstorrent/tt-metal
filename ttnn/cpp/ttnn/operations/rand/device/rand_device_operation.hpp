@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::rand {
 
@@ -18,6 +19,7 @@ struct RandDeviceOperation {
         const float from;
         const float to;
         uint32_t seed;
+        bool unique_per_device = false;
     };
 
     struct tensor_args_t {};
@@ -25,28 +27,38 @@ struct RandDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct ProgramFactory {
+    struct RandMeshWorkloadFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle compute_kernel_id{};
             tt::tt_metal::KernelHandle writer_kernel_id{};
             std::vector<CoreCoord> cores;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        static cached_program_t create(
+        static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+    private:
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create_at(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    using program_factory_t = std::variant<RandMeshWorkloadFactory>;
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -65,5 +77,6 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed);
+    uint32_t seed,
+    bool unique_per_device = false);
 }  // namespace ttnn::prim
