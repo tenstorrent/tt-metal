@@ -68,10 +68,17 @@ HANG_APP_EXPECTED_RESULTS = {
 
 def print_process_output(proc):
     stdout, stderr = proc.communicate(input=None, timeout=0)
+
+    stdout = stdout.decode("utf-8") if stdout else "(empty)"
+    stderr = stderr.decode("utf-8") if stderr else "(empty)"
+
     print("\n=== Process stdout ===")
-    print(stdout.decode("utf-8") if stdout else "(empty)")
+    print(stdout)
     print("\n=== Process stderr ===")
-    print(stderr.decode("utf-8") if stderr else "(empty)")
+    print(stderr)
+
+    # return outputs for additional operations
+    return stdout, stderr
 
 
 @pytest.fixture(scope="class")
@@ -103,13 +110,8 @@ def cause_hang_with_app(request):
 
         # Only error if the process actually exited early with a non-zero code
         if process_exited_early and proc.returncode != 0:
-            stdout_bytes, stderr_bytes = proc.communicate(input=None, timeout=0)
-            stdout_text = stdout_bytes.decode("utf-8") if stdout_bytes else "(empty)"
-            stderr_text = stderr_bytes.decode("utf-8") if stderr_bytes else "(empty)"
-            print("\n=== Process stdout ===")
-            print(stdout_text)
-            print("\n=== Process stderr ===")
-            print(stderr_text)
+            _, stderr_text = print_process_output(proc)
+
             # Ethernet core service timeout during device init — the operation-timeout
             # handler in TT-Metal tries to read Ethernet core registers while another
             # process (e.g. MPI) holds the Ethernet cores.  This is a known conflict on
