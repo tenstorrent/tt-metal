@@ -304,7 +304,6 @@ struct FlashMLADecode {
 
             // Only the core handling the last chunk needs to wait for the KV cache cur pos ready
             bool wait_for_kv_cache_ready = k_chunk_end == k_num_chunks;
-            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
