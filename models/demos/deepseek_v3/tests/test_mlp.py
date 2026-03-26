@@ -26,8 +26,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
-pytestmark = pytest.mark.t3k_compat
-
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
