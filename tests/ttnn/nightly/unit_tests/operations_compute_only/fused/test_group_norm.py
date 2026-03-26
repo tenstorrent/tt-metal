@@ -35,7 +35,6 @@ import torch
 import ttnn
 from ttnn._ttnn.operations.normalization import (
     create_group_norm_input_mask,
-    _compute_num_virtual_cols,
     _find_expected_dram_grid,
 )
 
