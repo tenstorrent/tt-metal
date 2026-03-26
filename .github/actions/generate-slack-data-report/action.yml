@@ -40,8 +40,12 @@ runs:
         raw_output_path="${report_path}.raw.log"
         echo "Running Cursor agent with model: $model"
         echo "Writing report to: $report_path"
-        agent --trust --model "$model" -p "$run_prompt" | tee "$raw_output_path"
-        awk 'found {print} /^===FINAL_REPORT_MD===$/ {found=1; next}' "$raw_output_path" > "$report_path"
+        echo "Streaming readable Cursor output to job logs..."
+        agent --trust --model "$model" \
+          --output-format stream-json \
+          --stream-partial-output \
+          -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        python "${{ github.action_path }}/extract_final_report.py" "$raw_output_path" "$report_path"
         if [ ! -s "$report_path" ]; then
           echo "Failed to extract final markdown report from agent output."
           echo "Raw output was saved to: $raw_output_path"
