@@ -176,7 +176,6 @@ class Pipeline:
         self.window = 160
         self.t_pad = self.sr * x_pad
         self.t_pad_tgt = tgt_sr * x_pad
-        self.t_pad2 = self.t_pad * 2
         self.t_query = self.sr * x_query
         self.t_center = self.sr * x_center
         self.t_max = self.sr * x_max
@@ -230,6 +229,13 @@ class Pipeline:
         index_rate,
         protect,
     ):
+        speaker_id = ttnn.from_torch(
+            speaker_id,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.tt_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         assert audio.dim() == 1, audio.dim()
         hubert_input = ttnn.from_torch(
             audio.view(1, -1, 1),
@@ -247,7 +253,7 @@ class Pipeline:
         num_frames = feats.shape[1] * 2
 
         if protect < 0.5 and pitch is not None and pitchf is not None:
-            protected_features = ttnn.clone(feats)
+            protected_features = _interpolate_1d(feats, scale_factor=2, mode="linear")
         if index is not None and big_npy is not None and index_rate != 0:
             index_features = feats[0].cpu().numpy()
             scores, indices = index.search(index_features, k=8)
@@ -258,8 +264,6 @@ class Pipeline:
             feats = index_features * index_rate + (1 - index_rate) * feats
 
         feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
-        if protect < 0.5 and pitch is not None and pitchf is not None:
-            protected_features = _interpolate_1d(protected_features, scale_factor=2, mode="linear")
 
         if pitch is not None and pitchf is not None:
             pitch = pitch[:, :num_frames]
@@ -278,21 +282,11 @@ class Pipeline:
                 device=self.tt_device,
                 # memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-
-        if protect < 0.5 and pitch is not None and pitchf is not None:
-            pitchff = protect + (1 - protect) * (pitchf >= 1)
-            pitchff = ttnn.unsqueeze(pitchff, -1)
-            feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
-            ttnn.deallocate(protected_features)
-
-        speaker_id = ttnn.from_torch(
-            speaker_id,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.tt_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        if pitch is not None and pitchf is not None:
+            if protect < 0.5:
+                pitchff = protect + (1 - protect) * (pitchf >= 1)
+                pitchff = ttnn.unsqueeze(pitchff, -1)
+                feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
+                ttnn.deallocate(protected_features)
             feats = ttnn.reallocate(feats)
             pitch = ttnn.reallocate(pitch)
             pitchf = ttnn.reallocate(pitchf)
@@ -323,26 +317,21 @@ class Pipeline:
         audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
         opt_ts = []
         if audio_padded.shape[0] > self.t_max:
-            audio_sum = torch.zeros_like(audio)
-            for i in range(self.window):
-                audio_sum += torch.abs(audio_padded[i : i - self.window])
+            audio_avg = F.avg_pool1d(
+                audio_padded.abs().view(1, 1, -1),
+                kernel_size=self.window,
+                stride=1,
+            ).view(-1)
             for t in range(self.t_center, audio.shape[0], self.t_center):
-                opt_ts.append(
-                    t
-                    - self.t_query
-                    + torch.where(
-                        audio_sum[t - self.t_query : t + self.t_query]
-                        == audio_sum[t - self.t_query : t + self.t_query].min()
-                    )[0][0]
-                )
-
+                segment = audio_avg[t - self.t_query : t + self.t_query]
+                opt_ts.append(t - self.t_query + torch.argmin(segment).item())
         audio_output = []
         audio_padded = F.pad(audio.unsqueeze(0), (self.t_pad, self.t_pad), mode="reflect").squeeze(0)
         num_frames = audio_padded.shape[0] // self.window
         s = 0
         idx_list = []
         for t in opt_ts:
-            idx_list.append((s // self.window, (t + self.t_pad2) // self.window))
+            idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
             s = t
         idx_list.append((s // self.window, num_frames))
         speaker_id = torch.tensor(speaker_id, device=self.device).unsqueeze(0).long()
@@ -351,12 +340,16 @@ class Pipeline:
             pitch, pitchf = self._get_f0(audio_padded, num_frames, f0_up_key, f0_method)
 
         for idx_s, idx_e in idx_list:
-            chunk_end = min(idx_e + self.t_pad2 // self.window, pitch.shape[1]) if pitch is not None else idx_e
-            pitch_slice = pitch[:, idx_s:chunk_end] if pitch is not None else None
-            pitchf_slice = pitchf[:, idx_s:chunk_end] if pitchf is not None else None
+            if self.if_f0:
+                chunk_end = min(idx_e, pitch.shape[1])
+                pitch_slice = pitch[:, idx_s:chunk_end]
+                pitchf_slice = pitchf[:, idx_s:chunk_end]
+            else:
+                pitch_slice = None
+                pitchf_slice = None
             audio_output.append(
                 self._vc(
-                    audio_padded[idx_s * self.window : (idx_e + self.t_pad2 // self.window) * self.window],
+                    audio_padded[idx_s * self.window : idx_e * self.window],
                     speaker_id,
                     pitch_slice,
                     pitchf_slice,

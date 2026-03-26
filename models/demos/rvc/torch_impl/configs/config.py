@@ -13,10 +13,21 @@ class Config:
 
     def params_config(self) -> tuple:
         # 5G GPU_RAM conf
+        # note: keep x_query < x_center/ 2 to voice degradation
         x_pad = 1
-        x_query = 6
-        x_center = 38
-        x_max = 41
+        x_query = 3
+        x_center = 12
+        x_max = 16
+
+        # x_pad = 1
+        # x_query = 6
+        # x_center = 38
+        # x_max = 41
+
+        # x_pad = 1
+        # x_query = 2
+        # x_center = 6
+        # x_max = 8
         return x_pad, x_query, x_center, x_max
 
     def use_cpu(self) -> None:
