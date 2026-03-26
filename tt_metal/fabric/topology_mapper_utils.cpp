@@ -491,8 +491,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     log_info(tt::LogFabric, "Got {} valid groupings map from MGD and PGD", valid_groupings_map.size());
 
     // Get groupings for mesh level mappings
-    TT_ASSERT(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
-    TT_ASSERT(
+    TT_FATAL(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
+    TT_FATAL(
         !valid_groupings_map.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
@@ -524,15 +524,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
     result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
 
-    // Build asic_id_to_mesh_rank from mesh groupings for computing intermesh_assign_z_direction
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (size_t i = 0; i < all_mesh_groupings.size(); ++i) {
-        MeshId mesh_id{static_cast<uint32_t>(i)};
-        for (const auto& asic_id : all_mesh_groupings[i]) {
-            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
-        }
-    }
-
     return result;
 }
 
@@ -544,6 +535,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // Convert asic_id_to_mesh_rank to mesh_groupings format
     // Find the maximum mesh ID to determine vector size
+    if (asic_id_to_mesh_rank.empty()) {
+        return PhysicalMultiMeshGraph{};
+    }
     MeshId max_mesh_id{0};
     for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
         if (mesh_id.get() > max_mesh_id.get()) {
@@ -669,9 +663,6 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 }
 
 namespace {
-// Helper function to add Z-direction constraints
-// Logical meshes that need Z connections can only be mapped to physical meshes that have Z connections
-
 // Helper function to build inter-mesh constraints
 // Maps logical meshes to physical meshes based on matching mesh host ranks
 // A logical mesh maps to a physical mesh if the ASICs in that physical mesh have matching ranks
@@ -1145,10 +1136,6 @@ bool add_exit_node_constraints(
                 return false;
             }
 
-            MeshId src_logical_mesh_for_log = MeshId{0};
-            if (!logical_graph.get_nodes().empty()) {
-                src_logical_mesh_for_log = logical_graph.get_nodes().front().mesh_id;
-            }
             if (!intra_mesh_constraints.add_cardinality_constraint(
                     valid_logical_exit_nodes, valid_physical_exit_nodes, effective_exit_pair_min_count)) {
                 return false;
@@ -1304,6 +1291,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
     using namespace ::tt::tt_fabric;
+
+    if (config.strict_mode) {
+        log_warning(
+            tt::LogFabric,
+            "TopologyMappingConfig::strict_mode is deprecated and has no effect. "
+            "Set mesh_validation_modes and/or inter_mesh_validation_mode explicitly.");
+    }
 
     // Step 1: Run Mesh to Mesh mapping algorithm
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
