@@ -333,7 +333,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
-                "vae_use_cache": False,
+                "vae_use_cache": True,
             }
             device_configs[(4, 32)] = {
                 "sp_axis": 1,
