@@ -12,6 +12,9 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <map>
@@ -462,6 +465,31 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";
+    }
+}
+
+void expect_galaxy_corner_folding_check(const ControlPlane& control_plane) {
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto chip_ids_container = mesh_graph.get_chip_ids(mesh_id);
+        ASSERT_GT(chip_ids_container.size(), 0u);
+        const auto& vals = chip_ids_container.values();
+        const auto first_chip = vals.front();
+        const auto last_chip = vals.back();
+        for (auto chip_id : {first_chip, last_chip}) {
+            FabricNodeId fn_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+            auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fn_id);
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_location = psd.get_asic_location(asic_id);
+
+            EXPECT_GE(*tray_id, 1u) << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id
+                                    << ") tray_id should be >= 1";
+            EXPECT_LE(*tray_id, 4u) << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id
+                                    << ") tray_id should be <= 4";
+            EXPECT_EQ(*asic_location, 1u)
+                << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id << ") asic_location should be 1";
+        }
     }
 }
 
