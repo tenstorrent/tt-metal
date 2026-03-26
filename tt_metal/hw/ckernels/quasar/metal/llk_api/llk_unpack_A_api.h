@@ -58,6 +58,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * The tiles are read from the operand buffer starting at start_tile_index
  * and unpacked into srcA one tile at a time.
  */
+// TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     const std::uint32_t operand_id = get_operand_id(operand);
