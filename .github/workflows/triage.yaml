@@ -35,8 +35,8 @@ on:
         description: 'Run hang report generation test (intentionally hangs a card)'
         default: false
         type: boolean
-      force-job-failure-for-auto-triage-e2e:
-        description: 'After triage tests and artifact upload, fail the job so auto-triage has a failed job to analyze (manual E2E only)'
+      force_e2e_failure_after_triage:
+        description: 'After hang triage (run-hang-report-test) and artifact upload, fail the job for auto-triage E2E. No effect unless run-hang-report-test is true.'
         required: false
         default: false
         type: boolean
@@ -93,10 +93,11 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Deliberate job failure for auto-triage E2E
-        if: ${{ inputs.force-job-failure-for-auto-triage-e2e == true }}
+      - name: Deliberate failure after hang triage (auto-triage E2E)
+        # Only when hang report test ran; hyphenated input via bracket form (dots + hyphens = subtraction).
+        if: ${{ inputs.force_e2e_failure_after_triage && inputs['run-hang-report-test'] }}
         run: |
-          echo "::error::Deliberate failure after triage tests (force-job-failure-for-auto-triage-e2e). For auto-triage E2E only."
+          echo "::error::Deliberate job failure after hang triage path (force_e2e_failure_after_triage + run-hang-report-test). For auto-triage hang E2E only."
           exit 1
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
