@@ -1256,15 +1256,29 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     return find_all_in_psd(groupings, physical_system_descriptor, errors);
 }
 
-// NOTE this only works on flattenable meshes right now
+std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+    const std::vector<GroupingInfo>& groupings,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const AdjacencyGraph<AsicID>& physical_graph) const {
+    std::vector<std::string> errors;
+    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
+}
+
 std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::vector<std::string>& errors_out) const {
-    // Build physical adjacency map from PSD (empty map means include all ASICs)
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
     AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors_out);
+}
 
+// NOTE this only works on flattenable meshes right now
+std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+    const std::vector<GroupingInfo>& groupings,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    std::vector<std::string>& errors_out) const {
     // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
     for (const auto& grouping : groupings) {
