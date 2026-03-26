@@ -18,7 +18,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionR
     "device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("device"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -33,7 +33,6 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionR
 )
 def test_rot_emb(seq_len, batch_size, reset_seeds, device):
     dtype = ttnn.bfloat16
-    mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
         device,

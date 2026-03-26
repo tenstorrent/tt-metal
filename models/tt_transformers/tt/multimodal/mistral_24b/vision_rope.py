@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-This is the modified version of the RoPE for the Mistral-Small-3.1-24B-Instruct-2503 model.
-We have modified the compute_gather_cos_sin function of RMSNorm to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+Vision 2D RoPE for the Mistral-Small-3.1-24B-Instruct-2503 model.
+Computes 2D rotary position embeddings for the Pixtral vision encoder using meshgrid-based frequencies.
 """
 
 import torch
@@ -15,7 +15,7 @@ from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 from ttnn import ReplicateTensorToMesh
 
 
-def compute_gather_cos_sin(dhead, max_patches_per_side, theta, scale_factor, orig_context_len, position_ids):
+def compute_gather_cos_sin(dhead, max_patches_per_side, theta, scale_factor, orig_context_len):
     cos, sin = precompute_mistral_vision_freqs(dhead, max_patches_per_side, theta, scale_factor, orig_context_len)
     return cos, sin
 
@@ -56,7 +56,6 @@ class VisionRotarySetup(LightweightModule):
             theta=rope_theta,
             scale_factor=scale_factor,
             orig_context_len=orig_context_len,
-            position_ids=torch.arange(max_seq_len),
         )
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,
