@@ -36,11 +36,6 @@ class MistralTTVisionMLP(LightweightModule):
         def get_bias(name):
             return state_dict[f"{state_dict_prefix}{name}.bias"]
 
-        def cache_name(name):
-            if args.dummy_weights:
-                return None
-            return weight_cache_path / f"{state_dict_prefix}.{name}"
-
         def as_tensor(name, dtype, is_bias=False):
             tensor_data = get_bias(name) if is_bias else get_weight(name)
             return ttnn.as_tensor(
@@ -52,15 +47,9 @@ class MistralTTVisionMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Weights and Biases
         self.w1 = as_tensor("w1", dtype)
-        self.b1 = as_tensor("w1", ttnn.bfloat16, is_bias=False)
-
         self.w3 = as_tensor("w3", dtype)
-        self.b3 = as_tensor("w3", ttnn.bfloat16, is_bias=False)
-
         self.w2 = as_tensor("w2", dtype)
-        self.b2 = as_tensor("w2", ttnn.bfloat16, is_bias=False)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,

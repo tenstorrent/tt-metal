@@ -25,7 +25,6 @@ class TTMistral3PatchMerger(LightweightModule):
     ):
         super().__init__()
         self.device = mesh_device
-        hidden_size = args.vision_dim
         self.spatial_merge_size = 2
         self.patch_size = args.vision_patch_size
         self.args = args
@@ -35,11 +34,6 @@ class TTMistral3PatchMerger(LightweightModule):
 
         def get_bias(name):
             return state_dict[f"{state_dict_prefix}{name}.bias"]
-
-        def cache_name(name):
-            if args.dummy_weights:
-                return None
-            return weight_cache_path / f"{state_dict_prefix}.{name}"
 
         def as_tensor(name, dtype, is_bias=False):
             tensor_data = get_bias(name) if is_bias else get_weight(name)
@@ -53,7 +47,6 @@ class TTMistral3PatchMerger(LightweightModule):
             )
 
         self.merging_weights = as_tensor("merging_layer", dtype)
-        self.merging_bias = as_tensor("merging_layer", ttnn.bfloat16, is_bias=False)
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
         image_sizes = [
@@ -131,11 +124,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
         def get_bias(name):
             return state_dict[f"{state_dict_prefix}{name}.bias"]
 
-        def cache_name(name):
-            if args.dummy_weights:
-                return None
-            return weight_cache_path / f"{state_dict_prefix}.{name}"
-
         def as_tensor(name, dtype, is_bias=False):
             tensor_data = get_bias(name) if is_bias else get_weight(name)
             return ttnn.as_tensor(
@@ -148,10 +136,7 @@ class TTMistral3MultiModalProjector(LightweightModule):
             )
 
         self.linear_1_weight = as_tensor("linear_1", dtype)
-        self.linear_1_bias = as_tensor("linear_1", ttnn.bfloat16, is_bias=False)
-
         self.linear_2_weight = as_tensor("linear_2", dtype)
-        self.linear_2_bias = as_tensor("linear_2", ttnn.bfloat16, is_bias=False)
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
         image_features = self.norm(image_features, mode="decode")

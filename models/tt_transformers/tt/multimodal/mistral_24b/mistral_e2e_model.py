@@ -77,7 +77,7 @@ class MistralTransformer(Transformer):
                 )[: vision_output.shape[0], :]
 
                 image_features = comp_vision_output.squeeze(0)
-                special_image_mask = (pt_tokens == 10).unsqueeze(-1)
+                special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
                 special_image_mask = special_image_mask.expand_as(tokens_embd)
                 image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
                 tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
