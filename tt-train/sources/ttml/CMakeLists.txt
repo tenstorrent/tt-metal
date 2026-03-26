@@ -145,6 +145,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SwiGLU Elemwise Backward (fused eltwise backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
@@ -169,10 +173,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_program_factory.cpp
-    # SwiGLU Forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
