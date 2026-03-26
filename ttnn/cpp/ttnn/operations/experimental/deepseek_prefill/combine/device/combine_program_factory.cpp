@@ -339,7 +339,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         std::set<CoreCoord> sender_core_set(sender_cores.begin(), sender_cores.end());
         std::vector<CoreCoord> idle_row_cores;
         for (const auto& core : subdevice_cores) {
-            if (core.y == sender_row_y && sender_core_set.find(core) == sender_core_set.end()) {
+            if (core.y == sender_row_y && !sender_core_set.contains(core)) {
                 idle_row_cores.push_back(core);
             }
         }
