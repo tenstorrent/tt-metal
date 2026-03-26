@@ -7,6 +7,10 @@ inputs:
   report-path:
     description: "Path where markdown report should be written"
     required: true
+  model:
+    description: "Cursor agent model to use (for example: auto, claude-3-7-sonnet, gpt-5)"
+    required: false
+    default: "auto"
 runs:
   using: "composite"
   steps:
@@ -16,6 +20,7 @@ runs:
         set -euo pipefail
         input_json="${{ inputs.input-json-path }}"
         report_path="${{ inputs.report-path }}"
+        model="${{ inputs.model }}"
         prompt_file="${{ github.action_path }}/prompt.md"
 
         if [ ! -f "$input_json" ]; then
@@ -26,5 +31,5 @@ runs:
         mkdir -p "$(dirname "$report_path")"
         prompt_text="$(cat "$prompt_file")"
         prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
-        agent --trust -p "$prompt_text" > "$report_path"
+        agent --trust --model "$model" -p "$prompt_text" > "$report_path"
         test -s "$report_path"

@@ -7,6 +7,22 @@ on:
         description: "Number of days of Slack history to export"
         required: false
         default: "30"
+      data-report-model:
+        description: "Cursor model for Slack data gathering report"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "auto"
       data-gathering-mode:
         description: "If checked, run Cursor agent to generate Slack stats report"
         required: false
@@ -81,6 +97,7 @@ jobs:
         with:
           input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
           report-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
+          model: ${{ github.event.inputs['data-report-model'] || 'auto' }}
 
       - name: Upload data gathering report artifact
         if: ${{ inputs['data-gathering-mode'] }}
