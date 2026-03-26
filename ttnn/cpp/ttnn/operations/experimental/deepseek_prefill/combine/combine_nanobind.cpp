@@ -42,7 +42,7 @@ void bind_combine(nb::module_& mod) {
             cluster_axis (int, optional): Mesh axis to operate along (0=rows, 1=cols). Defaults to 0. Currently only 0 is tested.
             num_links (int, optional): Number of ethernet links to use for fabric communication. Defaults to 1. Currently only 1 is tested.
             topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
-            init_zeros (bool, optional): Whether to zero-initialize the output buffer using the hybrid row-based approach. Sender cores handle their share of pages on the reader RISC, while idle cores in the same row run a dedicated zero-init kernel (RISCV_0/NOC1). Defaults to True.
+            init_zeros (bool, optional): Whether to zero-initialize the output buffer. Defaults to True.
 
         Returns:
             ttnn.Tensor: Combined output tensor of shape (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)

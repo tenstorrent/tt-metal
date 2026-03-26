@@ -17,6 +17,7 @@
     DebugPrinter()
 #endif
 
+// Signal last element to writer to break out of loop
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {

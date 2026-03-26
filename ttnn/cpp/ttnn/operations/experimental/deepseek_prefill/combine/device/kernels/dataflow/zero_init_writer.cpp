@@ -5,9 +5,7 @@
 //
 // Lightweight data-movement kernel that zeroes a page range of an interleaved
 // DRAM output tensor, then signals the combine reader cores via semaphore.
-//
-// Deployed on a wide core grid (worker cores minus sender cores) so that
-// the DRAM zero-init work is distributed across many cores in parallel.
+// Deployed on idle cores to speed up zero-init process by spreading out across more banks
 //
 
 #include <cstdint>
