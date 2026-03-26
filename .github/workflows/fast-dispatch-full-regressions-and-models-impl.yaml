@@ -165,7 +165,8 @@ jobs:
       matrix:
         card: [N150, N300]
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_matrix) }}
-    name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
+        run-index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }} (${{ matrix.run-index }})
     defaults:
       run:
         shell: bash
