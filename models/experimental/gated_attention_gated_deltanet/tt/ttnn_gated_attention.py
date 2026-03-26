@@ -19,8 +19,9 @@ def rotate_half_ttnn(x):
 
 def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     """Apply RoPE to query and key tensors using TTNN ops."""
-    cos = ttnn.unsqueeze(cos, 1)  # [B, 1, T, D]
-    sin = ttnn.unsqueeze(sin, 1)
+    if len(cos.shape) < 4:
+        cos = ttnn.unsqueeze(cos, 1)  # [B, 1, T, D]
+        sin = ttnn.unsqueeze(sin, 1)
 
     rotary_dim = cos.shape[-1]
     full_dim = q.shape[-1]
@@ -197,8 +198,13 @@ def gated_attention_forward_ttnn(
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
 
-    # RoPE
-    query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
+    # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement)
+    if T == 1 and len(cos.shape) == 3:
+        cos_4d = ttnn.reshape(cos, [cos.shape[0], 1, 1, cos.shape[-1]])
+        sin_4d = ttnn.reshape(sin, [sin.shape[0], 1, 1, sin.shape[-1]])
+        query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos_4d, sin_4d)
+    else:
+        query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
     # KV cache handling
     if trace_new_k_buf is not None and trace_attn_mask is not None:

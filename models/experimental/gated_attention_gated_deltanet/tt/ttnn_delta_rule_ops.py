@@ -375,9 +375,8 @@ def fused_decay_and_write_ttnn(
     V = h.shape[3]
 
     # decay: [B, H] -> [B, H, 1, 1]
-    # decay_t is already exp(g_t); keep recurrent path in BF16.
-    decay = ttnn.typecast(decay_t, ttnn.bfloat16)
-    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    # decay_t is already exp(g_t) in BF16; no typecast needed.
+    decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # beta: [B, H] -> [B, H, 1, 1]
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -388,8 +387,6 @@ def fused_decay_and_write_ttnn(
     # delta: [B, H, V] -> [B, H, 1, V]
     d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=None)
 
-    k_col = ttnn.to_layout(k_col, ttnn.TILE_LAYOUT)
-    d_row = ttnn.to_layout(d_row, ttnn.TILE_LAYOUT)
     k_col = ttnn.to_memory_config(k_col, ttnn.DRAM_MEMORY_CONFIG)
     d_row = ttnn.to_memory_config(d_row, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -549,9 +546,12 @@ def recurrent_gated_delta_rule_decode_ttnn(
         scale = K**-0.5
     q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Squeeze T=1 dimension and transpose to [B, H, K] / [B, H, V]
-    q_t = ttnn.reshape(q, [B, H, K], memory_config=ttnn.L1_MEMORY_CONFIG)
-    k_t = ttnn.reshape(k, [B, H, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Reshape directly to shapes needed by matmul (skip intermediate 3D form)
+    # q and k need [B, H, 1, K] for matmul against h [B, H, K, V]
+    # v needs [B, H, V] for subtract with v_read
+    # Inputs are already TILE_LAYOUT from the caller, so skip redundant to_layout.
+    q_row = ttnn.reshape(q, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_row = ttnn.reshape(k, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     v_t = ttnn.reshape(v, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -583,25 +583,18 @@ def recurrent_gated_delta_rule_decode_ttnn(
         except Exception:
             pass
 
-    # Read from state: v_read = k @ h
-    q_t = ttnn.to_layout(q_t, ttnn.TILE_LAYOUT)
-    k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT)
-    v_t = ttnn.to_layout(v_t, ttnn.TILE_LAYOUT)
-
-    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
+    # Read from state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
     v_read = ttnn.matmul(
         k_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
     v_read = ttnn.reshape(v_read, [B, H, V], memory_config=None)
 
-    # Delta and state update
+    # Delta and state update — extract k_t [B,H,K] from k_row for fused_decay_and_write
     delta = ttnn.subtract(v_t, v_read, memory_config=None)
+    k_t = ttnn.reshape(k_row, [B, H, K], memory_config=None)
     h = fused_decay_and_write_ttnn(h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device)
 
-    # Query state: o = q @ h
-    q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    q_row = ttnn.to_layout(q_row, ttnn.TILE_LAYOUT)
+    # Query state: o = q @ h  (q_row already [B,H,1,K] TILE_LAYOUT)
     o_t = ttnn.matmul(
         q_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
