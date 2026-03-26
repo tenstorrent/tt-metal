@@ -12,7 +12,7 @@ from loguru import logger
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 from conftest import is_galaxy
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,
@@ -203,6 +203,11 @@ def run_demo_inference(
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
+        logger.info("=" * 80)
+        for key, data in profiler.times.items():
+            logger.info(f"{key}: {data[-1]:.2f} seconds")
+        logger.info("=" * 80)
+
     return images
 
 
@@ -308,8 +313,8 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    # if vae_on_device and is_blackhole():
+    #     pytest.skip("Device VAE not supported on Blackhole")
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(

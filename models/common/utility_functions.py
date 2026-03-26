@@ -131,6 +131,9 @@ class Profiler:
             self.times[key] = []
 
         self.times[key].append(diff / PERF_CNT)
+        # Must clear so a second end() without a new start() does not measure
+        # wall time since the previous start (can be hundreds of seconds).
+        del self.start_times[key]
 
     def get(self, key):
         if key not in self.times:

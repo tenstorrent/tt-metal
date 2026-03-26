@@ -4,9 +4,11 @@
 
 import gc
 import inspect
+import os
 from typing import List, Optional, Union
 
 import torch
+import tracy
 from loguru import logger
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
@@ -31,6 +33,11 @@ MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
 CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER = 1280
+
+
+def metal_command_queue_trace_supported() -> bool:
+    """Mesh trace capture conflicts with TT device profiler CQ traffic (e.g. ``tracy -r`` → ``TT_METAL_DEVICE_PROFILER=1``)."""
+    return os.environ.get("TT_METAL_DEVICE_PROFILER") != "1"
 
 
 def determine_data_parallel(ttnn_device, use_cfg_parallel):
@@ -910,6 +917,12 @@ def run_tt_image_gen(
     """
 
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
+    if capture_trace and not metal_command_queue_trace_supported():
+        logger.warning(
+            "capture_trace disabled: TT_METAL_DEVICE_PROFILER=1 is incompatible with Metal command-queue trace capture "
+            "(use ``tracy -r --no-device`` if you need capture_trace while profiling)."
+        )
+        capture_trace = False
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
@@ -919,6 +932,19 @@ def run_tt_image_gen(
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
             for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
+                # if not capture_trace and i == 5:
+                #     # cfg-parallel: one fused UNet forward, then combine (interleaved + all_gather) below.
+                #     # Non-cfg: dim0==2 is uncond + text as separate forwards; else dim0 is batch.
+                #     n0 = int(tt_prompt_embeds.shape[0])
+                #     if use_cfg_parallel:
+                #         tag = "cfg_parallel_unet"
+                #     elif n0 == 2:
+                #         tag = "unet_uncond" if unet_slice == 0 else "unet_text"
+                #     else:
+                #         tag = "unet_uncond"
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.start(tag)
+                tracy.signpost("unet_loop_start")
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
                     tt_scheduler,
@@ -928,25 +954,68 @@ def run_tt_image_gen(
                     tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
                     ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
                 )
+                tracy.signpost("unet_loop_end")
+                # if not capture_trace and i == 5:
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.end(tag)
+                #     if tag in profiler.times and profiler.times[tag]:
+                #         logger.info(
+                #             "profiler[{}] last_sample={:.6f}s avg={:.6f}s",
+                #             tag,
+                #             profiler.times[tag][-1],
+                #             profiler.get(tag),
+                #         )
 
                 unet_outputs.append(noise_pred)
 
             if use_cfg_parallel:
+                # if not capture_trace and i == 5:
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.start("noise_pred_interleaved")
                 noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+                # if not capture_trace and i == 5:
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.end("noise_pred_interleaved")
+                #     if "noise_pred_interleaved" in profiler.times and profiler.times["noise_pred_interleaved"]:
+                #         logger.info(
+                #             "profiler[{}] last_sample={:.6f}s avg={:.6f}s",
+                #             "noise_pred_interleaved",
+                #             profiler.times["noise_pred_interleaved"][-1],
+                #             profiler.get("noise_pred_interleaved"),
+                #         )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
+                # if not capture_trace and i == 5:
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.start("all_gather")
+                tracy.signpost("all_gather_start")
                 noise_pred_out = ttnn.all_gather(
                     noise_pred,
                     dim=0,
                     cluster_axis=0,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+                tracy.signpost("all_gather_end")
+                # if not capture_trace and i == 5:
+                #     ttnn.synchronize_device(ttnn_device)
+                #     profiler.end("all_gather")
+                #     if "all_gather" in profiler.times and profiler.times["all_gather"]:
+                #         logger.info(
+                #             "profiler[{}] last_sample={:.6f}s avg={:.6f}s",
+                #             "all_gather",
+                #             profiler.times["all_gather"][-1],
+                #             profiler.get("all_gather"),
+                #         )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
                 noise_pred = noise_pred[..., :4]
                 noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
             else:
                 noise_pred_uncond, noise_pred_text = unet_outputs
+
+            # if not capture_trace and i == 5:
+            #     ttnn.synchronize_device(ttnn_device)
+            #     profiler.start("after_all_gather")
 
             # ttnn.clone doesn't work with L1 sharded tensors
             noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
@@ -989,15 +1058,24 @@ def run_tt_image_gen(
 
             tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
+            # if not capture_trace and i == 5:
+            #     ttnn.synchronize_device(ttnn_device)
+            #     profiler.end("after_all_gather")
+            #     if "after_all_gather" in profiler.times and profiler.times["after_all_gather"]:
+            #         logger.info(
+            #             "profiler[{}] last_sample={:.6f}s avg={:.6f}s",
+            #             "after_all_gather",
+            #             profiler.times["after_all_gather"][-1],
+            #             profiler.get("after_all_gather"),
+            #         )
+
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
         else:
-            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
+            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
-
-    ttnn.synchronize_device(ttnn_device)
 
     # set_begin_index resets both begin and step index of the scheduler
     tt_scheduler.set_begin_index(0)
@@ -1099,6 +1177,12 @@ def run_tt_image_gen_inpainting(
     one_minus_guidance_rescale=1.0,
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
+    if capture_trace and not metal_command_queue_trace_supported():
+        logger.warning(
+            "capture_trace disabled: TT_METAL_DEVICE_PROFILER=1 is incompatible with Metal command-queue trace capture "
+            "(use ``tracy -r --no-device`` if you need capture_trace while profiling)."
+        )
+        capture_trace = False
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
@@ -1183,12 +1267,10 @@ def run_tt_image_gen_inpainting(
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
         else:
-            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
+            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
-
-    ttnn.synchronize_device(ttnn_device)
 
     # set_begin_index resets both begin and step index of the scheduler
     tt_scheduler.set_begin_index(0)
@@ -1399,12 +1481,17 @@ def run_tt_denoising(
     compile_run=False,
 ):
     B, C, H, W = input_shape
+    do_metal_trace = (not compile_run) and metal_command_queue_trace_supported()
     if tid is None:
-        tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if not compile_run else None
+        tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if do_metal_trace else None
         unet_outputs = []
         tt_latents = tt_latents_device
         for unet_slice in range(len(ttnn_prompt_embeds)):
             tt_latent_model_input = tt_latents
+            # if not compile_run:
+            #     tag = "unet_uncond" if unet_slice == 0 else "unet_text"
+            #     ttnn.synchronize_device(ttnn_device)
+            #     profiler.start(tag)
             noise_pred, noise_shape = run_tt_iteration(
                 tt_unet,
                 tt_scheduler,
@@ -1414,6 +1501,9 @@ def run_tt_denoising(
                 ttnn_add_time_ids[unet_slice],
                 ttnn_add_text_embeds[unet_slice],
             )
+            # if not compile_run:
+            #     ttnn.synchronize_device(ttnn_device)
+            #     profiler.end(tag)
             C, H, W = noise_shape
 
             unet_outputs.append(noise_pred)
@@ -1428,7 +1518,7 @@ def run_tt_denoising(
         ttnn.deallocate(noise_pred_uncond)
         ttnn.deallocate(noise_pred_text)
 
-        if not compile_run:
+        if do_metal_trace:
             ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
     else:
         ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)

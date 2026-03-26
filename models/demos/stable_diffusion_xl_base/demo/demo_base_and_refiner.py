@@ -11,7 +11,7 @@ from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
 
 from conftest import is_galaxy
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
@@ -54,8 +54,8 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    # if vae_on_device and is_blackhole():
+    #     pytest.skip("Device VAE not supported on Blackhole")
 
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 

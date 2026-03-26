@@ -145,6 +145,17 @@ def get_benchmark_summary(metadata):
             "min_gen_time": min(profiler.times["end_to_end_generation"]),
             "max_gen_time": max(profiler.times["end_to_end_generation"]),
             "average_encoding_time": profiler.get("encode_prompts"),
+            "average_read_output_tensor": profiler.get("read_output_tensor"),
+            "average_prepare_input_tensors": profiler.get("prepare_input_tensors"),
+            "average_allocate_input_tensors": profiler.get("allocate_input_tensors"),
+            "average_create_user_tensors": profiler.get("create_user_tensors"),
+            "average_diffusion_pipeline_from_pretrained": profiler.get("diffusion_pipeline_from_pretrained"),
+            "average_all_gather": profiler.get("all_gather"),
+            "average_noise_pred_interleaved": profiler.get("noise_pred_interleaved"),
+            "average_unet_uncond": profiler.get("unet_uncond"),
+            "average_unet_text": profiler.get("unet_text"),
+            "average_after_all_gather": profiler.get("after_all_gather"),
+            "average_cfg_parallel_unet": profiler.get("cfg_parallel_unet"),
         }
     ]
 

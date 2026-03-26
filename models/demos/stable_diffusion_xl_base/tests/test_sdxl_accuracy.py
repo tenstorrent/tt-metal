@@ -8,7 +8,6 @@ import os
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_base_and_refiner import test_demo_base_and_refiner
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
@@ -138,8 +137,8 @@ def test_accuracy_sdxl(
     refiner_aesthetic_score,
     refiner_negative_aesthetic_score,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    # if vae_on_device and is_blackhole():
+    #     pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 

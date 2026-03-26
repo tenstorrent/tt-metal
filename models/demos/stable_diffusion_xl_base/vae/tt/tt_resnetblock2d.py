@@ -4,7 +4,6 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
 from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_GN_shape
 
@@ -156,7 +155,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         # On Blackhole, disable Welford algorithm due to precision issues
-        use_welford = reciprocals_tensor is not None and not is_blackhole()
+        use_welford = True
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -227,7 +226,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         # On Blackhole, disable Welford algorithm due to precision issues
-        use_welford = reciprocals_tensor is not None and not is_blackhole()
+        use_welford = True
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
