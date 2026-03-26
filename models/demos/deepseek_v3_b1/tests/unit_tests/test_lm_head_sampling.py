@@ -2061,7 +2061,7 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
-def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
+def test_pipeline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
     """
     4-stage 4x2 single-galaxy pipeline:
     P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
