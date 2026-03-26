@@ -259,9 +259,11 @@ class Qwen35Model:
         position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
         cos, sin = self.rope.get_rot_mats(position_ids)
 
-        # Create cur_pos_tensor for SDPA decode (int32, shape [B])
+        # Create cur_pos_tensor for SDPA decode + paged_update_cache.
+        # paged_update_cache reshapes cache to [B*H_kv, ...] so needs B*H_kv indices.
+        n_kv = self.args.n_kv_heads
         cur_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * B, dtype=torch.int32),
+            torch.full((B * n_kv,), current_pos, dtype=torch.int32),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -478,16 +480,18 @@ class Qwen35Model:
             device=device,
         )
 
-        # Phase 2: position tensor for paged_update_cache (if enabled)
-        if self._use_paged_cache:
-            self._trace_position = ttnn.from_torch(
-                torch.tensor([0], dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-            )
-        else:
-            self._trace_position = None
+        # Position tensor for paged_update_cache + sdpa_decode (trace-compatible dynamic index).
+        # paged_update_cache needs one index per "batch" element where batch = B * num_kv_heads
+        # (cache is reshaped to [B*H_kv, 1, max_seq, D] for the write).
+        # All heads share the same position, so we replicate the value.
+        n_kv = self.args.n_kv_heads
+        self._trace_position = ttnn.from_torch(
+            torch.zeros(n_kv, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        self._trace_position_n_kv = n_kv
 
         # 2. Save DeltaNet states (warmup + capture corrupt them)
         saved_dn_states = self._save_deltanet_states()
@@ -528,28 +532,18 @@ class Qwen35Model:
         ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
         ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
 
-        # Phase 2: update position tensor for paged_update_cache
-        if self._trace_position is not None:
-            pos_host = ttnn.from_torch(
-                torch.tensor([current_pos], dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(pos_host, self._trace_position)
+        # Position tensor for paged_update_cache + sdpa_decode (inside trace)
+        # Replicate position for each kv_head (paged_update_cache treats B*H_kv as batch)
+        pos_host = ttnn.from_torch(
+            torch.full((self._trace_position_n_kv,), current_pos, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(pos_host, self._trace_position)
 
-        # Update attention masks BEFORE replay
-        for layer in self.layers:
-            if layer.is_full_attention:
-                layer.attention.update_mask_for_pos(current_pos)
-
-        # Replay the captured trace
+        # Replay the captured trace — paged_update_cache + sdpa_decode run inside,
+        # no mask updates or post-trace cache copies needed.
         ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
-
-        # Phase 1: post-trace KV cache update (only if paged_update_cache not used)
-        if self._trace_position is None:
-            for layer in self.layers:
-                if layer.is_full_attention:
-                    layer.attention.update_cache_after_trace(current_pos)
 
         return self._trace_output
 

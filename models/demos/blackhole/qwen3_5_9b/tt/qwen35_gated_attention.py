@@ -226,7 +226,8 @@ class Qwen35GatedAttention:
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
         if self.use_preallocated_cache and self.use_trace_mode:
-            # Trace-compatible mode: save K/V to buffers, write to staging pos, SDPA with full cache + mask
+            # Trace-compatible mode with sdpa_decode when position_tensor is available,
+            # fallback to staging+mask approach otherwise.
             output, _, _ = gated_attention_forward_ttnn(
                 hidden_states=x,
                 q_proj_weight=self.q_proj_weight,
@@ -253,6 +254,7 @@ class Qwen35GatedAttention:
                 trace_attn_mask=self.trace_attn_mask,
                 trace_kv_pad_zeros=self.trace_kv_pad_zeros,
                 trace_staging_pos=self.staging_pos,
+                cur_pos_tensor=position_tensor,
             )
             return output
         elif self.use_preallocated_cache:
