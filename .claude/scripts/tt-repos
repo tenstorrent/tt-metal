@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =============================================================================
+# tt-repos — manage parallel tt-metal-{1..5} repos
+# =============================================================================
+
+BASE_DIR="/localdev/vignjatijevic"
+REPO_PREFIX="tt-metal"
+REPO_INDICES=(1 2 3 4 5)
+BRANCH_PREFIX="vignjatijevic/sfpu-agent-codegen-test"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+repo_path() { echo "$BASE_DIR/$REPO_PREFIX-$1"; }
+
+# Detect which tt-metal-{i} repo we're currently inside
+get_current_repo_index() {
+    local cwd
+    cwd=$(pwd -P)
+    for i in "${REPO_INDICES[@]}"; do
+        local rp
+        rp=$(repo_path "$i")
+        if [[ "$cwd" == "$rp"* ]]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    echo -e "${RED}Error: not inside a tt-metal repo${NC}" >&2
+    return 1
+}
+
+# Find the largest j in branches matching vignjatijevic/sfpu-agent-codegen-test-{i}-{j}
+find_max_branch_index() {
+    local i=$1
+    local repo
+    repo=$(repo_path "$i")
+    local max_j=0
+
+    while IFS= read -r branch; do
+        branch=$(echo "$branch" | sed 's/^[* ]*//' | xargs)
+        local suffix="${branch#${BRANCH_PREFIX}-${i}-}"
+        if [[ "$suffix" != "$branch" && "$suffix" =~ ^[0-9]+$ ]]; then
+            (( suffix > max_j )) && max_j=$suffix
+        fi
+    done < <(git -C "$repo" branch --list "${BRANCH_PREFIX}-${i}-*" 2>/dev/null)
+
+    echo "$max_j"
+}
+
+# Untrack .claude/*, ensure .gitignore entry, stage & commit if dirty
+auto_commit() {
+    local repo=$1 name=$2
+
+    # Untrack .claude/ if any files are tracked
+    if git -C "$repo" ls-files .claude/ 2>/dev/null | grep -q .; then
+        git -C "$repo" rm -r --cached .claude/ >/dev/null 2>&1 || true
+        if ! grep -qx '\.claude/' "$repo/.gitignore" 2>/dev/null; then
+            echo ".claude/" >> "$repo/.gitignore"
+        fi
+        echo -e "  ${YELLOW}[$name]${NC} Untracked .claude/"
+    fi
+
+    # Stage everything
+    git -C "$repo" add -A
+
+    # Commit only if there are staged changes
+    if ! git -C "$repo" diff --cached --quiet 2>/dev/null; then
+        git -C "$repo" commit -m "Auto-commit before branch switch" >/dev/null 2>&1
+        echo -e "  ${YELLOW}[$name]${NC} Committed pending changes"
+    fi
+}
+
+# Run a function across all repos in parallel, collecting output per-repo
+run_parallel() {
+    local func=$1
+    shift
+    local pids=() tmpfiles=()
+
+    for i in "${REPO_INDICES[@]}"; do
+        local tmp
+        tmp=$(mktemp)
+        tmpfiles+=("$tmp")
+        ( "$func" "$i" "$@" ) > "$tmp" 2>&1 &
+        pids+=($!)
+    done
+
+    for idx in "${!pids[@]}"; do
+        wait "${pids[$idx]}" || true
+        cat "${tmpfiles[$idx]}"
+        rm -f "${tmpfiles[$idx]}"
+    done
+}
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+# checkout -b: auto-commit, then create next incremental branch
+_checkout_b_one() {
+    local i=$1
+    local repo name max_j next_j new_branch
+    repo=$(repo_path "$i")
+    name="tt-metal-$i"
+
+    auto_commit "$repo" "$name"
+
+    max_j=$(find_max_branch_index "$i")
+    next_j=$((max_j + 1))
+    new_branch="${BRANCH_PREFIX}-${i}-${next_j}"
+
+    git -C "$repo" checkout -b "$new_branch" >/dev/null 2>&1
+    echo -e "  ${GREEN}[$name]${NC} → $new_branch"
+}
+
+cmd_checkout_b() {
+    echo -e "${BLUE}Creating next branch in all repos...${NC}"
+    run_parallel _checkout_b_one
+}
+
+# sync <folder_path> [<dst>...]: copy folder from current repo to specific repos (or all others)
+# <dst> can be a repo index (e.g. 3) or full name (e.g. tt-metal-3)
+_sync_to() {
+    local dst_idx=$1 src_idx=$2 folder_path=$3
+    local dst_repo name dst_dir src_dir
+    dst_repo=$(repo_path "$dst_idx")
+    name="tt-metal-$dst_idx"
+    dst_dir="$dst_repo/$folder_path"
+    src_dir="$(repo_path "$src_idx")/$folder_path"
+
+    rm -rf "$dst_dir"
+    mkdir -p "$(dirname "$dst_dir")"
+    cp -a "$src_dir" "$dst_dir"
+    echo -e "  ${GREEN}[$name]${NC} Synced $folder_path"
+}
+
+parse_repo_index() {
+    local arg=$1
+    # Accept bare index (3) or tt-metal-3
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        echo "$arg"
+    elif [[ "$arg" =~ ^tt-metal-([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo -e "${RED}Error: invalid repo '$arg' — use index (3) or name (tt-metal-3)${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_sync() {
+    local folder_path="${1%/}"
+    shift
+    local src_idx
+    src_idx=$(get_current_repo_index) || exit 1
+    local src_dir
+    src_dir="$(repo_path "$src_idx")/$folder_path"
+
+    if [[ ! -e "$src_dir" ]]; then
+        echo -e "${RED}Error: $src_dir does not exist${NC}" >&2
+        exit 1
+    fi
+
+    # Build target list: explicit destinations, or all others
+    local targets=()
+    if [[ $# -gt 0 ]]; then
+        for arg in "$@"; do
+            local idx
+            idx=$(parse_repo_index "$arg") || exit 1
+            if [[ "$idx" == "$src_idx" ]]; then
+                echo -e "${YELLOW}Skipping tt-metal-$idx (source repo)${NC}"
+                continue
+            fi
+            targets+=("$idx")
+        done
+    else
+        for i in "${REPO_INDICES[@]}"; do
+            [[ "$i" == "$src_idx" ]] && continue
+            targets+=("$i")
+        done
+    fi
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}No target repos to sync to${NC}"
+        return 0
+    fi
+
+    local dst_list
+    dst_list=$(printf ", tt-metal-%s" "${targets[@]}")
+    dst_list="${dst_list:2}"
+    echo -e "${BLUE}Syncing '$folder_path' from tt-metal-$src_idx → $dst_list...${NC}"
+
+    local pids=() tmpfiles=()
+    for idx in "${targets[@]}"; do
+        local tmp
+        tmp=$(mktemp)
+        tmpfiles+=("$tmp")
+        ( _sync_to "$idx" "$src_idx" "$folder_path" ) > "$tmp" 2>&1 &
+        pids+=($!)
+    done
+
+    for i in "${!pids[@]}"; do
+        wait "${pids[$i]}" || true
+        cat "${tmpfiles[$i]}"
+        rm -f "${tmpfiles[$i]}"
+    done
+}
+
+# status: show branch + dirty state for all repos
+cmd_status() {
+    echo -e "${BLUE}Repository status:${NC}"
+    for i in "${REPO_INDICES[@]}"; do
+        local repo name branch info=""
+        repo=$(repo_path "$i")
+        name="tt-metal-$i"
+        branch=$(git -C "$repo" branch --show-current 2>/dev/null || echo "???")
+
+        if ! git -C "$repo" diff --quiet 2>/dev/null || \
+           ! git -C "$repo" diff --cached --quiet 2>/dev/null; then
+            info+=" ${YELLOW}(dirty)${NC}"
+        fi
+
+        local untracked
+        untracked=$(git -C "$repo" ls-files --others --exclude-standard 2>/dev/null | wc -l)
+        (( untracked > 0 )) && info+=" ${YELLOW}(+$untracked untracked)${NC}"
+
+        echo -e "  ${GREEN}[$name]${NC} $branch$info"
+    done
+}
+
+# exec <cmd>: run arbitrary command in every repo
+_exec_one() {
+    local i=$1
+    shift
+    local repo name
+    repo=$(repo_path "$i")
+    name="tt-metal-$i"
+    echo -e "  ${GREEN}[$name]${NC}"
+    ( cd "$repo" && eval "$*" 2>&1 ) | sed 's/^/    /'
+}
+
+cmd_exec() {
+    echo -e "${BLUE}Running across all repos:${NC} $*"
+    run_parallel _exec_one "$@"
+}
+
+# commit <message>: stage & commit all changes in every repo
+_commit_one() {
+    local i=$1 msg=$2
+    local repo name
+    repo=$(repo_path "$i")
+    name="tt-metal-$i"
+
+    # Untrack .claude/ if needed
+    if git -C "$repo" ls-files .claude/ 2>/dev/null | grep -q .; then
+        git -C "$repo" rm -r --cached .claude/ >/dev/null 2>&1 || true
+        if ! grep -qx '\.claude/' "$repo/.gitignore" 2>/dev/null; then
+            echo ".claude/" >> "$repo/.gitignore"
+        fi
+    fi
+
+    git -C "$repo" add -A
+    if ! git -C "$repo" diff --cached --quiet 2>/dev/null; then
+        git -C "$repo" commit -m "$msg" >/dev/null 2>&1
+        echo -e "  ${GREEN}[$name]${NC} Committed: $msg"
+    else
+        echo -e "  ${CYAN}[$name]${NC} Nothing to commit"
+    fi
+}
+
+cmd_commit() {
+    local msg="$*"
+    echo -e "${BLUE}Committing across all repos...${NC}"
+    run_parallel _commit_one "$msg"
+}
+
+# delete <pattern>: checkout to base branch, then delete the branch matching pattern
+# pattern contains {i} which is replaced with the repo index
+_delete_one() {
+    local i=$1 pattern=$2
+    local repo name branch base_branch
+    repo=$(repo_path "$i")
+    name="tt-metal-$i"
+    branch="vignjatijevic/${pattern/\{i\}/$i}"
+    base_branch="${BRANCH_PREFIX}-${i}"
+
+    # Check the branch exists
+    if ! git -C "$repo" rev-parse --verify "$branch" >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}[$name]${NC} Branch $branch does not exist, skipping"
+        return 0
+    fi
+
+    # Checkout to a safe branch if currently on the branch being deleted
+    local current
+    current=$(git -C "$repo" branch --show-current 2>/dev/null)
+    if [[ "$current" == "$branch" ]]; then
+        local switched=false
+        for candidate in \
+            "vignjatijevic/sfpu-agent-codegen" \
+            "${BRANCH_PREFIX}-${i}" \
+            "main" \
+        ; do
+            if git -C "$repo" rev-parse --verify "$candidate" >/dev/null 2>&1; then
+                git -C "$repo" checkout "$candidate" >/dev/null 2>&1
+                echo -e "  ${CYAN}[$name]${NC} Checked out to $candidate"
+                switched=true
+                break
+            fi
+        done
+        if [[ "$switched" == false ]]; then
+            echo -e "  ${RED}[$name]${NC} No safe branch to checkout to"
+            return 1
+        fi
+    fi
+
+    # Delete the branch
+    if git -C "$repo" branch -D "$branch" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}[$name]${NC} Deleted $branch"
+    else
+        echo -e "  ${RED}[$name]${NC} Failed to delete $branch"
+    fi
+}
+
+cmd_delete() {
+    local pattern=$1
+    echo -e "${BLUE}Deleting branches matching vignjatijevic/${pattern} ...${NC}"
+    run_parallel _delete_one "$pattern"
+}
+
+# branches: list all local branches matching the codegen pattern for each repo
+cmd_branches() {
+    echo -e "${BLUE}Codegen branches per repo:${NC}"
+    for i in "${REPO_INDICES[@]}"; do
+        local repo name
+        repo=$(repo_path "$i")
+        name="tt-metal-$i"
+        echo -e "  ${GREEN}[$name]${NC}"
+        git -C "$repo" branch --list "${BRANCH_PREFIX}-${i}*" 2>/dev/null | sed 's/^/    /'
+    done
+}
+
+# =============================================================================
+# Usage
+# =============================================================================
+
+usage() {
+    cat <<'EOF'
+tt-repos — manage parallel tt-metal-{1..5} repos
+
+Usage:
+  tt-repos checkout -b                      Auto-commit & create next incremental branch
+  tt-repos -D <pattern>                     Delete branch matching pattern in all repos
+  tt-repos sync <path> [<dst>...]           Copy folder from current repo to specific repos (or all)
+  tt-repos status                           Show branch + dirty state for all repos
+  tt-repos exec <command>                   Run a shell command in every repo (parallel)
+  tt-repos commit "<message>"               Stage & commit all changes in every repo
+  tt-repos branches                         List codegen branches per repo
+
+Branch naming: vignjatijevic/sfpu-agent-codegen-test-{i}-{j}
+  checkout -b finds max j per repo and creates j+1.
+
+Delete pattern: use {i} as placeholder for the repo index.
+  Checks out to the base branch (vignjatijevic/sfpu-agent-codegen-test-{i}) before deleting.
+
+Sync destinations: repo index (3) or name (tt-metal-3). Omit to sync to all others.
+
+Examples:
+  tt-repos checkout -b
+  tt-repos -D sfpu-agent-codegen-{i}-1                              # delete across all repos
+  tt-repos sync ttnn/cpp/ttnn/operations/eltwise/unary              # → all other repos
+  tt-repos sync ttnn/cpp/ttnn/operations/eltwise/unary 2 5          # → tt-metal-2, tt-metal-5
+  tt-repos sync ttnn/cpp/ttnn/operations/eltwise/unary tt-metal-3   # → tt-metal-3
+  tt-repos status
+  tt-repos exec "git log --oneline -3"
+  tt-repos commit "Add new SFPU operation"
+  tt-repos branches
+EOF
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+case "${1:-}" in
+    checkout)
+        shift
+        [[ "${1:-}" == "-b" ]] || { usage; exit 1; }
+        cmd_checkout_b
+        ;;
+    sync)
+        shift
+        [[ -n "${1:-}" ]] || { echo -e "${RED}Error: folder_path required${NC}" >&2; usage; exit 1; }
+        cmd_sync "$@"
+        ;;
+    -D)
+        shift
+        [[ -n "${1:-}" ]] || { echo -e "${RED}Error: branch pattern required (use {i} for repo index)${NC}" >&2; usage; exit 1; }
+        cmd_delete "$1"
+        ;;
+    status)     cmd_status ;;
+    exec)       shift; cmd_exec "$@" ;;
+    commit)     shift; cmd_commit "$@" ;;
+    branches)   cmd_branches ;;
+    -h|--help)  usage ;;
+    *)          usage ;;
+esac
