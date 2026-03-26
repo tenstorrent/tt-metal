@@ -92,7 +92,8 @@ MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t> MorehFoldOperation::invoke(
+std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t>
+moreh_fold_build_operation_args(
     const Tensor& input,
     const std::optional<Tensor>& output,
     const std::vector<uint32_t>& output_size,
@@ -102,8 +103,27 @@ std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tenso
     const std::vector<uint32_t>& stride,
     const std::optional<MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{
+        MorehFoldOperation::operation_attributes_t{
             output_size, kernel_size, dilation, padding, stride, memory_config.value_or(input.memory_config())},
-        tensor_args_t{input, output}};
+        MorehFoldOperation::tensor_args_t{input, output}};
 }
+
 }  // namespace ttnn::operations::moreh::moreh_fold
+
+namespace ttnn::prim {
+
+Tensor moreh_fold(
+    const Tensor& input,
+    const std::optional<Tensor>& output,
+    const std::vector<uint32_t>& output_size,
+    const std::vector<uint32_t>& kernel_size,
+    const std::vector<uint32_t>& dilation,
+    const std::vector<uint32_t>& padding,
+    const std::vector<uint32_t>& stride,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [attrs, tensor_args] = operations::moreh::moreh_fold::moreh_fold_build_operation_args(
+        input, output, output_size, kernel_size, dilation, padding, stride, memory_config);
+    return ttnn::device_operation::launch<operations::moreh::moreh_fold::MorehFoldOperation>(attrs, tensor_args);
+}
+
+}  // namespace ttnn::prim
