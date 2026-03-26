@@ -11,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_expert_dispatch_table, create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     adjust_shapes_for_testing,
@@ -151,32 +151,23 @@ def test_forward_pass(
     n_tp_devices = mesh_device.shape[1]
     n_routed_experts = config.n_routed_experts
 
-    dispatch_table = create_expert_dispatch_table(
+    dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=n_routed_experts,
         dispatch_group_size=n_sp_devices,
         num_dispatch_groups=n_tp_devices,
     )
-    if n_tp_devices == 1:
-        tt_model.expert_dispatch_table = ttnn.from_torch(
-            dispatch_table[0],
-            device=mesh_device,
-            dtype=ttnn.int32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-    else:
-        tt_model.expert_dispatch_table = ttnn.from_torch(
-            dispatch_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, 0),
-                mesh_shape=mesh_device.shape,
-            ),
-        )
+    tt_model.expert_dispatch_table = ttnn.from_torch(
+        dispatch_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0),
+            mesh_shape=mesh_device.shape,
+        ),
+    )
 
     # Reshape reference outputs to match device mesh structure upfront
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]

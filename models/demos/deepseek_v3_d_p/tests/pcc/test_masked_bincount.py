@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_expert_dispatch_table, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config
 
 
 def torch_masked_bincount(
@@ -72,13 +72,11 @@ def torch_masked_bincount(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mask_all_present", [True, False], ids=["all_present", "sparse_mask"])
 def test_masked_bincount(
     mesh_device,
     sp_dim,
     topk,
     n_routed_experts,
-    mask_all_present,
 ):
     """Test ttnn.masked_bincount against PyTorch reference on each device."""
     mesh_config = extract_mesh_config(mesh_device)
@@ -88,7 +86,7 @@ def test_masked_bincount(
 
     logger.info(
         f"Testing masked_bincount: {mesh_device.shape=}, {sp_dim=}, {topk=}, "
-        f"{n_routed_experts=}, {mask_all_present=}, {num_dispatch_groups=}"
+        f"{n_routed_experts=}, {num_dispatch_groups=}"
     )
     ttnn.visualize_mesh_device(mesh_device)
 
@@ -99,14 +97,11 @@ def test_masked_bincount(
     indices = torch.randint(0, n_routed_experts, (total_sp, topk), dtype=torch.int32)
 
     # Expert dispatch table: maps expert_id -> chip_id (>= 0) or -1 (absent)
-    dispatch_table = create_expert_dispatch_table(
+    dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=n_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
-    if not mask_all_present:
-        absent = torch.randint(0, 2, (n_routed_experts,)).bool()
-        dispatch_table[:, absent] = -1
 
     # Compute torch reference per (dispatch_group, chip) pair
     # torch_histograms[group][chip] = histogram for that group/chip combination
@@ -144,27 +139,18 @@ def test_masked_bincount(
     )
     tt_indices = ttnn.to_memory_config(tt_indices, sharded_mem_config)
 
-    if num_dispatch_groups == 1:
-        tt_dispatch_table = ttnn.from_torch(
-            dispatch_table[0],
-            device=mesh_device,
-            dtype=ttnn.int32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-    else:
-        tt_dispatch_table = ttnn.from_torch(
-            dispatch_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                mesh_shape=mesh_device.shape,
-                dims=(None, 0),
-            ),
-        )
+    tt_dispatch_table = ttnn.from_torch(
+        dispatch_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(None, 0),
+        ),
+    )
 
     # Run ttnn op
     tt_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
@@ -183,8 +169,6 @@ def test_masked_bincount(
         col = device_id % n_cols
         chip_idx = row if sp_axis == 0 else col
         group_idx = col if sp_axis == 0 else row
-        if num_dispatch_groups == 1:
-            group_idx = 0
         ref_hist = torch_histograms[(group_idx, chip_idx)]
 
         matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)

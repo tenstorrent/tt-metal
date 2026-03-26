@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_expert_dispatch_table, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config
 
 
 @dataclass
@@ -104,32 +104,23 @@ class MoEGatePrefill(LightweightModule):
         )
 
         mesh_config = extract_mesh_config(mesh_device)
-        dispatch_table = create_expert_dispatch_table(
+        dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts=config.n_routed_experts,
             dispatch_group_size=mesh_config.dispatch_group_size,
             num_dispatch_groups=mesh_config.num_dispatch_groups,
         )
-        if mesh_config.num_dispatch_groups == 1:
-            self.expert_dispatch_table = ttnn.from_torch(
-                dispatch_table[0],
-                device=mesh_device,
-                dtype=ttnn.int32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-        else:
-            self.expert_dispatch_table = ttnn.from_torch(
-                dispatch_table,
-                device=mesh_device,
-                dtype=ttnn.int32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device,
-                    dims=(None, 0),
-                    mesh_shape=mesh_device.shape,
-                ),
-            )
+        self.expert_dispatch_table = ttnn.from_torch(
+            dispatch_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0),
+                mesh_shape=mesh_device.shape,
+            ),
+        )
 
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
             shape=(config.sp_dim // 64, self.topk),
