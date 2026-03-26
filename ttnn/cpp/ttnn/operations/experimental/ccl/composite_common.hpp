@@ -54,7 +54,9 @@ ttnn::Tensor composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore = std::nullopt);
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -62,7 +64,9 @@ std::vector<ttnn::Tensor> composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
 ttnn::Tensor composite_all_to_all(
     ttnn::Tensor input_tensor,
@@ -70,6 +74,8 @@ ttnn::Tensor composite_all_to_all(
     int32_t out_dim,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
 }  // namespace composite_common
