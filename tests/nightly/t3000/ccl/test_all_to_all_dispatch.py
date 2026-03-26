@@ -494,39 +494,40 @@ def run_all_to_all_dispatch_test(
         delays[0][0] = 400000
 
     def run_op(n_iters, store_all_results=True):
-        tt_output_list = []
-        tt_metadata_list = []
+        with mesh_device.cache_entries_counter.total_counter():
+            tt_output_list = []
+            tt_metadata_list = []
 
-        for i in range(n_iters):
-            buffer_index = i
-            if test_skew:
-                ttnn.apply_device_delay(mesh_device, delays)
-            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
-                input_tensors[buffer_index],
-                expert_indices_tensors[buffer_index],
-                expert_mapping_tensors[buffer_index],
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                topology=topology,
-                memory_config=output_memory_config,
-                subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
-                if use_optional_output_tensors
-                else None,
-            )
+            for i in range(n_iters):
+                buffer_index = i
+                if test_skew:
+                    ttnn.apply_device_delay(mesh_device, delays)
+                output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
+                    input_tensors[buffer_index],
+                    expert_indices_tensors[buffer_index],
+                    expert_mapping_tensors[buffer_index],
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    topology=topology,
+                    memory_config=output_memory_config,
+                    subdevice_id=worker_sub_device_id,
+                    output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                    if use_optional_output_tensors
+                    else None,
+                )
 
-            tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
-            tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
+                tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
+                tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
 
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    tt_output_list.append(tt_out_tensor)
+                    tt_metadata_list.append(tt_metadata)
             if store_all_results:
-                tt_output_list.append(tt_out_tensor)
-                tt_metadata_list.append(tt_metadata)
-        if store_all_results:
-            return tt_output_list, tt_metadata_list
-        else:
-            return [tt_out_tensor], [tt_metadata]
+                return tt_output_list, tt_metadata_list
+            else:
+                return [tt_out_tensor], [tt_metadata]
 
     if trace_mode:
         # compile run:
@@ -660,10 +661,10 @@ def run_all_to_all_dispatch_test(
     num_program_cache_entries = 1
     if test_skew:
         num_program_cache_entries = 2
-    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == num_program_cache_entries
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == num_program_cache_entries
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     if not metadata_passed:
         logger.info(f"Failed metadata indices: {failed_metadata_indices}")
