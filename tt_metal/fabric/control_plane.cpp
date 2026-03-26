@@ -2784,12 +2784,10 @@ void ControlPlane::validate_requested_intermesh_connections(
                     dst_mesh,
                     ports.size(),
                     port_directions_str);
-                log_warning(
-                    tt::LogFabric,
-                    "Inter-mesh channel request exceeds physical links (policy {}): {}",
-                    inter_mesh_relaxed ? "relaxed" : "strict",
-                    msg);
-                if (!inter_mesh_relaxed) {
+                if (inter_mesh_relaxed) {
+                    log_warning(
+                        tt::LogFabric, "Inter-mesh channel request exceeds physical links (policy relaxed): {}", msg);
+                } else {
                     TT_THROW("{}", msg);
                 }
             }
