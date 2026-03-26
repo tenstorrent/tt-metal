@@ -20,6 +20,7 @@ Uses ttnn.experimental.rotary_embedding (half-span RoPE) for device-side RoPE.
 """
 
 import math
+import os
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -300,7 +301,10 @@ class TextAttention(LightweightModule):
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
-
+        print("first Run Demo : ", " : ", os.getenv("First_run"))
+        if os.getenv("First_run", "false").lower() == "true" and trace_id is not None:
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            os.environ["First_run"] = "false"
         q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
