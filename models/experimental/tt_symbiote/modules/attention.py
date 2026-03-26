@@ -26,6 +26,10 @@ from models.experimental.tt_symbiote.modules.rope import (
     TTNNRotaryPositionEmbedding,
     TTNNDistributedRotaryPositionEmbedding,
 )
+from models.experimental.tt_symbiote.modules.tensor_utils import (
+    ensure_ttnn_bfloat16,
+    to_replicated_topology,
+)
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 try:
@@ -101,6 +105,11 @@ class TTNNPagedAttentionKVCache(Cache):
         self._tt_value_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
         self._tt_page_table: Optional[ttnn.Tensor] = None
         self._is_on_device = False
+
+        # CPU-side key/value cache for PyTorch layers that call update()
+        # (TTNN layers use paged_fill_on_device/paged_update_on_device instead)
+        self._cpu_key_cache: list[Optional[torch.Tensor]] = [None] * num_layers
+        self._cpu_value_cache: list[Optional[torch.Tensor]] = [None] * num_layers
 
     def to_device(self, device) -> "TTNNPagedAttentionKVCache":
         if self._is_on_device and self._device == device:
@@ -239,6 +248,11 @@ class TTNNPagedAttentionKVCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[dict] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update CPU-side KV cache for PyTorch layers (matches DynamicCache.update contract).
+
+        TTNN layers use paged_fill_on_device/paged_update_on_device instead.
+        PyTorch layers call this to concatenate new K/V with cached history.
+        """
         if isinstance(key_states, TorchTTNNTensor):
             key_states = key_states.to_torch
         if isinstance(value_states, TorchTTNNTensor):
@@ -248,10 +262,17 @@ class TTNNPagedAttentionKVCache(Cache):
         if isinstance(value_states, ttnn.Tensor):
             value_states = ttnn.to_torch(value_states)
 
+        # Concatenate with cached history (dim=2 is sequence dimension)
+        if self._cpu_key_cache[layer_idx] is not None:
+            key_states = torch.cat([self._cpu_key_cache[layer_idx], key_states], dim=2)
+            value_states = torch.cat([self._cpu_value_cache[layer_idx], value_states], dim=2)
+        self._cpu_key_cache[layer_idx] = key_states
+        self._cpu_value_cache[layer_idx] = value_states
+
         seq_len = key_states.shape[2]
-        self._seq_lengths[layer_idx] += seq_len
+        self._seq_lengths[layer_idx] = seq_len
         if layer_idx == 0:
-            self._seen_tokens += seq_len
+            self._seen_tokens = seq_len
 
         return key_states, value_states
 
@@ -1798,9 +1819,14 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         """Convert a multi-device tensor to an explicitly replicated tensor.
 
         After all-gather the data is identical on every device but the mesh
-        topology metadata differs from ReplicateTensorToMesh.  Paged-attention
+        topology metadata differs from ReplicateTensorToMesh. Paged-attention
         kernels require the replicated topology, so we round-trip through the
         host for decode tokens (tiny tensors, negligible overhead).
+
+        Note: This is needed because tt_symbiote uses data replication (all_gather
+        replicates ALL heads on ALL devices), unlike TT Transformers which uses
+        tensor parallelism (each device has LOCAL heads only). See
+        to_replicated_topology() in tensor_utils.py for more details.
         """
         if self.device.get_num_devices() <= 1:
             return tensor
@@ -1913,10 +1939,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         )
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
-
-        past_key_values._seq_lengths[layer_idx] += seq_length
-        if layer_idx == 0:
-            past_key_values._seen_tokens += seq_length
 
         # --- paged SDPA decode (Q stays in DRAM) ---
         attn_output = past_key_values.paged_sdpa_decode(
@@ -2195,11 +2217,82 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         return out, None
 
 
+def _reverse_permute_weight(tensor: torch.Tensor, n_heads: int, rotary_dim: int) -> torch.Tensor:
+    """Permute Q/K projection weight from HF (split-half) to Meta (interleaved) layout.
+
+    Only permutes the rotary portion of each head's output dimensions.
+    Pass-through dimensions (beyond rotary_dim) are left unchanged and contiguous.
+
+    For partial_rotary_factor < 1.0, the HF weight output has:
+    - Dims [0, rotary_dim): rotary dimensions in split-half layout
+    - Dims [rotary_dim, head_dim): pass-through dimensions (no rotation)
+
+    After permutation:
+    - Dims [0, rotary_dim): rotary dimensions in interleaved layout
+    - Dims [rotary_dim, head_dim): pass-through dimensions (unchanged)
+    """
+    dim1, dim2 = tensor.shape
+    head_dim = dim1 // n_heads
+
+    if rotary_dim == head_dim:
+        # Full rotary: standard permutation (same as tt-transformers reverse_permute)
+        return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+    # Partial rotary: only permute the rotary portion per head
+    t = tensor.view(n_heads, head_dim, dim2)
+    t_rot = t[:, :rotary_dim, :]  # [n_heads, rotary_dim, hidden]
+    t_pass = t[:, rotary_dim:, :]  # [n_heads, pass_dim, hidden]
+
+    # Interleave the rotary portion: split-half -> interleaved
+    t_rot = t_rot.view(n_heads, 2, rotary_dim // 2, dim2).transpose(1, 2).reshape(n_heads, rotary_dim, dim2)
+
+    result = torch.cat([t_rot, t_pass], dim=1)
+    return result.reshape(dim1, dim2)
+
+
+def _reverse_permute_1d(tensor: torch.Tensor, rotary_dim: int, head_dim: int = 0) -> torch.Tensor:
+    """Permute 1D tensor (bias or norm weight) from HF (split-half) to Meta (interleaved) layout.
+
+    Only permutes the rotary portion per head. Pass-through dimensions are left unchanged.
+
+    Args:
+        tensor: 1D tensor of shape [dim] (can be multi-head: num_heads * head_dim)
+        rotary_dim: Number of rotary dimensions per head
+        head_dim: Size of each head (0 = same as tensor dim, for single-head norms)
+    """
+    dim = tensor.shape[-1]
+    if head_dim == 0:
+        head_dim = dim
+
+    if head_dim == dim:
+        # Single head (e.g., norm weight with shape [head_dim])
+        if rotary_dim == dim:
+            reals = tensor[..., : dim // 2]
+            imags = tensor[..., dim // 2 :]
+            return torch.stack((reals, imags), dim=-1).flatten(start_dim=len(tensor.shape) - 1)
+        rot = tensor[..., :rotary_dim]
+        pas = tensor[..., rotary_dim:]
+        reals = rot[..., : rotary_dim // 2]
+        imags = rot[..., rotary_dim // 2 :]
+        rot_interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=len(tensor.shape) - 1)
+        return torch.cat([rot_interleaved, pas], dim=-1)
+
+    # Multi-head (e.g., bias with shape [num_heads * head_dim])
+    n_heads = dim // head_dim
+    t = tensor.view(n_heads, head_dim)
+    t_rot = t[:, :rotary_dim]
+    t_pass = t[:, rotary_dim:]
+    reals = t_rot[:, : rotary_dim // 2]
+    imags = t_rot[:, rotary_dim // 2 :]
+    rot_interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=1)
+    result = torch.cat([rot_interleaved, t_pass], dim=1)
+    return result.reshape(dim)
+
+
 class TTNNBailingMoEAttention(TTNNModule):
     """TTNN Attention for BailingMoeV2 (Ling-mini-2.0 model).
 
-    Supports both standard DynamicCache and TTNNPagedAttentionKVCache
-    for paged attention with on-device KV storage.
+    Uses TTNNPagedAttentionKVCache for paged attention with on-device KV storage.
     """
 
     def __init__(self):
@@ -2213,43 +2306,35 @@ class TTNNBailingMoEAttention(TTNNModule):
         self.is_causal = True
         self.scaling = None
 
-        self.query_key_value = None
         self.dense = None
         self.query_layernorm = None
         self.key_layernorm = None
         self.rope = None
         self.sdpa = None
 
-        # Separate Q, K, V projections for distributed mode when num_kv_heads < num_devices
-        # In this case, Q is sharded (num_heads >= num_devices) but K/V must be replicated
-        self._use_separate_qkv = False
+        # Separate Q, K, V projections (T3K mode only)
+        # Q is sharded (num_heads >= num_devices), K/V must be replicated
         self.q_proj = None
         self.k_proj = None
         self.v_proj = None
 
-    @property
-    def _is_distributed(self):
-        """Check if running in distributed mode with CCL manager."""
-        return (
-            self.device_state is not None
-            and hasattr(self.device_state, "ccl_manager")
-            and self.device_state.ccl_manager is not None
-        )
-
     def _maybe_all_gather(self, tensor):
-        """All-gather tensor across mesh devices if in distributed mode."""
-        if not self._is_distributed:
-            return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+        """All-gather tensor across mesh devices (T3K mode only).
+
+        This method performs all-gather across devices using the standard synchronous API.
+        Single device mode is not supported.
+
+        Args:
+            tensor: Input tensor to gather
+
+        Returns:
+            Gathered tensor with full data replicated across all devices
+        """
         t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
-        gathered = ttnn.experimental.all_gather_async(
-            t,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-        ttnn.synchronize_device(self.device)
+
+        # Use synchronous all_gather (simple, reliable)
+        gathered = ttnn.all_gather(t, dim=-1, num_links=1)
+
         # Ensure output is BFLOAT16 for compatibility with downstream ops (e.g., RoPE)
         if gathered.dtype != ttnn.bfloat16:
             gathered = ttnn.typecast(gathered, ttnn.bfloat16)
@@ -2262,41 +2347,60 @@ class TTNNBailingMoEAttention(TTNNModule):
         topology metadata differs from ReplicateTensorToMesh. Paged-attention
         kernels require the replicated topology, so we round-trip through the
         host for decode tokens (tiny tensors, negligible overhead).
+
+        See to_replicated_topology() in tensor_utils.py for implementation details.
         """
-        if self.device.get_num_devices() <= 1:
-            return tensor
-        t = tensor
-        if isinstance(t, TorchTTNNTensor):
-            t = t.to_ttnn
-        orig_shape = list(t.shape)
-        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
-        t_torch = ttnn.to_torch(t, mesh_composer=mesh_composer)
-        t_torch = t_torch[: orig_shape[0]]
-        return ttnn.from_torch(
-            t_torch,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            dtype=t.dtype,
-            layout=t.layout,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return to_replicated_topology(tensor, self.device)
+
+    def _project_qkv_t3k(self, hidden_states: ttnn.Tensor):
+        """Project Q/K/V with proper sharding for T3K.
+
+        This method handles the Q/K/V projections with the proper sharding strategy:
+        - Q projection uses sharded input (TTNNLinearIColShardedWRowSharded)
+        - K/V projections need replicated (all-gathered) input
+
+        Args:
+            hidden_states: Input tensor [batch, seq, hidden_size]
+
+        Returns:
+            Tuple of (query_states, key_states, value_states) after all-gather with shapes:
+                query: [batch, seq, num_heads * head_dim]
+                key/value: [batch, seq, num_kv_heads * head_dim]
+        """
+        # Q projection can use sharded input
+        query_states = self.q_proj(hidden_states)
+
+        # K/V projections need replicated (all-gathered) input since they use
+        # TTNNLinearIReplicatedWColSharded which expects full tensor width
+        hidden_states_replicated = ttnn.all_gather(hidden_states, dim=-1, num_links=1)
+
+        key_states = self.k_proj(hidden_states_replicated)
+        value_states = self.v_proj(hidden_states_replicated)
+
+        # Deallocate the gathered tensor
+        ttnn.deallocate(hidden_states_replicated)
+
+        # All-gather projection outputs (T3K mode produces sharded outputs)
+        query_states = self._maybe_all_gather(query_states)
+        key_states = self._maybe_all_gather(key_states)
+        value_states = self._maybe_all_gather(value_states)
+
+        return query_states, key_states, value_states
 
     @classmethod
-    def from_torch(cls, torch_attn, distributed: bool = True):
+    def from_torch(cls, torch_attn):
         """Create TTNNBailingMoEAttention from BailingMoeV2Attention/SdpaAttention.
 
         Args:
             torch_attn: PyTorch BailingMoeV2 attention module
-            distributed: Whether to use distributed linear/norm modules for mesh devices.
-                         Defaults to True for multi-device compatibility.
 
         Note:
-            When distributed=True and the model has fewer KV heads than devices (e.g.,
-            Ling-mini-2.0 with 4 KV heads on 8 devices), this method automatically
-            splits the fused QKV projection into separate Q, K, V projections:
+            This module requires T3K mesh device (8 devices). Single device mode is not supported.
+
+            The model's fused QKV projection is split into separate Q, K, V projections:
             - Q projection uses TTNNLinearIColShardedWRowSharded (sharded, since num_heads >= num_devices)
             - K/V projections use TTNNLinearIReplicatedWColSharded (replicated input, col-sharded output)
-            This allows running on more devices than KV heads.
+            This allows running on more devices than KV heads (e.g., Ling-mini-2.0 with 4 KV heads on 8 devices).
         """
         from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
 
@@ -2313,77 +2417,77 @@ class TTNNBailingMoEAttention(TTNNModule):
         new_attn.use_qk_norm = getattr(config, "use_qk_norm", False)
         new_attn.scaling = new_attn.head_dim**-0.5
 
-        # Select linear class based on distributed mode
-        LinearCls = TTNNLinearIColShardedWRowSharded if distributed else TTNNLinear
-        LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
-        NormCls = TTNNDistributedRMSNorm if distributed else TTNNRMSNorm
+        # T3K mode uses separate Q, K, V projections to handle
+        # the case where num_kv_heads < num_devices. This allows:
+        # - Q projection to be sharded (num_heads >= num_devices typically)
+        # - K/V projections to be replicated (num_kv_heads < num_devices)
 
-        if distributed:
-            # In distributed mode, we need separate Q, K, V projections to handle
-            # the case where num_kv_heads < num_devices. This allows:
-            # - Q projection to be sharded (num_heads >= num_devices typically)
-            # - K/V projections to be replicated (num_kv_heads < num_devices)
-            new_attn._use_separate_qkv = True
+        # Split the fused query_key_value weight into separate Q, K, V weights
+        qkv_weight = torch_attn.query_key_value.weight  # [(num_heads + 2*num_kv_heads) * head_dim, hidden_size]
+        q_size = new_attn.num_heads * new_attn.head_dim  # e.g., 16 * 128 = 2048
+        kv_size = new_attn.num_kv_heads * new_attn.head_dim  # e.g., 4 * 128 = 512
 
-            # Split the fused query_key_value weight into separate Q, K, V weights
-            qkv_weight = torch_attn.query_key_value.weight  # [(num_heads + 2*num_kv_heads) * head_dim, hidden_size]
-            q_size = new_attn.num_heads * new_attn.head_dim  # e.g., 16 * 128 = 2048
-            kv_size = new_attn.num_kv_heads * new_attn.head_dim  # e.g., 4 * 128 = 512
+        q_weight = qkv_weight[:q_size, :]
+        k_weight = qkv_weight[q_size : q_size + kv_size, :]
+        v_weight = qkv_weight[q_size + kv_size :, :]
 
-            q_weight = qkv_weight[:q_size, :]
-            k_weight = qkv_weight[q_size : q_size + kv_size, :]
-            v_weight = qkv_weight[q_size + kv_size :, :]
+        # Permute Q/K weights from HF (split-half) to Meta (interleaved) layout.
+        # Required because rotary_embedding_llama rotates adjacent pairs (2i, 2i+1),
+        # but HF weights produce split-half pairs (i, i+head_dim/2).
+        # Only the rotary portion is permuted; pass-through dims are left unchanged.
+        rotary_dim = int(new_attn.head_dim * new_attn.partial_rotary_factor)
+        q_weight = _reverse_permute_weight(q_weight, new_attn.num_heads, rotary_dim)
+        k_weight = _reverse_permute_weight(k_weight, new_attn.num_kv_heads, rotary_dim)
 
-            # Handle bias if present
-            q_bias = k_bias = v_bias = None
-            if torch_attn.query_key_value.bias is not None:
-                qkv_bias = torch_attn.query_key_value.bias
-                q_bias = qkv_bias[:q_size]
-                k_bias = qkv_bias[q_size : q_size + kv_size]
-                v_bias = qkv_bias[q_size + kv_size :]
+        # Handle bias if present
+        q_bias = k_bias = v_bias = None
+        if torch_attn.query_key_value.bias is not None:
+            qkv_bias = torch_attn.query_key_value.bias
+            q_bias = _reverse_permute_1d(qkv_bias[:q_size], rotary_dim, new_attn.head_dim)
+            k_bias = _reverse_permute_1d(qkv_bias[q_size : q_size + kv_size], rotary_dim, new_attn.head_dim)
+            v_bias = qkv_bias[q_size + kv_size :]
 
-            # Create temporary torch.nn.Linear modules for from_torch
-            import torch.nn as nn
+        # Create temporary torch.nn.Linear modules for from_torch
+        import torch.nn as nn
 
-            q_linear = nn.Linear(new_attn.hidden_size, q_size, bias=q_bias is not None)
-            q_linear.weight.data = q_weight
-            if q_bias is not None:
-                q_linear.bias.data = q_bias
+        q_linear = nn.Linear(new_attn.hidden_size, q_size, bias=q_bias is not None)
+        q_linear.weight.data = q_weight
+        if q_bias is not None:
+            q_linear.bias.data = q_bias
 
-            k_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=k_bias is not None)
-            k_linear.weight.data = k_weight
-            if k_bias is not None:
-                k_linear.bias.data = k_bias
+        k_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=k_bias is not None)
+        k_linear.weight.data = k_weight
+        if k_bias is not None:
+            k_linear.bias.data = k_bias
 
-            v_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=v_bias is not None)
-            v_linear.weight.data = v_weight
-            if v_bias is not None:
-                v_linear.bias.data = v_bias
+        v_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=v_bias is not None)
+        v_linear.weight.data = v_weight
+        if v_bias is not None:
+            v_linear.bias.data = v_bias
 
-            # Q projection: sharded input, row-sharded output (num_heads >= num_devices)
-            new_attn.q_proj = LinearCls.from_torch(q_linear)
+        # Q projection: sharded input, row-sharded output (num_heads >= num_devices)
+        new_attn.q_proj = TTNNLinearIColShardedWRowSharded.from_torch(q_linear)
 
-            # K/V projections: replicated input, col-sharded output (num_kv_heads < num_devices)
-            # Using TTNNLinearIReplicatedWColSharded allows K/V to work even when
-            # num_kv_heads < num_devices because the input is replicated
-            new_attn.k_proj = TTNNLinearIReplicatedWColSharded.from_torch(k_linear)
-            new_attn.v_proj = TTNNLinearIReplicatedWColSharded.from_torch(v_linear)
-
-            # No fused QKV in distributed mode with separate projections
-            new_attn.query_key_value = None
-        else:
-            # Non-distributed mode: use fused query_key_value projection
-            new_attn._use_separate_qkv = False
-            new_attn.query_key_value = LinearCls.from_torch(torch_attn.query_key_value)
+        # K/V projections: replicated input, col-sharded output (num_kv_heads < num_devices)
+        # Using TTNNLinearIReplicatedWColSharded allows K/V to work even when
+        # num_kv_heads < num_devices because the input is replicated
+        new_attn.k_proj = TTNNLinearIReplicatedWColSharded.from_torch(k_linear)
+        new_attn.v_proj = TTNNLinearIReplicatedWColSharded.from_torch(v_linear)
 
         # Create dense (output) projection
-        new_attn.dense = LinearClsOut.from_torch(torch_attn.dense)
+        new_attn.dense = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.dense)
 
         # Create QK normalization layers if enabled
         # QK norms operate on head_dim (128), not hidden_size (2048), so always use
         # non-distributed version. Distributed norm tries to shard head_dim // 32 = 4
         # chunks across 8 devices, which fails.
         if new_attn.use_qk_norm:
+            # Permute QK norm weights to Meta layout (must match Q/K data layout)
+            with torch.no_grad():
+                torch_attn.query_layernorm.weight.copy_(
+                    _reverse_permute_1d(torch_attn.query_layernorm.weight, rotary_dim)
+                )
+                torch_attn.key_layernorm.weight.copy_(_reverse_permute_1d(torch_attn.key_layernorm.weight, rotary_dim))
             new_attn.query_layernorm = TTNNRMSNorm.from_torch(torch_attn.query_layernorm)
             new_attn.key_layernorm = TTNNRMSNorm.from_torch(torch_attn.key_layernorm)
 
@@ -2396,7 +2500,7 @@ class TTNNBailingMoEAttention(TTNNModule):
         if uses_partial_rotary:
             new_attn.rope = TTNNRotaryPositionEmbedding()
         else:
-            new_attn.rope = TTNNDistributedRotaryPositionEmbedding() if distributed else TTNNRotaryPositionEmbedding()
+            new_attn.rope = TTNNDistributedRotaryPositionEmbedding()
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
 
@@ -2438,43 +2542,29 @@ class TTNNBailingMoEAttention(TTNNModule):
                 packer_l1_acc=True,
             )
 
-    def _split_qkv(self, qkv: ttnn.Tensor, batch_size: int, seq_length: int):
-        """Split fused QKV tensor into separate Q, K, V tensors.
+        # Initialize BailingRotarySetup for decode RoPE
+        # This provides correctly-formatted cos/sin in Meta format with identity padding
+        from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
-        Args:
-            qkv: Fused QKV tensor of shape [batch, seq, (num_heads + 2*num_kv_heads) * head_dim]
-            batch_size: Batch size
-            seq_length: Sequence length
-
-        Returns:
-            Tuple of (query_states, key_states, value_states)
-        """
-        q_size = self.num_heads * self.head_dim
-        kv_size = self.num_kv_heads * self.head_dim
-
-        # Split along last dimension
-        query_states = ttnn.slice(qkv, (0, 0, 0), (batch_size, seq_length, q_size))
-        key_states = ttnn.slice(qkv, (0, 0, q_size), (batch_size, seq_length, q_size + kv_size))
-        value_states = ttnn.slice(qkv, (0, 0, q_size + kv_size), (batch_size, seq_length, q_size + 2 * kv_size))
-
-        # Reshape to [batch, seq, num_heads, head_dim]
-        query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_heads, self.head_dim))
-        key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
-        value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
-
-        # Transpose to [batch, heads, seq, head_dim]
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-
-        return query_states, key_states, value_states
+        config = self._fallback_torch_layer.config
+        self._rotary_setup = BailingRotarySetup(
+            device=self.device,
+            head_dim=self.head_dim,
+            max_seq_len=getattr(config, "max_position_embeddings", 8192),
+            rope_theta=getattr(config, "rope_theta", 600000.0),
+            partial_rotary_factor=self.partial_rotary_factor,
+        )
 
     def _apply_qk_norm(self, query_states: ttnn.Tensor, key_states: ttnn.Tensor):
         """Apply QK normalization if enabled.
 
+        Handles both tensor layouts automatically:
+            - Prefill: [batch, heads, seq, head_dim]
+            - Decode: [1, batch, heads, head_dim]
+
         Args:
-            query_states: Query tensor [batch, heads, seq, head_dim]
-            key_states: Key tensor [batch, heads, seq, head_dim]
+            query_states: Query tensor in either prefill or decode format
+            key_states: Key tensor in either prefill or decode format
 
         Returns:
             Tuple of (normalized_query, normalized_key)
@@ -2482,14 +2572,27 @@ class TTNNBailingMoEAttention(TTNNModule):
         if not self.use_qk_norm:
             return query_states, key_states
 
-        # Reshape for normalization: [batch, heads, seq, head_dim] -> [batch*heads*seq, head_dim]
-        batch_size, num_heads, seq_length, head_dim = query_states.shape
-        batch_kv, num_kv_heads, seq_length_k, head_dim_k = key_states.shape
+        q_shape = query_states.shape
+        k_shape = key_states.shape
+
+        # Detect decode mode: [1, batch, heads, head_dim] where first dim is 1
+        # vs prefill mode: [batch, heads, seq, head_dim] where first dim is batch
+        is_decode_mode = q_shape[0] == 1 and len(q_shape) == 4
+
+        if is_decode_mode:
+            # Decode: [1, batch, heads, head_dim] -> [batch*heads, head_dim]
+            seq_len, batch_size, num_heads, head_dim = q_shape
+            _, batch_kv, num_kv_heads, head_dim_k = k_shape
+            q_reshaped = ttnn.reshape(query_states, (batch_size * num_heads, head_dim))
+            k_reshaped = ttnn.reshape(key_states, (batch_kv * num_kv_heads, head_dim_k))
+        else:
+            # Prefill: [batch, heads, seq, head_dim] -> [batch*heads*seq, head_dim]
+            batch_size, num_heads, seq_length, head_dim = q_shape
+            batch_kv, num_kv_heads, seq_length_k, head_dim_k = k_shape
+            q_reshaped = ttnn.reshape(query_states, (batch_size * num_heads * seq_length, head_dim))
+            k_reshaped = ttnn.reshape(key_states, (batch_kv * num_kv_heads * seq_length_k, head_dim_k))
 
         # Apply normalization
-        q_reshaped = ttnn.reshape(query_states, (batch_size * num_heads * seq_length, head_dim))
-        k_reshaped = ttnn.reshape(key_states, (batch_kv * num_kv_heads * seq_length_k, head_dim_k))
-
         q_normed = self.query_layernorm(q_reshaped)
         k_normed = self.key_layernorm(k_reshaped)
 
@@ -2505,9 +2608,13 @@ class TTNNBailingMoEAttention(TTNNModule):
         if k_normed.dtype != ttnn.bfloat16:
             k_normed = ttnn.typecast(k_normed, ttnn.bfloat16)
 
-        # Reshape back
-        query_states = ttnn.reshape(q_normed, (batch_size, num_heads, seq_length, head_dim))
-        key_states = ttnn.reshape(k_normed, (batch_kv, num_kv_heads, seq_length_k, head_dim_k))
+        # Reshape back to original layout
+        if is_decode_mode:
+            query_states = ttnn.reshape(q_normed, (seq_len, batch_size, num_heads, head_dim))
+            key_states = ttnn.reshape(k_normed, (seq_len, batch_kv, num_kv_heads, head_dim_k))
+        else:
+            query_states = ttnn.reshape(q_normed, (batch_size, num_heads, seq_length, head_dim))
+            key_states = ttnn.reshape(k_normed, (batch_kv, num_kv_heads, seq_length_k, head_dim_k))
 
         return query_states, key_states
 
@@ -2549,164 +2656,52 @@ class TTNNBailingMoEAttention(TTNNModule):
         past_key_values,
         cache_position: Optional[torch.LongTensor],
     ) -> tuple:
-        """Forward pass for prefill phase."""
+        """Forward pass for prefill phase (T3K mode only)."""
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
         # Ensure proper layout
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if self._use_separate_qkv:
-            # Separate Q, K, V projections path (for distributed mode with num_kv_heads < num_devices)
-            # Q projection can use sharded input (TTNNLinearIColShardedWRowSharded)
-            query_states = self.q_proj(hidden_states)
+        # Project Q/K/V using shared helper
+        query_states, key_states, value_states = self._project_qkv_t3k(hidden_states)
 
-            # K/V projections need replicated (all-gathered) input since they use
-            # TTNNLinearIReplicatedWColSharded which expects full tensor width
-            if self.device.get_num_devices() > 1:
-                hidden_states_replicated = ttnn.all_gather(hidden_states, dim=-1, num_links=1)
-            else:
-                hidden_states_replicated = hidden_states
+        # Reshape to [batch, seq, num_heads, head_dim]
+        query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_heads, self.head_dim))
+        key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
+        value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
 
-            key_states = self.k_proj(hidden_states_replicated)
-            value_states = self.v_proj(hidden_states_replicated)
-
-            # Deallocate the gathered tensor if we created one
-            if self.device.get_num_devices() > 1:
-                ttnn.deallocate(hidden_states_replicated)
-
-            # All-gather projection outputs for reshape (distributed mode produces sharded outputs)
-            # _maybe_all_gather also handles TorchTTNNTensor unwrapping
-            query_states = self._maybe_all_gather(query_states)
-            key_states = self._maybe_all_gather(key_states)
-            value_states = self._maybe_all_gather(value_states)
-
-            # Reshape to [batch, seq, num_heads, head_dim]
-            query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
-
-            # Transpose to [batch, heads, seq, head_dim]
-            query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-            key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-            value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-        else:
-            # Fused QKV path (non-distributed or compatible distributed mode)
-            qkv = self.query_key_value(hidden_states)
-            if hasattr(qkv, "to_ttnn"):
-                qkv = qkv.to_ttnn
-
-            # Split into Q, K, V
-            query_states, key_states, value_states = self._split_qkv(qkv, batch_size, seq_length)
+        # Transpose to [batch, heads, seq, head_dim]
+        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
+        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
+        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
 
         # Apply QK normalization if enabled
         query_states, key_states = self._apply_qk_norm(query_states, key_states)
 
-        # Apply RoPE
-        cos, sin = position_embeddings
-
-        # Handle position embeddings - they should be REPLICATED across devices, not sharded
-        # The framework default shards inputs, but cos/sin must be identical on all devices
-        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-        def _ensure_replicated_tensor(t, name):
-            """Convert tensor to TTNN with proper replication for multi-device.
-
-            The framework default shards inputs, but position embeddings (cos/sin)
-            must be identical on all devices, so we need to gather and re-replicate.
-            """
-            num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
-
-            # If it's already an TTNN tensor with wrong sharding, we need to convert back and re-convert
-            if isinstance(t, ttnn.Tensor):
-                # Check if tensor appears to be sharded (last dim smaller than expected)
-                t_shape = list(t.shape)
-                # Position embeddings should have shape like [1, 1, seq_len, rotary_dim] or [batch, seq_len, rotary_dim]
-                # If last dim is divided by num_devices, it's been sharded
-                if num_devices > 1 and t_shape[-1] < 32:  # rotary_dim is typically >= 32
-                    # Tensor was sharded, need to convert back and re-convert with replication
-                    # Use mesh_composer to gather the tensor first
-                    torch_t = ttnn.to_torch(
-                        t,
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(self.device, self.device.shape, (0, -1)),
-                    )
-                    mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
-                    return ttnn.from_torch(
-                        torch_t.to(torch.bfloat16),
-                        device=self.device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat16,
-                        mesh_mapper=mesh_mapper,
-                    )
-                return t
-
-            # If it's a TorchTTNNTensor, extract the original torch tensor and re-convert
-            if isinstance(t, TorchTTNNTensor):
-                if t.elem is not None:
-                    torch_t = t.elem
-                else:
-                    torch_t = ttnn.to_torch(t.ttnn_tensor if t.ttnn_tensor is not None else t.to_ttnn)
-                mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if num_devices > 1 else None
-                return ttnn.from_torch(
-                    torch_t.to(torch.bfloat16),
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=mesh_mapper,
-                )
-
-            elif isinstance(t, torch.Tensor):
-                mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if num_devices > 1 else None
-                return ttnn.from_torch(
-                    t.to(torch.bfloat16),
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=mesh_mapper,
-                )
-            return t
-
-        cos = _ensure_replicated_tensor(cos, "cos")
-        sin = _ensure_replicated_tensor(sin, "sin")
+        # Use BailingRotarySetup for Meta-format RoPE (same format as decode path)
+        # This ensures K values stored in KV cache during prefill are compatible with
+        # Q values computed during decode via rotary_embedding_llama
+        seq_len = query_states.shape[2]  # seq dimension in [B, H, S, D]
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        trans_mat = self._rotary_setup.get_trans_mat(is_decode=False)
 
         # Ensure query/key states are BFLOAT16 for RoPE compatibility
-        if query_states.dtype != ttnn.bfloat16:
-            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if key_states.dtype != ttnn.bfloat16:
-            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
+        query_states = ensure_ttnn_bfloat16(query_states)
+        key_states = ensure_ttnn_bfloat16(key_states)
 
-        query_states, key_states = self._apply_partial_rope(query_states, key_states, cos, sin)
+        query_states = ttnn.experimental.rotary_embedding_llama(query_states, cos, sin, trans_mat, is_decode_mode=False)
+        key_states = ttnn.experimental.rotary_embedding_llama(key_states, cos, sin, trans_mat, is_decode_mode=False)
 
-        # Handle KV cache
-        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        # Handle KV cache - only TTNNPagedAttentionKVCache is supported
         if past_key_values is not None:
             layer_idx = self._fallback_torch_layer.layer_idx
-
-            if use_paged:
-                past_key_values.paged_fill_on_device(
-                    key_states,
-                    value_states,
-                    layer_idx=layer_idx,
-                    batch_idx=0,
-                )
-            else:
-                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-                torch_tensors = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-                orig_shapes = [key_states.shape, value_states.shape]
-
-                torch_tensors = [
-                    torch_tensor.to_torch[: orig_shape[0], : orig_shape[1], : orig_shape[2], : orig_shape[3]]
-                    for orig_shape, torch_tensor in zip(orig_shapes, torch_tensors)
-                ]
-
-                key_states, value_states = past_key_values.update(
-                    *torch_tensors,
-                    layer_idx,
-                    cache_kwargs,
-                )
-                key_states, value_states = [TorchTTNNTensor(key_states), TorchTTNNTensor(value_states)]
-                key_states = ttnn.to_device(key_states.to_ttnn, self.device)
-                value_states = ttnn.to_device(value_states.to_ttnn, self.device)
+            past_key_values.paged_fill_on_device(
+                key_states,
+                value_states,
+                layer_idx=layer_idx,
+                batch_idx=0,
+            )
 
         # Apply SDPA
         attn_output = self.sdpa(
@@ -2721,8 +2716,7 @@ class TTNNBailingMoEAttention(TTNNModule):
             transpose_output=True,
         )
 
-        if hasattr(attn_output, "to_ttnn"):
-            attn_output = attn_output.to_ttnn
+        attn_output = ensure_ttnn_bfloat16(attn_output)
 
         # Reshape and project output
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.head_dim))
@@ -2739,91 +2733,60 @@ class TTNNBailingMoEAttention(TTNNModule):
         past_key_values: "TTNNPagedAttentionKVCache",
         cache_position: Optional[torch.LongTensor],
     ) -> tuple:
-        """Decode path using paged attention with on-device KV cache."""
+        """Decode path using paged attention with on-device KV cache (T3K mode only).
+
+        Uses nlp_create_qkv_heads_decode to produce [1, B, H, D] format tensors with
+        correct HEIGHT_SHARDED L1 memory config for downstream paged kernels. Applies
+        decode-mode partial RoPE via rotary_embedding_llama.
+        """
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
         # Ensure proper layout
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if self._use_separate_qkv:
-            # Separate Q, K, V projections path (for distributed mode with num_kv_heads < num_devices)
-            # Q projection can use sharded input (TTNNLinearIColShardedWRowSharded)
-            query_states = self.q_proj(hidden_states)
+        # Project Q/K/V using shared helper
+        query_states, key_states, value_states = self._project_qkv_t3k(hidden_states)
 
-            # K/V projections need replicated (all-gathered) input since they use
-            # TTNNLinearIReplicatedWColSharded which expects full tensor width
-            if self.device.get_num_devices() > 1:
-                hidden_states_replicated = ttnn.all_gather(hidden_states, dim=-1, num_links=1)
-            else:
-                hidden_states_replicated = hidden_states
+        # Unwrap TorchTTNNTensor if needed
+        if hasattr(query_states, "to_ttnn"):
+            query_states = query_states.to_ttnn
+        if hasattr(key_states, "to_ttnn"):
+            key_states = key_states.to_ttnn
+        if hasattr(value_states, "to_ttnn"):
+            value_states = value_states.to_ttnn
 
-            key_states = self.k_proj(hidden_states_replicated)
-            value_states = self.v_proj(hidden_states_replicated)
+        # Fuse Q/K/V for nlp_create_qkv_heads_decode: [B, S, Q_dim + K_dim + V_dim]
+        xqkv_fused = ttnn.concat([query_states, key_states, value_states], dim=-1)
+        # Reshape to [1, 1, B, fused_dim] as expected by the kernel
+        fused_dim = xqkv_fused.shape[-1]
+        xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, batch_size, fused_dim))
 
-            # Deallocate the gathered tensor if we created one
-            if self.device.get_num_devices() > 1:
-                ttnn.deallocate(hidden_states_replicated)
+        # Ensure bfloat16 (required by nlp_create_qkv_heads_decode)
+        if xqkv_fused.dtype != ttnn.bfloat16:
+            xqkv_fused = ttnn.typecast(xqkv_fused, ttnn.bfloat16)
 
-            # All-gather projection outputs for reshape (distributed mode produces sharded outputs)
-            # _maybe_all_gather also handles TorchTTNNTensor unwrapping
-            query_states = self._maybe_all_gather(query_states)
-            key_states = self._maybe_all_gather(key_states)
-            value_states = self._maybe_all_gather(value_states)
+        # Safety: fix topology for fused tensor before decode kernel (1 round-trip instead of 3)
+        xqkv_fused = self._to_replicated(xqkv_fused)
 
-            # Reshape to [batch, seq, num_heads, head_dim]
-            query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
+        # Split into heads using the decode kernel -> outputs [1, B, H, D]
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv_fused,
+            num_heads=self.num_heads,  # 16
+            num_kv_heads=self.num_kv_heads,  # 4
+        )
+        ttnn.deallocate(xqkv_fused)
 
-            # Transpose to [batch, heads, seq, head_dim]
-            query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-            key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-            value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-        else:
-            # Fused QKV path (non-distributed or compatible distributed mode)
-            qkv = self.query_key_value(hidden_states)
-            if hasattr(qkv, "to_ttnn"):
-                qkv = qkv.to_ttnn
+        # Move to L1 interleaved for QK norm (reshape ops don't work on sharded tensors)
+        query_states = ttnn.to_memory_config(query_states, ttnn.L1_MEMORY_CONFIG)
+        key_states = ttnn.to_memory_config(key_states, ttnn.L1_MEMORY_CONFIG)
 
-            # Split into Q, K, V
-            query_states, key_states, value_states = self._split_qkv(qkv, batch_size, seq_length)
-
-        # Apply QK normalization if enabled
+        # Apply QK normalization in [1, B, H, D] format
         query_states, key_states = self._apply_qk_norm(query_states, key_states)
 
-        # Apply RoPE
-        cos, sin = position_embeddings
-        if isinstance(cos, torch.Tensor):
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-            cos = ttnn.from_torch(
-                cos.to(torch.bfloat16),
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=mesh_mapper,
-            )
-        if isinstance(sin, torch.Tensor):
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-            sin = ttnn.from_torch(
-                sin.to(torch.bfloat16),
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=mesh_mapper,
-            )
-
-        # Ensure query/key states are BFLOAT16 for RoPE compatibility
-        if query_states.dtype != ttnn.bfloat16:
-            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if key_states.dtype != ttnn.bfloat16:
-            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
-
-        query_states, key_states = self._apply_partial_rope(query_states, key_states, cos, sin)
-
+        # Resolve cache position (needed by BailingRotarySetup before RoPE)
         layer_idx = self._fallback_torch_layer.layer_idx
 
-        # Resolve cache position
         if cache_position is None:
             cur_pos = past_key_values.get_seq_length(layer_idx)
             cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
@@ -2838,7 +2801,7 @@ class TTNNBailingMoEAttention(TTNNModule):
                 cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
             cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
 
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         cur_pos_tt = ttnn.from_torch(
             cache_position_tensor,
             device=self.device,
@@ -2848,30 +2811,75 @@ class TTNNBailingMoEAttention(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Permute B H S D -> S B H D for paged kernels
-        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
-        key_states = ttnn.permute(key_states, (2, 0, 1, 3))
-        value_states = ttnn.permute(value_states, (2, 0, 1, 3))
+        # Ensure bfloat16 for RoPE
+        query_states = ensure_ttnn_bfloat16(query_states)
+        key_states = ensure_ttnn_bfloat16(key_states)
 
-        # Multi-device: convert all-gathered topology -> replicated for paged kernels
-        if self.device.get_num_devices() > 1:
-            query_states = self._to_replicated(query_states)
-            key_states = self._to_replicated(key_states)
-            value_states = self._to_replicated(value_states)
+        # Get cos/sin from BailingRotarySetup (Meta format, identity-padded to head_dim, on device)
+        cos_ttnn, sin_ttnn = self._rotary_setup.get_cos_sin_for_decode(cache_position_tensor)
 
-        # Update paged KV cache
-        tile_size = 32
-        shard_h = ((self.num_kv_heads + tile_size - 1) // tile_size) * tile_size
+        # Prepare HEIGHT_SHARDED memory configs (all must share same batch_grid)
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
 
-        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
-        shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(shard_h, self.head_dim),
-            core_grid=core_grid,
+        # Shard cos/sin to HEIGHT_SHARDED (shape: [1, B, 1, head_dim])
+        rope_shard_mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
-        key_states = ttnn.to_memory_config(key_states, shard_cfg)
-        value_states = ttnn.to_memory_config(value_states, shard_cfg)
+        cos_ttnn = ttnn.to_memory_config(cos_ttnn, rope_shard_mem)
+        sin_ttnn = ttnn.to_memory_config(sin_ttnn, rope_shard_mem)
+
+        # Shard Q to HEIGHT_SHARDED
+        q_shard_mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        query_states = ttnn.to_memory_config(query_states, q_shard_mem)
+
+        # Shard K to HEIGHT_SHARDED
+        k_shard_mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, key_states.shape[-1]),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        key_states = ttnn.to_memory_config(key_states, k_shard_mem)
+
+        # Get trans_mat pre-sharded for batch_size (lazily cached in BailingRotarySetup)
+        trans_mat = self._rotary_setup.get_trans_mat_decode_sharded(batch_size)
+
+        # Apply FULL RoPE (no slicing needed - identity padding handles partial rotation)
+        query_states = ttnn.experimental.rotary_embedding_llama(
+            query_states, cos_ttnn, sin_ttnn, trans_mat, is_decode_mode=True
+        )
+        key_states = ttnn.experimental.rotary_embedding_llama(
+            key_states, cos_ttnn, sin_ttnn, trans_mat, is_decode_mode=True
+        )
+
+        # Re-shard K/V for paged_update_cache (may be needed after RoPE concat produces INTERLEAVED)
+        num_cores = batch_size
+        compute_grid = self.device.compute_with_storage_grid_size()
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+        kv_vol = key_states.volume() // key_states.padded_shape[-1] // num_cores
+        kv_shard = ttnn.ShardSpec(
+            shard_grid,
+            [kv_vol, key_states.padded_shape[-1]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        kv_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_shard,
+        )
+        key_states = ttnn.to_memory_config(key_states, kv_mem)
+        value_states = ttnn.to_memory_config(value_states, kv_mem)
 
         past_key_values.paged_update_on_device(
             key_states,
@@ -2882,26 +2890,46 @@ class TTNNBailingMoEAttention(TTNNModule):
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
-        past_key_values._seq_lengths[layer_idx] += seq_length
-        if layer_idx == 0:
-            past_key_values._seen_tokens += seq_length
-
         # Paged SDPA decode
-        # Use the same cur_pos_tt for both paged_update_on_device and paged_sdpa_decode
-        # This matches the Qwen implementation semantics
         attn_output = past_key_values.paged_sdpa_decode(
             query_states,
             layer_idx,
             current_pos=cur_pos_tt,
             scale=self.scaling,
-            program_config=self.sdpa.decode_program_config,  # Use decode config (q_chunk_size=0, k_chunk_size=0)
+            program_config=self.sdpa.decode_program_config,
             compute_kernel_config=self.sdpa.compute_kernel_config,
         )
 
-        # Convert back to [B, S, H*D] for output projection
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, head_dim]
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.head_dim))
+        # Convert SDPA output to HEIGHT_SHARDED for nlp_concat_heads_decode
+        # Kernel requires shard_shape = (32, head_dim), num_cores = batch_size
+        sdpa_output_memcfg = ttnn.create_sharded_memory_config(
+            shape=(32, self.head_dim),  # padded_heads=32 is required by kernel
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn_output = ttnn.to_memory_config(attn_output, sdpa_output_memcfg)
+
+        # Use nlp_concat_heads_decode for direct output (no permute needed)
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
+            attn_output,
+            num_heads=self.num_heads,
+        )
+        # Output is [1, 1, padded_batch, H*D] where padded_batch = max(32, batch_size)
+        # Pass 4D tensor directly to dense layer - it handles 4D input
         attn_output = self.dense(attn_output)
+
+        # Handle TorchTTNNTensor wrapper - extract underlying ttnn.Tensor for TTNN ops
+        if hasattr(attn_output, "to_ttnn"):
+            attn_output = attn_output.to_ttnn
+
+        # Slice to actual batch size if padded (for batch < 32)
+        if batch_size < 32:
+            attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, attn_output.shape[-1]])
+
+        # Reshape to expected output format [batch_size, seq_length, hidden_dim]
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, -1))
 
         # Return format matches HuggingFace: (attn_output, attn_weights, past_key_values)
         return attn_output, None, past_key_values
@@ -2912,34 +2940,51 @@ class TTNNBailingMoEAttention(TTNNModule):
         position_embeddings: tuple,
         attention_mask: Optional[ttnn.Tensor] = None,
         past_key_values=None,
-        past_key_value=None,  # legacy single KV cache for compatibility, ignored if past_key_values is provided
+        past_key_value=None,
         cache_position: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> tuple:
         """Forward pass through BailingMoE attention.
+
+        This module requires T3K mesh device (8 devices) and only supports
+        TTNNPagedAttentionKVCache for the KV cache.
 
         Args:
             hidden_states: Input tensor [batch, seq, hidden_size]
             position_embeddings: Tuple of (cos, sin) for RoPE
             attention_mask: Optional attention mask
-            past_key_values: KV cache (TTNNPagedAttentionKVCache or DynamicCache)
+            past_key_values: KV cache (must be TTNNPagedAttentionKVCache)
+            past_key_value: Alias for past_key_values (HuggingFace BailingMoeV2 uses singular)
             cache_position: Position in cache for decode
-            position_ids: Position IDs (unused, for compatibility)
-            **kwargs: Additional arguments
+            **kwargs: Additional arguments (ignored)
 
         Returns:
-            Tuple of (output, None)
+            Tuple of (output, attention_weights, past_key_values)
         """
-        # Handle TorchTTNNTensor input
-        if hasattr(hidden_states, "to_ttnn"):
-            hidden_states = hidden_states.to_ttnn
+        # HuggingFace BailingMoeV2 passes past_key_value (singular), map to plural
         if past_key_value is not None and past_key_values is None:
-            past_key_values = past_key_value  # Support legacy single KV cache argument
-        seq_length = hidden_states.shape[1]
-        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+            past_key_values = past_key_value
 
-        if use_paged and seq_length == 1:
+        # T3K mode validation
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        if num_devices <= 1:
+            raise RuntimeError(
+                f"TTNNBailingMoEAttention requires T3K mesh device (8 devices). "
+                f"Found {num_devices} device(s). Single device mode is not supported."
+            )
+
+        if past_key_values is not None and not isinstance(past_key_values, TTNNPagedAttentionKVCache):
+            raise ValueError(
+                f"TTNNBailingMoEAttention only supports TTNNPagedAttentionKVCache, "
+                f"got {type(past_key_values).__name__}. DynamicCache is not supported."
+            )
+
+        # Handle TorchTTNNTensor input
+        hidden_states = ensure_ttnn_bfloat16(hidden_states)
+        seq_length = hidden_states.shape[1]
+
+        # Route to decode path for single-token generation with paged cache
+        if past_key_values is not None and seq_length == 1:
             return self._forward_decode_paged(
                 hidden_states,
                 position_embeddings,

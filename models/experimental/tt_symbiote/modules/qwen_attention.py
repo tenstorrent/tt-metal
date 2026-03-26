@@ -471,6 +471,11 @@ class TTNNQwen3FullAttention(TTNNModule):
         topology metadata differs from ReplicateTensorToMesh. Paged-attention
         kernels require the replicated topology, so we round-trip through the
         host for decode tokens (tiny tensors, negligible overhead).
+
+        Note: This is needed because tt_symbiote uses data replication (all_gather
+        replicates ALL heads on ALL devices), unlike TT Transformers which uses
+        tensor parallelism (each device has LOCAL heads only). See
+        to_replicated_topology() in tensor_utils.py for more details.
         """
         if self.device.get_num_devices() <= 1:
             return tensor

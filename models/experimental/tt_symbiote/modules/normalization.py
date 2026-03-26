@@ -89,10 +89,25 @@ class TTNNRMSNorm(TTNNModule):
         """Move weights to TTNN device."""
         self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
 
+        # Initialize high-precision compute kernel config for RMSNorm
+        # This matches PyTorch behavior which computes variance in float32
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,  # CRITICAL: Enable FP32 accumulation
+            packer_l1_acc=True,
+        )
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.torch_layer.variance_epsilon)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.tt_weight,
+            epsilon=self.torch_layer.variance_epsilon,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         return x
 
 
