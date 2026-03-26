@@ -488,6 +488,53 @@ def _normalize_for_hash(obj):
                 _normalize_for_hash(item)
 
 
+def _extract_hardware_and_mesh(machine_info):
+    """Extract the hash-relevant hardware and mesh fields from machine_info."""
+    hardware = None
+    if machine_info:
+        board_type = machine_info.get("board_type")
+        if board_type:
+            device_series = machine_info.get("device_series")
+            if isinstance(device_series, list):
+                device_series = device_series[0] if device_series else None
+            hardware = (board_type, device_series, machine_info.get("card_count", 1))
+
+    mesh_config = None
+    if machine_info and "tensor_placements" in machine_info:
+        placements = machine_info.get("tensor_placements", [])
+        if placements:
+            placement = placements[0]
+            mesh_shape_value = placement.get("mesh_device_shape")
+            if mesh_shape_value:
+                try:
+                    mesh_shape = json.loads(mesh_shape_value) if isinstance(mesh_shape_value, str) else mesh_shape_value
+                    if mesh_shape:
+                        placement_str = placement.get("placement", "")
+                        shard_dim = None
+                        if "PlacementShard" in placement_str:
+                            match = re.search(r"PlacementShard\((\d+)\)", placement_str)
+                            if match:
+                                shard_dim = int(match.group(1))
+                        mesh_config = {
+                            "mesh_shape": mesh_shape,
+                            "placement_type": "shard" if shard_dim is not None else "replicate",
+                            "shard_dim": shard_dim,
+                        }
+                except Exception:
+                    pass
+
+    return hardware, mesh_config
+
+
+def _compute_config_hash(op_name, op_args, machine_info):
+    """Compute the stable config hash used for fresh traces and recomputation."""
+    hardware, mesh_config = _extract_hardware_and_mesh(machine_info)
+    hash_args = copy.deepcopy(op_args)
+    _normalize_for_hash(hash_args)
+    normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
+
 def update_master_file(master_file_path, operations, test_source):
     """Update master JSON file with operations"""
     import hashlib
@@ -546,51 +593,7 @@ def update_master_file(master_file_path, operations, test_source):
             # New configuration - assign new config_id
             # Compute config_hash for stable tracking (same logic as load_ttnn_ops_data_v2.py)
             machine_info = operation.get("machine_info")
-
-            # Extract hardware tuple
-            hardware = None
-            if machine_info:
-                board_type = machine_info.get("board_type")
-                if board_type:
-                    device_series = machine_info.get("device_series")
-                    if isinstance(device_series, list):
-                        device_series = device_series[0] if device_series else None
-                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
-
-            # Extract mesh config
-            mesh_config = None
-            if machine_info and "tensor_placements" in machine_info:
-                placements = machine_info.get("tensor_placements", [])
-                if placements:
-                    p = placements[0]
-                    mesh_shape_str = p.get("mesh_device_shape")
-                    if mesh_shape_str:
-                        try:
-                            mesh_shape = (
-                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
-                            )
-                            if mesh_shape:
-                                import re
-
-                                placement_str = p.get("placement", "")
-                                shard_dim = None
-                                if "PlacementShard" in placement_str:
-                                    match = re.search(r"PlacementShard\((\d+)\)", placement_str)
-                                    if match:
-                                        shard_dim = int(match.group(1))
-                                mesh_config = {
-                                    "mesh_shape": mesh_shape,
-                                    "placement_type": "shard" if shard_dim is not None else "replicate",
-                                    "shard_dim": shard_dim,
-                                }
-                        except:
-                            pass
-
-            # Compute SHA-256 hash (normalize a copy so stored arguments are untouched)
-            hash_args = copy.deepcopy(op_args)
-            _normalize_for_hash(hash_args)
-            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
-            config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+            config_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             config_entry = {
                 "config_id": next_config_id,
@@ -1083,9 +1086,6 @@ def recompute_config_hashes(json_file):
     using _normalize_for_hash to strip device-specific fields and
     canonicalize shard_spec before hashing.
     """
-    import hashlib
-    import re as _re
-
     print(f"🔄 Recomputing config hashes in {os.path.basename(json_file)}...")
 
     with open(json_file, "r") as f:
@@ -1101,46 +1101,7 @@ def recompute_config_hashes(json_file):
             executions = config.get("executions", [])
             if executions and isinstance(executions[0], dict):
                 machine_info = executions[0].get("machine_info")
-
-            hardware = None
-            if machine_info:
-                board_type = machine_info.get("board_type")
-                if board_type:
-                    device_series = machine_info.get("device_series")
-                    if isinstance(device_series, list):
-                        device_series = device_series[0] if device_series else None
-                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
-
-            mesh_config = None
-            if machine_info and "tensor_placements" in machine_info:
-                placements = machine_info.get("tensor_placements", [])
-                if placements:
-                    p = placements[0]
-                    mesh_shape_str = p.get("mesh_device_shape")
-                    if mesh_shape_str:
-                        try:
-                            mesh_shape = (
-                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
-                            )
-                            if mesh_shape:
-                                placement_str = p.get("placement", "")
-                                shard_dim = None
-                                if "PlacementShard" in placement_str:
-                                    match = _re.search(r"PlacementShard\((\d+)\)", placement_str)
-                                    if match:
-                                        shard_dim = int(match.group(1))
-                                mesh_config = {
-                                    "mesh_shape": mesh_shape,
-                                    "placement_type": "shard" if shard_dim is not None else "replicate",
-                                    "shard_dim": shard_dim,
-                                }
-                        except Exception:
-                            pass
-
-            hash_args = copy.deepcopy(op_args)
-            _normalize_for_hash(hash_args)
-            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
-            new_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+            new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
                 config["config_hash"] = new_hash
