@@ -35,6 +35,11 @@ on:
         description: 'Run hang report generation test (intentionally hangs a card)'
         default: false
         type: boolean
+      force-job-failure-for-auto-triage-e2e:
+        description: 'After triage tests and artifact upload, fail the job so auto-triage has a failed job to analyze (manual E2E only)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   triage-tests:
@@ -88,6 +93,11 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Deliberate job failure for auto-triage E2E
+        if: ${{ inputs.force-job-failure-for-auto-triage-e2e == true }}
+        run: |
+          echo "::error::Deliberate failure after triage tests (force-job-failure-for-auto-triage-e2e). For auto-triage E2E only."
+          exit 1
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

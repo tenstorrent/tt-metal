@@ -99,6 +99,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      fail_triage_job_for_e2e:
+        description: "After triage tests finish, fail that job so auto-triage has a real failure (workflow_dispatch only; use with Nightly L2 + triage-tests)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-artifact:
@@ -497,6 +502,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-hang-report-test: true
+      force-job-failure-for-auto-triage-e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.fail_triage_job_for_e2e }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
