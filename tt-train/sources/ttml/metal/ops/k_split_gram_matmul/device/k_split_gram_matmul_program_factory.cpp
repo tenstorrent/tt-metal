@@ -75,13 +75,20 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     auto find_max_mb = [&](uint32_t kb, bool block_streaming) -> uint32_t {
         for (uint32_t mb = Mpc; mb >= 1; mb--) {
-            uint32_t l1 =
-                block_streaming
-                    ? mb * mb * (intermed_tile_sz + out_tile_sz) +
-                          mb * (out_tile_sz + mirror_out_overhead + 2 * input_cb_num_blocks * kb * tile_sz)
-                    : mb * mb * intermed_tile_sz + mb * (2 * Mpc * out_tile_sz + out_tile_sz + mirror_out_overhead +
-                                                         2 * input_cb_num_blocks * kb * tile_sz);
-            if (l1 <= L1_BUDGET)
+            // c_0 + c_1: two input CBs, each holds input_cb_num_blocks × kb × mb tiles
+            uint32_t input_cbs = 2 * input_cb_num_blocks * kb * mb * tile_sz;
+            // c_2: matmul intermediate accumulator (FP32), mb × mb tiles
+            uint32_t intermed_cb = mb * mb * intermed_tile_sz;
+            // c_6: combined output after reduction, mb tiles
+            uint32_t combined_cb = mb * out_tile_sz;
+            // c_4 + c_7: mirror output staging (only with OutputMode::Full)
+            uint32_t mirror_cbs = mb * mirror_out_overhead;
+            // c_3 + c_5: output + reduce CBs
+            //   Row streaming: c_3 = Mpc × mb, c_5 = Mpc × mb (accumulate full row-strip)
+            //   Block streaming: c_5 = mb × mb (immediate output per block, no c_3)
+            uint32_t output_cbs = block_streaming ? mb * mb * out_tile_sz : 2 * Mpc * mb * out_tile_sz;
+
+            if (input_cbs + intermed_cb + combined_cb + mirror_cbs + output_cbs <= L1_BUDGET)
                 return mb;
         }
         return 0;
