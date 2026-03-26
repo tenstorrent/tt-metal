@@ -147,9 +147,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
     uint32_t max_transaction_size_bytes = device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
 
     // Cap to L1 available size
-    if (max_transaction_size_bytes > max_transmittable_bytes) {
-        max_transaction_size_bytes = max_transmittable_bytes;
-    }
+    max_transaction_size_bytes = std::min(max_transaction_size_bytes, max_transmittable_bytes);
 
     constexpr uint32_t total_transactions = 100000;
     CoreCoord master_core_coord = {0, 0};
@@ -174,7 +172,8 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
 
 /* ========== Host-side D2H (ReadShard) bandwidth sweep; Test id = 607 ========== */
 TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
-    GTEST_SKIP() << "Skipping test";
+    // Remove GTEST_SKIP to run the test
+    GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
     auto mesh_device = get_mesh_device();
     auto device_coord = distributed::MeshCoordinate(0, 0);
     auto& cq = mesh_device->mesh_command_queue();
