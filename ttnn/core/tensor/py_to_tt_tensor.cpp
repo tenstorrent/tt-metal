@@ -41,14 +41,8 @@ bool can_construct_on_device(
     DataType dst_dtype,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile,
-    bool enable_bfloat_opt,
+    bool enable_device_typecast,
     bool preserve_nan_values) {
-    // typecast to bfloat4_b is expected to lose precision, see
-    // https://github.com/tenstorrent/tt-metal/issues/35048
-    // user can choose to use enable_bfloat_opt=True to get the best performance, but the precision will be lost.
-    bool enable_device_typecast =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? enable_bfloat_opt : true;
-
     bool res = device != nullptr &&
                // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
                // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
@@ -140,21 +134,19 @@ Tensor create_tt_tensor_from_host_data(
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values,
     bool enable_bfloat_opt) {
+    // typecast to bfloat4_b is expected to lose precision, see
+    // https://github.com/tenstorrent/tt-metal/issues/35048
+    // user can choose to use enable_bfloat_opt=True to get the best performance, but the precision will be lost.
+    const bool enable_device_typecast =
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? enable_bfloat_opt : true;
+
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
-        const bool construct_on_device = can_construct_on_device(
-            device,
-            tensor_shape,
-            src_dtype,
-            dst_dtype,
-            memory_config,
-            optional_tile,
-            enable_bfloat_opt,
-            preserve_nan_values);
-
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         if (mesh_mapper != nullptr) {
             TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
+            const bool construct_on_device = device != nullptr && enable_device_typecast && !preserve_nan_values;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -165,7 +157,25 @@ Tensor create_tt_tensor_from_host_data(
                 cq_id,
                 static_cast<T>(pad_value));
         }
+        const bool construct_on_device = can_construct_on_device(
+            device,
+            tensor_shape,
+            src_dtype,
+            dst_dtype,
+            memory_config,
+            optional_tile,
+            enable_device_typecast,
+            preserve_nan_values);
 
+        // TODO: For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
+        // caused by limited support for the SFPLOADMACRO instruction.
+        // LLK does not currently provide an alternative implementation with SFPLOADMACRO disabled
+        // for all data type combinations.
+        // Once tt-sim supports layout/data type transformations, or a workaround for SFPLOADMACRO
+        // becomes available, this restriction can be removed.
+        const bool is_data_transformation_required = layout != Layout::ROW_MAJOR ||
+                                                     src_dtype != convert_to_data_type<T>() || src_dtype != dst_dtype ||
+                                                     memory_config.is_sharded();
         // Borrow the Python buffer directly when possible, otherwise copy via from_span.
         // Borrowing sends the tensor to device in src_dtype ROW_MAJOR, then converts on-device.
         // This requires enough memory for both input and output to coexist during tilize/typecast.
@@ -173,7 +183,8 @@ Tensor create_tt_tensor_from_host_data(
         // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
                                 has_sufficient_device_memory(
-                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
+                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile) &&
+                                !is_data_transformation_required;
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }
