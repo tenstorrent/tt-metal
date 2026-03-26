@@ -10,12 +10,12 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
-#include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
-#include "internal/dataflow_buffer_interface.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/kernel_thread_globals.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
@@ -51,10 +51,6 @@ thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attr
 thread_local uint32_t rta_count __attribute__((used));
 thread_local uint32_t crta_count __attribute__((used));
 #endif
-
-// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
-thread_local uint32_t num_sw_threads __attribute__((used));
-thread_local uint32_t my_thread_id __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -105,10 +101,9 @@ void deassert_trisc() {
     deassert_trisc_reset();
 }
 
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
-
-volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
+volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -321,7 +316,7 @@ extern "C" uint32_t _start1() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
                     uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
-                    experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+                    setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
@@ -405,7 +400,7 @@ extern "C" uint32_t _start1() {
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
-        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

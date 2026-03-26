@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Fused op unit test for lm_head (vocabulary projection).
+Fused op unit test for lm_head (vocabulary projection) using LMHead1D.
 
 lm_head is the linear projection from hidden_size (7168) to vocab_size (129280).
 The weight is sharded across all 32 devices, with each device holding vocab/32 = 4040
@@ -10,14 +10,14 @@ output features.
 
 Sequence of ops:
     Decode:  output = ttnn.linear(x, **cfg["linear"])
-    Prefill: output = ttnn.linear(x, program_config=..., **cfg["linear"])
+    Prefill: output = ttnn.linear(x, **cfg["linear"])
 
 Key characteristics:
-    - Weight dtype: bfloat4_b (quantized)
+    - Weight dtype: bfloat8_b (quantized)
     - Weight shape per device: [7168, 4040]
-    - Weight memory: WIDTH_SHARDED DRAM
-    - Decode input: WIDTH_SHARDED L1
-    - Prefill input: DRAM INTERLEAVED
+    - Weight memory: DRAM INTERLEAVED
+    - Decode input/output: L1 INTERLEAVED
+    - Prefill input/output: DRAM INTERLEAVED
 """
 
 import json
@@ -39,7 +39,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     maybe_skip_long_seq,
     measure_perf_us,
 )
-from models.demos.deepseek_v3.tt.lm_head import LMHead
+from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, pad_or_trim_seq_len
@@ -52,8 +52,8 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 1.0
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 90.564, "op_to_op": None},
-    ("prefill", 128): {"kernel": 255.285, "op_to_op": None},
+    ("decode", 1): {"kernel": 603.542, "op_to_op": None},
+    ("prefill", 128): {"kernel": 716.055, "op_to_op": None},
 }
 
 
@@ -93,17 +93,10 @@ def ds_lm_head_ttnn_decode(
     """
     TTNN implementation for lm_head linear projection (decode mode).
 
-    Uses DRAM sharded matmul with WIDTH_SHARDED L1 activations.
-
-    Args:
-        x: Input tensor (WIDTH_SHARDED L1)
-        cfg: Configuration dictionary containing linear config
-
-    Returns:
-        Output tensor (WIDTH_SHARDED L1)
+    Delegates to LMHead1D._fwd_linear (compute-only, no deallocation)
+    so the input can be reused across perf-measurement iterations.
     """
-    output = LMHead._fwd_linear(x, cfg)
-    return output
+    return LMHead1D._fwd_linear(x, cfg)
 
 
 def ds_lm_head_ttnn_prefill(
@@ -114,25 +107,10 @@ def ds_lm_head_ttnn_prefill(
     """
     TTNN implementation for lm_head linear projection (prefill mode).
 
-    Uses multicore multicast matmul with DRAM INTERLEAVED tensors.
-    For long sequences, handles chunking.
-
-    Args:
-        x: Input tensor (DRAM INTERLEAVED)
-        cfg: Configuration dictionary containing linear and linear_pc_gen configs
-        seq_len: Original sequence length (before any chunking)
-
-    Returns:
-        Output tensor (DRAM INTERLEAVED)
+    Delegates to LMHead1D._fwd_prefill with deallocate_inputs=False
+    so the input can be reused across perf-measurement iterations.
     """
-    # Use effective sequence length (chunk size) for program config to avoid L1 overflow
-    effective_seq_len = min(seq_len, cfg.get("max_rows", seq_len))
-
-    # Generate program config based on effective sequence length
-    program_config = LMHead._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"])
-
-    output = LMHead._fwd_linear(x, cfg, program_config=program_config)
-    return output
+    return LMHead1D._fwd_prefill(x, cfg, deallocate_inputs=False)
 
 
 def _run_ds_lm_head_test(
@@ -316,13 +294,13 @@ def _build_lm_head_inputs(
         seq_len: Sequence length
         state_dict: Model state dict (needed if use_real_weights=True)
 
-    LMHead shape convention (from original test_lm_head.py):
+    LMHead1D shape convention:
     - Decode: height = 32 (USERS_PER_ROW users × 1 token each)
     - Prefill: height = seq_len (1 user × seq_len tokens)
     """
     hidden_size = hf_config.hidden_size
 
-    # LMHead uses different batch conventions:
+    # LMHead1D uses different batch conventions:
     # - Decode: batch_size=32 (USERS_PER_ROW), seq_len=1 → height=32
     # - Prefill: batch_size=1, seq_len=N → height=N
     if mode == "decode":
@@ -355,14 +333,11 @@ def _build_lm_head_inputs(
     torch_input_padded = pad_or_trim_seq_len(torch_input, mode, effective_height)
 
     # Generate TTNN configs
-    # input_row_idx=3 matches the default in LMHead module test
-    input_row_idx = 3
     weight_config = get_test_weight_config(
-        LMHead, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        LMHead1D, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    # Note: LMHead doesn't take seq_len in model_config - it computes program config dynamically
-    model_config = get_model_config(LMHead, mode, hf_config, mesh_device, input_row_idx)
-    model_state = LMHead.create_state(hf_config, mesh_device, None)  # CCL not needed for linear only
+    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_state = LMHead1D.create_state(mesh_device, None)  # CCL not needed for linear only
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN - replicate to all devices

@@ -3,6 +3,7 @@
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,35 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+
+
+@lru_cache(maxsize=1)
+def get_total_model_layers(model_path: Path) -> int:
+    with open(model_path / "config.json", "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    total_layers = config.get("num_hidden_layers")
+    if not isinstance(total_layers, int):
+        raise ValueError(f"Expected integer num_hidden_layers in {(model_path / 'config.json')}, got {total_layers!r}")
+    return total_layers
+
+
+def _assert_no_garbage_tokens(results: dict) -> None:
+    failures = []
+    for i, generation in enumerate(results.get("generations", []), start=1):
+        garbage_count = int(generation.get("garbage_token_count", 0) or 0)
+        if garbage_count == 0:
+            continue
+        garbage_checked = int(generation.get("garbage_tokens_checked", 0) or 0)
+        garbage_topk = generation.get("garbage_token_topk")
+        failures.append(
+            f"Generation {i}: garbage_token_count={garbage_count} over {garbage_checked} checked tokens"
+            + (f" against teacher top-{garbage_topk}" if garbage_topk is not None else "")
+        )
+        failures.extend(generation.get("garbage_token_debug", []) or [])
+
+    if failures:
+        pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
 def _demo_case(
@@ -213,3 +243,5 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
             json.dump(output_data, f, indent=2, ensure_ascii=False)
 
         print(f"\nDemo results saved to: {output_file}")
+
+    _assert_no_garbage_tokens(results)

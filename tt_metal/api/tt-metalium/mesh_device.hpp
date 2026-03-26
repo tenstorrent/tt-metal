@@ -167,14 +167,6 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_host() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_device() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    bool compile_fabric() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void configure_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -202,6 +194,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

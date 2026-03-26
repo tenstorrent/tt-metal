@@ -6,6 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -55,6 +59,14 @@ void kernel_main() {
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::CircularBuffer cb_out(cb_id_out);
+    experimental::CircularBuffer cb_out_reshard(cb_id_out_reshard);
+#ifdef FUSE_BIAS
+    experimental::CircularBuffer cb_in3(cb_id_in3);
+#endif
+
     //  READER
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
@@ -66,8 +78,8 @@ void kernel_main() {
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Operand 1
-        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+        cb_in1.reserve_back(in1_block_num_tiles);
+        l1_write_addr_in1 = cb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
             noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
@@ -75,8 +87,8 @@ void kernel_main() {
             l1_write_addr_in1 += in1_page_size;
         }
 
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in1, in1_block_num_tiles);
+        noc.async_read_barrier();
+        cb_in1.push_back(in1_block_num_tiles);
     }
 #else
     constexpr uint32_t total_num_blocks_in_buffer = 3;
@@ -85,9 +97,9 @@ void kernel_main() {
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+    cb_in1.reserve_back(in1_block_num_tiles);
     uint32_t l1_write_addr_in1_offset = 0;
-    uint32_t l1_write_addr_in1_start = get_write_ptr(cb_id_in1);
+    uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         noc_async_read_set_trid(curr_block_trid);
@@ -101,11 +113,11 @@ void kernel_main() {
 
         if (num_free_blocks_in_buffer == 2) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
-            cb_push_back(cb_id_in1, in1_block_num_tiles);
+            cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
             // reserve for next block
-            cb_reserve_back(cb_id_in1, in1_block_num_tiles * 2);
+            cb_in1.reserve_back(in1_block_num_tiles * 2);
         } else {
             num_free_blocks_in_buffer -= 1;
         }
@@ -121,13 +133,13 @@ void kernel_main() {
     }
     // last block to wait
     noc_async_read_barrier_with_trid(block_trid_to_wait);
-    cb_push_back(cb_id_in1, in1_block_num_tiles);
+    cb_in1.push_back(in1_block_num_tiles);
 #endif
 
 #ifdef FUSE_BIAS
     // Operand 1
-    cb_reserve_back(cb_id_in3, in1_block_w);
-    uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3);
+    cb_in3.reserve_back(in1_block_w);
+    uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
     uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in3_tensor_addr);
@@ -140,37 +152,44 @@ void kernel_main() {
     }
 
     // Barrier! make sure the reads are done
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in3, in1_block_w);
+    noc.async_read_barrier();
+    cb_in3.push_back(in1_block_w);
 #endif
 
     // WRITER
-    cb_wait_front(cb_id_out, out_block_num_tiles);
+    cb_out.wait_front(out_block_num_tiles);
 
 #ifndef SKIP_WRITE_BACK
     uint32_t index_offset = 0;
     uint32_t l1_read_addr_out_offset = 0;
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
-        uint32_t l1_read_addr_out = get_read_ptr(cb_id_out) + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = get_write_ptr(cb_id_out_reshard);
+        uint32_t l1_read_addr_out = cb_out.get_read_ptr() + l1_read_addr_out_offset;
+        uint32_t l1_write_addr_out_reshard = cb_out_reshard.get_write_ptr();
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
         }
 
-        uint64_t reshard_dest_addr = get_noc_addr(
-            in0_mcast_sender_noc_x[index_offset], in0_mcast_sender_noc_y[index_offset], l1_write_addr_out_reshard);
+        experimental::UnicastEndpoint dst_ep;
+        uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
-            noc_async_write(l1_read_addr_out, reshard_dest_addr, per_core_N_reshard_bytes[index_offset]);
+            noc.async_write(
+                experimental::CoreLocalMem<uint32_t>(l1_read_addr_out),
+                dst_ep,
+                per_core_N_reshard_bytes[index_offset],
+                {},
+                {.noc_x = in0_mcast_sender_noc_x[index_offset],
+                 .noc_y = in0_mcast_sender_noc_y[index_offset],
+                 .addr = reshard_dest_local_addr});
             l1_read_addr_out += out_tensor_stride_w_bytes;
-            reshard_dest_addr += out_reshard_tensor_stride_w_bytes;
+            reshard_dest_local_addr += out_reshard_tensor_stride_w_bytes;
         }
         l1_read_addr_out_offset += per_core_N_reshard_bytes[index_offset];
 
         index_offset += 3;
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 #endif
 }
