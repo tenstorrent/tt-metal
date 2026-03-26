@@ -48,9 +48,9 @@ void kernel_main() {
     for (uint32_t offset = 0; offset < NOC_MAX_BURST_SIZE; offset += MEM_ZEROS_SIZE) {
         uint32_t chunk = ((uint32_t)MEM_ZEROS_SIZE < (NOC_MAX_BURST_SIZE - offset)) ? (uint32_t)MEM_ZEROS_SIZE
                                                                                     : (NOC_MAX_BURST_SIZE - offset);
-        noc_async_read(zeros_noc_addr, zero_buffer_addr + offset, chunk);
+        noc_async_write(zero_buffer_addr + offset, zeros_noc_addr, chunk);
     }
-    noc_async_read_barrier();
+    noc_async_write_barrier();
 
     // Write zeros to each assigned page using NOC_MAX_BURST_SIZE chunks
     for (uint32_t page = page_start; page < page_end; page++) {
@@ -70,4 +70,6 @@ void kernel_main() {
     for (uint32_t c = 0; c < num_sender_cores; c++) {
         noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
     }
+
+    noc_async_atomic_barrier();
 }

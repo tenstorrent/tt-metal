@@ -135,6 +135,8 @@ void kernel_main() {
             }
         }
 
+        noc_async_write_barrier();
+
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
         noc_semaphore_wait(zi_done_sem_ptr, num_idle_cores);
