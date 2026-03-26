@@ -28,12 +28,11 @@ class ModelArgs:
         hf_model_name=None,
     ):
         super().__init__()
-        self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
+        self.device_name, self.num_devices = determine_device_name(self.mesh_device)
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None
         self.grid_size = mesh_device.compute_with_storage_grid_size() if mesh_device else None
-        self.device_name = determine_device_name(self.mesh_device)
 
         self.cluster_shape = list(self.mesh_device.shape) if self.mesh_device is not None else None
         self.is_galaxy = self.num_devices == 32
@@ -204,9 +203,6 @@ class ModelArgs:
 
 
 def get_padded_sequence_length(seq_len: int) -> int:
-    if seq_len <= 0:
-        raise ValueError(f"seq_len must be positive, got {seq_len}")
-
     # Attention accepts 128-wide tiles for short sequences, but the long-sequence
     # output projection path requires 1024 alignment and the QKV path requires
     # 2048 alignment once those kernels are used.
@@ -237,7 +233,7 @@ def determine_device_name(mesh_device):
         mesh_device (MeshDevice): MeshDevice object
 
     Returns:
-        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+        tuple[str, int]: Device name and number of devices.
 
     Raises:
         ValueError: If architecture or device count is unsupported
@@ -247,7 +243,7 @@ def determine_device_name(mesh_device):
     dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
     if num_devices == 0:
-        return "CPU"
+        return "CPU", num_devices
 
     if is_blackhole():
         dict_device_names = {
@@ -268,7 +264,7 @@ def determine_device_name(mesh_device):
         raise ValueError(f"Unsupported architecture: {arch_name}")
 
     if num_devices in dict_device_names:
-        return dict_device_names[num_devices]
+        return dict_device_names[num_devices], num_devices
     else:
         raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
 
