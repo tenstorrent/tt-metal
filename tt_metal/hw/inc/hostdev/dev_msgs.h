@@ -275,6 +275,9 @@ enum debug_assert_type_t {
     DebugAssertRtaOutOfBounds = 8,
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
+    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
+    // This transient value indicates a DM is writing error metadata, host should ignore
+    DebugAssertWriteInProgress = 0xFF,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

@@ -749,7 +749,8 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
+    if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
+        assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
