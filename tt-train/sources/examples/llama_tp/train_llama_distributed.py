@@ -46,7 +46,6 @@ from ttml.distributed import (
 )
 from ttml.distributed.debug import DispatchTraceCallback
 
-
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -549,7 +548,6 @@ def main():
 
     # Initialize dispatch layer for distributed ops
     print("\n   Initializing dispatch layer...")
-    init_ops()
 
     # Model
     print("\n3. Creating Llama model...")
@@ -608,7 +606,7 @@ def main():
         else:
             # CP only: parallelize_module with empty plan still runs GQA rule (cp_axis)
             model = parallelize_module(
-                model, mesh_device, {}, tp_axis=0, cp_axis=cp_axis
+                model, mesh_device, {}, tp_axis=None, cp_axis=cp_axis
             )
 
         if args.track_memory:
