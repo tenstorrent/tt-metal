@@ -53,7 +53,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -64,10 +64,10 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-          path: docker-job
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
