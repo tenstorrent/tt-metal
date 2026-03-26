@@ -49,8 +49,12 @@ GALAXY_DEVICE_COUNT = 32
 GALAXY_TP_SIZE = 4
 GALAXY_SP_SIZE = 8
 
-# Shape constraint: N_local = sdpa_cols * Q_CHUNK_SIZE
-# This ensures ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols (one Q chunk per SDPA core column).
+# Shape constraint: ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols (one Q chunk per SDPA core column).
+# Galaxy N_local=2368 matches the real WAN 2.2 shape (75600 total / 32 devices → padded to 2368).
+# Non-galaxy N_local=2240 is exact (10 * 224).
+GALAXY_N_LOCAL = 2368
+NON_GALAXY_N_LOCAL = NON_GALAXY_SDPA_COLS * 224  # 2240
+
 Q_CHUNK_SIZE = 224
 K_CHUNK_SIZE = 512
 
@@ -105,9 +109,8 @@ def generate_test_configs():
     Generate (b, nh, total_seq, d, q_chunk, k_chunk) tuples tuned for available hardware.
 
     Shapes satisfy: ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols
-    - Non-galaxy: N_local = 10 * 224 = 2240, total_seq = 2240 * sp_size
-    - Galaxy:     N_local = 11 * 224 = 2464 ... but practical shape uses N_local = 2368
-                  (11 Q chunks via ceiling division, matching 11 sdpa_cols on galaxy)
+    - Non-galaxy: N_local = 2240 (10 * 224, exact), total_seq = 2240 * sp_size
+    - Galaxy:     N_local = 2368 (ceil = 11 = sdpa_cols), total_seq = 18944 for sp=8
 
     NOTE: Uses detect_devices_without_opening() to avoid holding device locks
     during pytest collection, which would block subprocess profiling.
@@ -119,9 +122,7 @@ def generate_test_configs():
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
     is_galaxy = arch_type.startswith("galaxy")
 
-    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS
-    # N_local designed so ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols
-    N_local = sdpa_cols * Q_CHUNK_SIZE  # exact: 11*224=2464 galaxy, 10*224=2240 non-galaxy
+    N_local = GALAXY_N_LOCAL if is_galaxy else NON_GALAXY_N_LOCAL
     total_seq = N_local * sp_size  # already aligned to 32*sp_size
     total_heads = HEADS_PER_DEVICE * tp_size
 
