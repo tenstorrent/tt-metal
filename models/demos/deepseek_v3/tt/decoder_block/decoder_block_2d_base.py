@@ -131,8 +131,12 @@ class DecoderBlock2DBase(DecoderBlockBase):
             x.shape,
             **cfg["mla_reshard"],
         )
-        mla_norm_out = DistributedRMSNorm.forward_decode(
-            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=mla_reshard_memory_config
+        mla_norm_out, _ = DistributedRMSNorm.forward_decode(
+            x,
+            cfg["mla_norm"],
+            **cfg["mla_norm_reshard"],
+            output_memory_config=mla_reshard_memory_config,
+            residual=None,
         )
 
         # MLA
@@ -144,8 +148,12 @@ class DecoderBlock2DBase(DecoderBlockBase):
         ttnn.deallocate(mla_out)
 
         # MLP norm
-        mlp_norm_out = DistributedRMSNorm.forward_decode(
-            x, cfg["mlp_norm"], **cfg["mlp_norm_reshard"], output_memory_config=cfg["mlp_reshard"]["memory_config"]
+        mlp_norm_out, _ = DistributedRMSNorm.forward_decode(
+            x,
+            cfg["mlp_norm"],
+            **cfg["mlp_norm_reshard"],
+            output_memory_config=cfg["mlp_reshard"]["memory_config"],
+            residual=None,
         )
 
         # MLP

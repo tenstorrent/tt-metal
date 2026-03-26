@@ -279,6 +279,7 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         cfg: RunDecodeConfig,
         memory_config: ttnn.MemoryConfig,
         output_memory_config: ttnn.MemoryConfig,
+        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Forward pass of the RMSNorm for decode mode.
 
@@ -287,6 +288,7 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
             cfg: RunDecodeConfig containing weights and op configurations
             memory_config: Memory configuration for the input tensor
             output_memory_config: Memory configuration for the output tensor
+            residual: Optional residual tensor to add
 
         Returns:
             Output tensor after RMSNorm computation
@@ -302,7 +304,7 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
             cfg["all_gather"]["mesh_device"],
             cfg["semaphore"],
             topology=ttnn.Topology.Linear,
-            residual_input_tensor=None,
+            residual_input_tensor=residual,
             num_links=1,
             epsilon=cfg["rms_norm_post_all_gather"]["epsilon"],
             weight=cfg["rms_norm_post_all_gather"]["weight"],
@@ -314,7 +316,7 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
 
-        return tt_out
+        return tt_out, residual
 
     @classmethod
     def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
