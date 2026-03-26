@@ -57,8 +57,8 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         }
 
         // Update per-process CB stats for this PID
-        for (size_t i = 0; i < MAX_PROCESSES; i++) {
-            if (region_->processes[i].pid == pid) {
+        for (auto& processe : region_->processes) {
+            if (processe.pid == pid) {
                 // Update only locally-allocated CBs (query-based, accurate even with caching)
                 processe.cb_allocated = cb_allocated;
                 processe.last_update_timestamp =
