@@ -115,7 +115,7 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     bool serialize_on_dispatch_timeout = true;
-    bool capture_tensor_specs = false;
+    bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
