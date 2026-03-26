@@ -31,11 +31,6 @@ ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
     return t.reshape(ttnn::Shape({static_cast<uint32_t>(vol), t.logical_shape()[-1]}));
 }
 
-bool use_swiglu_bw_recompute() {
-    static const bool enabled = std::getenv("TTML_SWIGLU_BW_RECOMPUTE") != nullptr;
-    return enabled;
-}
-
 bool force_swiglu_composite() {
     // Benchmark-only override for model-level A/B without changing production call sites.
     return std::getenv("TTML_SWIGLU_FORCE_COMPOSITE") != nullptr;
@@ -105,20 +100,13 @@ autograd::TensorPtr swiglu(
     auto saved_gated =
         ttnn::multiply(saved_linear1, saved_gate, std::nullopt, std::nullopt, std::nullopt, no_acts, silu_lhs);
     auto swiglu_result = ttnn_fixed::matmul(saved_gated, w2->get_value(), false, true);
-    const bool recompute_bw = use_swiglu_bw_recompute();
-
-    std::optional<ttnn::Tensor> saved_linear1_for_bw = std::nullopt;
-    std::optional<ttnn::Tensor> saved_gate_for_bw = std::nullopt;
-    std::optional<ttnn::Tensor> saved_gated_for_bw = std::nullopt;
-    if (!recompute_bw) {
-        saved_linear1_for_bw = std::move(saved_linear1);
-        saved_gate_for_bw = std::move(saved_gate);
-        saved_gated_for_bw = std::move(saved_gated);
-    } else {
-        saved_linear1.deallocate();
-        saved_gate.deallocate();
-        saved_gated.deallocate();
-    }
+    auto saved_linear1_for_bw = std::move(saved_linear1);
+    auto saved_gate_for_bw = std::move(saved_gate);
+    auto saved_gated_for_bw = std::move(saved_gated);
+    // NOTE: gated = silu(linear1) * gate is an elemwise op and relatively light to recompute.
+    // In our nanollama3/tinyllama/llama1b experiments, recomputing it increased step time,
+    // while enabling larger DRAM-peak reduction. Keep eager save+reuse in this PR and track
+    // recompute tradeoff as a benchmark reference.
 
     uint32_t dropout_seed = 0;
     float dropout_scaler = 1.0F;
@@ -141,7 +129,6 @@ autograd::TensorPtr swiglu(
                                    w2,
                                    w3,
                                    out,
-                                   recompute_bw,
                                    saved_linear1_for_bw = std::move(saved_linear1_for_bw),
                                    saved_gate_for_bw = std::move(saved_gate_for_bw),
                                    saved_gated_for_bw = std::move(saved_gated_for_bw),
@@ -156,23 +143,9 @@ autograd::TensorPtr swiglu(
                 ttnn::experimental::dropout(dL_dout, dropout_prob, dropout_scaler, dropout_seed, use_per_device_seed);
         }
 
-        ttnn::Tensor linear1;
-        ttnn::Tensor gate;
-        ttnn::Tensor gated;
-        if (recompute_bw) {
-            linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value(), false, true);
-            gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value(), false, true);
-            using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
-            const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
-            const ttsl::Span<const EltwiseUnary> no_acts_recompute;
-            const ttsl::Span<const EltwiseUnary> silu_lhs_recompute(&silu_act, 1);
-            gated = ttnn::multiply(
-                linear1, gate, std::nullopt, std::nullopt, std::nullopt, no_acts_recompute, silu_lhs_recompute);
-        } else {
-            linear1 = std::move(saved_linear1_for_bw.value());
-            gate = std::move(saved_gate_for_bw.value());
-            gated = std::move(saved_gated_for_bw.value());
-        }
+        ttnn::Tensor linear1 = std::move(saved_linear1_for_bw);
+        ttnn::Tensor gate = std::move(saved_gate_for_bw);
+        ttnn::Tensor gated = std::move(saved_gated_for_bw);
 
         // W2 grad: use saved gated directly — no recompute
         {

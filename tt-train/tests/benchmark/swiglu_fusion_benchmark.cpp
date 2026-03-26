@@ -141,7 +141,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         .num_blocks = num_blocks,
         .vocab_size = kSyntheticVocabSize,
         .max_sequence_length = cfg.sequence_length,
-        .runner_type = ttml::models::llama::RunnerType::MemoryEfficient,
+        .runner_type = ttml::models::llama::RunnerType::Default,
         .weight_tying = shape.weight_tying,
     };
 
