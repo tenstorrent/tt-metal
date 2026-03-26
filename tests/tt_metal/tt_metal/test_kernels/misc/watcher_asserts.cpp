@@ -62,7 +62,20 @@ void kernel_main() {
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif
-
-    ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
+    if (assert_type == DebugAssertHwFault && a==b) {
+        uint32_t hw_assert_cause = get_arg_val<uint32_t>(3);
+        volatile int32_t* p = (int32_t*)0xffffffffff000000;
+        uint32_t tmp;
+        switch (hw_assert_cause) {
+            case 2: asm volatile(".word 0x00000000"); break; // illegal instruction
+            case 4: asm volatile("lw %0, 0x2(x0)" : "=r"(tmp)); break; // load not aligned
+            case 5: tmp = *p; break; // load access fault
+            case 6: asm volatile("sw %0, 0x2(x0)" : "=r"(tmp)); break; // store not aligned
+            case 7: *p = 0; break; // store access fault
+            default: ASSERT(0, DebugAssertHwFault);
+        }
+    } else {
+        ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
+    }
 #endif
 }

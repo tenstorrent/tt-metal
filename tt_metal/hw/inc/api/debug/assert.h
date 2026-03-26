@@ -7,15 +7,51 @@
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#endif
+
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
+//  - for Quasar, multiple DMs share assert_status area and we're fine of just getiting info for one of the asserts.
+//    To be multi-thread safe, CAS is used; address is remapped from uncached to
+//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
 inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
     // Write the line number into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
-    if (v->tripped == DebugAssertOK) {
+#if defined(ARCH_QUASAR)
+    // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
+    uintptr_t addr = reinterpret_cast<uintptr_t>(v);
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+    }
+    uint16_t expected = DebugAssertOK;
+    if (__atomic_compare_exchange_n(
+            &v->tripped, &expected, DebugAssertWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+#else
+    if (v->tripped == DebugAssertOK)
+#endif
+    {
         v->line_num = line_num;
-        v->tripped = assert_type;
         v->which = internal_::get_hw_thread_idx();
+        if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
+            uint64_t mcause;
+            uint64_t mtval;
+            uint64_t mepc;
+            asm volatile("csrr %0, mepc" : "=r"(mepc));
+            asm volatile("csrr %0, mcause" : "=r"(mcause));
+            asm volatile("csrr %0, mtval" : "=r"(mtval));
+            v->line_num = mepc;  // mepc is the instruction address that caused the fault
+            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
+        }
+        v->tripped = assert_type;
+#if defined(ARCH_QUASAR)
+        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
+        // TODO: Replace with flush_l2_cache_line() once available
+        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
+        *flush_reg = reinterpret_cast<uintptr_t>(v);
+        asm volatile("fence" ::: "memory");
+#endif
     }
 
     // Hang, or in the case of erisc, early exit.
