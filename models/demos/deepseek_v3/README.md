@@ -324,4 +324,4 @@ curl http://localhost:8000/v1/completions \
   -d '{ "model": "deepseek-ai/DeepSeek-R1-0528", "prompt": "San Francisco is a", "max_tokens": 32, "temperature": 0, "top_p": 0.9, "top_k": 10 }'
 ```
 
-For batched/manual vLLM request generation, the repo now includes `models/demos/deepseek_v3/demo/vllm_aime24_gpqa_short.json`, a 512-prompt copy of the issue attachment doubled in-place to match the existing demo batch sizes.
+For batched/manual vLLM request generation, the repo now includes `models/demos/deepseek_v3/demo/vllm_aime24_gpqa_short.json`. It contains the same 512 doubled AIME24/GPQA prompts as `models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json`, but serialized as a plain JSON string array instead of `{"prompt": ...}` objects so it matches the format vLLM clients typically expect.
