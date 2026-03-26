@@ -9,6 +9,7 @@ This module provides the vLLM-compatible wrapper class for Molmo2-8B,
 enabling integration with tt-inference-server via the vLLM plugin.
 """
 
+import time
 from typing import List, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
@@ -181,8 +182,8 @@ from models.demos.molmo2.tt.utils import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     arange_for_pooling,
+    get_padded_prefill_len,
     normalize_image,
-    pad_input_ids,
     preprocess_image_molmo2,
     resize_image,
 )
@@ -1151,21 +1152,52 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         Returns:
             Tuple of (logits_ttnn, timing_dict)
         """
-        # Pad to bucket size for trace reuse
         original_seq_len = input_ids.shape[1]
-        input_ids_padded, padded_seq_len, _ = pad_input_ids(input_ids, pad_token_id=0)
+        has_vision = pixel_values is not None
 
-        # Prepare hidden states (vision + text fusion or text-only)
-        hidden_states_ttnn = self._prepare_text_inputs(input_ids_padded, pixel_values, pooled_patches_idx)
+        # Step 1: Prepare hidden states (vision + text fusion or text-only)
+        # Do this FIRST to get the actual seq_len after vision fusion
+        hidden_states_ttnn = self._prepare_text_inputs(input_ids, pixel_values, pooled_patches_idx)
 
-        # Get rotation matrices for prefill
+        # Step 2: Compute padded_seq_len from the ACTUAL hidden states
+        # Vision fusion changes seq_len (replaces <|image|> with ~196 vision tokens)
+        # Tensor format is [1, 1, seq_len, hidden_dim] (4D) - seq_len is at index 2
+        tensor_shape = hidden_states_ttnn.shape
+        if len(tensor_shape) == 4:
+            actual_seq_len = tensor_shape[2]  # [batch, 1, seq_len, hidden_dim]
+        elif len(tensor_shape) == 3:
+            actual_seq_len = tensor_shape[1]  # [batch, seq_len, hidden_dim]
+        else:
+            actual_seq_len = tensor_shape[1]  # fallback
+        logger.info(f"_run_prefill: tensor_shape={list(tensor_shape)}, actual_seq_len={actual_seq_len}")
+        padded_seq_len = get_padded_prefill_len(actual_seq_len)
+
+        # Step 3: Pad hidden states to bucket size
+        if actual_seq_len != padded_seq_len:
+            # Padding tuple must match tensor dimensions
+            if len(tensor_shape) == 4:
+                # [batch, 1, seq_len, hidden_dim] -> pad seq_len dimension (index 2)
+                pad_tuple = ((0, 0), (0, 0), (0, padded_seq_len - actual_seq_len), (0, 0))
+            else:
+                # [batch, seq_len, hidden_dim] -> pad seq_len dimension (index 1)
+                pad_tuple = ((0, 0), (0, padded_seq_len - actual_seq_len), (0, 0))
+            hidden_states_ttnn = ttnn.pad(
+                hidden_states_ttnn,
+                padding=pad_tuple,
+                value=0.0,
+            )
+
+        logger.info(f"_run_prefill: seq_len {actual_seq_len} -> padded {padded_seq_len} (has_vision={has_vision})")
+
+        # Step 4: Get rotation matrices for the correct bucket size
         rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(padded_seq_len, start_pos=0)
 
         # Use vLLM's paged KV cache if available
         prefill_kv_cache = self.kv_caches
 
-        # Check for pre-captured trace
+        # Check for pre-captured trace (text-only path)
         if use_trace and padded_seq_len in self.prefill_traces:
+            logger.info(f"_run_prefill: Executing prefill trace for seq_len={padded_seq_len}")
             trace_id, trace_tensors, trace_output = self.prefill_traces[padded_seq_len]
 
             # Copy inputs into trace tensors
@@ -1186,12 +1218,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
             logits_ttnn = trace_output
         else:
-            # Direct model forward (no trace)
-            logger.info(f"_run_prefill: Starting text model forward (no trace)")
-            logger.info(f"  hidden_states shape info: padded_seq_len={padded_seq_len}")
-            logger.info(f"  kv_caches is None: {prefill_kv_cache is None}")
-            logger.info(f"  page_table is None: {page_table is None}")
+            # Direct model forward (no trace) - used for vision input
+            logger.info(f"_run_prefill: Non-traced forward for seq_len={padded_seq_len}")
 
+            # All buckets should be compiled during warmup
+            # Just run the forward pass directly
             logits_ttnn, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
@@ -1200,9 +1231,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 rot_mats=rot_mats,
                 page_table=page_table,
             )
-            logger.info(f"_run_prefill: text model forward returned")
 
-            # Clean up rot_mats
+            # Clean up
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
             ttnn.deallocate(hidden_states_ttnn)
@@ -1649,16 +1679,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     logger.warning(f"  No image_token_pooling available - vision features may not work correctly")
 
                 # Run prefill with pre-processed image/video
-                # NOTE: Prefill traces DISABLED for vision input because:
-                # 1. Warmup captures text-only traces (no vision backbone involved)
-                # 2. Vision-fused hidden states have different numerical properties
-                # 3. Running text-only trace with vision input causes garbage output or device hangs
-                # TODO: Implement vision-aware prefill traces during warmup
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=False,  # DISABLED: text-only traces incompatible with vision input
+                    use_trace=False,  # Traces cause device hang with vision input
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                     page_table=page_table_tt,
@@ -1986,8 +2011,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             num_blocks: Number of KV cache blocks
             max_seq_len: Maximum sequence length (buckets exceeding this are skipped)
         """
+        # Always run vision compile warmup, even when traces are disabled
+        # This compiles the vision + prefill path during initialization, not during inference
+        self._warmup_vision_compile(kv_cache, num_blocks, max_seq_len)
+
         if not enable_trace:
-            logger.info("Prefill trace disabled - skipping warmup_model_prefill")
+            logger.info("Prefill trace disabled - skipping trace capture (vision already compiled)")
             return
 
         logger.info("Warmup: Capturing prefill traces (two-phase approach)...")
@@ -2083,6 +2112,156 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         ttnn.deallocate(warmup_page_table)
 
         logger.info(f"Warmup: Prefill traces captured for buckets: {valid_buckets}")
+
+    def _warmup_vision_compile(self, kv_cache, num_blocks: int = 64, max_seq_len: int = 4096) -> None:
+        """
+        Compile the vision encoder and text model prefill for ALL bucket sizes.
+
+        This ensures:
+        1. Vision encoder (ViT + pooling + projector) is compiled once
+        2. Text model forward is compiled for ALL bucket sizes
+
+        Args:
+            kv_cache: KV cache tensors from vLLM (paged format)
+            num_blocks: Number of KV cache blocks
+            max_seq_len: Maximum sequence length (buckets exceeding this are skipped)
+        """
+        logger.info("Warmup: Starting vision compile warmup for ALL buckets...")
+
+        # Use vLLM's paged KV cache
+        if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
+            warmup_kv_cache = kv_cache[0]
+            self.kv_caches = warmup_kv_cache
+
+            # Get actual num_blocks from KV cache shape
+            if len(warmup_kv_cache) > 0 and warmup_kv_cache[0] is not None:
+                k_cache = warmup_kv_cache[0][0]
+                actual_num_blocks = k_cache.shape[0]
+                if actual_num_blocks != num_blocks:
+                    logger.info(f"Warmup vision: Overriding num_blocks from {num_blocks} to {actual_num_blocks}")
+                    num_blocks = actual_num_blocks
+        else:
+            warmup_kv_cache = self.kv_caches
+            logger.info("Warmup vision: Using internal KV cache")
+
+        # Initialize compiled buckets tracker
+        if not hasattr(self, "_prefill_compiled_buckets"):
+            self._prefill_compiled_buckets = set()
+
+        # Create page_table for warmup (use first blocks)
+        warmup_page_table_torch = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+        warmup_page_table = ttnn.from_torch(
+            warmup_page_table_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # ========== PHASE 1: Compile vision encoder with dummy image ==========
+        logger.info("Warmup vision: Phase 1 - Compiling vision encoder...")
+        try:
+            # Create dummy image (378x378 RGB)
+            image_size = 378
+            dummy_pixel_values = torch.zeros((1, 3, image_size, image_size), dtype=torch.float32)
+
+            # Create dummy pooling indices for a single image
+            # 27x27 = 729 patches -> 14x14 = 196 pooled tokens
+            import numpy as np
+
+            pooled_h, pooled_w = 14, 14
+            pool_h, pool_w = 2, 2
+            patches_per_side = 27
+            resize_idx = np.arange(patches_per_side * patches_per_side).reshape(patches_per_side, patches_per_side)
+            resize_idx = arange_for_pooling(resize_idx, pool_h, pool_w)
+            pooling_idx = resize_idx.reshape(-1, pool_h * pool_w)[: pooled_h * pooled_w, :]
+            dummy_pooling = torch.from_numpy(pooling_idx).long().unsqueeze(0)  # [1, 196, 4]
+
+            # Create dummy tokens with 196 <im_patch> placeholders (token ID 151938)
+            # This matches the 196 vision tokens from pooling (14x14 pooled patches)
+            # Format: [BOS, im_patch*196, text_tokens...]
+            image_patch_id = 151938  # <im_patch> token
+            num_vision_tokens = 196  # 14x14 pooled patches
+            dummy_tokens = torch.cat(
+                [
+                    torch.tensor([[1]], dtype=torch.long),  # BOS token
+                    torch.full((1, num_vision_tokens), image_patch_id, dtype=torch.long),  # 196 image patches
+                    torch.tensor([[2277, 374]], dtype=torch.long),  # Some text tokens
+                ],
+                dim=1,
+            )  # [1, 199] tokens
+            logger.info(
+                f"Warmup vision: Created dummy tokens with {num_vision_tokens} image patches, shape={dummy_tokens.shape}"
+            )
+
+            # Run vision encoder to compile it
+            vision_start = time.time()
+            _ = self._prepare_text_inputs(
+                input_ids=dummy_tokens,
+                pixel_values=dummy_pixel_values,
+                pooled_patches_idx=dummy_pooling,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            vision_time = (time.time() - vision_start) * 1000
+            logger.info(f"Warmup vision: Vision encoder compiled in {vision_time:.2f}ms")
+
+        except Exception as e:
+            logger.warning(f"Warmup vision: Vision encoder compile failed: {e}")
+
+        # ========== PHASE 2: Compile text_model.forward for ALL bucket sizes ==========
+        logger.info("Warmup vision: Phase 2 - Compiling text model for all buckets...")
+        warmup_bucket_sizes = [128, 256, 512, 1024, 2048, 4096]
+        hidden_dim = 4096
+
+        for bucket_size in warmup_bucket_sizes:
+            if bucket_size > max_seq_len:
+                logger.info(f"Warmup vision: Skipping bucket {bucket_size} (exceeds max_seq_len {max_seq_len})")
+                continue
+
+            try:
+                compile_start = time.time()
+
+                # Create dummy hidden states for this bucket size
+                dummy_hidden = torch.zeros((1, bucket_size, hidden_dim), dtype=torch.bfloat16)
+                dummy_hidden_ttnn = ttnn.from_torch(
+                    dummy_hidden,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+                # Get rotation matrices for this bucket size
+                rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(bucket_size, start_pos=0)
+
+                # Run forward to compile
+                _, _ = self.model.text_model.forward(
+                    hidden_states=dummy_hidden_ttnn,
+                    start_pos=0,
+                    attn_mask=None,
+                    kv_caches=warmup_kv_cache,
+                    rot_mats=rot_mats,
+                    page_table=warmup_page_table,
+                )
+                ttnn.synchronize_device(self.mesh_device)
+
+                compile_time = (time.time() - compile_start) * 1000
+                self._prefill_compiled_buckets.add(bucket_size)
+                logger.info(f"Warmup vision: Compiled bucket {bucket_size} in {compile_time:.2f}ms")
+
+                # Cleanup
+                ttnn.deallocate(rot_mats[0])
+                ttnn.deallocate(rot_mats[1])
+                ttnn.deallocate(dummy_hidden_ttnn)
+
+            except Exception as e:
+                logger.warning(f"Warmup vision: Failed to compile bucket {bucket_size}: {e}")
+
+        # Cleanup
+        ttnn.deallocate(warmup_page_table)
+        logger.info(f"Warmup vision: Compiled buckets: {sorted(self._prefill_compiled_buckets)}")
 
     def warmup_model_decode(
         self,
