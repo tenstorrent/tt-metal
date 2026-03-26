@@ -29,7 +29,7 @@ class TtCombineModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        memory_config: ttnn.MemoryConfig = None,
+        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
     ):
         """
@@ -42,8 +42,8 @@ class TtCombineModule(LightweightModule):
             experts_per_chip: Number of experts per chip
             num_experts_per_tok: Number of experts each token is routed to
             seq_len_per_chip: Sequence length per chip
-            memory_config: Output memory configuration (L1 or DRAM interleaved)
-            init_zeros: Whether to zero-initialize the output buffer
+            memory_config: Output memory configuration (DRAM interleaved)
+            init_zeros: Whether to zero-initialize the output buffer using hybrid row zero-init
         """
         super().__init__()
         self.mesh_device = mesh_device
