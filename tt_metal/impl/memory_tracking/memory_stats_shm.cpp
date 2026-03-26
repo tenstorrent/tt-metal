@@ -121,8 +121,8 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
 
         // Remove our PID entry if per-PID tracking was enabled
         if (per_pid_tracking_enabled_) {
-            for (size_t i = 0; i < MAX_PROCESSES; i++) {
-                if (region_->processes[i].pid.load(std::memory_order_relaxed) == my_pid) {
+            for (auto & processe : region_->processes) {
+                if (processe.pid.load(std::memory_order_relaxed) == my_pid) {
                     // Subtract this process's allocations from aggregated totals
                     // before clearing the entry (to properly track memory when process exits)
                     uint64_t dram = region_->processes[i].dram_allocated.load(std::memory_order_relaxed);
