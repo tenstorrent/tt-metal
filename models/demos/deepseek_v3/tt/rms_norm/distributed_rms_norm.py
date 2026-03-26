@@ -272,49 +272,31 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         """
         return ttnn.rms_norm_post_all_gather(x, stats, program_config=program_config, **cfg["rms_norm_post_all_gather"])
 
-    @classmethod
-    def _rmsnorm_forward_decode(
-        cls,
+    @staticmethod
+    def _fwd_rms_norm_fused(
         x: ttnn.Tensor,
-        cfg: RunDecodeConfig,
-        memory_config: ttnn.MemoryConfig,
         output_memory_config: ttnn.MemoryConfig,
+        cfg: dict,
+        program_config: Any,
+        topology=ttnn.Topology.Linear,
+        num_links=1,
+        cluster_axis=1,
     ) -> ttnn.Tensor:
-        """Forward pass of the RMSNorm for decode mode.
-
-        Args:
-            x: Input tensor
-            cfg: RunDecodeConfig containing weights and op configurations
-            memory_config: Memory configuration for the input tensor
-            output_memory_config: Memory configuration for the output tensor
-
-        Returns:
-            Output tensor after RMSNorm computation
-        """
-        tensor_in = ttnn.to_memory_config(x, memory_config)
-
-        program_config = cls._get_pc(memory_config)
-        # Get mesh device from the all_gather config (it's available there)
-        tt_out = ttnn.fused_rms_minimal(
-            tensor_in,
+        return ttnn.fused_rms_minimal(
+            x,
             program_config,
-            1,
+            cluster_axis,
             cfg["all_gather"]["mesh_device"],
             cfg["semaphore"],
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             residual_input_tensor=None,
-            num_links=1,
+            num_links=num_links,
             epsilon=cfg["rms_norm_post_all_gather"]["epsilon"],
             weight=cfg["rms_norm_post_all_gather"]["weight"],
             stats=cfg["persistent_tensor"],
             memory_config=output_memory_config,
             use_noc1_only=False,
         )
-
-        if _has_distinct_buffer(x, tensor_in):
-            ttnn.deallocate(tensor_in)
-
-        return tt_out
 
     @classmethod
     def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
@@ -340,5 +322,35 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         # Run distributed rmsnorm part 2
         tt_out = cls._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config=program_config)
         ttnn.deallocate(tt_gathered_stats)
+
+        return tt_out
+
+    @classmethod
+    def _rmsnorm_forward_decode(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        memory_config: ttnn.MemoryConfig,
+        output_memory_config: ttnn.MemoryConfig,
+    ) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for decode mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunDecodeConfig containing weights and op configurations
+            memory_config: Memory configuration for the input tensor
+            output_memory_config: Memory configuration for the output tensor
+
+        Returns:
+            Output tensor after RMSNorm computation
+        """
+        tensor_in = ttnn.to_memory_config(x, memory_config)
+
+        program_config = cls._get_pc(memory_config)
+        # Get mesh device from the all_gather config (it's available there)
+        tt_out = cls._fwd_rms_norm_fused(tensor_in, output_memory_config, cfg, program_config)
+
+        if _has_distinct_buffer(x, tensor_in):
+            ttnn.deallocate(tensor_in)
 
         return tt_out

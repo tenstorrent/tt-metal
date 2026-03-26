@@ -77,6 +77,19 @@ class RMSNorm(RMSNormBase):
         )
 
     @classmethod
+    def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        """Forward pass of the RMSNorm for prefill mode.
+
+        Args:
+            x: Input tensor
+            cfg: RunPrefillConfig containing weights and op configurations
+
+        Returns:
+            Output tensor after RMSNorm computation
+        """
+        return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
+
+    @classmethod
     def _rmsnorm_forward_decode(
         cls,
         x: ttnn.Tensor,
@@ -100,16 +113,3 @@ class RMSNorm(RMSNormBase):
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
         return tt_out
-
-    @classmethod
-    def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        """Forward pass of the RMSNorm for prefill mode.
-
-        Args:
-            x: Input tensor
-            cfg: RunPrefillConfig containing weights and op configurations
-
-        Returns:
-            Output tensor after RMSNorm computation
-        """
-        return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)
