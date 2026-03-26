@@ -321,7 +321,8 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
             layer_metrics = get_accuracy_metrics(torch_ref_layer_out, torch_act_layer_out)
             all_accuracy_metrics[layer_id] = layer_metrics
 
-    if dump_outputs:
+    # the tensors to be dumped only exist when check_accuracy is true
+    if dump_outputs and check_accuracy:
         torch.set_printoptions(profile="full")
         var2filename = {
             torch_input: f"torch_input.txt",
