@@ -136,34 +136,6 @@ class DummyInputsBuilder(BaseDummyInputsBuilder):
         raise NotImplementedError
 
 
-def input_processor_for_mistral_24b(ctx, inputs):
-    input_processor = ctx.get_hf_processor()
-    if "prompt" in inputs:
-        prompt_text = inputs["prompt"]
-    else:
-        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
-        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-    if "multi_modal_data" in inputs and "image" in inputs["multi_modal_data"]:
-        images = inputs["multi_modal_data"]["image"]
-    else:
-        images = None
-
-    processed_inputs = input_processor(
-        text=prompt_text,
-        images=images,
-        videos=None,
-        return_tensors="pt",
-    )
-
-    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
-    return {
-        "type": inputs["type"],
-        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
-        "prompt": prompt_text,
-        "multi_modal_data": {"image": processed_inputs},
-    }
-
-
 class CustomNamespace(SimpleNamespace):
     def __contains__(self, key):
         return key in self.__dict__
@@ -222,10 +194,6 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     @property
     def cache_path(self):
         return self.model_args[0].model_cache_path
-
-    @property
-    def max_cross_attn_tokens(self):
-        return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
 
     def prefill_forward(self, *args, **kwargs):
         self.tokenizer = self.model_args[0].tokenizer

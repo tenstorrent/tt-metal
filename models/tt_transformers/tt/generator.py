@@ -34,7 +34,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.model_config import CheckpointType
 
 # Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
@@ -1303,7 +1302,7 @@ class Generator(WarmupForwardMixin):
         empty_slots=None,
         **kwargs,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if not self.model_args[0].is_llama_vision():
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
