@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -38,6 +39,8 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
 
 
 def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
@@ -278,7 +281,6 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
         output_memory_config: ttnn.MemoryConfig,
         cfg: dict,
         program_config: Any,
-        topology=ttnn.Topology.Linear,
         num_links=1,
         cluster_axis=1,
     ) -> ttnn.Tensor:
@@ -288,7 +290,7 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
             cluster_axis,
             cfg["all_gather"]["mesh_device"],
             cfg["semaphore"],
-            topology=topology,
+            topology=optimal_topology,
             residual_input_tensor=None,
             num_links=num_links,
             epsilon=cfg["rms_norm_post_all_gather"]["epsilon"],
@@ -348,7 +350,12 @@ class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
 
         program_config = cls._get_pc(memory_config)
         # Get mesh device from the all_gather config (it's available there)
-        tt_out = cls._fwd_rms_norm_fused(tensor_in, output_memory_config, cfg, program_config)
+        tt_out = cls._fwd_rms_norm_fused(
+            tensor_in,
+            output_memory_config,
+            cfg,
+            program_config,
+        )
 
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
