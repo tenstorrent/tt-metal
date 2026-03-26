@@ -35,8 +35,8 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  push:
-    branches: ["main"]
+  schedule:
+    - cron: "0 */4 * * *" # Runs every 4 hours
 
 run-name: "(Galaxy) Health"
 
@@ -64,10 +64,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      # Push to main: run both architectures. Manual: derive from checkboxes (same as galaxy e2e).
       enabled-skus: >-
         ${{
-          github.event_name == 'push'
+          github.event_name == 'schedule'
             && 'wh_galaxy,bh_galaxy'
             || (
               inputs.wormhole && inputs.blackhole
