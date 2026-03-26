@@ -927,7 +927,7 @@ class Generator(WarmupForwardMixin):
             return tt_logits
 
     # Note: This function is called by vLLM
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -1504,12 +1504,6 @@ class Generator(WarmupForwardMixin):
             return self.process_decode_output_host(to_host)
         else:
             return tt_logits
-
-    def decode_forward(self, *args, **kwargs):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
-            return self.decode_forward_text(*args, **kwargs)
-        else:
-            return self.decode_forward_llama_vision(*args, **kwargs)
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):

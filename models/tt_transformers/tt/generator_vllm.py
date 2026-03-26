@@ -17,8 +17,8 @@ from vllm.model_executor.models.gemma3_mm import (
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.mistral3 import (
     Mistral3DummyInputsBuilder,
-    _build_mistral3_info,
-    _build_mistral3_processor,
+    Mistral3MultiModalProcessor,
+    Mistral3ProcessingInfo,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalDataDict
@@ -170,8 +170,8 @@ class CustomNamespace(SimpleNamespace):
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    _build_mistral3_processor,
-    info=_build_mistral3_info,
+    Mistral3MultiModalProcessor,
+    info=Mistral3ProcessingInfo,
     dummy_inputs=Mistral3DummyInputsBuilder,
 )
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
@@ -257,7 +257,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
