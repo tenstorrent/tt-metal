@@ -83,7 +83,6 @@ class RMSNorm(RMSNormBase):
         cfg: RunDecodeConfig,
         memory_config: ttnn.MemoryConfig,
         output_memory_config: ttnn.MemoryConfig,
-        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Forward pass of the RMSNorm for decode mode.
 
@@ -92,7 +91,6 @@ class RMSNorm(RMSNormBase):
             cfg: RunDecodeConfig containing weights and op configurations
             memory_config: Memory configuration for the input tensor
             output_memory_config: Memory configuration for the output tensor
-            residual: Optional residual tensor to add (not used in this implementation)
         Returns:
             Output tensor after RMSNorm computation
         """
@@ -101,7 +99,7 @@ class RMSNorm(RMSNormBase):
         tt_out = ttnn.to_memory_config(tt_out, output_memory_config)
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
-        return tt_out, residual
+        return tt_out
 
     @classmethod
     def _rmsnorm_forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
