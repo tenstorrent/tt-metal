@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // out tensor args
@@ -32,6 +35,9 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(cb_id_out0);
+
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
@@ -40,22 +46,27 @@ void kernel_main() {
             for (uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
-                cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+                cb_out.wait_front(out_subblock_tile_count);
+                uint32_t out_read_offset = 0;
 
                 for (uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; w++) {
-                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
-                        l1_read_addr += single_tile_size_bytes;
+                        noc.async_write(
+                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            s,
+                            single_tile_size_bytes,
+                            {.offset_bytes = out_read_offset},
+                            {.page_id = out_tensor_tile_id});
+                        out_read_offset += single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;
                     }
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                 }
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_id_out0, out_subblock_tile_count);
+                noc.async_write_barrier();
+                cb_out.pop_front(out_subblock_tile_count);
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
