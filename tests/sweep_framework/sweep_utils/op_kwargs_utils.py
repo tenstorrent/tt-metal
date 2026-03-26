@@ -44,13 +44,13 @@ _INFRA_KEYS = frozenset(
         "input_hash",
         "tag",
         "timestamp",
-        # memory_config from traced kwargs must not leak into op kwargs — passing it
-        # causes "incompatible function arguments" for ops that don't accept it.
-        # Sweep modules that need memory_config should add it explicitly after
-        # calling build_op_kwargs().
-        "memory_config",
     }
 )
+# NOTE: memory_config is intentionally NOT in _INFRA_KEYS.
+# - Ops that accept memory_config as a kwarg need it passed through.
+# - Ops that don't accept it will get "incompatible function arguments".
+# If a specific sweep module hits that error, add "memory_config" to its
+# build_op_kwargs(exclude={"memory_config"}) call rather than filtering globally.
 
 # Known boolean parameters in traced JSON: V2 JSON stores all numbers as floats,
 # so 0.0/1.0 must be converted back to False/True for these keys.
