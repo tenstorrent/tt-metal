@@ -94,6 +94,13 @@ class VisionTransformer(LightweightModule):
 
         is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        num_devices = mesh_device.get_num_devices() if is_mesh_device else 1
+
+        # Keep interfaces DRAM-based, but use L1 width-sharded intermediates on T3K.
+        # Patch-embed activations are large for single-core L1 but map well to width sharding.
+        self.patch_embed_compute_memory_config = (
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_mesh_device and num_devices >= 8 else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # Patch embedding: Conv2d(3, hidden_dim, kernel_size=patch_size, stride=patch_size)
         # We store the weight and bias, actual embedding done on CPU or via TTNN fold+linear
@@ -268,22 +275,31 @@ class VisionTransformer(LightweightModule):
 
         # TTNN: linear projection -- x @ patch_embed_weight
         # x: [1, 1, B*N, 588],  patch_embed_weight: [1, 1, 588, 1152]
-        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # On T3K, keep intermediates sharded in L1 for better bandwidth/latency.
+        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=self.patch_embed_compute_memory_config)
         ttnn.deallocate(x_ttnn)
 
         # Add bias
-        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=self.patch_embed_compute_memory_config)
 
         # Add positional embedding: [1, 1, num_patches, 1152]
         if batch_size == 1:
             # Shapes match directly -- [1, 1, N, 1152] + [1, 1, N, 1152]
-            embedded = ttnn.add(embedded, self.positional_embedding, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            embedded = ttnn.add(
+                embedded,
+                self.positional_embedding,
+                memory_config=self.patch_embed_compute_memory_config,
+            )
         else:
             # Tile positional embedding for multi-crop: [1, 1, B*N, 1152]
             pos_tiles = [self.positional_embedding] * batch_size
             pos_tiled = ttnn.concat(pos_tiles, dim=2)
-            embedded = ttnn.add(embedded, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            embedded = ttnn.add(embedded, pos_tiled, memory_config=self.patch_embed_compute_memory_config)
             ttnn.deallocate(pos_tiled)
+
+        # Preserve existing interface expectations for downstream blocks.
+        if self.patch_embed_compute_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            embedded = ttnn.to_memory_config(embedded, ttnn.DRAM_MEMORY_CONFIG)
 
         return embedded
 
@@ -330,46 +346,57 @@ class VisionTransformer(LightweightModule):
         return_all_hidden_states: bool = True,
     ) -> List[ttnn.Tensor]:
         """
-        Full forward pass including patch embedding (CPU) and transformer (TTNN).
+        Full forward pass: patch + positional embedding, then ViT blocks on TTNN.
 
-        Args:
-            pixel_values: Input images [batch, 3, height, width] as torch tensor
-            return_all_hidden_states: If True, return hidden states from all layers
+        For the native patch grid (Molmo2 27x27), patch/pos use ``patch_embed_ttnn`` so
+        T3K can run matmul/add in L1 width-sharded mode (see ``patch_embed_compute_memory_config``).
 
-        Returns:
-            List of hidden states from requested layers
+        Non-native grids still use CPU interpolation + H2D because learned pos is resized on CPU.
         """
         batch_size, channels, height, width = pixel_values.shape
         patches_h = height // self.patch_size
         patches_w = width // self.patch_size
 
-        # Patch embedding on CPU
-        x = self.patch_embed_cpu(pixel_values)  # [batch, num_patches, hidden_dim]
+        native_grid = patches_h == self.base_num_patches_per_side and patches_w == self.base_num_patches_per_side
 
-        # Interpolate positional embedding if needed
-        if patches_h != self.base_num_patches_per_side or patches_w != self.base_num_patches_per_side:
-            # For simplicity, assume square patches
-            assert patches_h == patches_w, "Non-square patch grids not yet supported"
-            pos_embed = self.interpolate_pos_embedding(patches_h)
-        else:
-            pos_embed = self.positional_embedding_torch
+        def forward_one_crop_ttnn(crop_pixels: torch.Tensor) -> List[ttnn.Tensor]:
+            """crop_pixels: [1, 3, H, W]; returns hidden states from self.forward."""
+            x_ttnn = self.patch_embed_ttnn(crop_pixels)
+            return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
 
-        # Add positional embedding
+        if native_grid:
+            # Multi-crop: one ViT forward per crop so attention stays within each crop; patch embed uses L1 on T3K.
+            if batch_size > 1:
+                all_crop_hidden_states = []
+                for crop_idx in range(batch_size):
+                    crop_pixels = pixel_values[crop_idx : crop_idx + 1]
+                    all_crop_hidden_states.append(forward_one_crop_ttnn(crop_pixels))
+
+                combined_hidden_states = []
+                num_layers_out = len(all_crop_hidden_states[0])
+                for layer_idx in range(num_layers_out):
+                    layer_outputs = [crop_states[layer_idx] for crop_states in all_crop_hidden_states]
+                    combined = ttnn.concat(layer_outputs, dim=2)
+                    combined_hidden_states.append(combined)
+                    for crop_tensor in layer_outputs:
+                        ttnn.deallocate(crop_tensor)
+                return combined_hidden_states
+
+            return forward_one_crop_ttnn(pixel_values)
+
+        # Non-native patch grid: HF torch path for interp pos, then H2D (DRAM; blocks expect interleaved DRAM).
+        assert patches_h == patches_w, "Non-square patch grids not yet supported"
+        x = self.patch_embed_cpu(pixel_values)
+        pos_embed = self.interpolate_pos_embedding(patches_h)
         x = x + pos_embed.unsqueeze(0)
 
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
-        # Process each crop separately (nlp_create_qkv_heads requires batch_size=1)
-        # Then concatenate hidden states from all crops
         if batch_size > 1:
             all_crop_hidden_states = []
-
             for crop_idx in range(batch_size):
-                # Get single crop: [1, num_patches, hidden_dim]
-                crop_x = x[crop_idx : crop_idx + 1]
-                crop_x = crop_x.unsqueeze(0)  # [1, 1, num_patches, hidden_dim]
-
+                crop_x = x[crop_idx : crop_idx + 1].unsqueeze(0)
                 crop_x_ttnn = ttnn.from_torch(
                     crop_x,
                     device=self.mesh_device,
@@ -378,42 +405,26 @@ class VisionTransformer(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=mesh_mapper,
                 )
+                all_crop_hidden_states.append(
+                    self.forward(crop_x_ttnn, return_all_hidden_states=return_all_hidden_states)
+                )
 
-                # Forward through transformer blocks
-                crop_hidden_states = self.forward(crop_x_ttnn, return_all_hidden_states=return_all_hidden_states)
-                all_crop_hidden_states.append(crop_hidden_states)
-
-            # Combine hidden states from all crops
-            # Each layer's hidden states from all crops should be concatenated
-            # crop_hidden_states[i] is layer i's output: [1, 1, num_patches, hidden_dim]
-            # We want: [1, 1, batch*num_patches, hidden_dim]
             combined_hidden_states = []
             num_layers_out = len(all_crop_hidden_states[0])
-
             for layer_idx in range(num_layers_out):
-                # Collect this layer's outputs from all crops
                 layer_outputs = [crop_states[layer_idx] for crop_states in all_crop_hidden_states]
-                # Concatenate along sequence dimension (dim=2)
                 combined = ttnn.concat(layer_outputs, dim=2)
                 combined_hidden_states.append(combined)
-
-                # Clean up individual crop tensors
                 for crop_tensor in layer_outputs:
                     ttnn.deallocate(crop_tensor)
-
             return combined_hidden_states
-        else:
-            # Single crop - original path
-            x = x.unsqueeze(0)  # [1, batch, num_patches, hidden_dim]
 
-            x_ttnn = ttnn.from_torch(
-                x,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-
-            # Forward through transformer blocks
-            return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
+        x_ttnn = ttnn.from_torch(
+            x.unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        return self.forward(x_ttnn, return_all_hidden_states=return_all_hidden_states)
