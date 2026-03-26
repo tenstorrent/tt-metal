@@ -20,6 +20,7 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIColShardedWRowSharded,
+    TTNNLinearIColShardedWAllReduced,
     TTNNLinearIReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.rope import (
@@ -2271,11 +2272,14 @@ class TTNNBailingMoEAttention(TTNNModule):
         self.rope = None
         self.sdpa = None
 
-        # Separate Q, K, V projections (T3K mode only)
+        # Separate Q, K, V projections (used for prefill and single-device decode)
         # Q is sharded (num_heads >= num_devices), K/V must be replicated
         self.q_proj = None
         self.k_proj = None
         self.v_proj = None
+
+        # Fused QKV projection for multi-device decode (1 matmul + 1 all_reduce)
+        self.qkv_proj = None
 
     def _maybe_all_gather(self, tensor):
         """All-gather tensor across mesh devices."""
@@ -2354,26 +2358,22 @@ class TTNNBailingMoEAttention(TTNNModule):
             k_bias = _reverse_permute_1d(qkv_bias[q_size : q_size + kv_size], rotary_dim, new_attn.head_dim)
             v_bias = qkv_bias[q_size + kv_size :]
 
-        import torch.nn as nn
+        # Fused QKV projection for decode: single matmul + all_reduce replaces
+        # 3 separate matmuls + 5 CCL ops with 1 matmul + 1 CCL op.
+        # Uses the already-permuted Q/K weights (Meta layout for RoPE).
+        import torch.nn as tnn
 
-        q_linear = nn.Linear(new_attn.hidden_size, q_size, bias=q_bias is not None)
-        q_linear.weight.data = q_weight
+        qkv_fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)  # [3072, 2048]
+        qkv_fused_bias = None
         if q_bias is not None:
-            q_linear.bias.data = q_bias
+            qkv_fused_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)  # [3072]
 
-        k_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=k_bias is not None)
-        k_linear.weight.data = k_weight
-        if k_bias is not None:
-            k_linear.bias.data = k_bias
+        qkv_linear = tnn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=qkv_fused_bias is not None)
+        qkv_linear.weight.data = qkv_fused_weight
+        if qkv_fused_bias is not None:
+            qkv_linear.bias.data = qkv_fused_bias
 
-        v_linear = nn.Linear(new_attn.hidden_size, kv_size, bias=v_bias is not None)
-        v_linear.weight.data = v_weight
-        if v_bias is not None:
-            v_linear.bias.data = v_bias
-
-        new_attn.q_proj = TTNNLinearIColShardedWRowSharded.from_torch(q_linear)
-        new_attn.k_proj = TTNNLinearIReplicatedWColSharded.from_torch(k_linear)
-        new_attn.v_proj = TTNNLinearIReplicatedWColSharded.from_torch(v_linear)
+        new_attn.qkv_proj = TTNNLinearIColShardedWAllReduced.from_torch(qkv_linear)
 
         new_attn.dense = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.dense)
 
@@ -2539,18 +2539,21 @@ class TTNNBailingMoEAttention(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        query_states = self.q_proj(hidden_states)
+        # Fused QKV: 1 matmul + 1 all_reduce
+        qkv_states = self.qkv_proj(hidden_states)
 
-        # K/V need all-gathered input for replicated projections
-        hidden_states_replicated = ttnn.all_gather(hidden_states, dim=-1, num_links=1)
-        key_states = self.k_proj(hidden_states_replicated)
-        value_states = self.v_proj(hidden_states_replicated)
-        ttnn.deallocate(hidden_states_replicated)
+        if hasattr(qkv_states, "to_ttnn"):
+            qkv_states = qkv_states.to_ttnn
 
-        query_states = self._maybe_all_gather(query_states)
-        key_states = self._maybe_all_gather(key_states)
-        value_states = self._maybe_all_gather(value_states)
+        # Split into Q, K, V by slicing last dimension
+        q_size = self.num_heads * self.head_dim
+        kv_size = self.num_kv_heads * self.head_dim
+        query_states = ttnn.slice(qkv_states, [0, 0, 0], [batch_size, seq_length, q_size])
+        key_states = ttnn.slice(qkv_states, [0, 0, q_size], [batch_size, seq_length, q_size + kv_size])
+        value_states = ttnn.slice(qkv_states, [0, 0, q_size + kv_size], [batch_size, seq_length, q_size + 2 * kv_size])
+        ttnn.deallocate(qkv_states)
 
+        # Reshape to multi-head format and transpose to [B, H, S, D]
         query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_heads, self.head_dim))
         key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
         value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_kv_heads, self.head_dim))
@@ -2624,26 +2627,23 @@ class TTNNBailingMoEAttention(TTNNModule):
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        query_states = self.q_proj(hidden_states)
+        # Check for multi-device mode to use fused QKV path
+        # === FUSED QKV: 1 matmul + 1 all_reduce (replaces 3 matmuls + 5 CCL ops) ===
+        qkv_states = self.qkv_proj(hidden_states)
+        # qkv_states shape: [B, 1, 3072] replicated on all devices
 
-        hidden_states_replicated = ttnn.all_gather(hidden_states, dim=-1, num_links=1)
-        key_states = self.k_proj(hidden_states_replicated)
-        value_states = self.v_proj(hidden_states_replicated)
-        ttnn.deallocate(hidden_states_replicated)
+        if hasattr(qkv_states, "to_ttnn"):
+            qkv_states = qkv_states.to_ttnn
 
-        query_states = self._maybe_all_gather(query_states)
-        key_states = self._maybe_all_gather(key_states)
-        value_states = self._maybe_all_gather(value_states)
+        # Split into Q, K, V by slicing last dimension
+        q_size = self.num_heads * self.head_dim
+        kv_size = self.num_kv_heads * self.head_dim
+        query_states = ttnn.slice(qkv_states, [0, 0, 0], [batch_size, 1, q_size])
+        key_states = ttnn.slice(qkv_states, [0, 0, q_size], [batch_size, 1, q_size + kv_size])
+        value_states = ttnn.slice(qkv_states, [0, 0, q_size + kv_size], [batch_size, 1, q_size + 2 * kv_size])
+        ttnn.deallocate(qkv_states)
 
-        if hasattr(query_states, "to_ttnn"):
-            query_states = query_states.to_ttnn
-        if hasattr(key_states, "to_ttnn"):
-            key_states = key_states.to_ttnn
-        if hasattr(value_states, "to_ttnn"):
-            value_states = value_states.to_ttnn
-
-        # Reshape Q/K/V to decode format [1, batch, heads, head_dim] directly
-        # This avoids the concat + _to_replicated + nlp_create_qkv_heads_decode round-trip
+        # Reshape Q/K/V to decode format [1, batch, heads, head_dim]
         query_states = ttnn.reshape(query_states, (1, batch_size, self.num_heads, self.head_dim))
         key_states = ttnn.reshape(key_states, (1, batch_size, self.num_kv_heads, self.head_dim))
         value_states = ttnn.reshape(value_states, (1, batch_size, self.num_kv_heads, self.head_dim))

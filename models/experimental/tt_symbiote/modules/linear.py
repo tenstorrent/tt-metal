@@ -176,6 +176,59 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         return tt_output
 
 
+class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass: matmul + all_reduce.
+
+        The input is column-sharded across devices. After matmul each device
+        holds a partial sum.  all_reduce sums the partials so every device
+        gets the full output (replicated).
+        """
+        if len(input_tensor.tensor_topology().placements()) == 1:
+            assert (
+                input_tensor.tensor_topology().placements()[0].dim == self.input_dim
+            ), f"Input tensor must be sharded on dimension {self.input_dim}."
+        elif len(input_tensor.tensor_topology().placements()) == 2:
+            assert (
+                input_tensor.tensor_topology().placements()[0].dim == 0
+            ), f"Input tensor must be sharded on batch dim (0)."
+            assert (
+                input_tensor.tensor_topology().placements()[1].dim == self.input_dim
+            ), f"Input tensor must be sharded on dimension {self.input_dim}."
+        else:
+            raise RuntimeError(
+                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), "
+                f"but got tensor with placements: {input_tensor.tensor_topology().placements()}"
+            )
+
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        if len(input_shape) == 2:
+            input_shape.insert(0, 1)  # Add batch dimension if missing
+        if len(input_shape) == 3:
+            input_shape.insert(1, 1)  # Add batch dimensions if needed
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+
+        # Matmul: partial sum on each device
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_output = ttnn.all_reduce(
+            tt_output,
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if self.tt_bias is not None:
+            tt_output += self.tt_bias
+
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+        return tt_output
+
+
 @trace_disabled
 class TTNNLinearLLama(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
