@@ -6,37 +6,34 @@
 
 from __future__ import annotations
 
-import numpy as np
-import ml_dtypes
-
-import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules.parameter import TensorMetadata
 
 
 class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
-    def __init__(self, num_embeddings: int, embedding_dim: int) -> None:
+    def __init__(self, num_embeddings: int, embedding_dim: int, **kwargs) -> None:
         """Initialize embedding layer.
 
         Args:
-            num_embeddings: Size of vocabulary
-            embedding_dim: Dimension of embeddings
+            num_embeddings: Size of vocabulary.
+            embedding_dim: Dimension of embeddings.
+            **kwargs: Forwarded to AbstractModuleBase (mesh_device, tp_plan, etc.).
         """
-        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
 
-        # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
-        # Embedding weights must be BFLOAT16 - use ml_dtypes.bfloat16 on NumPy side
-        # Weight must be in TILE layout because embedding calls untilize on it
-        weight_shape = (1, 1, num_embeddings, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
+        # Match C++ modules/embedding_module.cpp: normal_init(..., {0.F, 1.F})
+        self.weight = Parameter(
+            TensorMetadata(
+                shape=(1, 1, num_embeddings, embedding_dim),
+                init_fn=ttml.init.normal(0.0, 1.0),
+            )
         )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
-        self.weight = Parameter(weight_tensor)
+
+        super().__init__(**kwargs)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.

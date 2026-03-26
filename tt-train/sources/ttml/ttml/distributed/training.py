@@ -64,24 +64,7 @@ def distribute_tensor(
     if np_data.shape[0] > 1:
         np_data = np_data[:1]
 
-    shard_dim = None
-    shard_axis = None
-    for axis, p in enumerate(layout.placements):
-        if isinstance(p, Shard):
-            shard_dim = p.dim
-            shard_axis = axis
-            break
-
-    mapper = None
-    if shard_dim is not None:
-        rank = len(np_data.shape)
-        dim = shard_dim if shard_dim >= 0 else rank + shard_dim
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            mesh_device, dim, shard_axis
-        )
-    else:
-        # Use replicate mapper for fully replicated tensors to get correct 2D topology
-        mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(mesh_device)
+    mapper = layout.build_mapper(mesh_device, tensor_rank=len(np_data.shape))
 
     result = ttml.autograd.Tensor.from_numpy(
         np_data,

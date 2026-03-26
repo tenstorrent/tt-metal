@@ -22,9 +22,8 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
+        **kwargs,
     ) -> None:
-        super().__init__()
-
         if embedding_size % num_heads != 0:
             raise ValueError(
                 "Embedding size must be divisible by the number of attention heads. "
@@ -40,9 +39,17 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
-        self.kv_linear = LinearLayer(embedding_size, concat_kv_dim, bias_linears)
-        self.out_linear = LinearLayer(embedding_size, embedding_size, bias_linears)
+        self.q_linear = LinearLayer(
+            embedding_size, embedding_size, bias_linears, **kwargs
+        )
+        self.kv_linear = LinearLayer(
+            embedding_size, concat_kv_dim, bias_linears, **kwargs
+        )
+        self.out_linear = LinearLayer(
+            embedding_size, embedding_size, bias_linears, **kwargs
+        )
+
+        super().__init__(**kwargs)
 
     def forward_no_kv(
         self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor

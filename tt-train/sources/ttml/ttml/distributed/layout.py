@@ -113,6 +113,24 @@ class Layout:
                 axis_placements[i] = p
         return Layout(ndim=ndim, axis_placements=axis_placements)
 
+    def build_mapper(self, mesh_device, tensor_rank: int = 4):
+        """Build a TensorToMesh mapper for this layout.
+
+        Returns a shard mapper for the first ``Shard`` placement found,
+        or a replicate mapper if fully replicated.
+        """
+        import ttml
+
+        for mesh_axis, placement in enumerate(self.placements):
+            if isinstance(placement, Shard):
+                dim = (
+                    placement.dim if placement.dim >= 0 else tensor_rank + placement.dim
+                )
+                return ttml.core.distributed.shard_tensor_to_mesh_mapper(
+                    mesh_device, dim, mesh_axis
+                )
+        return ttml.core.distributed.replicate_tensor_to_mesh_mapper(mesh_device)
+
     def __eq__(self, other):
         if not isinstance(other, Layout):
             return False

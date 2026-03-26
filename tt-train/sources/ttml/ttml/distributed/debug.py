@@ -35,7 +35,8 @@ import threading
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from itertools import zip_longest
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from ttml.trainers import SFTTrainer
@@ -51,7 +52,11 @@ def _thread_local() -> threading.local:
 
 @dataclass
 class TraceEntry:
-    """Single dispatch event."""
+    """Single dispatch event.
+
+    ``input_shapes`` holds ``tuple(t.shape())`` for each tensor argument, same order
+    as ``input_layouts`` (logical shapes as seen by the Python op).
+    """
 
     op_name: str
     input_layouts: List[Optional[Layout]]
@@ -61,6 +66,7 @@ class TraceEntry:
     redistributions: List[Dict[str, Any]]
     post_collectives: List[Dict[str, Any]]
     output_layout: Optional[Layout]
+    input_shapes: List[Tuple[int, ...]] = field(default_factory=list)
     depth: int = 0
     module_stack: List[str] = field(default_factory=list)
     op_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -68,6 +74,8 @@ class TraceEntry:
     def __repr__(self) -> str:
         parts = [f"op={self.op_name}"]
         parts.append(f"inputs={self.input_layouts}")
+        if self.input_shapes:
+            parts.append(f"input_shapes={self.input_shapes}")
         if self.rule_name:
             parts.append(f"rule={self.rule_name}")
         if self.op_kwargs:
@@ -105,6 +113,7 @@ class TraceEntry:
             "depth": self.depth,
             "module_stack": list(self.module_stack),
             "input_layouts": [layout_repr(l) for l in self.input_layouts],
+            "input_shapes": [list(s) for s in self.input_shapes],
             "output_layout": layout_repr(self.output_layout),
             "op_kwargs": json_safe(self.op_kwargs),
             "pre_collectives": json_safe(self.pre_collectives),
@@ -347,6 +356,8 @@ class DispatchTrace:
 
         def short_summary(entry: TraceEntry) -> str:
             parts = [f"op={entry.op_name}"]
+            if entry.input_shapes:
+                parts.append(f"in_shapes={entry.input_shapes}")
             if entry.rule_name:
                 parts.append(f"rule={entry.rule_name}")
             if entry.op_kwargs:
@@ -451,6 +462,8 @@ class DispatchTrace:
 
         def entry_summary(ent: TraceEntry) -> str:
             parts = [f"op={escape(ent.op_name)}"]
+            if ent.input_shapes:
+                parts.append(f"in_shapes={escape(repr(ent.input_shapes))}")
             if ent.rule_name:
                 parts.append(f"rule={escape(ent.rule_name)}")
             if ent.op_kwargs:
@@ -465,6 +478,20 @@ class DispatchTrace:
 
         # Execution order: entries in record order with CCLs visible
         exec_lines: List[str] = []
+
+        def inputs_shapes_layouts_html(ent: TraceEntry) -> str:
+            if not ent.input_shapes and not ent.input_layouts:
+                return ""
+            pairs = []
+            for idx, (sh, ly) in enumerate(
+                zip_longest(ent.input_shapes, ent.input_layouts, fillvalue=None)
+            ):
+                pairs.append(
+                    f'<span class="in-pair">in[{idx}]: shape={escape(repr(sh))} '
+                    f"layout={layout_str(ly)}</span>"
+                )
+            return '<div class="exec-inputs">' + "<br/>".join(pairs) + "</div>"
+
         for i, ent in enumerate(entries):
             path_str = escape(" / ".join(ent.module_stack)) if ent.module_stack else "—"
             exec_lines.append(
@@ -473,6 +500,7 @@ class DispatchTrace:
                 f'<span class="exec-path">{path_str}</span> '
                 f'<span class="op-name">{escape(ent.op_name)}</span>'
                 f'<span class="op-summary">{entry_summary(ent)}</span>'
+                f"{inputs_shapes_layouts_html(ent)}"
                 f"{ccls_html(ent)}</div>"
             )
         execution_body = "\n".join(exec_lines)
@@ -515,6 +543,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     .ccl.pre {{ color: #4ec9b0; }}
     .ccl.redist {{ color: #ce9178; }}
     .ccl.post {{ color: #569cd6; }}
+    .exec-inputs {{ margin: 0.35rem 0 0 1.5rem; font-size: 0.88em; color: #b5cea8; }}
+    .in-pair {{ display: block; }}
   </style>
 </head>
 <body>

@@ -40,7 +40,7 @@ from .rules.registry import (
 )
 from .debug import DispatchTracer, DispatchTraceCallback, dispatch_trace
 from .training import distribute_tensor, parallelize_module
-from .style import ParallelStyle, ColwiseParallel, RowwiseParallel
+from .style import ParallelStyle, TpPlan, ColwiseParallel, RowwiseParallel
 from ._register_ops import init_ops
 
 from . import module_rules as _module_rules  # register module rules  # noqa: F401
@@ -75,6 +75,7 @@ __all__ = [
     "parallelize_module",
     "sync_gradients",
     "ParallelStyle",
+    "TpPlan",
     "ColwiseParallel",
     "RowwiseParallel",
     "init_ops",
