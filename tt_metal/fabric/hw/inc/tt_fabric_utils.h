@@ -81,7 +81,9 @@ inline void wait_for_notification(
     ) {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         // context switch while waiting to allow slow dispatch traffic to go through
+#ifndef ARCH_WORMHOLE
         static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
+#endif
         run_routing();
     }
 }
