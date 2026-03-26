@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "patchable_generic_op_types.hpp"
 #include "patchable_generic_op_program_factory.hpp"
 

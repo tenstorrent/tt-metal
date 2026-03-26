@@ -153,10 +153,6 @@ class DeferredOpDescriptor:
         return self.output_tensors
 
 
-# Backward compatibility — prefer :class:`DeferredOpDescriptor`.
-LazyOpDescriptor = DeferredOpDescriptor
-
-
 def is_op_descriptor(item) -> bool:
     """True if ``item`` is an :class:`OpDescriptor` or :class:`DeferredOpDescriptor`."""
     return isinstance(item, (OpDescriptor, DeferredOpDescriptor))
@@ -165,7 +161,6 @@ def is_op_descriptor(item) -> bool:
 __all__ = [
     "OpDescriptor",
     "DeferredOpDescriptor",
-    "LazyOpDescriptor",
     "core_range_set_fusion_key",
     "extend_branch_program_cache_key",
     "is_op_descriptor",

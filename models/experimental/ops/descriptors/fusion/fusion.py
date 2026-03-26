@@ -431,11 +431,6 @@ class FusedOp:
             raise TypeError(f"expected Parallel, got {type(parallel).__name__}")
         self.refresh_merged_io(_flatten_ops(parallel._items))
 
-    def refresh_merged_io_from_sequential(self, sequential: "Sequential") -> None:
-        if not isinstance(sequential, Sequential):
-            raise TypeError(f"expected Sequential, got {type(sequential).__name__}")
-        self.refresh_merged_io(_flatten_ops(sequential._items))
-
     def _apply_kernel_dir(self, kernel_dir: str) -> None:
         """Switch kernel sources to file-based, writing files only if they don't exist.
 

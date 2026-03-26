@@ -785,42 +785,8 @@ class OpGraphBuilder:
 # =============================================================================
 
 
-def build_op_graph(
-    root_phases: List[OpDescriptor],
-    children: List[OpNode],
-    device: Any = None,
-):
-    """Build a fused descriptor for a tree topology.
-
-    Convenience wrapper around :class:`OpGraphBuilder`.  Converts
-    ``root_phases`` into a chain of nodes, attaches ``children`` to
-    the last root-phase node, then builds.
-
-    Args:
-        root_phases: Phases that run before the tree splits.  Converted
-            into a chain of OpNode objects.
-        children: Subtrees to attach to the last root-phase node.
-        device: Optional device for GlobalSemaphore allocation.
-            If *None*, auto-extracted from the first tensor found
-            in the tree's OpDescriptors.
-
-    Returns:
-        A single self-contained FusedOp suitable for
-        ``result.launch()``.
-    """
-    if not root_phases:
-        raise ValueError("root_phases cannot be empty")
-    # Last root phase gets children attached
-    last = OpNode(root_phases[-1], children=list(children))
-    node = last
-    for desc in reversed(root_phases[:-1]):
-        node = OpNode(desc, children=[node])
-    return OpGraphBuilder(node).build(device)
-
-
 __all__ = [
     "OpNode",
     "CoreGroup",
     "OpGraphBuilder",
-    "build_op_graph",
 ]

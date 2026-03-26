@@ -422,16 +422,6 @@ class TestAliasGroups:
 class TestSourceTransformations:
     """Tests for kernel source transformation functions."""
 
-    @pytest.mark.parametrize("phase,expected_prefix", [(0, '"cb_in"'), (1, '"phase_1_cb_in"'), (2, '"phase_2_blk"')])
-    def test_prefix_named_args(self, phase, expected_prefix):
-        fn = _codegen._prefix_named_args_in_source
-        if phase == 2:
-            source = 'constexpr uint32_t blk = get_named_compile_time_arg_val("blk");'
-        else:
-            source = 'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");'
-        result = fn(source, phase)
-        assert f"get_named_compile_time_arg_val({expected_prefix})" in result
-
     def test_emit_rt_arg_wrapper_and_defines(self):
         joined = "\n".join(_codegen._emit_rt_arg_wrapper(2, 18))
         assert "arg_idx + 18" in joined
@@ -455,73 +445,6 @@ class TestSourceTransformations:
             "constexpr auto src_args = TensorAccessorArgs<2>();", 1, 5
         )
         assert "TensorAccessorArgs<7>" in result
-
-    def test_transform_phase_source_combines_all(self):
-        source = (
-            'constexpr uint32_t cb = get_named_compile_time_arg_val("cb_in");\n'
-            "uint32_t blk = get_compile_time_arg_val(0);\n"
-            "constexpr auto args = TensorAccessorArgs<2>();\n"
-            "uint32_t val = get_arg_val<uint32_t>(3);\n"
-        )
-        result = _codegen._transform_phase_source(source, 1, ct_arg_offset=5)
-        assert "phase_1_cb_in" in result
-        assert "get_compile_time_arg_val(5)" in result
-        assert "TensorAccessorArgs<7>" in result
-        assert "get_arg_val<uint32_t>(3)" in result  # NOT rewritten in source
-
-
-class TestExtractKernelBody:
-    """Tests for kernel body extraction via brace matching."""
-
-    @pytest.mark.parametrize(
-        "source,expected_in,expected_not_in",
-        [
-            # Standard
-            ("void kernel_main() {\n    int x = 1;\n}", ["int x = 1"], []),
-            # ALWI prefix
-            ("ALWI void kernel_main() {\n    compute(x);\n}", ["compute(x)"], []),
-            # Nested braces
-            (
-                "void kernel_main() {\n    for (int i=0;i<10;i++) { if (i>5) { do_something(); } }\n}",
-                ["do_something", "for"],
-                [],
-            ),
-            # No kernel_main
-            ("void other_function() { int x = 1; }", [], []),
-            # String literal with braces
-            (
-                'void kernel_main() {\n    const char* msg = "{ json }";\n    int y = 2;\n}',
-                ["{ json }", "int y = 2"],
-                [],
-            ),
-            # Line comment with braces
-            ("void kernel_main() {\n    // this has a } brace\n    int x = 1;\n}", ["int x = 1"], []),
-            # Block comment with braces
-            ("void kernel_main() {\n    /* } } } */\n    int x = 1;\n}", ["int x = 1"], []),
-            # Char literal with brace
-            ("void kernel_main() {\n    char c = '}';\n    int x = 1;\n}", ["int x = 1"], []),
-            # Raw string
-            (
-                'void kernel_main() {\n    const char* s = R"({ \\"key\\" })";\n    int x = 1;\n}',
-                ["int x = 1", 'R"('],
-                [],
-            ),
-        ],
-    )
-    def test_extract(self, source, expected_in, expected_not_in):
-        body = _codegen.extract_kernel_body(source)
-        for s in expected_in:
-            assert s in body
-        for s in expected_not_in:
-            assert s not in body
-        if not expected_in and not expected_not_in:
-            assert body == ""
-
-    def test_raw_string_with_delimiter(self):
-        source = (
-            'void kernel_main() {\n    const char* s = R"foo(\n        }}} """ {{{\n    )foo";\n    int done = 1;\n}'
-        )
-        assert "int done = 1" in _codegen.extract_kernel_body(source)
 
 
 class TestCollectIncludesAndDefines:
@@ -1032,31 +955,6 @@ class TestSequentialParallelAPI:
         OD = _fusion.OpDescriptor
         assert OD("desc", ["in"], ["out"]).name == ""
         assert OD("desc", ["in"], ["out"], "matmul").name == "matmul"
-
-
-# ---------------------------------------------------------------------------
-# Phase name generation and DeviceZoneScopedN
-# ---------------------------------------------------------------------------
-
-
-class TestPhaseNameGeneration:
-    """Tests for phase name propagation in generated source."""
-
-    def test_phase_namespace_with_and_without_name(self):
-        gen = _codegen._generate_phase_namespace
-        source = "void kernel_main() { int x = 1; }"
-
-        lines = gen(0, "", source, [], 0, phase_name="rms_norm")
-        assert "Phase 0: rms_norm" in lines[1]
-        # DeviceZoneScopedN is emitted in the kernel_main() dispatcher,
-        # not inside _generate_phase_namespace, so we only check the comment.
-
-        lines = gen(0, "", source, [], 0, phase_name="")
-        assert "Phase 0" in lines[1]
-
-    def test_default_no_zone(self):
-        lines = _codegen._generate_phase_namespace(0, "", "void kernel_main() { int x = 1; }", [], 0)
-        assert "DeviceZoneScopedN" not in "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

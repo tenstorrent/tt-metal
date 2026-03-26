@@ -2795,7 +2795,7 @@ manually.
 | `models/experimental/ops/descriptors/fusion/common.py` | Shared data classes + geometry utilities (leaf module) |
 | `models/experimental/ops/descriptors/fusion/cb_allocator.py` | CB pool allocation + analysis + phantom/rebind helpers |
 | `models/experimental/ops/descriptors/fusion/fusion.py` | `Sequential`, `Parallel`, `FusedOp` (high-level API) |
-| `models/experimental/ops/descriptors/fusion/graph.py` | `OpNode`, `OpGraphBuilder`, `build_op_graph`, global pool + projection |
+| `models/experimental/ops/descriptors/fusion/graph.py` | `OpNode`, `OpGraphBuilder`, global pool + projection |
 | `models/experimental/ops/descriptors/fusion/codegen/cpp_parser.py` | C++ lexer, body extraction, include inlining |
 | `models/experimental/ops/descriptors/fusion/codegen/barrier.py` | C++ templates + unified barrier generator |
 | `models/experimental/ops/descriptors/fusion/codegen/source_gen.py` | Source utils, transforms, phase NS, fused source gen |

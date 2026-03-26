@@ -7,7 +7,6 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
 
 #include "ttnn/tensor/tensor.hpp"

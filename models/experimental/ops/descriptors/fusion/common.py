@@ -260,7 +260,6 @@ __all__ = [
     "BarrierSegment",
     "MultiBarrierSpec",
     "_BuildResult",
-    "_NoOpProgramDescriptor",
     "_NOOP_OP",
     "_core_range_set_to_coords",
     "_core_ranges_key",
