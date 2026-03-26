@@ -1199,6 +1199,45 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     }
 }
 
+// Two HALFTRAY instances in row_major_mesh [2,1] produce non-contiguous node IDs when joined; items must be
+// indexed by node_id (rebuild_items_from_flattened_mesh), not push_back order.
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x2Mesh_TwoHalftray_ItemsPerGraphNode) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    GroupingInfo mesh_4x2;
+    bool found = false;
+    for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
+        if (mesh.name == "4x2_Mesh") {
+            mesh_4x2 = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '4x2_Mesh' grouping";
+
+    EXPECT_EQ(mesh_4x2.asic_count, 8u) << "4x2_Mesh: 2 halftrays x 4 ASICs";
+    EXPECT_EQ(mesh_4x2.items.size(), 2u) << "4x2_Mesh should have 2 instance refs before flatten";
+
+    auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_4x2);
+    ASSERT_FALSE(flattened_meshes.empty());
+    const GroupingInfo& flat = flattened_meshes.front();
+    const auto& flattened_mesh = flat.adjacency_graph;
+
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 8u) << "Flattened mesh should have 8 nodes";
+
+    for (uint32_t node_id : nodes) {
+        ASSERT_LT(node_id, flat.items.size())
+            << "items must be sized so items[node_id] exists for every graph node (node_id=" << node_id
+            << ", items.size()=" << flat.items.size() << ")";
+        const auto& item = flat.items[node_id];
+        EXPECT_EQ(item.type, GroupingItemInfo::ItemType::ASIC_LOCATION)
+            << "node_id " << node_id << " should have ASIC_LOCATION metadata from flattened mesh";
+    }
+}
+
 // Corner-inferred dims: dims inferred from items' corners, not stored in GroupingInfo
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInference) {
     const std::string text_proto = wrap_with_required_groupings(R"proto(
@@ -1281,7 +1320,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWi
     ASSERT_FALSE(all_mesh_groupings.empty()) << "No MESH groupings found in PGD";
 
     // Find specific mesh groupings by name or by dimensions (name can have WH/BH suffix)
-    // Prefer exact match first so "2x4_Mesh" matches the single-tray grouping, not "2x4_Mesh_2tray"
+    // Prefer exact match first so "4x2_Mesh" matches the two-halftray grouping, not a longer prefix
     auto find_mesh_by_name = [&all_mesh_groupings](const std::string& name) -> const GroupingInfo* {
         for (const auto& mesh : all_mesh_groupings) {
             if (mesh.name == name) {
@@ -1307,15 +1346,15 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWi
             << "Expected validation result: 8x16_Mesh grouping validation against mock cluster PSD";
     }
 
-    // Test 2x4_Mesh - validation against mock cluster
+    // Test 4x2_Mesh (two HALFTRAY instances, row_major_mesh [2,1]) - validation against mock cluster
     {
-        const auto* mesh_grouping = find_mesh_by_name("2x4_Mesh");
-        ASSERT_NE(mesh_grouping, nullptr) << "2x4_Mesh grouping not found";
+        const auto* mesh_grouping = find_mesh_by_name("4x2_Mesh");
+        ASSERT_NE(mesh_grouping, nullptr) << "4x2_Mesh grouping not found";
 
         auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: 2x4_Mesh grouping should map to mock cluster PSD";
+            << "Expected validation to pass: 4x2_Mesh grouping should map to mock cluster PSD";
     }
 
     // Test 4x4_Mesh - validation against mock cluster
@@ -1503,14 +1542,14 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple16x8PsdWi
     }
 
     {
-        auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh grouping not found";
+        auto mesh_groupings = pgd.get_groupings_by_name("4x2_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "4x2_Mesh grouping not found";
 
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
-        // Expect 48 groups
+        // Expect 48 groups (same tiling count as former 2x4_Mesh: 8-ASIC two-halftray mesh)
         EXPECT_EQ(asic_ids.size(), 48u)
-            << "Expected validation to pass: 2x4_Mesh grouping should map to mock cluster PSD";
+            << "Expected validation to pass: 4x2_Mesh grouping should map to mock cluster PSD";
     }
 
     {
@@ -1564,7 +1603,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, ValidateGroupingWithPsd_PodAndSuperpodL
 // ============================================================================
 
 TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
-    // Test matching a 2x4 mesh MGD (8 ASICs) to the 2x4_Mesh grouping
+    // Test matching a 4x2 mesh MGD (8 ASICs) to the 4x2_Mesh grouping in bh_galaxy PGD
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
@@ -1604,14 +1643,14 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
     ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
 
-    // Check that we have a match for the 2x4_Mesh grouping (8 ASICs)
+    // Check that we have a match for the 4x2_Mesh grouping (8 ASICs)
     // Flattened groupings have "_flat" appended to their name
     bool found_mesh_match = false;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 8u && grouping.name == "2x4_Mesh_flat") {
+            if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_flat") {
                 found_mesh_match = true;
-                EXPECT_EQ(grouping.name, "2x4_Mesh_flat") << "Should match 2x4_Mesh_flat grouping";
+                EXPECT_EQ(grouping.name, "4x2_Mesh_flat") << "Should match 4x2_Mesh_flat grouping";
                 EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
                 break;
             }
@@ -1620,7 +1659,7 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_BlitzPipeline2x
             break;
         }
     }
-    EXPECT_TRUE(found_mesh_match) << "Should find a match for 2x4 mesh (8 ASICs) matching 2x4_Mesh_flat grouping";
+    EXPECT_TRUE(found_mesh_match) << "Should find a match for 4x2 mesh (8 ASICs) matching 4x2_Mesh_flat grouping";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";

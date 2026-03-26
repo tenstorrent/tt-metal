@@ -55,10 +55,12 @@ struct GroupingItemInfo {
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
     std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
-    std::vector<GroupingItemInfo> items;  // items[i] is the item for graph node i (0..n-1)
+    // items[node_id] is the item for graph node node_id. Flattened meshes may use non-contiguous IDs;
+    // in that case size is max_node_id+1 (only indices present in adjacency_graph are meaningful).
+    std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
-    // Adjacency graph. For flattened groupings, nodes are 0..n-1 and items[i] = item for node i.
+    // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
