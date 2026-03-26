@@ -33,12 +33,7 @@ inline void calculate_mac(
         TTI_SFPNOP;
         if constexpr (!is_fp32_dest_acc_en) {
             TTI_SFP_STOCH_RND(
-                sfpi::SFPSTOCHRND_RND_EVEN,
-                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A,
-                0,
-                p_sfpu::LREG3,
-                p_sfpu::LREG3,
-                InstrModLoadStore::FP16A);
+                sfpi::SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
         TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
