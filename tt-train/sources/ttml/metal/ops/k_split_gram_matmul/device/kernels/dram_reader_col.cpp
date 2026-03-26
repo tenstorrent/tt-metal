@@ -59,10 +59,12 @@ void kernel_main() {
         uint32_t M_start = m_sub * M_block;
         uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
 
-        // --- Phase 1: read odd K-columns from DRAM, N_block rows per pass ---
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             uint32_t row_base = n_sub * M_block;
+            uint32_t N_start = n_sub * M_block;
+            uint32_t current_N = (M_block < Mpc - N_start) ? M_block : (Mpc - N_start);
 
+            // Read odd K-columns from DRAM
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 uint32_t first_k_col = blk * K_block_tiles * 2 + 1;
 
@@ -84,40 +86,23 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id, block_size);
             }
-        }
 
-        const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
-
-#ifdef BLOCK_STREAMING
-        for (uint32_t m = 0; m < current_M_block; m++) {
-            cb_wait_front(cb_out, Mpc);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            uint32_t row = M_start_tile + M_start + m;
-            for (uint32_t n = 0; n < Mpc; n++) {
-                uint32_t col = N_start_tile + n;
-                if (row < logical_M_tiles && col < logical_M_tiles) {
-                    uint32_t tid = row * padded_out_tiles + col;
-                    noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
-                }
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, Mpc);
-        }
-#else
-        for (uint32_t n = 0; n < Mpc; n++) {
-            cb_wait_front(cb_out, current_M_block);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            uint32_t col = N_start_tile + n;
+            // Write output per block
+            const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
             for (uint32_t m = 0; m < current_M_block; m++) {
+                cb_wait_front(cb_out, current_N);
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
                 uint32_t row = M_start_tile + M_start + m;
-                if (row < logical_M_tiles && col < logical_M_tiles) {
-                    uint32_t tid = row * padded_out_tiles + col;
-                    noc_async_write_tile(tid, out_writer, l1_read_addr + m * out_tile_size);
+                for (uint32_t n = 0; n < current_N; n++) {
+                    uint32_t col = N_start_tile + N_start + n;
+                    if (row < logical_M_tiles && col < logical_M_tiles) {
+                        uint32_t tid = row * padded_out_tiles + col;
+                        noc_async_write_tile(tid, out_writer, l1_read_addr + n * out_tile_size);
+                    }
                 }
+                noc_async_write_barrier();
+                cb_pop_front(cb_out, current_N);
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, current_M_block);
         }
-#endif
     }
 }

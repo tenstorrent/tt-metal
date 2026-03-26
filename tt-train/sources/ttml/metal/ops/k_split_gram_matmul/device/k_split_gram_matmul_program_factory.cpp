@@ -67,70 +67,44 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t mirror_out_overhead = mirror_active ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
 
-    // Find optimal (kb, mb) config that minimizes subs (= ceil(Mpc/mb)), then maximizes kb.
-    // Two L1 formulas: per-msb uses c_3 (Mpc*mb), per-nsb replaces c_3 with smaller c_5 (mb²).
-    // Per-nsb is selected only when it achieves subs=1 and per-msb doesn't.
-    // Input CBs (c_0, c_1) hold 2 blocks each for double-buffered DRAM streaming
+    // Find optimal (kb, mb) that minimizes num_m_blocks (= ceil(Mpc/mb)), then maximizes kb.
+    // Input CBs (c_0, c_1) hold 2 blocks each for double-buffered DRAM streaming.
     constexpr uint32_t input_cb_num_blocks = 2;
 
-    auto find_max_mb = [&](uint32_t kb, bool block_streaming) -> uint32_t {
+    auto find_max_mb = [&](uint32_t kb) -> uint32_t {
         for (uint32_t mb = Mpc; mb >= 1; mb--) {
             // c_0 + c_1: two input CBs, each holds input_cb_num_blocks × kb × mb tiles
             uint32_t input_cbs = 2 * input_cb_num_blocks * kb * mb * tile_sz;
             // c_2: matmul intermediate accumulator (FP32), mb × mb tiles
             uint32_t intermed_cb = mb * mb * intermed_tile_sz;
+            // c_5: output/reduce CB, mb × mb tiles
+            uint32_t output_cb = mb * mb * out_tile_sz;
             // c_6: combined output after reduction, mb tiles
             uint32_t combined_cb = mb * out_tile_sz;
             // c_4 + c_7: mirror output staging (only with OutputMode::Full)
             uint32_t mirror_cbs = mb * mirror_out_overhead;
-            // c_3 + c_5: output + reduce CBs
-            //   Row streaming: c_3 = Mpc × mb, c_5 = Mpc × mb (accumulate full row-strip)
-            //   Block streaming: c_5 = mb × mb (immediate output per block, no c_3)
-            uint32_t output_cbs = block_streaming ? mb * mb * out_tile_sz : 2 * Mpc * mb * out_tile_sz;
 
-            if (input_cbs + intermed_cb + combined_cb + mirror_cbs + output_cbs <= L1_BUDGET)
+            if (input_cbs + intermed_cb + output_cb + combined_cb + mirror_cbs <= L1_BUDGET)
                 return mb;
         }
         return 0;
     };
 
-    uint32_t best_num_m_blocks = UINT32_MAX, best_kb = 0, best_mb = 0;
-    uint32_t pernsb_best_num_m_blocks = UINT32_MAX, pernsb_best_kb = 0, pernsb_best_mb = 0;
-
+    uint32_t best_kb = 0, best_mb = 0, best_num_m_blocks = UINT32_MAX;
     for (uint32_t kb = std::min(K_half, 8u); kb >= 1; kb--) {
         if (K_half % kb != 0)
             continue;
-        // Per-msb path
-        uint32_t mb = find_max_mb(kb, false);
-        if (mb > 0) {
-            uint32_t subs = (Mpc + mb - 1) / mb;
-            if (subs < best_num_m_blocks || (subs == best_num_m_blocks && kb > best_kb)) {
-                best_num_m_blocks = subs;
-                best_kb = kb;
-                best_mb = mb;
-            }
-        }
-        // Per-nsb path
-        mb = find_max_mb(kb, true);
-        if (mb > 0) {
-            uint32_t subs = (Mpc + mb - 1) / mb;
-            if (subs < pernsb_best_num_m_blocks || (subs == pernsb_best_num_m_blocks && kb > pernsb_best_kb)) {
-                pernsb_best_num_m_blocks = subs;
-                pernsb_best_kb = kb;
-                pernsb_best_mb = mb;
-            }
+        uint32_t mb = find_max_mb(kb);
+        if (mb == 0)
+            continue;
+        uint32_t n = (Mpc + mb - 1) / mb;
+        if (n < best_num_m_blocks || (n == best_num_m_blocks && kb > best_kb)) {
+            best_num_m_blocks = n;
+            best_kb = kb;
+            best_mb = mb;
         }
     }
-    TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul with db=2 in L1");
-
-    bool use_block_streaming = (pernsb_best_num_m_blocks == 1 && best_num_m_blocks > 1);
-    if (use_block_streaming) {
-        best_num_m_blocks = pernsb_best_num_m_blocks;
-        best_kb = pernsb_best_kb;
-        best_mb = pernsb_best_mb;
-    }
-    best_num_m_blocks = (Mpc + best_mb - 1) / best_mb;
-    use_block_streaming = use_block_streaming && (best_num_m_blocks == 1);
+    TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul in L1");
 
     uint32_t K_block_tiles = best_kb;
     uint32_t M_block = best_mb;
@@ -144,19 +118,14 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t padded_out_tiles = logical_M_tiles;
     uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per nsb pass
 
-    // CB for sender output: c_3 (per-msb) or c_5 (per-nsb)
-    uint32_t send_out_cb = use_block_streaming ? (uint32_t)tt::CBIndex::c_5 : (uint32_t)tt::CBIndex::c_3;
-    uint32_t c5_tiles = use_block_streaming ? M_block * N_block : Mpc * M_block;
+    uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
+    uint32_t c5_tiles = M_block * N_block;
 
     auto create_all_cbs = [&](const tt::tt_metal::CoreRange& range) {
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_0, tile_format, tile_sz, cb_size);
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_1, tile_format, tile_sz, cb_size);
         create_circular_buffer(
             program, range, (uint32_t)tt::CBIndex::c_2, intermed_format, intermed_tile_sz, M_block * N_block);
-        if (!use_block_streaming) {
-            create_circular_buffer(
-                program, range, (uint32_t)tt::CBIndex::c_3, out_tile_format, out_tile_sz, Mpc * M_block);
-        }
         if (mirror_active) {
             // c_4: mirror buffer for transposed tiles (M_block tiles, streamed col by col)
             create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_4, out_tile_format, out_tile_sz, M_block);
@@ -390,8 +359,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     if (!row_upper_recv.empty()) {
         auto ct = make_recv_write_ct(row_sender_sem2, row_receiver_sem2);
         auto recv_defines = std::map<std::string, std::string>{{"REDUCE_RECV", "1"}};
-        if (use_block_streaming)
-            recv_defines["BLOCK_STREAMING"] = "1";
+        recv_defines["BLOCK_STREAMING"] = "1";
         if (mirror_active)
             recv_defines["MIRROR_OUTPUT"] = "1";
         row_upper_recv_kid = CreateKernel(
@@ -502,8 +470,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
         TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
         auto dram_defines = std::map<std::string, std::string>{};
-        if (use_block_streaming)
-            dram_defines["BLOCK_STREAMING"] = "1";
+        dram_defines["BLOCK_STREAMING"] = "1";
         if (mirror_active)
             dram_defines["MIRROR_OUTPUT"] = "1";
         helper_dram_reader_kid = CreateKernel(
@@ -516,8 +483,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // === Compute ===
     // Different defines per core group for reduction mode
     auto compute_cfg = [&](std::map<std::string, std::string> defines = {}) {
-        if (use_block_streaming)
-            defines["BLOCK_STREAMING"] = "1";
+        defines["BLOCK_STREAMING"] = "1";
         return ComputeConfig{
             .fp32_dest_acc_en = true,
             .compile_args = {K_half, K_block_tiles, Mpc, subblock_w, M_block, subblock_h, N_block, num_n_blocks},
