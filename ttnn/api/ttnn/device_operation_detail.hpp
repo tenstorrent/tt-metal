@@ -5,7 +5,6 @@
 #pragma once
 
 #include <functional>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,7 +16,6 @@ namespace tt::tt_metal {
 class Tensor;
 namespace distributed {
 class MeshDevice;
-class MeshWorkload;
 }  // namespace distributed
 }  // namespace tt::tt_metal
 
@@ -38,17 +36,6 @@ std::pair<
 compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
     const tt::tt_metal::Tensor& first_tensor);
-
-/**
- * Non-template implementation of mesh workload annotation for the inspector.
- *
- * Formats tensor arguments and emits annotation metadata without requiring
- * the operation type template parameter.
- */
-void emit_mesh_workload_annotation_impl(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    std::string_view operation_name,
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors);
 
 /**
  * Non-template implementation of tensor coordinate extraction.

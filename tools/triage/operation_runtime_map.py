@@ -9,7 +9,7 @@ Usage:
 
 Description:
     Data provider that builds a mapping from dispatcher runtime IDs (host_assigned_id) to
-    (operation_name, operation_parameters) using Inspector mesh workloads.
+    (operation_name, operation_parameters) using Inspector runtime entries.
 
     This is intentionally cached with @triage_singleton so the mapping is computed once per
     triage run (per args/context) and reused by other scripts.
@@ -40,15 +40,11 @@ def run(args, context) -> dict[int, tuple[str, str]]:
     runtime_id_map: dict[int, tuple[str, str]] = {}
 
     try:
-        mesh_workloads_result = inspector_data.getMeshWorkloads()
-        mesh_workloads = {w.meshWorkloadId: w for w in mesh_workloads_result.meshWorkloads}
-
-        runtime_ids_result = inspector_data.getMeshWorkloadsRuntimeIds()
-        for entry in runtime_ids_result.runtimeIds:
-            workload = mesh_workloads.get(entry.workloadId)
-            if workload is None:
-                continue
-            runtime_id_map[int(entry.runtimeId)] = (workload.name, workload.parameters)
+        runtime_entries_result = inspector_data.getMeshWorkloadRuntimeEntries()
+        for entry in runtime_entries_result.runtimeEntries:
+            op_name = entry.operationName
+            op_params = entry.operationParameters
+            runtime_id_map[int(entry.runtimeId)] = (op_name, op_params)
 
         log_check(True, f"Built runtime_id map with {len(runtime_id_map)} operation(s)")
     except Exception as e:
