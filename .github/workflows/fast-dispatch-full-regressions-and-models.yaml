@@ -5,7 +5,7 @@ on:
     inputs:
       models-to-run:
         description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
-        default: "all"
+        default: '["stable_diffusion_xl_base"]'
         type: string
       enable-ops-recording:
         description: "Enable Tracy ops recording for all tests (generates operations report)"
