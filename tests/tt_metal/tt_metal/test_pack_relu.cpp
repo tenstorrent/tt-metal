@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,12 +13,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
-using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -56,97 +54,54 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
     auto dst_dram_buffer = CreateBuffer(dst_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    KernelHandle reader;
-    KernelHandle writer;
-    KernelHandle compute;
+    // DFB config for Quasar
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,
+        .data_format = tt::DataFormat::Float16_b};
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,
+        .data_format = tt::DataFormat::Float16_b};
 
-    if (dev->arch() != ARCH::QUASAR) {
-        uint32_t src0_cb_index = tt::CBIndex::c_0;
-        CircularBufferConfig cb_src0_config =
-            CircularBufferConfig(num_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        CreateCircularBuffer(program, core, cb_src0_config);
+    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
+    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
 
-        uint32_t output_cb_index = tt::CBIndex::c_16;
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, single_tile_size);
-        CreateCircularBuffer(program, core, cb_output_config);
+    KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb}});
 
-        reader = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = {src0_cb_index}});
+    KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
 
-        writer = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-            core,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = {output_cb_index}});
+    KernelHandle compute = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 1, .compile_args = {num_tiles}, .defines = {{"PACK_RELU", "1"}}});
 
-        compute = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
-            core,
-            ComputeConfig{.compile_args = {num_tiles}, .defines = {{"PACK_RELU", "1"}}});
-    } else {
-        // Same DFB config as test_direct.cpp quasar path
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
-            .entry_size = single_tile_size,
-            .num_entries = 2,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = true,
-            .data_format = tt::DataFormat::Float16_b};
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
-            .entry_size = single_tile_size,
-            .num_entries = 2,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = true,
-            .data_format = tt::DataFormat::Float16_b};
-
-        uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
-        uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
-
-        // Same reader/writer as test_direct.cpp
-        reader = tt_metal::experimental::quasar::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb}});
-
-        writer = tt_metal::experimental::quasar::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
-
-        compute = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
-            core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .compile_args = {num_tiles}, .defines = {{"PACK_RELU", "1"}}});
-
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program, l1_input_dfb, reader, compute);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program, l1_output_dfb, compute, writer);
-    }
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, l1_input_dfb, reader, compute);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, l1_output_dfb, compute, writer);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
@@ -184,13 +139,13 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
 }
 
 // ZERO_RELU: max(0, x)
-TEST_F(MeshDeviceSingleCardFixture, QuasarPackReluZero) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZero) {
     IDevice* dev = devices_[0]->get_devices()[0];
     run_pack_relu_test(dev, make_relu_config(ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
 // MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
-TEST_F(MeshDeviceSingleCardFixture, QuasarPackReluMinThreshold) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
     IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.25f;
     run_pack_relu_test(dev, make_relu_config(MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
@@ -199,7 +154,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarPackReluMinThreshold) {
 }
 
 // MAX_THRESHOLD_RELU: clamp to [0, threshold] (threshold = 0.5)
-TEST_F(MeshDeviceSingleCardFixture, QuasarPackReluMaxThreshold) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
     IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.5f;
     run_pack_relu_test(dev, make_relu_config(MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
