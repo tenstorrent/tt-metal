@@ -35,8 +35,9 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 */4 * * *" # Runs every 4 hours
+  push:
+    branches:
+      roseli/0-refactor-galaxy-quick
 
 run-name: "(Galaxy) Health"
 
@@ -66,7 +67,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: >-
         ${{
-          github.event_name == 'schedule'
+          github.event_name == 'push'
             && 'wh_galaxy,bh_galaxy'
             || (
               inputs.wormhole && inputs.blackhole
