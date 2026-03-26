@@ -125,11 +125,11 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
                 if (processe.pid.load(std::memory_order_relaxed) == my_pid) {
                     // Subtract this process's allocations from aggregated totals
                     // before clearing the entry (to properly track memory when process exits)
-                    uint64_t dram = region_->processes[i].dram_allocated.load(std::memory_order_relaxed);
-                    uint64_t l1 = region_->processes[i].l1_allocated.load(std::memory_order_relaxed);
-                    uint64_t l1_small = region_->processes[i].l1_small_allocated.load(std::memory_order_relaxed);
-                    uint64_t trace = region_->processes[i].trace_allocated.load(std::memory_order_relaxed);
-                    uint64_t cb = region_->processes[i].cb_allocated.load(std::memory_order_relaxed);
+                    uint64_t dram = processe.dram_allocated.load(std::memory_order_relaxed);
+                    uint64_t l1 = processe.l1_allocated.load(std::memory_order_relaxed);
+                    uint64_t l1_small = processe.l1_small_allocated.load(std::memory_order_relaxed);
+                    uint64_t trace = processe.trace_allocated.load(std::memory_order_relaxed);
+                    uint64_t cb = processe.cb_allocated.load(std::memory_order_relaxed);
 
                     // Subtract from aggregated totals with underflow protection
                     if (region_->total_dram_allocated >= dram) {
