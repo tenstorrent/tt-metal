@@ -1,0 +1,95 @@
+name: "Auto Disable Stale CI Threads"
+description: "Plans stale unresolved disables with Cursor and executes deterministic PR + kickoff steps"
+inputs:
+  input-json-path:
+    description: "Path to enriched Slack JSON"
+    required: true
+  stale-hours:
+    description: "Slack age threshold in hours"
+    required: false
+    default: "32"
+  max-actions:
+    description: "Max disable actions to execute in one run"
+    required: false
+    default: "3"
+  model:
+    description: "Cursor model"
+    required: false
+    default: "auto"
+  dry-run:
+    description: "If true, plan only and do not push/PR"
+    required: false
+    default: "false"
+  output-dir:
+    description: "Directory for generated artifacts"
+    required: false
+    default: "build_ci/auto_disable"
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare stale unresolved candidate list
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ inputs.output-dir }}"
+        python3 tools/ci/select_stale_unresolved_threads.py \
+          --input "${{ inputs.input-json-path }}" \
+          --output "${{ inputs.output-dir }}/stale_candidates.json" \
+          --stale-hours "${{ inputs.stale-hours }}" \
+          --max-candidates "${{ inputs.max-actions }}"
+
+    - name: Generate planning prompt
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 tools/ci/generate_disable_actions_prompt.py \
+          --template "${{ github.action_path }}/prompt.md" \
+          --candidates-json "${{ inputs.output-dir }}/stale_candidates.json" \
+          --output "${{ inputs.output-dir }}/disable_actions_prompt.txt" \
+          --max-actions "${{ inputs.max-actions }}"
+
+    - name: Build disable action JSON with Cursor
+      shell: bash
+      run: |
+        set -euo pipefail
+        prompt_file="${{ inputs.output-dir }}/disable_actions_prompt.txt"
+        raw_output="${{ inputs.output-dir }}/disable_actions_raw.txt"
+        actions_json="${{ inputs.output-dir }}/disable_actions.json"
+        if [ "${{ inputs.model }}" = "auto" ]; then
+          agent --trust -p "$(cat "$prompt_file")" | tee "$raw_output"
+        else
+          agent --trust --model "${{ inputs.model }}" -p "$(cat "$prompt_file")" | tee "$raw_output"
+        fi
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        raw_path = Path("${{ inputs.output-dir }}/disable_actions_raw.txt")
+        json_path = Path("${{ inputs.output-dir }}/disable_actions.json")
+        marker = "===FINAL_DISABLE_ACTIONS_JSON==="
+        text = raw_path.read_text(encoding="utf-8", errors="ignore")
+        idx = text.rfind(marker)
+        if idx < 0:
+            raise SystemExit("Missing marker in agent output")
+        payload = text[idx + len(marker):].strip()
+        data = json.loads(payload)
+        if not isinstance(data, dict) or not isinstance(data.get("actions"), list):
+            raise SystemExit("Invalid JSON contract: expected object with actions[]")
+        json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(json.dumps({"planned_actions": len(data.get("actions", []))}))
+        PY
+
+    - name: Execute disable actions
+      shell: bash
+      run: |
+        set -euo pipefail
+        dry=""
+        if [ "${{ inputs.dry-run }}" = "true" ]; then
+          dry="--dry-run"
+        fi
+        python3 tools/ci/execute_disable_actions.py \
+          --actions-json "${{ inputs.output-dir }}/disable_actions.json" \
+          --output-json "${{ inputs.output-dir }}/execution_result.json" \
+          --summary-md "${{ inputs.output-dir }}/summary.md" \
+          --model "${{ inputs.model }}" \
+          $dry

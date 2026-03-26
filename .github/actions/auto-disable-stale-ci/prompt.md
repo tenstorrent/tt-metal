@@ -1,0 +1,45 @@
+Read the JSON file at __CANDIDATES_JSON_PATH__.
+
+Task:
+- Produce a machine-readable disable action plan for stale unresolved CI Slack threads.
+- Only include entries where a disable PR should be attempted now.
+- Prioritize highest age first.
+- Cap actions to __MAX_ACTIONS__.
+
+Decision rules:
+- Ignore any candidate where `issue_closed` is true (these should already be excluded).
+- If `primary_issue_number` is missing, skip unless top-level text clearly contains enough failure context.
+- Prefer entries with clear CI failure context and issue references.
+- Keep action scope minimal and specific.
+
+Output contract:
+- Do not call tools, shell commands, or subagents.
+- At the very end, print exactly this marker on its own line:
+===FINAL_DISABLE_ACTIONS_JSON===
+- After that marker, output only JSON (no markdown) matching:
+{
+  "version": 1,
+  "actions": [
+    {
+      "source_slack_ts": "string",
+      "source_slack_permalink": "string",
+      "issue_number": 12345,
+      "job_urls": ["optional job urls"],
+      "disable_scope_hint": "one line",
+      "branch_name_hint": "ci-disable-test-optional-slug",
+      "pr_title": "ci: disable ...",
+      "pr_body": "short body with rationale and non-closing issue ref"
+    }
+  ],
+  "skipped": [
+    {
+      "source_slack_ts": "string",
+      "reason": "short reason"
+    }
+  ]
+}
+
+Validation constraints:
+- `actions` must be deterministic and deduplicated by `source_slack_ts`.
+- `issue_number` must be an integer.
+- `pr_title` and `pr_body` should be concise.

@@ -28,9 +28,41 @@ on:
         required: false
         type: boolean
         default: false
+      auto-disable-model:
+        description: "Cursor model for stale auto-disable mode"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "auto"
+      stale-hours-threshold:
+        description: "Slack message age threshold in hours for automatic disable actions"
+        required: false
+        default: "32"
+      max-auto-disable-actions:
+        description: "Maximum number of disable PRs to attempt in one run"
+        required: false
+        default: "3"
+      auto-disable-dry-run:
+        description: "If checked, produce plan only and skip push/PR/kickoff execution"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  actions: write
+  contents: write
+  issues: read
+  pull-requests: write
 
 jobs:
   export-slack-author-threads:
@@ -98,6 +130,16 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure CURSOR_API_KEY is configured (auto-disable mode)
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
       - name: Generate Slack data gathering report with Cursor agent
         if: ${{ inputs['data-gathering-mode'] }}
         env:
@@ -107,6 +149,51 @@ jobs:
           input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
           report-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
           model: ${{ github.event.inputs['data-report-model'] || 'auto' }}
+
+      - name: Auto-disable stale unresolved CI messages
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/auto-disable-stale-ci
+        with:
+          input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+          stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
+          max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
+          model: ${{ github.event.inputs['auto-disable-model'] || 'auto' }}
+          dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
+          output-dir: build_ci/auto_disable
+
+      - name: Upload auto-disable artifacts
+        if: ${{ !inputs['data-gathering-mode'] }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: auto-disable-artifacts
+          path: |
+            build_ci/auto_disable/stale_candidates.json
+            build_ci/auto_disable/disable_actions.json
+            build_ci/auto_disable/execution_result.json
+            build_ci/auto_disable/summary.md
+          retention-days: 7
+
+      - name: Publish auto-disable summary to run summary
+        if: ${{ !inputs['data-gathering-mode'] }}
+        run: |
+          set -euo pipefail
+          summary_path="build_ci/auto_disable/summary.md"
+          if [ -s "$summary_path" ]; then
+            {
+              echo "# Auto Disable Summary"
+              echo
+              cat "$summary_path"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Auto Disable Summary"
+              echo
+              echo "No summary produced."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload data gathering report artifact
         if: ${{ inputs['data-gathering-mode'] }}

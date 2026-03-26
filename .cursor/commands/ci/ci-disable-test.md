@@ -82,3 +82,7 @@ If no valid input is provided, stop and ask for at least one of the two.
 - Draft PR URL.
 - Explicit note confirming issue reference is non-closing (`Refs #...`).
 - Short statement of what exact test/job scope was disabled.
+
+## CI Automation Variant
+- For pipeline-driven automation where branch/PR/kickoff are executed by deterministic scripts, use `ci-disable-test-ci.md`.
+- In that mode, this command's disable analysis/edit behavior is reused, but git/gh write operations are handled externally.
