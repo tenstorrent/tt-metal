@@ -45,8 +45,14 @@ class RMSNormBase(AbstractModule):
         )
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
-        return cls._rmsnorm_forward_decode(x, cfg, memory_config)
+    def forward_decode(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        memory_config: ttnn.MemoryConfig,
+        output_memory_config: ttnn.MemoryConfig,
+    ) -> ttnn.Tensor:
+        return cls._rmsnorm_forward_decode(x, cfg, memory_config, output_memory_config)
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
@@ -55,12 +61,18 @@ class RMSNormBase(AbstractModule):
     @classmethod
     @abstractmethod
     def _rmsnorm_forward_decode(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig, memory_config: ttnn.MemoryConfig
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        memory_config: ttnn.MemoryConfig,
+        output_memory_config: ttnn.MemoryConfig,
     ) -> ttnn.Tensor:
         """Forward implementation of RMSNorm layer for decode mode.
         Args:
             x: Input tensor
             cfg: RunDecodeConfig containing weights and op configurations
+            memory_config: Memory configuration for the input tensor
+            output_memory_config: Memory configuration for the output tensor
 
         Returns:
             Output tensor after RMSNorm computation

@@ -127,14 +127,15 @@ class DecoderBlock2DBase(DecoderBlockBase):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         # MLA norm
-        mla_norm_out = DistributedRMSNorm.forward_decode(x, cfg["mla_norm"], **cfg["mla_norm_reshard"])
-
-        # MLA
         mla_reshard_memory_config = ttnn.create_sharded_memory_config(
-            mla_norm_out.shape,
+            x.shape,
             **cfg["mla_reshard"],
         )
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
+        mla_norm_out = DistributedRMSNorm.forward_decode(
+            x, cfg["mla_norm"], **cfg["mla_norm_reshard"], output_memory_config=mla_reshard_memory_config
+        )
+
+        # MLA
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
@@ -143,10 +144,11 @@ class DecoderBlock2DBase(DecoderBlockBase):
         ttnn.deallocate(mla_out)
 
         # MLP norm
-        mlp_norm_out = DistributedRMSNorm.forward_decode(x, cfg["mlp_norm"], **cfg["mlp_norm_reshard"])
+        mlp_norm_out = DistributedRMSNorm.forward_decode(
+            x, cfg["mlp_norm"], **cfg["mlp_norm_reshard"], output_memory_config=cfg["mlp_reshard"]["memory_config"]
+        )
 
         # MLP
-        mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
 

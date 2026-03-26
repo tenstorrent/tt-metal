@@ -223,7 +223,11 @@ class DistributedRMSNorm(RMSNormBase):
 
     @classmethod
     def _rmsnorm_forward_decode(
-        cls, x: ttnn.Tensor, cfg: RunDecodeConfig, memory_config: ttnn.MemoryConfig
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        memory_config: ttnn.MemoryConfig,
+        output_memory_config: ttnn.MemoryConfig,
     ) -> ttnn.Tensor:
         """Forward pass of the RMSNorm for decode mode.
 
@@ -231,13 +235,14 @@ class DistributedRMSNorm(RMSNormBase):
             x: Input tensor
             cfg: RunDecodeConfig containing weights and op configurations
             memory_config: Memory configuration for the input tensor
+            output_memory_config: Memory configuration for the output tensor
 
         Returns:
             Output tensor after RMSNorm computation
         """
         tensor_in = ttnn.to_memory_config(x, memory_config)
 
-        program_config = cls._get_pc(tensor_in.memory_config())
+        program_config = cls._get_pc(memory_config)
         # Run distributed rmsnorm part 1
         tt_stats = cls._fwd_rms_norm_pre_all_gather(tensor_in, cfg, program_config=program_config)
 
@@ -251,6 +256,7 @@ class DistributedRMSNorm(RMSNormBase):
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
         ttnn.deallocate(tt_gathered_stats)
+        tt_out = ttnn.to_memory_config(tt_out, output_memory_config)
 
         return tt_out
 
