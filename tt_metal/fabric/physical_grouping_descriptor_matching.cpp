@@ -1053,41 +1053,8 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
-// Helper: add forbidden constraints for used ASICs so they won't be reused.
-// Returns false if any constraint could not be added (e.g. would overconstrain).
-static bool add_forbidden_for_used_asics(
-    const std::set<AsicID>& used_asic_ids,
-    const std::set<uint32_t>& target_nodes,
-    MappingConstraints<uint32_t, AsicID>& constraints) {
-    for (const auto& asic_id : used_asic_ids) {
-        if (!constraints.add_forbidden_constraint(target_nodes, asic_id)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Maximum placements to find before stopping (safeguard against infinite loops).
 constexpr size_t kMaxPlacementsPerRun = 10000;
-
-// Helper: add forbidden constraints to all groupings (ASICs shared globally).
-static bool add_forbidden_for_used_asics_to_all_groupings(
-    const std::set<AsicID>& used_asic_ids,
-    const std::vector<GroupingInfo>& groupings,
-    std::vector<MappingConstraints<uint32_t, AsicID>>& constraints) {
-    for (size_t j = 0; j < groupings.size(); ++j) {
-        const auto& nodes = groupings[j].adjacency_graph.get_nodes();
-        if (nodes.empty()) {
-            continue;
-        }
-        std::set<uint32_t> targets(nodes.begin(), nodes.end());
-        if (!add_forbidden_for_used_asics(used_asic_ids, targets, constraints[j])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // TODO: Optimize constraints for maximum usage
 // https://github.com/tenstorrent/tt-metal/issues/40639
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
@@ -1120,18 +1087,12 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
             used_asic_ids.insert(asic_id);
         }
 
-        if (seen_asic_sets.contains(used_asic_ids)) {
-            log_warning(tt::LogFabric, "Homogeneous solver: repeated result - stopping to prevent infinite loop");
-            break;
-        }
-        seen_asic_sets.insert(used_asic_ids);
-
         results.push_back(result);
 
         std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
-        if (!add_forbidden_for_used_asics(used_asic_ids, all_target_nodes, current_constraints)) {
-            break;
-        }
+        TT_FATAL(
+            current_constraints.add_forbidden_constraint(all_target_nodes, used_asic_ids),
+            "Homogeneous solver: failed to add forbidden constraints to all groupings");
     }
 
     return results;
@@ -1149,8 +1110,14 @@ solve_for_many_groupings_to_psd_heterogeneous(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
-    std::vector<MappingConstraints<uint32_t, AsicID>> current_constraints(groupings.size());
-    std::vector<std::set<std::set<AsicID>>> seen_asic_sets_per_grouping(groupings.size());
+    MappingConstraints<uint32_t, AsicID> current_constraints;
+
+    std::set<uint32_t> all_target_nodes_union;
+    for (const auto& grouping : groupings) {
+        for (uint32_t n : grouping.adjacency_graph.get_nodes()) {
+            all_target_nodes_union.insert(n);
+        }
+    }
 
     while (true) {
         size_t total_results = 0;
@@ -1175,7 +1142,7 @@ solve_for_many_groupings_to_psd_heterogeneous(
             }
 
             MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
-                grouping, physical_graph, physical_system_descriptor, current_constraints[i]);
+                grouping, physical_graph, physical_system_descriptor, current_constraints);
 
             if (!result.success) {
                 ++i;
@@ -1187,52 +1154,12 @@ solve_for_many_groupings_to_psd_heterogeneous(
                 used_asic_ids.insert(asic_id);
             }
 
-            // Skip if this placement overlaps with results from a different grouping family (different name).
-            // Forbidden constraints may fail (validate) when adding to groupings with required traits that
-            // only allow the used ASICs; this check ensures we use only one disjoint family.
-            bool overlaps_other_family = false;
-            for (size_t j = 0; j < groupings.size(); ++j) {
-                if (groupings[j].name != grouping.name) {
-                    for (const auto& prev_result : results[j]) {
-                        for (const auto& [_, prev_asic] : prev_result.target_to_global) {
-                            if (used_asic_ids.contains(prev_asic)) {
-                                overlaps_other_family = true;
-                                break;
-                            }
-                        }
-                        if (overlaps_other_family) {
-                            break;
-                        }
-                    }
-                }
-                if (overlaps_other_family) {
-                    break;
-                }
-            }
-            if (overlaps_other_family) {
-                ++i;
-                continue;
-            }
-
-            // Guard against infinite loop when forbidden constraints don't take effect
-            if (seen_asic_sets_per_grouping[i].contains(used_asic_ids)) {
-                log_warning(
-                    tt::LogFabric,
-                    "Heterogeneous solver: grouping {} repeated result - stopping to prevent infinite loop",
-                    i);
-                overconstrained = true;
-                break;
-            }
-            seen_asic_sets_per_grouping[i].insert(used_asic_ids);
-
             results[i].push_back(result);
             found_any = true;
 
-            if (!add_forbidden_for_used_asics_to_all_groupings(used_asic_ids, groupings, current_constraints)) {
-                overconstrained = true;
-                break;
-            }
-            ++i;
+            TT_FATAL(
+                current_constraints.add_forbidden_constraint(all_target_nodes_union, used_asic_ids),
+                "Internal Error: Heterogeneous solver: failed to add forbidden constraints to all groupings");
         }
         if (!found_any || overconstrained) {
             break;
