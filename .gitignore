@@ -159,3 +159,9 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+CLAUDE.md
+
+# Worktree setup markers
+.worktree_building
+.worktree_ready
+.worktree_setup.log
