@@ -74,8 +74,6 @@ def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
     """Set random seeds so that inference is reproducible."""
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 
 def build_infer_obs(
@@ -121,16 +119,6 @@ def build_reset_message(prompt: str):
     return {"reset": True, "prompt": prompt}
 
 
-def build_kv_cache_message(key_frame_obs_list: list[dict], state: np.ndarray):
-    """Build the message for model.infer(...) to update KV cache after executing a chunk."""
-    return {
-        "obs": key_frame_obs_list,
-        "compute_kv_cache": True,
-        "imagine": False,
-        "state": np.asarray(state, dtype=np.float64),
-    }
-
-
 def _as_rgb_uint8(img: np.ndarray) -> np.ndarray:
     """Ensure (H, W, 3) and uint8 for server (it will resize and normalize)."""
     img = np.asarray(img)
@@ -167,13 +155,12 @@ def _load_models(config):
     init_logger()
     device = torch.device("cpu")
     dtype = config.param_dtype
-    enable_offload = getattr(config, "enable_offload", True)
     ckpt = config.wan22_pretrained_model_name_or_path
 
     vae = load_vae(
         os.path.join(ckpt, "vae"),
         torch_dtype=dtype,
-        torch_device="cpu" if enable_offload else device,
+        torch_device="cpu",
     )
     streaming_vae = WanVAEStreamingWrapper(vae)
 
@@ -182,7 +169,7 @@ def _load_models(config):
     text_encoder = load_text_encoder(
         os.path.join(ckpt, "text_encoder"),
         torch_dtype=dtype,
-        torch_device="cpu" if enable_offload else device,
+        torch_device="cpu",
     )
 
     transformer = load_transformer(
@@ -208,7 +195,7 @@ def _load_models(config):
         vae_half = load_vae(
             os.path.join(ckpt, "vae"),
             torch_dtype=dtype,
-            torch_device="cpu" if enable_offload else device,
+            torch_device="cpu",
         )
         streaming_vae_half = WanVAEStreamingWrapper(vae_half)
 

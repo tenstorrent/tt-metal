@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
-"""Utilities for loading VAE, tokenizer, text encoder, transformer, VAE streaming wrapper,
-scheduler, mesh/grid helpers, logging, and RobotWin config. Adapted from lingbot-va/wan_va."""
+"""Reference-side helpers used by Lingbot-VA demo scripts."""
 
 import concurrent.futures
 import logging
@@ -18,9 +16,6 @@ from transformers import T5TokenizerFast, UMT5EncoderModel
 
 from .transformer_wan import WanTransformer3DModel
 
-# -----------------------------------------------------------------------------
-# Logging (adapted from wan_va.utils.logging)
-# -----------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 
 
@@ -35,9 +30,6 @@ def init_logger():
     os.environ.setdefault("KINETO_LOG_LEVEL", "5")
 
 
-# -----------------------------------------------------------------------------
-# Scheduler (adapted from wan_va.utils.scheduler)
-# -----------------------------------------------------------------------------
 class FlowMatchScheduler:
     def __init__(
         self,
@@ -121,9 +113,6 @@ class FlowMatchScheduler:
         return image_seq_len * m + b
 
 
-# -----------------------------------------------------------------------------
-# Grid / patch helpers (adapted from wan_va.utils.utils)
-# -----------------------------------------------------------------------------
 def get_mesh_id(f, h, w, t, f_w=1, f_shift=0, action=False):
     f_idx = torch.arange(f_shift, f + f_shift) * f_w
     h_idx = torch.arange(h)
@@ -170,10 +159,10 @@ _save_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 
 def save_async(obj, file_path):
+    # Save work runs in a single background thread to avoid blocking inference loops.
     if torch.is_tensor(obj) or (isinstance(obj, dict) and any(torch.is_tensor(v) for v in obj.values())):
         if torch.is_tensor(obj):
-            if obj.is_cuda:
-                obj = obj.cpu()
+            obj = obj.cpu()
         elif isinstance(obj, dict):
             obj = {k: v.cpu() if torch.is_tensor(v) else v for k, v in obj.items()}
         _save_executor.submit(torch.save, obj, file_path)
@@ -184,9 +173,6 @@ def save_async(obj, file_path):
         _save_executor.submit(torch.save, obj, file_path)
 
 
-# -----------------------------------------------------------------------------
-# Model configure / shard (adapted from wan_va.distributed)
-# -----------------------------------------------------------------------------
 def _configure_model(model, shard_fn, param_dtype, device, eval_mode=True):
     if eval_mode:
         model.eval().requires_grad_(False)
@@ -201,12 +187,10 @@ def _configure_model(model, shard_fn, param_dtype, device, eval_mode=True):
 
 def shard_model(model, param_dtype=torch.bfloat16, reduce_dtype=torch.float32):
     """No-op when not distributed; avoids dependency on torch.distributed.fsdp."""
+    _ = (param_dtype, reduce_dtype)
     return model
 
 
-# -----------------------------------------------------------------------------
-# RobotWin config (adapted from wan_va.configs)
-# -----------------------------------------------------------------------------
 va_shared_cfg = EasyDict()
 va_shared_cfg.host = "0.0.0.0"
 va_shared_cfg.port = 29536
@@ -285,10 +269,6 @@ va_robotwin_cfg.norm_stat = {
 
 VA_CONFIGS = {"robotwin": va_robotwin_cfg}
 
-# -----------------------------------------------------------------------------
-# Model loaders, patchify, VAE wrapper
-# -----------------------------------------------------------------------------
-
 
 def _local_path(p):
     """Resolve to absolute path so from_pretrained treats it as local, not a HF repo id."""
@@ -314,11 +294,10 @@ def load_text_encoder(text_encoder_path, torch_dtype, torch_device):
 
 
 def load_tokenizer(tokenizer_path):
-    tokenizer = T5TokenizerFast.from_pretrained(
+    return T5TokenizerFast.from_pretrained(
         _local_path(tokenizer_path),
         local_files_only=True,
     )
-    return tokenizer
 
 
 def load_transformer(transformer_path, torch_dtype, torch_device):

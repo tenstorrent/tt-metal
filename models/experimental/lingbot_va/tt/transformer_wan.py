@@ -14,7 +14,6 @@ action_proj_out, and dual forward paths (video + action).
 from __future__ import annotations
 
 import gc
-import os
 import torch
 from loguru import logger
 
@@ -190,8 +189,6 @@ class WanTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        update_cache: int = 0,
-        cache_name: str = "pos",
         cached_k: ttnn.Tensor | None = None,
         cached_v: ttnn.Tensor | None = None,
         return_kv: bool = False,
@@ -499,6 +496,9 @@ class WanTransformer3DModel(Module):
         dtype: torch.dtype,
         batch_size: int = 1,
     ) -> None:
+        _ = device
+        # CPU-only host cache: this runtime is CPU/TT-only, and CPU KV keeps
+        # host-side cache management deterministic and lightweight.
         total_tolen = (attn_window // 2) * latent_token_per_chunk + (attn_window // 2) * action_token_per_chunk
         num_heads = self.num_heads
         head_dim = self.dim // num_heads
@@ -509,20 +509,19 @@ class WanTransformer3DModel(Module):
                     total_tolen,
                     num_heads,
                     head_dim,
-                    device,
+                    torch.device("cpu"),
                     torch.float32,
                     batch_size,
                 )
-        cache_device = device if device.type == "cpu" else torch.device("cpu")
         self._attn_caches[cache_name] = []
         for _ in range(len(self.blocks)):
             self._attn_caches[cache_name].append(
                 {
-                    "k": torch.empty([batch_size, total_tolen, num_heads, head_dim], device=cache_device, dtype=dtype),
-                    "v": torch.empty([batch_size, total_tolen, num_heads, head_dim], device=cache_device, dtype=dtype),
-                    "id": torch.full((total_tolen,), -1, device=cache_device),
-                    "mask": torch.zeros((total_tolen,), dtype=torch.bool, device=cache_device),
-                    "is_pred": torch.zeros((total_tolen,), dtype=torch.bool, device=cache_device),
+                    "k": torch.empty([batch_size, total_tolen, num_heads, head_dim], device="cpu", dtype=dtype),
+                    "v": torch.empty([batch_size, total_tolen, num_heads, head_dim], device="cpu", dtype=dtype),
+                    "id": torch.full((total_tolen,), -1, device="cpu"),
+                    "mask": torch.zeros((total_tolen,), dtype=torch.bool, device="cpu"),
+                    "is_pred": torch.zeros((total_tolen,), dtype=torch.bool, device="cpu"),
                 }
             )
 
@@ -641,7 +640,6 @@ class WanTransformer3DModel(Module):
     def prepare_text_conditioning(
         self,
         encoder_hidden_states: torch.Tensor | ttnn.Tensor,
-        action_mode: bool = False,
     ):
         embedder = self.condition_embedder
         if isinstance(encoder_hidden_states, torch.Tensor):
@@ -719,7 +717,7 @@ class WanTransformer3DModel(Module):
 
         tt_per_token_temb = float32_tensor(per_token_temb, device=self.mesh_device)
         tt_per_token_proj = float32_tensor(per_token_proj, device=self.mesh_device)
-        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states, action_mode=action_mode)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
         return tt_per_token_temb, tt_per_token_proj, tt_prompt_1BLP
 
     def prepare_conditioning(
@@ -730,7 +728,7 @@ class WanTransformer3DModel(Module):
     ):
         assert timestep.ndim == 1
         tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep, action_mode=action_mode)
-        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states, action_mode=action_mode)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
     def preprocess_spatial_input_host(self, spatial: torch.Tensor):
@@ -830,6 +828,7 @@ class WanTransformer3DModel(Module):
             Video path: (B, out_channels, F, H, W). Action path: (B, N, action_dim).
         """
         B, C, F, H, W = spatial.shape
+        _ = dump_iter  # Kept in signature for call compatibility; debug tensor dumps were removed.
         pF, pH, pW = self.patch_size
         if action_mode:
             patch_F, patch_H, patch_W = F, H, W
@@ -870,38 +869,6 @@ class WanTransformer3DModel(Module):
         caches = self._attn_caches[cache_name] if use_cache else None
 
         block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
-        dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
-        dump_path = "action" if action_mode else "video"
-        suffix = f"_iter{dump_iter}_{dump_path}" if dump_iter is not None else ""
-        os.makedirs(dump_dir, exist_ok=True)
-
-        def _to_torch_cpu(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-            return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).detach().cpu().float()
-
-        def _spatial_to_bnc(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-            t = _to_torch_cpu(tt_tensor)
-            return t[0, :, :N, :].contiguous()
-
-        if dump_iter is not None:
-            torch.save(_spatial_to_bnc(spatial_1BND), os.path.join(dump_dir, f"input_tt{suffix}.pt"))
-            torch.save(
-                _to_torch_cpu(prompt_1BLP)[0],
-                os.path.join(dump_dir, f"text_hidden_states_tt{suffix}.pt"),
-            )
-            if use_per_token:
-                torch.save(
-                    _to_torch_cpu(temb_1BND)[0, :, :N, :].contiguous(),
-                    os.path.join(dump_dir, f"temb_tt{suffix}.pt"),
-                )
-                tproj = _to_torch_cpu(block_temb)[0, :, :N, :]
-                tproj = tproj.reshape(B, N, 6, -1).contiguous()
-                torch.save(tproj, os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
-            else:
-                torch.save(
-                    _to_torch_cpu(temb_11BD).squeeze(0).squeeze(0),
-                    os.path.join(dump_dir, f"temb_tt{suffix}.pt"),
-                )
-                torch.save(_to_torch_cpu(block_temb)[0], os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
 
         for block_idx, block in enumerate(self.blocks):
             cached_k_tt = None
@@ -933,8 +900,6 @@ class WanTransformer3DModel(Module):
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
-                    update_cache=update_cache,
-                    cache_name=cache_name,
                     cached_k=cached_k_tt,
                     cached_v=cached_v_tt,
                     return_kv=True,
@@ -954,11 +919,6 @@ class WanTransformer3DModel(Module):
                 slots = self._cache_update(cache, k_t, v_t, is_pred=(update_cache == 1))
                 if update_cache == 0:
                     self._cache_restore(cache, slots)
-                if dump_iter is not None:
-                    torch.save(
-                        _spatial_to_bnc(attn1_out[0]),
-                        os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
-                    )
                 _safe_deallocate_tensor(cached_k_tt, "block cached_k")
                 _safe_deallocate_tensor(cached_v_tt, "block cached_v")
                 _safe_deallocate_tensor(k_cur, "block k_cur")
@@ -972,14 +932,7 @@ class WanTransformer3DModel(Module):
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
-                    update_cache=update_cache,
-                    cache_name=cache_name,
                 )
-                if dump_iter is not None:
-                    torch.save(
-                        _spatial_to_bnc(spatial_1BND),
-                        os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
-                    )
 
         if use_per_token:
             sst_shift, sst_scale = ttnn.chunk(self.scale_shift_table.data, 2, dim=-2)
@@ -1002,12 +955,6 @@ class WanTransformer3DModel(Module):
                 dim=3,
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-        if dump_iter is not None:
-            torch.save(
-                _spatial_to_bnc(spatial_norm_1BND),
-                os.path.join(dump_dir, f"norm_out_tt{suffix}.pt"),
-            )
-
         if action_mode:
             proj_out_1BNA = self.action_proj_out(
                 spatial_norm_1BND,
@@ -1015,8 +962,6 @@ class WanTransformer3DModel(Module):
                 dtype=ttnn.float32,
             )
             out_action = self.postprocess_action_output(proj_out_1BNA, N)
-            if dump_iter is not None:
-                torch.save(out_action.detach().cpu(), os.path.join(dump_dir, f"final_out_action_tt{suffix}.pt"))
             return out_action
         else:
             proj_out_1BNI = self.proj_out(
@@ -1024,12 +969,5 @@ class WanTransformer3DModel(Module):
                 compute_kernel_config=self.hifi4_compute_kernel_config,
                 dtype=ttnn.float32,
             )
-            if dump_iter is not None:
-                torch.save(
-                    _spatial_to_bnc(proj_out_1BNI),
-                    os.path.join(dump_dir, f"final_pre_rearrange_tt{suffix}.pt"),
-                )
             out_video = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
-            if dump_iter is not None:
-                torch.save(out_video.detach().cpu(), os.path.join(dump_dir, f"final_out_video_tt{suffix}.pt"))
             return out_video

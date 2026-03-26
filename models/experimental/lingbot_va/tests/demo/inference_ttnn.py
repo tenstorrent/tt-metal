@@ -1,26 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Build the observation dict and run Lingbot-VA inference locally (no server).
+"""Local Lingbot-VA demo runner.
 
-All model components used for inference are TTNN (no PyTorch fallbacks):
-- Text embeddings: TTNN UMT5 text encoder (tt.utils.load_text_encoder), or from cache (TT-produced).
-- VAE encoder: TTNN (tt.utils.WanVAEStreamingWrapper); encode runs on TT; after phase 2 we free it
-  and later _encode_obs() loads from cache only.
-- VAE decoder: TTNN WanVAEDecoder; in run_generate() we close the mesh device after the
-  generation loop and reopen a fresh one before loading the decoder so it has full device
-  memory. On OOM we fall back to PyTorch decode. Set LINGBOT_VA_USE_TT_DECODER=0 to skip TT
-  decoder and use PyTorch decode only.
-- Transformer: TTNN WanTransformer3DModel (tt.utils.load_transformer).
-
-PyTorch is used for: tokenizer, schedulers, base VAE config object, and optionally VAE decode
-in run_generate() when TT decoder is not used or OOMs.
-
-1. Build the input dict from three camera images (same format as client→server).
-2. Run inference using the same logic as VA_Server.infer() from wan_va_server.py:
-   reset with prompt, then infer one chunk on the observation dict.
-   All logic is inlined here; no dependency on wan_va_server.py or VA_Server class.
+This script builds observation inputs from camera images and executes the same
+reset/infer flow as the server implementation.
 """
 
 from __future__ import annotations
@@ -254,16 +238,6 @@ def build_infer_message(
 def build_reset_message(prompt: str):
     """Build the message for model.infer(...) to reset (start of episode)."""
     return {"reset": True, "prompt": prompt}
-
-
-def build_kv_cache_message(key_frame_obs_list: list[dict], state: np.ndarray):
-    """Build the message for model.infer(...) to update KV cache after executing a chunk."""
-    return {
-        "obs": key_frame_obs_list,
-        "compute_kv_cache": True,
-        "imagine": False,
-        "state": np.asarray(state, dtype=np.float64),
-    }
 
 
 def _as_rgb_uint8(img: np.ndarray) -> np.ndarray:

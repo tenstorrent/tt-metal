@@ -1,13 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-WanResidualUpBlock – TTNN decoder counterpart of WanResidualDownBlock.
-
-Mirrors the host WanResidualUpBlock from vae_wan2_1_encoder_host.py.
-Uses TtDupUp3D for the residual shortcut and WanResample for spatial/temporal upsampling.
-"""
-
 import ttnn
 
 from models.tt_dit.layers.module import Module, ModuleList
@@ -43,15 +36,16 @@ class WanResidualUpBlock(Module):
         self.out_dim = out_dim
         self.up_flag = up_flag
 
-        if up_flag:
-            self.avg_shortcut = TtDupUp3D(
+        self.avg_shortcut = (
+            TtDupUp3D(
                 in_dim,
                 out_dim,
                 factor_t=2 if temperal_upsample else 1,
                 factor_s=2,
             )
-        else:
-            self.avg_shortcut = None
+            if up_flag
+            else None
+        )
 
         resnets = []
         current_dim = in_dim
@@ -68,9 +62,9 @@ class WanResidualUpBlock(Module):
             current_dim = out_dim
         self.resnets = ModuleList(resnets)
 
-        if up_flag:
-            upsample_mode = "upsample3d" if temperal_upsample else "upsample2d"
-            self.upsampler = WanResample(
+        upsample_mode = "upsample3d" if temperal_upsample else "upsample2d"
+        self.upsampler = (
+            WanResample(
                 dim=out_dim,
                 mode=upsample_mode,
                 resample_out_dim=out_dim,
@@ -78,12 +72,12 @@ class WanResidualUpBlock(Module):
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-        else:
-            self.upsampler = None
+            if up_flag
+            else None
+        )
 
     def _prepare_torch_state(self, state: dict) -> None:
-        # Host model stores upsampler inside a ModuleList-like structure;
-        # our ttnn model stores it directly.
+        # Checkpoints store this as upsamplers.0; TT module keeps a direct attribute.
         rename_substate(state, "upsamplers.0", "upsampler")
 
     def forward(

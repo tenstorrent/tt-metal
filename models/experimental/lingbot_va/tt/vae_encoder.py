@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import ttnn
 import torch
@@ -252,13 +255,13 @@ class WanVAEEncoder(Module):
         x_BTHWC: ttnn.Tensor,
         logical_h: int,
         feat_cache: list[ttnn.Tensor] | None = None,
-        feat_idx: list[int] = [0],
+        feat_idx: list[int] | None = None,
     ) -> tuple[ttnn.Tensor, int]:
         if feat_cache is None:
             feat_cache = [None] * self.num_causal_conv_slots
+        if feat_idx is None:
             feat_idx = [0]
 
-        ## conv1
         if feat_cache is not None:
             idx = feat_idx[0]
             t_start = x_BTHWC.shape[1] - CACHE_T
@@ -276,7 +279,6 @@ class WanVAEEncoder(Module):
         # WanResample expects ROW_MAJOR input, then we convert back to TILE for the next block.
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
-        ## downsamples
         for down_block in self.down_blocks:
             if isinstance(down_block, WanResample):
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
@@ -291,10 +293,8 @@ class WanVAEEncoder(Module):
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
 
-        ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
-        ## head
         if self._norm_out_compute_kernel_config is not None:
             x_silu_tile_BTHWC = self.norm_out(x_BTHWC, compute_kernel_config=self._norm_out_compute_kernel_config)
         else:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.tt_dit.layers.module import Module
 from models.tt_dit.layers.normalization import RMSNorm
@@ -100,8 +103,10 @@ class WanResidualBlock(Module):
         x_BTHWC: ttnn.Tensor,
         logical_h: int,
         feat_cache: list[ttnn.Tensor] | None = None,
-        feat_idx: list[int] = [0],
+        feat_idx: list[int] | None = None,
     ) -> ttnn.Tensor:
+        if feat_idx is None:
+            feat_idx = [0]
         assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanResidualBlock expects TILE input, got {x_BTHWC.layout}"
         if self.conv_shortcut is not None:
             shortcut_rm_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
