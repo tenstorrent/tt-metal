@@ -24,7 +24,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     _topology_fingerprint,
 )
 from models.experimental.ops.descriptors.normalization.rms_norm import rms_norm
-from models.experimental.ops.descriptors.op_descriptor import DeferredOpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +138,15 @@ class TestCacheKeyInfra:
             cbs = []
             semaphores = []
 
-        a = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="a")
-        b = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="b")
-        c = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="c")
+        a = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="a", program_cache_key=1
+        )
+        b = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="b", program_cache_key=2
+        )
+        c = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="c", program_cache_key=3
+        )
 
         fp = _topology_fingerprint([a, b, c])
         assert fp == "O,O,O"
@@ -154,9 +160,15 @@ class TestCacheKeyInfra:
             cbs = []
             semaphores = []
 
-        a = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="a")
-        b = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="b")
-        c = OpDescriptor(descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="c")
+        a = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="a", program_cache_key=1
+        )
+        b = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="b", program_cache_key=2
+        )
+        c = OpDescriptor(
+            descriptor=_MockDescriptor(), input_tensors=[], output_tensors=[], name="c", program_cache_key=3
+        )
 
         inner = Sequential(b, c)
         fp = _topology_fingerprint([a, inner])
@@ -439,7 +451,7 @@ class TestTopologyDifferentiation:
 
 class TestDeferredFactorySkippedOnFusionCacheHit:
     def test_branch_descriptors_stay_deferred_after_cache_hit_build(self, device):
-        """Fusion cache hit must not access ``DeferredOpDescriptor.descriptor`` (no C++ factory)."""
+        """Fusion cache hit must not access ``OpDescriptor.descriptor`` (no C++ factory)."""
         clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=10)
@@ -447,18 +459,18 @@ class TestDeferredFactorySkippedOnFusionCacheHit:
         assert len(_BUILD_CACHE) == 1
 
         q2, kv2, _ = _make_branches(device, seed=20)
-        assert isinstance(q2, DeferredOpDescriptor)
-        assert isinstance(kv2, DeferredOpDescriptor)
-        assert q2._descriptor is None and q2._factory_fn is not None
-        assert kv2._descriptor is None and kv2._factory_fn is not None
+        assert isinstance(q2, OpDescriptor)
+        assert isinstance(kv2, OpDescriptor)
+        assert q2.is_deferred
+        assert kv2.is_deferred
 
         fused2 = Parallel(q2, kv2).build()
-        assert q2._descriptor is None and q2._factory_fn is not None
-        assert kv2._descriptor is None and kv2._factory_fn is not None
+        assert q2.is_deferred
+        assert kv2.is_deferred
 
         fused2.launch()
-        assert q2._descriptor is None and q2._factory_fn is not None
-        assert kv2._descriptor is None and kv2._factory_fn is not None
+        assert q2.is_deferred
+        assert kv2.is_deferred
 
 
 # ===========================================================================

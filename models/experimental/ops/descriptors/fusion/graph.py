@@ -339,6 +339,15 @@ class OpGraphBuilder:
         """
         from models.experimental.ops.descriptors.fusion.fusion import FusedOp
 
+        if self._built:
+            raise ValueError("Already built")
+
+        # Single node with no children — return FusedOp wrapping the original op.
+        if not self._root.children:
+            self._built = True
+            op = self._root.op
+            return FusedOp(op=op)
+
         r = self._build_internal(device)
         return FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),

@@ -86,11 +86,12 @@ def _make_op_with_cores(core_range_set):
 
 
 def _make_mock_op(name="op"):
-    """Create a mock OpDescriptor NamedTuple for high-level API tests."""
+    """Create a mock OpDescriptor for high-level API tests."""
     return _fusion.OpDescriptor(
         descriptor=_ns(__name__=f"{name}_desc"),
         input_tensors=[_ns(__name__=f"{name}_in")],
         output_tensors=[_ns(__name__=f"{name}_out")],
+        program_cache_key=hash(name),
     )
 
 
@@ -930,7 +931,7 @@ class TestSequentialParallelAPI:
             _fusion._resolve(42)
 
     def test_resolve_rejects_fused_op(self):
-        fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], []))
+        fused = _fusion.FusedOp(op=_fusion.OpDescriptor(_PLACEHOLDER, [], [], program_cache_key=0))
         with pytest.raises(TypeError, match="FusedOp cannot be nested"):
             _fusion._resolve(fused)
 
@@ -953,8 +954,8 @@ class TestSequentialParallelAPI:
 
     def test_op_descriptor_name_field(self):
         OD = _fusion.OpDescriptor
-        assert OD("desc", ["in"], ["out"]).name == ""
-        assert OD("desc", ["in"], ["out"], "matmul").name == "matmul"
+        assert OD("desc", ["in"], ["out"], program_cache_key=0).name == ""
+        assert OD("desc", ["in"], ["out"], "matmul", program_cache_key=0).name == "matmul"
 
 
 # ---------------------------------------------------------------------------

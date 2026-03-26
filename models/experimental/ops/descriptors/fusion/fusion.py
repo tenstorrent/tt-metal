@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import DeferredOpDescriptor, OpDescriptor, is_op_descriptor
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor, is_op_descriptor
 from models.experimental.ops.descriptors.fusion.common import (
     _get_risc_type,
 )
@@ -109,17 +109,8 @@ def _build_cache_surface_key(items, container_prefix: str) -> str:
 
 
 def _branch_program_cache_key(op) -> int:
-    """Stable branch identity for cache lookup. Never touches ``DeferredOpDescriptor.descriptor``."""
-    if isinstance(op, DeferredOpDescriptor):
-        return op.program_cache_key
-    pk = getattr(op, "program_cache_key", None)
-    if pk is not None:
-        return pk
-    # Legacy field name
-    legacy = getattr(op, "program_hash", None)
-    if legacy is not None:
-        return legacy
-    return ttnn.compute_program_descriptor_hash(op.descriptor)
+    """Stable branch identity for cache lookup. Never touches ``OpDescriptor.descriptor``."""
+    return op.program_cache_key
 
 
 def _fusion_mesh_runtime_id(device) -> int:

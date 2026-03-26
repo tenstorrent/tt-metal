@@ -11,7 +11,7 @@ from typing import Optional
 import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import (
-    DeferredOpDescriptor,
+    OpDescriptor,
     LazyOutputList,
     core_range_set_fusion_key,
     extend_branch_program_cache_key,
@@ -29,7 +29,7 @@ def _create_layernorm_op_descriptor(
     core_range_set: Optional["ttnn.CoreRangeSet"] = None,
     epsilon: float = 1e-12,
     program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
-) -> "DeferredOpDescriptor":
+) -> "OpDescriptor":
     """Create a normalization branch descriptor with deferred ``ProgramDescriptor``.
 
     ``program_cache_key`` is based on :meth:`ttnn.LayerNormDeviceOperation.compute_program_hash`
@@ -124,4 +124,10 @@ def _create_layernorm_op_descriptor(
         factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
         return factory.create_descriptor(operation_params, tensor_args, out, cr_arg)
 
-    return DeferredOpDescriptor(_run_factory, inputs, outputs, op_name, program_cache_key)
+    return OpDescriptor(
+        factory_fn=_run_factory,
+        input_tensors=inputs,
+        output_tensors=outputs,
+        name=op_name,
+        program_cache_key=program_cache_key,
+    )

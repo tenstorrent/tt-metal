@@ -252,6 +252,7 @@ _NOOP_OP = OpDescriptor(
     input_tensors=[],
     output_tensors=[],
     name="noop",
+    program_cache_key=0,
 )
 
 

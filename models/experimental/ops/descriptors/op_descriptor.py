@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, List, NamedTuple, Optional
+from typing import Callable, Optional
 
 import ttnn
 
@@ -33,7 +33,7 @@ def extend_branch_program_cache_key(device_program_hash: int, *extras) -> int:
             directly.
 
     Returns:
-        Integer for :attr:`DeferredOpDescriptor.program_cache_key`. This may differ
+        Integer for :attr:`OpDescriptor.program_cache_key`. This may differ
         from ``device_program_hash`` when ``extras`` is non-empty.
     """
     base = int(device_program_hash) & ((1 << 64) - 1)
@@ -88,53 +88,59 @@ class LazyOutputList:
         return f"LazyOutputList({self._slots!r})"
 
 
-class OpDescriptor(NamedTuple):
-    """Eager op: ``ProgramDescriptor`` is already materialized.
+class OpDescriptor:
+    """Operation descriptor with optional deferred ``ProgramDescriptor`` materialization.
 
-    Fields: ``descriptor`` (ProgramDescriptor), ``input_tensors``,
-    ``output_tensors``, and optional ``name``.
-    """
+    Two construction patterns:
 
-    descriptor: "ttnn.ProgramDescriptor"
-    input_tensors: List["ttnn.Tensor"]
-    output_tensors: List["ttnn.Tensor"]
-    name: str = ""
+    **Eager** (descriptor already materialized)::
 
-    def launch(self):
-        """Dispatch via ``generic_op`` (not the fused ``patchable_generic_op`` path)."""
-        io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn.generic_op(io_tensors, self.descriptor)
-        return self.output_tensors
+        op = OpDescriptor(descriptor=prog_desc, input_tensors=[...], output_tensors=[...])
 
+    **Deferred** (factory runs only on first ``.descriptor`` access)::
 
-class DeferredOpDescriptor:
-    """Branch op with deferred ``ProgramDescriptor`` materialization.
+        op = OpDescriptor(
+            factory_fn=lambda: create_descriptor(...),
+            input_tensors=[...],
+            output_tensors=LazyOutputList([None], alloc_fn),
+            name="rms_norm",
+            program_cache_key=hash_value,
+        )
 
-    ``program_cache_key`` identifies this branch for fusion build-cache lookup. It
-    must be computable without calling ``descriptor``. Usually it matches the device
-    op's ``compute_program_hash``; when the factory takes side-channel arguments
-    that hash omits, use :func:`extend_branch_program_cache_key`.
-
-    The C++ factory runs only when :attr:`descriptor` is first accessed (e.g. fusion
-    cache miss, first launch of an eager path, or debugging).
+    ``program_cache_key`` is always available for fusion build-cache lookup
+    without touching ``.descriptor``. For eager ops it is computed from the
+    descriptor at construction; for deferred ops it is passed in.
     """
 
     __slots__ = ("_factory_fn", "_descriptor", "input_tensors", "output_tensors", "name", "program_cache_key")
 
     def __init__(
         self,
-        factory_fn,
-        input_tensors,
-        output_tensors,
-        name: str,
-        program_cache_key: int,
+        descriptor=None,
+        input_tensors=None,
+        output_tensors=None,
+        name: str = "",
+        *,
+        factory_fn: Optional[Callable] = None,
+        program_cache_key: Optional[int] = None,
     ):
+        if descriptor is not None and factory_fn is not None:
+            raise ValueError("Pass descriptor or factory_fn, not both")
+        if descriptor is None and factory_fn is None:
+            raise ValueError("Pass descriptor or factory_fn")
+
         self._factory_fn = factory_fn
-        self._descriptor = None
-        self.input_tensors = input_tensors
-        self.output_tensors = output_tensors
+        self._descriptor = descriptor
+        self.input_tensors = input_tensors if input_tensors is not None else []
+        self.output_tensors = output_tensors if output_tensors is not None else []
         self.name = name
-        self.program_cache_key = program_cache_key
+
+        if program_cache_key is not None:
+            self.program_cache_key = program_cache_key
+        elif descriptor is not None:
+            self.program_cache_key = ttnn.compute_program_descriptor_hash(descriptor)
+        else:
+            raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
     @property
     def descriptor(self):
@@ -143,6 +149,11 @@ class DeferredOpDescriptor:
             self._factory_fn = None
         return self._descriptor
 
+    @property
+    def is_deferred(self) -> bool:
+        """True if the C++ factory has not yet run."""
+        return self._descriptor is None
+
     def launch(self):
         """Dispatch via ``generic_op`` (materializes ``descriptor`` if needed)."""
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
@@ -150,14 +161,19 @@ class DeferredOpDescriptor:
         return self.output_tensors
 
 
+# Backward compatibility alias — will be removed once all references are cleaned up.
+DeferredOpDescriptor = OpDescriptor
+
+
 def is_op_descriptor(item) -> bool:
-    """True if ``item`` is an :class:`OpDescriptor` or :class:`DeferredOpDescriptor`."""
-    return isinstance(item, (OpDescriptor, DeferredOpDescriptor))
+    """True if ``item`` is an :class:`OpDescriptor`."""
+    return isinstance(item, OpDescriptor)
 
 
 __all__ = [
     "OpDescriptor",
     "DeferredOpDescriptor",
+    "LazyOutputList",
     "core_range_set_fusion_key",
     "extend_branch_program_cache_key",
     "is_op_descriptor",
