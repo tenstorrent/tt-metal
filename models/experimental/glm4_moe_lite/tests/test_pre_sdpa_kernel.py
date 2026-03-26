@@ -4,7 +4,7 @@
 Run inside the dev container (after stopping vLLM):
     docker compose --env-file dev/.env.glm47 -f dev/docker-compose.yml run --rm \
         -e DEV_RUN_CMD=1 vllm-tt \
-        python /tt-metal/models/demos/glm4_moe_lite/tests/test_pre_sdpa_kernel.py --stage 0
+        python /tt-metal/models/experimental/glm4_moe_lite/tests/test_pre_sdpa_kernel.py --stage 0
 
 This tests the kernel in isolation, avoiding warmup/flash MLA L1 conflicts.
 """

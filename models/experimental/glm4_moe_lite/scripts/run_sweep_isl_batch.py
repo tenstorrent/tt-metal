@@ -7,7 +7,7 @@ Collects: per-user TPS, aggregate TPS, TTFT (time to first token).
 Outputs: CSV results, markdown table, and matplotlib graphs.
 
 Usage (from tt-metal repo root with venv activated):
-  python models/demos/glm4_moe_lite/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
+  python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ MAX_NEW_TOKENS = 128
 MESH_ROWS = 4
 MESH_COLS = 8
 PREFILL_CHUNK_SIZE = 32768
-SCRIPT_PATH = "models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
+SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
 
 
 def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s: int) -> dict:
@@ -521,7 +521,7 @@ def main() -> int:
     ap.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("models/demos/glm4_moe_lite/experiments/sweep_isl_batch"),
+        default=Path("models/experimental/glm4_moe_lite/experiments/sweep_isl_batch"),
         help="Output directory for CSV, table, and graphs",
     )
     ap.add_argument(
