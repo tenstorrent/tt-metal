@@ -1872,9 +1872,7 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        Parallel(q_norm_desc, kv_norm_desc).run()
-        tt_q = q_norm_desc.output_tensors[0]
-        tt_kv_nope = kv_norm_desc.output_tensors[0]
+        tt_q, tt_kv_nope = descriptors.Parallel(q_norm_desc, kv_norm_desc).run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE

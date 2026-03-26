@@ -53,7 +53,7 @@ Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a sin
 
 **API:**
 ```python
-Sequential(rms1, matmul, rms2).run()
+[out] = Sequential(rms1, matmul, rms2).run(results=[rms2])
 ```
 
 **Setup (parameterized on H):**
@@ -107,7 +107,7 @@ Fusion with block-sharded memory layout. The CB allocator detects pinned buffer 
 
 **API:**
 ```python
-Sequential(rms, ln).run()
+[out] = Sequential(rms, ln).run(results=[ln])
 ```
 
 **Setup (parameterized on H):**
@@ -160,10 +160,10 @@ Two independent 2-op chains running on disjoint 1x8 core columns within a single
 
 **API:**
 ```python
-Parallel(
+out_a, out_b = Parallel(
     Sequential(ln_a, mm_a),
     Sequential(rms_b, mm_b),
-).run()
+).run(results=[mm_a, mm_b])
 ```
 
 **Setup:**
@@ -213,13 +213,13 @@ Full block-sharded tree topology with 13 ops across 5 levels on a 2x8 core grid 
 
 **API:**
 ```python
-Sequential(
+ll, lr, rl, rr = Sequential(
     ln_stem,
     Parallel(
         Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
         Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
     ),
-).run()
+).run(results=[ln_ll, ln_lr, ln_rl, ln_rr])
 ```
 
 **Setup:**
@@ -264,13 +264,13 @@ A common stem LN fans out into two asymmetric branches: a lightweight chain (Sli
 
 **API:**
 ```python
-Sequential(
+left_out, right_out = Sequential(
     ln_stem,
     Parallel(
         Sequential(sl_left, rms1, rms2),
         Sequential(sl_right, ln_right),
     ),
-).run()
+).run(results=[rms2, ln_right])
 ```
 
 **Setup:**
@@ -308,10 +308,10 @@ Data exfiltration from the middle of a fused kernel via `GlobalCircularBuffer`. 
 
 **API:**
 ```python
-Parallel(
+out_b, out_recv = Parallel(
     Sequential(gcb_sender, identity_phase1),
     gcb_consumer,
-).run()
+).run(results=[identity_phase1, gcb_consumer])
 ```
 
 All three ops use hand-written SOURCE_CODE kernels (not ttnn ops):
@@ -340,7 +340,7 @@ row5   X     X     X     X     X     X    <- branch B (6 cores)
 
 **API:**
 ```python
-Sequential(stem, Parallel(op_a, op_b)).run()
+out_a, out_b = Sequential(stem, Parallel(op_a, op_b)).run(results=[op_a, op_b])
 ```
 
 All three ops are hand-written DRAM-to-DRAM identity ops (same `_build_identity_op` helper used by the barrier benchmark). Each op has three kernels: reader loads tiles from a DRAM tensor into a local CB, compute does a tile copy (`copy_tile`/`pack_tile`) from input CB to output CB, and writer drains the output CB back to DRAM. The data content is trivial — the point is exercising the barrier and core-grid mechanics, not the compute.

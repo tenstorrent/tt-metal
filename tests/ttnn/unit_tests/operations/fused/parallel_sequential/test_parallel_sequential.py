@@ -228,8 +228,8 @@ class TestSequentialExecution:
             prev = op.output_tensors[0]
 
         fused = Sequential(*ops)
-        outs_fused = fused.run()
-        check_pcc(golden, outs_fused[0], pcc=0.97, label=f"{num_phases}-phase chain")
+        [out] = fused.run(results=[ops[-1]])
+        check_pcc(golden, out, pcc=0.97, label=f"{num_phases}-phase chain")
 
     @pytest.mark.parametrize("core_x", [3, 5, 7])
     def test_chain_on_nonzero_core(self, device, core_x):
@@ -251,13 +251,13 @@ class TestSequentialExecution:
         )
 
         fused = Sequential(ln, rms)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms])
 
         golden = torch_rms_norm(
             torch_layer_norm(t["torch_input"].float(), t["torch_weights"][0].float()),
             t["torch_weights"][1].float(),
         )
-        check_pcc(golden, outs_fused[0], label=f"core ({core_x},0)")
+        check_pcc(golden, out, label=f"core ({core_x},0)")
 
     @pytest.mark.parametrize(
         "grid",
@@ -291,10 +291,10 @@ class TestSequentialExecution:
         )
 
         fused = Sequential(ln, rms)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms])
 
         golden = torch_rms_norm(torch_layer_norm(torch_input.float(), torch_w.float()), torch_w.float())
-        check_pcc(golden, outs_fused[0], label="multicore chain")
+        check_pcc(golden, out, label="multicore chain")
 
     def test_repeated_execution(self, device):
         """Same fused op launched 3x — verify no stale state."""
@@ -314,8 +314,8 @@ class TestSequentialExecution:
         )
 
         for i in range(3):
-            outs_fused = fused.run()
-            check_pcc(golden, outs_fused[0], label=f"run {i}")
+            fused.run()
+            check_pcc(golden, rms2.output_tensors[0], label=f"run {i}")
 
     def test_single_op_passthrough(self, device):
         """Single op in Sequential — verify pass-through."""
@@ -326,10 +326,10 @@ class TestSequentialExecution:
         rms = rms_norm.rms_norm(t["tt_input"], core_range_set=cores(0, 0), weight=t["tt_weights"][0], epsilon=1e-5)
 
         fused = Sequential(rms)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms])
 
         golden = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(golden, outs_fused[0], pcc=0.99, label="single op")
+        check_pcc(golden, out, pcc=0.99, label="single op")
 
 
 # ===========================================================================
@@ -390,10 +390,10 @@ class TestShardedExecution:
         )
 
         fused = Sequential(ln, rms)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms])
 
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
-        check_pcc(golden, outs_fused[0], label=f"sharded {shard_type}")
+        check_pcc(golden, out, label=f"sharded {shard_type}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_sharded_three_phase(self, device):
@@ -439,12 +439,12 @@ class TestShardedExecution:
         )
 
         fused = Sequential(ln1, rms, ln2)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[ln2])
 
         g = sh_ln_golden(torch_input, weight=torch_ws[0])
         g = rms_norm_golden(g, torch_ws[1])
         golden = sh_ln_golden(g, weight=torch_ws[2])
-        check_pcc(golden, outs_fused[0], label="sharded 3-phase")
+        check_pcc(golden, out, label="sharded 3-phase")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     def test_sharded_with_bias_residual(self, device):
@@ -497,12 +497,12 @@ class TestShardedExecution:
         )
 
         fused = Sequential(ln, rms)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms])
 
         golden = rms_norm_golden(
             sh_ln_golden(torch_input, residual=torch_residual, weight=torch_w, bias=torch_bias), torch_w
         )
-        check_pcc(golden, outs_fused[0], label="sharded bias+residual")
+        check_pcc(golden, out, label="sharded bias+residual")
 
 
 # ===========================================================================
@@ -609,7 +609,7 @@ class TestMatmulFusion:
             prev = op.output_tensors[0]
 
         fused = Sequential(*ops)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[ops[-1]])
 
         # Golden
         g = torch_a.float()
@@ -621,7 +621,7 @@ class TestMatmulFusion:
             elif token == "ln":
                 g = torch_layer_norm(g, torch_w.float(), torch_bias.float())
 
-        check_pcc(g, outs_fused[0], pcc=0.97, label=ordering)
+        check_pcc(g, out, pcc=0.97, label=ordering)
 
     def test_multicore_matmul_chain(self, device):
         """RMS->MM->RMS on 4x2 grid (8 cores)."""
@@ -648,10 +648,10 @@ class TestMatmulFusion:
         rms2 = rms_norm.rms_norm(mm.output_tensors[0], core_range_set=cr, weight=tt(torch_w, device), epsilon=1e-5)
 
         fused = Sequential(rms1, mm, rms2)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms2])
 
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
-        check_pcc(golden, outs_fused[0], label="multicore RMS->MM->RMS")
+        check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
@@ -684,12 +684,12 @@ class TestMatmulFusion:
             prev = rms.output_tensors[0]
 
         fused = Sequential(*ops)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[ops[-1]])
 
         g = torch_a.float() @ torch_b.float()
         for _ in range(num_rms):
             g = torch_rms_norm(g, torch_w.float())
-        check_pcc(g, outs_fused[0], pcc=0.97, label=f"MM->{num_rms}xRMS")
+        check_pcc(g, out, pcc=0.97, label=f"MM->{num_rms}xRMS")
 
     def test_fp32_mismatch_error(self, device):
         """MM(fp32=off) + LN(fp32=on) should raise."""
@@ -748,11 +748,11 @@ class TestBranchingTopology:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="branch A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="branch B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
     def test_three_way_split_with_slice(self, device):
         """Stem RMS(6c) -> 3 branches(2c each), using slice in one branch.
@@ -783,7 +783,7 @@ class TestBranchingTopology:
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b, branch_c))
-        outs_fused = fused.run()
+        fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
         check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_a.output_tensors[0], pcc=0.97, label="A (RMS)")
@@ -825,7 +825,7 @@ class TestBranchingTopology:
                 b,
             ),
         )
-        outs_fused = fused.run()
+        fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
         g_a = torch_rms_norm(g_stem, ws[1].float())
@@ -864,12 +864,13 @@ class TestBranchingTopology:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        outs_fused = fused.run()
+        fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
         g_right = torch_rms_norm(g_root, ws[2].float())
+        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -877,7 +878,7 @@ class TestBranchingTopology:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], outs_fused[i], label=label)
+            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_asymmetric_deep_left(self, device):
@@ -911,18 +912,19 @@ class TestBranchingTopology:
                 right,
             ),
         )
-        outs_fused = fused.run()
+        fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
+        leaves = [ll_deep, lr, right]
         goldens = [
             torch_rms_norm(torch_rms_norm(g_left, ws[2].float()), ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
             torch_rms_norm(g_root, ws[5].float()),
         ]
         for i, label in enumerate(["LL(deep)", "LR", "Right"]):
-            check_pcc(goldens[i], outs_fused[i], label=label)
+            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
     def test_overlapping_branches_error(self, device):
         """Overlapping branch core ranges should raise ValueError."""
@@ -1024,14 +1026,14 @@ class TestParallelExecution:
         fused = Sequential(ln1, rms, ln2)
 
         mm.launch()
-        outs_fused = fused.run()
+        fused.run()
 
         check_pcc(torch_a @ torch_b, mm.output_tensors[0], pcc=0.99, label="matmul")
 
         g = torch_layer_norm(t["torch_input"].float(), t["torch_weights"][0].float(), t["torch_biases"][0].float())
         g = torch_rms_norm(g, t["torch_weights"][1].float())
         golden = torch_layer_norm(g, t["torch_weights"][2].float(), t["torch_biases"][1].float())
-        check_pcc(golden, outs_fused[0], label="3-phase chain")
+        check_pcc(golden, ln2.output_tensors[0], label="3-phase chain")
 
     def test_two_disjoint_trees_parallel(self, device):
         """Two independent branching trees launched in parallel on disjoint cores.
@@ -1207,26 +1209,30 @@ class TestParallelExecution:
 
         # Launch all 7
         mm1.launch()
-        outs_chain1 = chain1.run()
-        outs_chain2 = chain2.run()
-        outs_chain3 = chain3.run()
-        outs_tree = tree.run()
+        chain1.run()
+        chain2.run()
+        chain3.run()
+        tree.run()
         mm2.launch()
         single.launch()
 
         w, b = torch_w.float(), torch_b.float()
         check_pcc(torch_mm1_a @ torch_mm1_b, mm1.output_tensors[0], pcc=0.99, label="MM1")
-        check_pcc(torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), outs_chain1[0], label="LN->RMS")
-        check_pcc(torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), outs_chain2[0], label="RMS->LN")
+        check_pcc(
+            torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), rms1.output_tensors[0], label="LN->RMS"
+        )
+        check_pcc(
+            torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), ln2.output_tensors[0], label="RMS->LN"
+        )
         check_pcc(
             torch_rms_norm(torch_rms_norm(torch_norms[2].float(), w) @ torch_mm3_b.float(), w),
-            outs_chain3[0],
+            rms3c.output_tensors[0],
             label="RMS->MM->RMS",
         )
 
         g_stem = torch_rms_norm(torch_stem_in.float(), w)
-        check_pcc(torch_rms_norm(g_stem, w), outs_tree[0], label="tree A")
-        check_pcc(torch_rms_norm(g_stem, w), outs_tree[1], label="tree B")
+        check_pcc(torch_rms_norm(g_stem, w), br_a.output_tensors[0], label="tree A")
+        check_pcc(torch_rms_norm(g_stem, w), br_b.output_tensors[0], label="tree B")
 
         check_pcc(torch_mm2_a @ torch_mm2_b, mm2.output_tensors[0], pcc=0.99, label="MM2")
         check_pcc(torch_rms_norm(torch_norms[3].float(), w), single.output_tensors[0], pcc=0.99, label="single RMS")
@@ -1251,13 +1257,13 @@ class TestSequentialParallelAPI:
         rms2 = rms_norm.rms_norm(rms1.output_tensors[0], core_range_set=cr, weight=t["tt_weights"][1], epsilon=1e-5)
 
         fused = Sequential(rms1, rms2)
-        outs_fused = fused.run()
+        [out] = fused.run(results=[rms2])
 
         golden = torch_rms_norm(
             torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float()),
             t["torch_weights"][1].float(),
         )
-        check_pcc(golden, outs_fused[0], pcc=0.99, label="inline")
+        check_pcc(golden, out, pcc=0.99, label="inline")
 
     def test_sequential_add_method(self, device):
         """s.add(op) matches inline construction."""
@@ -1271,13 +1277,13 @@ class TestSequentialParallelAPI:
 
         s = Sequential(rms1)
         s.add(rms2)
-        outs_s = s.run()
+        [out] = s.run(results=[rms2])
 
         golden = torch_rms_norm(
             torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float()),
             t["torch_weights"][1].float(),
         )
-        check_pcc(golden, outs_s[0], pcc=0.99, label="add method")
+        check_pcc(golden, out, pcc=0.99, label="add method")
 
     def test_sequential_branching(self, device):
         """Sequential(stem, Parallel(a, b)).run() — API-level branching."""
@@ -1296,11 +1302,11 @@ class TestSequentialParallelAPI:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="B")
 
 
 # ===========================================================================
@@ -1512,7 +1518,7 @@ class TestDocExample:
                 Sequential(op3, op6),
             ),
         )
-        outs_fused = fused.run()
+        fused.run()
 
         # Golden
         g1 = torch.matmul(torch_a.float(), torch_b1.float())
@@ -1618,18 +1624,18 @@ class TestDeepSeekV3:
         )
 
         # --- Fused parallel norms ---
-        Parallel(q_branch, kv_branch).run()
+        [out_q, out_kv] = Parallel(q_branch, kv_branch).run(results=[q_branch, kv_branch])
 
         # --- Verify ---
         check_pcc(
             torch_rms_norm(torch_q_input.float(), torch_q_weight.float()),
-            q_branch.output_tensors[0],
+            out_q,
             pcc=0.98,
             label="Q norm",
         )
         check_pcc(
             torch_rms_norm(torch_kv_input.float(), torch_kv_weight.float()),
-            kv_branch.output_tensors[0],
+            out_kv,
             pcc=0.98,
             label="KV norm",
         )
@@ -1673,11 +1679,11 @@ class TestAsymmetricBarrier:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="branch A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="branch B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
     def test_single_core_stem_wide_branches(self, device):
         """Extreme asymmetry: 1-core stem → 4+4 core branches.
@@ -1698,11 +1704,11 @@ class TestAsymmetricBarrier:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="branch A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="branch B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
     def test_narrow_wide_repeated_execution(self, device):
         """Narrow→wide with repeated execution to catch stale semaphores.
@@ -1730,15 +1736,15 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            outs_fused = fused.run()
+            fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                outs_fused[0],
+                a.output_tensors[0],
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                outs_fused[1],
+                b.output_tensors[0],
                 label=f"branch B run {run}",
             )
 
@@ -1781,12 +1787,13 @@ class TestAsymmetricBarrier:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        outs_fused = fused.run()
+        fused.run()
 
         ws = t["torch_weights"]
         g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_stem, ws[1].float())
         g_right = torch_rms_norm(g_stem, ws[2].float())
+        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -1794,7 +1801,7 @@ class TestAsymmetricBarrier:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], outs_fused[i], label=label)
+            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
 
     def test_narrow_deep_left_wide_right(self, device):
         """Narrow stem with asymmetric depth AND width.
@@ -1829,16 +1836,16 @@ class TestAsymmetricBarrier:
                 right,
             ),
         )
-        outs_fused = fused.run()
+        [out_left, out_right] = fused.run(results=[left2, right])
 
         ws = t["torch_weights"]
         g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         check_pcc(
             torch_rms_norm(torch_rms_norm(g_stem, ws[1].float()), ws[2].float()),
-            outs_fused[0],
+            out_left,
             label="deep left",
         )
-        check_pcc(torch_rms_norm(g_stem, ws[3].float()), outs_fused[1], label="wide right")
+        check_pcc(torch_rms_norm(g_stem, ws[3].float()), out_right, label="wide right")
 
     def test_narrow_wide_with_slice(self, device):
         """Narrow stem → wide branches with slice op in one branch.
@@ -1870,11 +1877,11 @@ class TestAsymmetricBarrier:
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[branch_a, branch_b])
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w0.float())
-        check_pcc(g_stem[:, :, :, :64], branch_a.output_tensors[0], pcc=0.97, label="A (slice)")
-        check_pcc(torch_rms_norm(g_stem, torch_w1.float()), branch_b.output_tensors[0], label="B (RMS)")
+        check_pcc(g_stem[:, :, :, :64], out_a, pcc=0.97, label="A (slice)")
+        check_pcc(torch_rms_norm(g_stem, torch_w1.float()), out_b, label="B (RMS)")
 
     def test_fully_disjoint_parent_children(self, device):
         """Fully disjoint: parent {0,1} → children {2-3, 4-7}.
@@ -1899,11 +1906,11 @@ class TestAsymmetricBarrier:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="branch A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="branch B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
     def test_partial_disjoint_one_core_exits(self, device):
         """Partial disjoint: parent {0,1} → child {1-7}.
@@ -1927,11 +1934,11 @@ class TestAsymmetricBarrier:
         )
 
         fused = Sequential(stem, Parallel(a, b))
-        outs_fused = fused.run()
+        [out_a, out_b] = fused.run(results=[a, b])
 
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), outs_fused[0], label="branch A")
-        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), outs_fused[1], label="branch B")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), out_a, label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), out_b, label="branch B")
 
     def test_disjoint_repeated_execution(self, device):
         """Fully disjoint with repeated execution to catch stale semaphores."""
@@ -1954,14 +1961,14 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            outs_fused = fused.run()
+            fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                outs_fused[0],
+                a.output_tensors[0],
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                outs_fused[1],
+                b.output_tensors[0],
                 label=f"branch B run {run}",
             )

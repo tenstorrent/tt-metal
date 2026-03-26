@@ -42,7 +42,7 @@ op6 = descriptors.rms_norm(op3.output_tensors[0], core_range_set=right_cores,
                            weight=rms_w, epsilon=1e-5,
                            compute_kernel_config=compute_cfg)
 
-fused = Sequential(
+out4, out5, out6 = Sequential(
     op1,                          # matmul on all 64 cores
     Parallel(
         Sequential(               # left half (32 cores)
@@ -51,15 +51,12 @@ fused = Sequential(
         ),
         Sequential(op3, op6),     # right half: slice → RMS (32 cores)
     ),
-).build()
-
-fused.launch()
+).run(results=[op4, op5, op6])
 ttnn.synchronize_device(device)
 
-# Read leaf outputs
-result_op4 = ttnn.to_torch(op4.output_tensors[0])
-result_op5 = ttnn.to_torch(op5.output_tensors[0])
-result_op6 = ttnn.to_torch(op6.output_tensors[0])
+result_op4 = ttnn.to_torch(out4)
+result_op5 = ttnn.to_torch(out5)
+result_op6 = ttnn.to_torch(out6)
 ```
 
 The compositional framework both encourages op genericity and reuse and reduces the need to write single-use custom fused ops for cases where the performance of existing ops is satisfactory.
@@ -90,7 +87,7 @@ The rest of this document provides implementation details for the various compon
 - [Argument Concatenation](#argument-concatenation)
   - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
 - [Build Cache](#build-cache)
-  - [DeferredOpDescriptor](#deferredopdescriptor) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: patchable_generic_op](#dispatch-patchable_generic_op) | [Steady-State Pattern](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
+  - [Deferred OpDescriptor](#deferred-opdescriptor) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: patchable_generic_op](#dispatch-patchable_generic_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
 - [Constraints and Limitations](#constraints-and-limitations)
 - [File Map](#file-map)
 
@@ -117,51 +114,53 @@ subsets. A linear chain is a tree with branching factor 1.
 Chains ops in temporal order. Items can be `OpDescriptor`, `Sequential`, or
 `Parallel` objects. Nested `Sequential` items are flattened.
 
-`build()` returns a `FusedOp`. Call `fused.launch()` to dispatch. Device is
-auto-extracted from input tensors (or pass explicitly to `build(device=...)`).
+`run()` builds the fused program (cached after the first call) and dispatches
+it. Pass `results=[desc1, desc2, ...]` to select which descriptors' outputs
+are returned. When `results` is omitted, returns `None`.
 
 ```python
-# Linear chain
-fused = Sequential(op0, op1, op2).build()
-fused.launch()
+# Linear chain — run and get last op's output
+[out] = Sequential(op0, op1, op2).run(results=[op2])
 
 # Incremental construction
 s = Sequential(op0)
 s.add(op1).add(op2)
-fused = s.build()
+[out] = s.run(results=[op2])
 
 # Composition via nesting (flattened automatically)
 stem = Sequential(op0, op1)
-full = Sequential(stem, op2).build()  # equivalent to op0 -> op1 -> op2
+[out] = Sequential(stem, op2).run(results=[op2])  # equivalent to op0 -> op1 -> op2
 ```
+
+For advanced use, `build()` returns a `FusedOp` with a `launch()` method
+for direct dispatch control (e.g. benchmarking).
 
 ### `Parallel`
 
 Groups items that run concurrently on disjoint core subsets. Requires at least
 2 items. Items can be `OpDescriptor`, `Sequential`, or `Parallel`.
 
-Branch order is the order you list in `Parallel(...)`; `fused.output_tensors`
-after `build()` follows that same order. The fusion build cache key includes
-per-op hashes in that order, so swapping branch order is a different cache
-entry (and may produce a different merged program).
+The fusion build cache key includes per-op hashes in branch order, so
+swapping branch order is a different cache entry (and may produce a
+different merged program).
 
 ```python
 # Branching tree: stem runs first, then two branches in parallel
-fused = Sequential(stem_op, Parallel(branch_a, branch_b)).build()
-fused.launch()
+a_out, b_out = Sequential(
+    stem_op, Parallel(branch_a, branch_b)
+).run(results=[branch_a, branch_b])
 
 # Standalone: independent ops merged into one dispatch
-fused = Parallel(op_a, op_b).build()
-fused.launch()
+q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
 
 # Nested: Parallel items can contain Sequential chains with further splits
-fused = Sequential(
+a1_out, a2_out, b_out = Sequential(
     stem,
     Parallel(
         Sequential(op_a, Parallel(op_a1, op_a2)),
         op_b,
     ),
-).build()
+).run(results=[op_a1, op_a2, op_b])
 ```
 
 Items after a `Parallel` in a `Sequential` are not allowed — the tree
@@ -2537,16 +2536,16 @@ disk — it is lost on process exit.  The device program cache and slot
 patching are handled by `patchable_generic_op` on the C++ side.
 
 
-### DeferredOpDescriptor
+### Deferred OpDescriptor
 
-Branch ops are created as `DeferredOpDescriptor` instances — lightweight
-wrappers that carry a `program_cache_key` (stable integer hash, computable
-without calling the C++ factory) and a deferred factory function.  The
+`OpDescriptor` supports both eager and deferred construction.  Deferred
+descriptors carry a `program_cache_key` (stable integer hash, computable
+without calling the C++ factory) and a `factory_fn`.  The
 `ProgramDescriptor` is materialized only when `.descriptor` is first accessed:
 
 ```python
-class DeferredOpDescriptor:
-    program_cache_key: int  # Stable identity — no .descriptor access needed
+class OpDescriptor:
+    program_cache_key: int  # Always available — no .descriptor access needed
 
     @property
     def descriptor(self):
@@ -2554,6 +2553,10 @@ class DeferredOpDescriptor:
             self._descriptor = self._factory_fn()  # Lazy materialization
         return self._descriptor
 ```
+
+Eager descriptors (e.g. matmul, slice) pass `descriptor=` directly and
+`program_cache_key` is auto-computed from it.  Deferred descriptors (e.g.
+rms_norm, layer_norm) pass `factory_fn=` and an explicit `program_cache_key`.
 
 This is the key enabler of the build cache: a cache **hit** never touches
 `.descriptor`, so the expensive C++ factory call is skipped entirely on
@@ -2580,10 +2583,10 @@ def _fusion_hash_from_ops(items, container_prefix, ops, device_id):
    etc.  `O` = op, `S(...)` = `Sequential`, `P(...)` = `Parallel`.
 
 2. **Per-branch program cache keys**: A tuple of one integer per flattened
-   branch op, obtained via `_branch_program_cache_key(op)`.  For
-   `DeferredOpDescriptor` this reads `op.program_cache_key` (no `.descriptor`
-   access).  For eager `OpDescriptor` it falls back to
-   `ttnn.compute_program_descriptor_hash(op.descriptor)`.
+   branch op, obtained via `op.program_cache_key`.  This field is always
+   available on `OpDescriptor` — for deferred ops it is passed at construction,
+   for eager ops it is auto-computed from the descriptor.  No `.descriptor`
+   access is needed for cache lookup.
 
 3. **Mesh device id**: `MeshDevice.id()` when available (monotonic Metal mesh
    id), else Python `id(device)`, else `0` when no device is known.  This
@@ -2639,7 +2642,7 @@ The hit path:
 3. **Wrap**: A new `FusedOp` is returned with the cached `ProgramDescriptor`,
    the fresh IO lists, and the pinned semaphore/label metadata.
 
-The `.descriptor` property of branch `DeferredOpDescriptor` objects is **never
+The `.descriptor` property of deferred branch `OpDescriptor` objects is **never
 accessed** on a cache hit.  Only their `input_tensors` / `output_tensors`
 (which the caller populated before `build()`) are read.
 
@@ -2684,7 +2687,7 @@ def launch(self, *branch_ops_override):
         self.refresh_merged_io(list(self._branch_ops))
     io_tensors = list(self.input_tensors) + list(self.output_tensors)
     ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor)
-    return self.output_tensors
+    return self.output_tensors  # results written in-place to pre-allocated output tensors
 ```
 
 Before dispatch, `refresh_merged_io` copies the current branch ops' tensor
@@ -2723,16 +2726,33 @@ The three slot types:
 
 `Sequential.run()` and `Parallel.run()` combine `build()` + `launch()` into
 a single call optimized for the training-loop pattern where the same fusion
-graph is dispatched repeatedly with in-place tensor swaps:
+graph is dispatched repeatedly with in-place tensor swaps.
+
+Pass `results=[desc1, desc2, ...]` to select which descriptors' first output
+tensors are returned.  When `results` is omitted, returns `None` (outputs
+are still written in-place to the descriptor objects' pre-allocated tensors).
 
 ```python
-def _container_run(container, surface_prefix, device=None, kernel_dir=None):
+# Explicit result selection
+q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
+
+# Fire-and-forget (read from descriptors later if needed)
+Sequential(op0, op1, op2).run()
+```
+
+The implementation caches the `FusedOp` on the container object:
+
+```python
+def _container_run(container, surface_prefix, results, device=None, kernel_dir=None):
     cache_id, ops = _fusion_cache_id_and_ops(container._items, surface_prefix, cache_device)
     sig = (cache_id, tuple(id(op) for op in ops), kernel_dir)
     if container._run_fused is None or container._run_signature != sig:
         container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
         container._run_signature = sig
-    return container._run_fused.launch()
+    container._run_fused.launch()
+    if results is not None:
+        return [desc.output_tensors[0] for desc in results]
+    return None
 ```
 
 The signature includes both the fusion cache id and the Python `id()` of each
@@ -2747,7 +2767,8 @@ branch op object.  This means:
 
 The steady-state hot path is: `run()` → signature match → `launch()`
 → `refresh_merged_io` (Python list copy) → `patchable_generic_op` → device
-program cache hit → slot patching (skip unchanged) → enqueue.
+program cache hit → slot patching (skip unchanged) → enqueue → extract
+`results`.
 
 
 ### Cache Invalidation

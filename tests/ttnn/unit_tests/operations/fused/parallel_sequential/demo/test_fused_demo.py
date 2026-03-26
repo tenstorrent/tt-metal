@@ -358,13 +358,15 @@ class TestPerfDemos:
 
         if perf_mode == "device_fw":
             fused = Sequential(r1, m, r2)
-            outs_fused = fused.run()
+            fused.run()
             ttnn.synchronize_device(device)
             print(f"\n  Linear Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Sequential(r1, m, r2), device)
+            s = Sequential(r1, m, r2)
+            cold = _time_cold(s.run, device)
 
-            fused_result = ttnn.to_torch(r2.output_tensors[0])
+            [fused_result_t] = s.run(results=[r2])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             tt_in = ttnn.from_torch(
@@ -387,7 +389,8 @@ class TestPerfDemos:
             s = Sequential(r1, m, r2)
             e2e = _time_e2e(s.run, device)
 
-            fused_result = ttnn.to_torch(r2.output_tensors[0])
+            [fused_result_t] = s.run(results=[r2])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             tt_in = ttnn.from_torch(
@@ -512,13 +515,15 @@ class TestPerfDemos:
 
         if perf_mode == "device_fw":
             fused = Sequential(r, ln)
-            outs_fused = fused.run()
+            fused.run()
             ttnn.synchronize_device(device)
             print(f"\n  Sharded Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Sequential(r, ln), device)
+            s = Sequential(r, ln)
+            cold = _time_cold(s.run, device)
 
-            fused_result = ttnn.to_torch(ln.output_tensors[0])
+            [fused_result_t] = s.run(results=[ln])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             u1 = ttnn.rms_norm(
@@ -547,7 +552,8 @@ class TestPerfDemos:
             s = Sequential(r, ln)
             e2e = _time_e2e(s.run, device)
 
-            fused_result = ttnn.to_torch(ln.output_tensors[0])
+            [fused_result_t] = s.run(results=[ln])
+            fused_result = ttnn.to_torch(fused_result_t)
 
             # Unfused reference for PCC
             u1 = ttnn.rms_norm(
@@ -745,14 +751,16 @@ class TestPerfDemos:
 
         if perf_mode == "device_fw":
             fused = Parallel(Sequential(la, ma), Sequential(rb, mb))
-            outs_fused = fused.run()
+            fused.run()
             ttnn.synchronize_device(device)
             print("\n  Parallel Chains Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)), device)
+            p = Parallel(Sequential(la, ma), Sequential(rb, mb))
+            cold = _time_cold(p.run, device)
 
-            result_a = ttnn.to_torch(ma.output_tensors[0])
-            result_b = ttnn.to_torch(mb.output_tensors[0])
+            [result_a_t, result_b_t] = p.run(results=[ma, mb])
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
@@ -770,8 +778,9 @@ class TestPerfDemos:
             p = Parallel(Sequential(la, ma), Sequential(rb, mb))
             e2e = _time_e2e(p.run, device)
 
-            result_a = ttnn.to_torch(ma.output_tensors[0])
-            result_b = ttnn.to_torch(mb.output_tensors[0])
+            [result_a_t, result_b_t] = p.run(results=[ma, mb])
+            result_a = ttnn.to_torch(result_a_t)
+            result_b = ttnn.to_torch(result_b_t)
 
             # Unfused reference for PCC — interleaved to avoid core mapping constraints
             ua1 = ttnn.layer_norm(ta, weight=tw, bias=tbi, epsilon=1e-5, compute_kernel_config=COMPUTE_CONFIG)
@@ -1177,7 +1186,12 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Sharded Tree Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: self._sharded_tree_container(ops), device)
+            tree = self._sharded_tree_container(ops)
+            cold = _time_cold(tree.run, device)
+
+            [result_ll_t, result_rl_t] = tree.run(results=[ln_ll, ln_rl])
+            result_ll = ttnn.to_torch(result_ll_t)
+            result_rl = ttnn.to_torch(result_rl_t)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1224,7 +1238,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tl)
-            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
@@ -1245,7 +1258,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tr)
-            result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
 
             p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
             p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
@@ -1256,6 +1268,10 @@ class TestPerfDemos:
             tree = self._sharded_tree_container(ops)
             e2e = _time_e2e(tree.run, device)
 
+            [result_ll_t, result_rl_t] = tree.run(results=[ln_ll, ln_rl])
+            result_ll = ttnn.to_torch(result_ll_t)
+            result_rl = ttnn.to_torch(result_rl_t)
+
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(2, 8),
@@ -1301,7 +1317,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tl)
-            result_ll = ttnn.to_torch(ln_ll.output_tensors[0])
             u_right = ttnn.matmul(
                 u_bot,
                 tt_B_right,
@@ -1322,7 +1337,6 @@ class TestPerfDemos:
                 )
             )
             ttnn.deallocate(u_tr)
-            result_rl = ttnn.to_torch(ln_rl.output_tensors[0])
 
             p_ll, pcc_ll = comp_pcc(ref_ll, result_ll, pcc=0.97)
             p_rl, pcc_rl = comp_pcc(ref_rl, result_rl, pcc=0.97)
@@ -1593,6 +1607,10 @@ class TestPerfDemos:
         )
 
         def _pcc_check():
+            [result_left_t, result_right_t] = container.run(results=[rms2, ln_right])
+            result_left = ttnn.to_torch(result_left_t)
+            result_right = ttnn.to_torch(result_right_t)
+
             # Unfused reference for PCC — sharded on (0,0)-based grids
             branch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1639,8 +1657,6 @@ class TestPerfDemos:
                 memory_config=branch_mem,
             )
 
-            result_left = ttnn.to_torch(rms2.output_tensors[0])
-            result_right = ttnn.to_torch(ln_right.output_tensors[0])
             ref_left = ttnn.to_torch(u_left)
             ref_right = ttnn.to_torch(u_right)
 
@@ -1655,7 +1671,7 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Asymmetric Branches Fused: device_fw run")
         elif perf_mode == "cold_start":
-            cold = _time_cold_fused(lambda: container, device)
+            cold = _time_cold(container.run, device)
             pcc_l, pcc_r = _pcc_check()
             print(f"\n  Asymmetric Branches Fused: cold={cold:.2f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
         elif perf_mode == "e2e":
@@ -1952,10 +1968,12 @@ void kernel_main() {
     ob = _build_identity_op(tib, tt_output_b, sender_range, num_tiles)
     con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
-    cold = _time_cold_fused(lambda: Parallel(Sequential(oa, ob), con), device)
+    p = Parallel(Sequential(oa, ob), con)
+    cold = _time_cold(p.run, device)
 
-    result_recv = ttnn.to_torch(tt_output_recv)
-    result_b = ttnn.to_torch(tt_output_b)
+    [result_b_t, result_recv_t] = p.run(results=[ob, con])
+    result_recv = ttnn.to_torch(result_recv_t)
+    result_b = ttnn.to_torch(result_b_t)
 
     passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
     passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
@@ -2051,7 +2069,7 @@ def _non_contiguous_grid_setup(device, num_tiles=4):
 def test_non_contiguous_core_grid_fused(device, perf_mode):
     from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-    stem, op_a, op_b, t_in, t_out_a, t_out_b = _non_contiguous_grid_setup(device)
+    stem, op_a, op_b, t_in, _, _ = _non_contiguous_grid_setup(device)
 
     seq = Sequential(stem, Parallel(op_a, op_b))
 
@@ -2060,11 +2078,12 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
         ttnn.synchronize_device(device)
         print("\n  Non-Contiguous Grid Fused: device_fw run")
     elif perf_mode == "cold_start":
-        cold = _time_cold_fused(lambda: Sequential(stem, Parallel(op_a, op_b)), device)
+        cold = _time_cold(seq.run, device)
 
         ref = ttnn.to_torch(t_in)
-        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
-        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(t_out_b), pcc=0.999)
+        [out_a, out_b] = seq.run(results=[op_a, op_b])
+        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(out_a), pcc=0.999)
+        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(out_b), pcc=0.999)
 
         print(f"\n  Non-Contiguous Grid Fused: cold={cold:.2f}ms PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
         assert p_a, f"Branch A PCC: {pcc_a}"
@@ -2073,8 +2092,9 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
         e2e = _time_e2e(seq.run, device)
 
         ref = ttnn.to_torch(t_in)
-        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
-        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(t_out_b), pcc=0.999)
+        [out_a, out_b] = seq.run(results=[op_a, op_b])
+        p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(out_a), pcc=0.999)
+        p_b, pcc_b = comp_pcc(ref, ttnn.to_torch(out_b), pcc=0.999)
 
         print(f"\n  Non-Contiguous Grid Fused: e2e={e2e:.3f}ms PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
         assert p_a, f"Branch A PCC: {pcc_a}"

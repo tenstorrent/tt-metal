@@ -279,7 +279,32 @@ def clear_build_cache() -> None:
     _BUILD_CACHE.clear()
 
 
-def _container_run(container: Any, surface_prefix: str, device=None, kernel_dir: Optional[str] = None):
+def _default_results(items) -> List:
+    """Collect default result descriptors from a container's items.
+
+    - ``Parallel``: one output per branch (each branch's leaf).
+    - ``Sequential``: the last item's outputs.
+    - Nested: recurses, so ``Sequential(stem, Parallel(a, b))`` → ``[a, b]``.
+    """
+    if not items:
+        return []
+    last = items[-1]
+    if is_op_descriptor(last):
+        return [last]
+    if isinstance(last, Parallel):
+        result = []
+        for item in last._items:
+            if is_op_descriptor(item):
+                result.append(item)
+            elif isinstance(item, (Sequential, Parallel)):
+                result.extend(_default_results(item._items))
+        return result
+    if isinstance(last, Sequential):
+        return _default_results(last._items)
+    return []
+
+
+def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`."""
     cache_device = device
     if cache_device is None:
@@ -292,7 +317,10 @@ def _container_run(container: Any, surface_prefix: str, device=None, kernel_dir:
     if container._run_fused is None or container._run_signature != sig:
         container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
         container._run_signature = sig
-    return container._run_fused.launch()
+    container._run_fused.launch()
+    if results is None:
+        results = _default_results(container._items)
+    return [desc.output_tensors[0] for desc in results]
 
 
 # =============================================================================
@@ -545,24 +573,19 @@ class Sequential:
             fused._apply_kernel_dir(kernel_dir)
         return fused
 
-    def build_launch(self, device=None, kernel_dir: str = None):
-        """``build()`` then ``launch()``."""
-        return self.build(device=device, kernel_dir=kernel_dir).launch()
-
-    def run(self, device=None, kernel_dir: str = None):
+    def run(self, *, results=None, device=None, kernel_dir: str = None):
         """``build()`` once per stable graph, then ``launch()`` each call.
 
-        Reuses one :class:`FusedOp` while the fusion cache id and branch op object
-        identities match. Each ``launch`` still refreshes merged IO from the current
-        branch tensor lists (safe for in-place activation swaps).
+        Args:
+            results: List of descriptors whose ``output_tensors[0]`` are
+                returned. Defaults to the last op's output (for a plain
+                chain) or each branch's leaf output (if the chain ends
+                in a ``Parallel``).
 
-        ``device`` is optional and inferred from branch tensors when omitted (same as
-        :meth:`build`).
-
-        Invalidates automatically when :meth:`add` is used; call
-        :meth:`invalidate_run` if you replace entries in ``_items`` in place.
+        Returns:
+            List of output tensors, one per descriptor in *results*.
         """
-        return _container_run(self, "S", device=device, kernel_dir=kernel_dir)
+        return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -656,24 +679,18 @@ class Parallel:
             fused._apply_kernel_dir(kernel_dir)
         return fused
 
-    def build_launch(self, device=None, kernel_dir: str = None):
-        """``build()`` then ``launch()``."""
-        return self.build(device=device, kernel_dir=kernel_dir).launch()
-
-    def run(self, device=None, kernel_dir: str = None):
+    def run(self, *, results=None, device=None, kernel_dir: str = None):
         """``build()`` once per stable graph, then ``launch()`` each call.
 
-        Reuses one :class:`FusedOp` while the fusion cache id and branch op object
-        identities match. Each ``launch`` still refreshes merged IO from the current
-        branch tensor lists (safe for in-place activation swaps).
+        Args:
+            results: List of descriptors whose ``output_tensors[0]`` are
+                returned. Defaults to each branch's leaf output in
+                branch order.
 
-        ``device`` is optional and inferred from branch tensors when omitted (same as
-        :meth:`build`).
-
-        Invalidates automatically when :meth:`add` is used; call
-        :meth:`invalidate_run` if you replace entries in ``_items`` in place.
+        Returns:
+            List of output tensors, one per descriptor in *results*.
         """
-        return _container_run(self, "P", device=device, kernel_dir=kernel_dir)
+        return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""

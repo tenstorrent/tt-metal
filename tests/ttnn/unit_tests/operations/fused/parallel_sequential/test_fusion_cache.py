@@ -215,9 +215,8 @@ class TestFusedOpRefreshMergedIo:
 
         clear_build_cache()
         fused_fresh = Parallel(q_b, kv_b)
-        outs_fused_fresh = fused_fresh.run()
+        outs_fused_fresh = fused_fresh.run(results=[q_b, kv_b])
         ttnn.synchronize_device(device)
-
         for t_new, t_ref in zip(fused_once.output_tensors, outs_fused_fresh):
             ok, pcc = comp_pcc(ttnn.to_torch(t_new), ttnn.to_torch(t_ref))
             assert ok and pcc >= 0.999, f"refresh vs fresh build PCC {pcc}"
@@ -249,12 +248,12 @@ class TestCacheOrderTolerance:
 
         q1, kv1, _ = _make_branches(device, seed=100)
         fused1 = Parallel(q1, kv1)
-        outs_fused1 = fused1.run()
+        fused1.run()
         assert len(_BUILD_CACHE) == 1
 
         q2, kv2, _ = _make_branches(device, seed=200)
         fused2 = Parallel(kv2, q2)
-        outs_fused2 = fused2.run()
+        fused2.run()
         assert len(_BUILD_CACHE) == 2, (
             "Reversed branch order must not share the same fusion cache entry "
             f"(output tensor order differs); got {len(_BUILD_CACHE)}"
@@ -273,11 +272,11 @@ class TestCacheHitCorrectness:
 
         q1, kv1, _ = _make_branches(device, seed=100)
         fused1 = Parallel(q1, kv1)
-        outs_fused1 = fused1.run()
+        fused1.run()
 
         q2, kv2, _ = _make_branches(device, seed=200)
         fused2 = Parallel(q2, kv2)
-        outs_fused2 = fused2.run()
+        fused2.run()
 
         # Cache hit reuses the same descriptor (no deep copy).
         assert len(_BUILD_CACHE) == 1
@@ -369,7 +368,7 @@ class TestCacheHitCorrectness:
             )
 
             fused = Parallel(q_b, kv_b)
-            outs_fused = fused.run()
+            q_out, kv_out = fused.run(results=[q_b, kv_b])
 
             if i == 0:
                 assert len(_BUILD_CACHE) == 1
@@ -377,12 +376,12 @@ class TestCacheHitCorrectness:
                 assert len(_BUILD_CACHE) == 1, f"Iteration {i}: expected cache hit"
 
             q_golden = torch_rms_norm(torch_q.float(), torch_qw.float())
-            q_result = ttnn.to_torch(q_b.output_tensors[0])
+            q_result = ttnn.to_torch(q_out)
             passing_q, pcc_q = comp_pcc(q_golden, q_result, pcc=0.98)
             assert passing_q, f"[iter {i}] Q PCC={pcc_q}"
 
             kv_golden = torch_rms_norm(torch_kv.float(), torch_kvw.float())
-            kv_result = ttnn.to_torch(kv_b.output_tensors[0])
+            kv_result = ttnn.to_torch(kv_out)
             passing_kv, pcc_kv = comp_pcc(kv_golden, kv_result, pcc=0.98)
             assert passing_kv, f"[iter {i}] KV PCC={pcc_kv}"
 
@@ -503,11 +502,6 @@ class TestCacheLifecycle:
         assert len(_BUILD_CACHE) == 1, "Single-op Sequential should populate the fusion build cache"
 
 
-# ===========================================================================
-# D7. build_launch sugar
-# ===========================================================================
-
-
 class TestLaunchInPlaceBranchIo:
     """In-place branch input swaps must stay correct with ``run()`` (reused ``FusedOp`` + refresh each launch)."""
 
@@ -538,7 +532,7 @@ class TestLaunchInPlaceBranchIo:
                     torch_kv, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem
                 )
 
-            merged_out = p.run()
+            q_out, kv_out = p.run(results=[q0, kv0])
             fused_ids.append(id(p._run_fused))
             ttnn.synchronize_device(device)
 
@@ -549,8 +543,8 @@ class TestLaunchInPlaceBranchIo:
             kvw = ttnn.to_torch(kv0.input_tensors[1]).float()
             q_golden = torch_rms_norm(tin_q, qw)
             kv_golden = torch_rms_norm(tin_kv, kvw)
-            q_result = ttnn.to_torch(merged_out[0])
-            kv_result = ttnn.to_torch(merged_out[1])
+            q_result = ttnn.to_torch(q_out)
+            kv_result = ttnn.to_torch(kv_out)
             ok_q, pcc_q = comp_pcc(q_golden, q_result, pcc=0.98)
             ok_kv, pcc_kv = comp_pcc(kv_golden, kv_result, pcc=0.98)
             assert ok_q, f"[iter {i}] Q PCC={pcc_q}"
@@ -559,31 +553,3 @@ class TestLaunchInPlaceBranchIo:
 
         assert min_pcc >= 0.98
         assert len(set(fused_ids)) == 1, "run() should reuse one FusedOp across iterations"
-
-
-class TestBuildLaunch:
-    def test_build_launch_same_as_build_then_launch(self, device):
-        """``Parallel.build_launch()`` matches ``build().launch()`` and ``run()``."""
-        clear_build_cache()
-        q_op, kv_op, _ = _make_branches(device, seed=77)
-        p = Parallel(q_op, kv_op)
-        out_sep = p.build().launch()
-        ttnn.synchronize_device(device)
-        out_one = p.build_launch()
-        ttnn.synchronize_device(device)
-        assert list(out_sep) == list(out_one)
-        p.invalidate_run()
-        out_run = p.run()
-        ttnn.synchronize_device(device)
-        assert list(out_sep) == list(out_run)
-
-    def test_parallel_run_twice_uses_cache_hit(self, device):
-        clear_build_cache()
-        q_op, kv_op, _ = _make_branches(device, seed=88)
-        p = Parallel(q_op, kv_op)
-        p.run()
-        ttnn.synchronize_device(device)
-        assert len(_BUILD_CACHE) == 1
-        p.run()
-        ttnn.synchronize_device(device)
-        assert len(_BUILD_CACHE) == 1
