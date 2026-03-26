@@ -333,8 +333,8 @@ setup_dual_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$RANK_BINDING_YAML"; then
-        echo "File '$RANK_BINDING_YAML' does not exist."
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
@@ -364,8 +364,8 @@ setup_quad_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$RANK_BINDING_YAML"; then
-        echo "File '$RANK_BINDING_YAML' does not exist."
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
     if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
