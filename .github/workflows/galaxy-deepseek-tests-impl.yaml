@@ -198,7 +198,8 @@ jobs:
             (test_ds_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
             (test_ds_mul_device_perf and ((decode and 1) or (prefill and 128))) or
             (test_ds_reduce_scatter_post_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_all_gather_preff1_3_device_perf and ((decode and 1) or (prefill and 128)))
+            (test_ds_all_gather_preff1_3_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_moe_forward_device_perf and ((decode and 1) or (prefill and 128)))
           )'
           CI_FUSED_OP_DEVICE_PERF_K_EXPR="$(printf '%s' "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
           pytest models/demos/deepseek_v3/tests/fused_op_unit_tests -k "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" --timeout 600 --durations=0
