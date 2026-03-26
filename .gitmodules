@@ -14,3 +14,7 @@
 	path = tt_metal/third_party/tt_llk
 	url = https://github.com/tenstorrent/tt-llk.git
 	branch = main
+[submodule ".claude"]
+	path = .claude
+	url = https://github.com/dstoiljkovicTT/tt-agents.git
+	branch = vignjatijevic/claude-sfpu
