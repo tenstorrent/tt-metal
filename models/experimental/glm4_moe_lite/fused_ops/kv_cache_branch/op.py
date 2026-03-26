@@ -390,7 +390,7 @@ class GLMKVCacheBranch:
         # Unified kernel descriptor
         # ================================================================
         unified_kernel = UnifiedKernelDescriptor(
-            kernel_source="models/demos/glm4_moe_lite/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
+            kernel_source="models/experimental/glm4_moe_lite/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
             core_ranges=input_core_grid,
             ncrisc_named_compile_time_args=(
                 dkv_matmul_ncrisc_args

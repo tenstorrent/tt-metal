@@ -1652,7 +1652,7 @@ class PreSDPA:
                     ]
 
                 unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/glm4_moe_lite/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
+                    kernel_source="models/experimental/glm4_moe_lite/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
                     core_ranges=full_device_grid,
                     # NCRISC named compile-time args: bcast reader + rmsnorm reader + mcast receiver + matmul + gather sender + rmsnorm2 + matmul2 + mcast2 + matmul3 + unicast receiver + dkv_matmul + dkv_gather_sender + kv_rmsnorm
                     ncrisc_named_compile_time_args=bcast_ncrisc_named_compile_time_args
