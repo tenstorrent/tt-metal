@@ -24,6 +24,13 @@ Requirements:
 - If a PR link exists but status is uncertain, classify as unresolved unless nearby thread text explicitly indicates fix/resolve outcome.
 - For average time-to-fix, use the timestamp delta between top-level `ts` and the earliest reply that provides a clear fixed/resolved signal.
 - In the final report, include a short "High-confidence evidence examples" section with 3-5 concrete thread snippets (message ts + key phrase) that drove classifications.
+- In the final report, include a section named "Unresolved Messages (Links)" that lists **every** unresolved top-level message with:
+  - message `ts`
+  - a one-line reason it is unresolved
+  - a Slack permalink
+- Build Slack permalinks from top-level message `ts` using:
+  - `https://tenstorrent.slack.com/archives/C05GRJC4J4A/p<ts_without_dot>`
+  - Example: ts `1773082489.672879` -> `https://tenstorrent.slack.com/archives/C05GRJC4J4A/p1773082489672879`
 - Include total top-level message count and per-category counts.
 - If an item is ambiguous, classify as "still failing/unresolved" and mention ambiguity.
 - Show percentages with one decimal place.
