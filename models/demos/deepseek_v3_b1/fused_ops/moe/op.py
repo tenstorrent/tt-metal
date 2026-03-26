@@ -4036,7 +4036,7 @@ class MoeOp:
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                 ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
-                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
+                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_socket else 0),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
             ]
         )
@@ -4088,16 +4088,14 @@ class MoeOp:
         ]
 
         # Per-core runtime args for reduce worker and fabric cores
-        # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
+        # Aggregation: on ROOT1, shard_idx==0 aggregates all shards and sends downstream
         agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
-        persistent_core_noc_x = 0
-        persistent_core_noc_y = 0
+        agg_core_noc_x = 0
+        agg_core_noc_y = 0
         if device_role == MESH_ROOT1:
-            persistent_core_phys = routed_ctx.device.worker_core_from_logical_core(
-                reduce_params["worker_cores_list"][0]
-            )
-            persistent_core_noc_x = persistent_core_phys.x
-            persistent_core_noc_y = persistent_core_phys.y
+            agg_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["worker_cores_list"][0])
+            agg_core_noc_x = agg_core_phys.x
+            agg_core_noc_y = agg_core_phys.y
 
         # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
         # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
@@ -4149,10 +4147,10 @@ class MoeOp:
 
             if device_role == MESH_ROOT1:
                 worker_agg_sem_addr = agg_sem_addr
-                worker_agg_noc_x = persistent_core_noc_x
-                worker_agg_noc_y = persistent_core_noc_y
-                if self.downstream_sockets is not None:
-                    socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
+                worker_agg_noc_x = agg_core_noc_x
+                worker_agg_noc_y = agg_core_noc_y
+                if shard_idx == 0 and self.downstream_socket is not None:
+                    socket_config_addr = self.downstream_socket.get_config_buffer_address()
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
 
@@ -4464,14 +4462,14 @@ class MoeOp:
         cb_id_context=None,
         worker_core_grid=None,
         is_torus=False,
-        downstream_sockets=None,
+        downstream_socket=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
-        self.downstream_sockets = downstream_sockets
+        self.downstream_socket = downstream_socket
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
@@ -4871,8 +4869,8 @@ class MoeOp:
         worker_core_grid=None,
         # Torus topology support
         is_torus=False,
-        # Per-worker downstream sockets for reduce workers to send reduced output
-        downstream_sockets=None,
+        # Downstream socket for reduce aggregator to send reduced output
+        downstream_socket=None,
         cb_id_context=None,
     ):
         """
@@ -4944,10 +4942,9 @@ class MoeOp:
             noc_mode=noc_mode,
             worker_core_grid=worker_core_grid,
             is_torus=is_torus,
-            downstream_sockets=downstream_sockets,
+            downstream_socket=downstream_socket,
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            persistent_mode=persistent_mode,
         )
 
         # ==================================================================

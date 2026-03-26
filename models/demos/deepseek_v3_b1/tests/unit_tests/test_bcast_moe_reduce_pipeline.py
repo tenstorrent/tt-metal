@@ -78,7 +78,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
-@pytest.mark.timeout(12000)
+@pytest.mark.timeout(1200)
 def test_bcast_moe_reduce_pipeline(
     mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
 ):
@@ -156,7 +156,6 @@ def test_bcast_moe_reduce_pipeline(
             embedding_tensor=embedding_tensor,
         )
     elif is_stage1:
-        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -165,8 +164,7 @@ def test_bcast_moe_reduce_pipeline(
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-            exit_node_upstream=exit_upstream_cores,
-            exit_upstream_page_size=reduce_payload_per_shard,
+            exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
         )
     else:
         pipeline_block = PipelineBlock(
@@ -180,11 +178,11 @@ def test_bcast_moe_reduce_pipeline(
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
-    # ── Get per-worker downstream sockets for reduce workers to send to pipeline exit ──
-    downstream_sockets = None
+    # ── Get downstream socket for reduce aggregator to send to pipeline exit ──
+    downstream_socket = None
     if is_stage1:
-        downstream_sockets = pipeline_block.get_upstream_sockets()
-        logger.info(f"[rank={my_mesh_id}] downstream sockets wired to pipeline exit")
+        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        logger.info(f"[rank={my_mesh_id}] downstream socket wired to pipeline exit")
 
     # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
     result_scores = None
@@ -407,7 +405,7 @@ def test_bcast_moe_reduce_pipeline(
             semaphores=moe_semaphores,
             worker_core_grid=moe_worker_core_grid,
             is_torus=is_torus,
-            downstream_sockets=downstream_sockets,
+            downstream_socket=downstream_socket,
         )
         logger.info("[rank=1] MoE + reduce completed")
 
@@ -633,8 +631,6 @@ def test_persistent_mode_pipeline(
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
-    num_gate_proj_cores = len(gate_proj_worker_cores)
-    reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
@@ -666,7 +662,6 @@ def test_persistent_mode_pipeline(
                 embedding_tensor=embedding_tensor,
             )
         elif is_stage1:
-            exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
@@ -675,8 +670,7 @@ def test_persistent_mode_pipeline(
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-                exit_node_upstream=exit_upstream_cores,
-                exit_upstream_page_size=reduce_payload_per_shard,
+                exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
             )
         else:
             pipeline_block = PipelineBlock(
@@ -690,10 +684,10 @@ def test_persistent_mode_pipeline(
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
-        # ── Per-worker downstream sockets for reduce workers ──
-        downstream_sockets = None
+        # ── Downstream socket for reduce aggregator ──
+        downstream_socket = None
         if is_stage1:
-            downstream_sockets = pipeline_block.get_upstream_sockets()
+            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
 
         # ── MoE tensors (Stage 1 only — no golden needed) ────────────────────
         state_dict = get_reference_model_state_dict(
@@ -891,7 +885,7 @@ def test_persistent_mode_pipeline(
                 semaphores=moe_semaphores,
                 worker_core_grid=moe_worker_core_grid,
                 is_torus=is_torus,
-                downstream_sockets=downstream_sockets,
+                downstream_socket=downstream_socket,
             )
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
 

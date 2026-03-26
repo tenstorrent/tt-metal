@@ -148,10 +148,10 @@ struct ReduceToOneB1 {
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
         uint32_t shard_idx;
-        uint32_t socket_config_addr;  // Per-worker downstream socket config address
-        uint32_t agg_sem_l1_addr;     // Persistent-signal sync semaphore L1 address (global sem)
-        uint32_t agg_core_noc_x;      // Persistent-signal core physical NOC x
-        uint32_t agg_core_noc_y;      // Persistent-signal core physical NOC y
+        uint32_t socket_config_addr;  // Non-zero only on aggregator worker (downstream socket)
+        uint32_t agg_sem_l1_addr;     // Aggregation sync semaphore L1 address (global sem)
+        uint32_t agg_core_noc_x;      // Aggregator core physical NOC x
+        uint32_t agg_core_noc_y;      // Aggregator core physical NOC y
         uint32_t persistent_enable;   // 1 if this core should send the persistent signal
         uint32_t persistent_dst_noc_x;     // Bcast sender physical NOC x on entry device
         uint32_t persistent_dst_noc_y;     // Bcast sender physical NOC y on entry device
@@ -334,7 +334,7 @@ struct ReduceToOneB1 {
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
 
-            // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
+            // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
@@ -345,40 +345,56 @@ struct ReduceToOneB1 {
                 noc_async_write_barrier();
 
                 if constexpr (CTArgs::enable_downstream_socket) {
-                    constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                     if (args.socket_config_addr != 0) {
+                        // Aggregator: wait for all other workers, then stream to downstream socket.
+                        // The aggregator core IS the output core, so all shards are already in local L1.
+                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
+
+                        constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                        set_sender_socket_page_size(sender_socket, useful_per_shard);
+                        set_sender_socket_page_size(sender_socket, CTArgs::agg_output_size_bytes);
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-                        uint64_t fifo_dst = get_noc_addr(
-                            downstream_enc.d2d.downstream_noc_x,
-                            downstream_enc.d2d.downstream_noc_y,
-                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-                        noc_async_write(src_addr, fifo_dst, useful_per_shard);
-                        noc_async_writes_flushed();
+                        uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
+                        for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
+                            uint32_t shard_l1_addr = args.output_base_addr + i * CTArgs::payload_size_bytes;
+                            uint64_t fifo_dst = get_noc_addr(
+                                downstream_enc.d2d.downstream_noc_x,
+                                downstream_enc.d2d.downstream_noc_y,
+                                fifo_base + i * useful_per_shard);
+                            noc_async_write(shard_l1_addr, fifo_dst, useful_per_shard);
+                            noc_async_writes_flushed();
+                        }
 
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
+                    } else if (args.agg_sem_l1_addr != 0) {
+                        // TODO: Use a separate flag to indicate the aggregator
+                        if (args.shard_idx == 0) {
+                            // No socket: aggregator waits for all workers before signaling.
+                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                            noc_semaphore_set(agg_sem_ptr, 0);
+                        } else {
+                            // Non-aggregator worker: signal the aggregator that our shard is ready.
+                            uint64_t agg_sem_noc =
+                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
                     }
                     if (args.persistent_enable != 0) {
-                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-
                         uint64_t fc_sem = get_noc_addr(
                             args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
                         noc_semaphore_inc(fc_sem, 1);
-                        noc_async_write_barrier();
-                    } else if (args.agg_sem_l1_addr != 0) {
-                        uint64_t agg_sem_noc =
-                            get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                        noc_semaphore_inc(agg_sem_noc, 1);
                         noc_async_atomic_barrier();
                     }
                 }
