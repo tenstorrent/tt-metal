@@ -304,9 +304,6 @@ static Tensor std_var_impl(
         return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    // For now support only interleaved tensors.
-    TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
-
     // Validate that the divisor is positive (Bessel's correction subtracts 1).
     // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
     int divisor = correction ? (reduced_volume - 1) : reduced_volume;
@@ -323,7 +320,7 @@ static Tensor std_var_impl(
     ttnn::Tensor input_tensor = input_tensor_arg;
     uint32_t reduce_batch_size = 1;
     bool needs_inverse_permute = false;
-    ttnn::SmallVector<int64_t> inverse_perm;
+    ttnn::SmallVector<int64_t> permute_swap;
 
     if (single_h || single_w) {
         reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -335,12 +332,11 @@ static Tensor std_var_impl(
         // Single non-H/W dim: permute to H position, H-reduce, inverse permute.
         reduce_dim = tt::tt_metal::ReduceOpDim::H;
         int target_dim = dim[0];
-        ttnn::SmallVector<int64_t> perm(rank);
-        std::iota(perm.begin(), perm.end(), 0);
-        std::swap(perm[target_dim], perm[rank - 2]);
-        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
-        needs_inverse_permute = true;
-        inverse_perm = perm;  // swap is its own inverse
+        permute_swap.resize(rank);
+        std::iota(permute_swap.begin(), permute_swap.end(), 0);
+        std::swap(permute_swap[target_dim], permute_swap[rank - 2]);
+        input_tensor = ttnn::permute(input_tensor, permute_swap, memory_config);
+        needs_inverse_permute = true;  // swap is its own inverse
     } else {
         // 2+ dims: unified HW path.  Permute all reduction dims to the end,
         // last two become H and W.  Extra reduction dims (if any) fold into
@@ -391,7 +387,7 @@ static Tensor std_var_impl(
         reduce_batch_size);
 
     if (needs_inverse_permute) {
-        output_tensor = ttnn::permute(output_tensor, inverse_perm, memory_config);
+        output_tensor = ttnn::permute(output_tensor, permute_swap, memory_config);
     }
 
     // Compensate for any shape adjustments applied to the input tensor.

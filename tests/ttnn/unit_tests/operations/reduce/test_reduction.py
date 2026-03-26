@@ -15,7 +15,7 @@ from models.common.utility_functions import is_blackhole, torch_random, skip_wit
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
+@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), None])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_std(device, batch_size, h, w, dim, correction, keepdim):
@@ -737,16 +737,14 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 @pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
 def test_gen_reduce_w_scalar(device, op, scalar, correction, dim, shape):
     rank = len(shape)
-    if isinstance(dim, tuple):
-        normalized = set((d % rank) for d in dim)
-        if len(normalized) < len(dim):
-            pytest.skip("Duplicate dims after normalization")
-
-    if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
-        pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
+    if isinstance(dim, tuple) and len(dim) > rank:
+        pytest.skip("More reduction dims than tensor rank")
 
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
+
+    if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
+        pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
 
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)

@@ -22,13 +22,13 @@ namespace nb = nanobind;
 inline std::string get_generic_reduction_doc(const char* op_name, const char* qualified_name) {
     return fmt::format(
         R"doc(
-        Computes the {0} of the input tensor :attr:`input_a` along the specified dimension :attr:`dim`.
+        Computes the {0} of the input tensor :attr:`input_a` along the specified dimension(s) :attr:`dim`.
         If no dimension is provided, {0} is computed over all dimensions yielding a single value.
 
         Args:
             input_a (ttnn.Tensor): the input tensor. Must be on the device.
-            dim (number): dimension value to reduce over.
-            keepdim (bool, optional): keep original dimension size. Defaults to `False`.
+            dim (number or tuple): dimension value(s) to reduce over.
+            keepdim (bool, optional): keep the original dimension size(s). Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
