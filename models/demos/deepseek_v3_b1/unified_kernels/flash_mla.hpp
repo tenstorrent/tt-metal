@@ -29,8 +29,8 @@ static_assert(noc_mode == DM_DYNAMIC_NOC, "Flash MLA Decode kernel only supports
 // ============================================================================
 #if defined(COMPILE_FOR_BRISC)
 template <typename Accessor>
-FORCE_INLINE uint64_t get_shard_noc_addr_helper(const Accessor& reader, uint32_t shard_id) {
-    return reader.get_shard_noc_addr(shard_id);
+FORCE_INLINE uint64_t get_shard_noc_addr_helper(const Accessor& reader, uint32_t shard_id, uint8_t noc = noc_index) {
+    return reader.get_shard_noc_addr(shard_id, 0, noc);
 }
 
 constexpr uint32_t MCAST_INVALID = 0;
@@ -296,7 +296,7 @@ struct FlashMLADecode {
 
             if (is_mcast_sender) {
                 const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk_start;
-                uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+                uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
                 noc_async_read_one_packet_set_state<true>(k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
                 // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
                 reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, READ_NOC_INDEX);
@@ -314,7 +314,7 @@ struct FlashMLADecode {
                     if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
                         const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
-                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;
                         uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
