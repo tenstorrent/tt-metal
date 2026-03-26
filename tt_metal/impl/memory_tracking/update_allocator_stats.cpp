@@ -60,8 +60,8 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         for (size_t i = 0; i < MAX_PROCESSES; i++) {
             if (region_->processes[i].pid == pid) {
                 // Update only locally-allocated CBs (query-based, accurate even with caching)
-                region_->processes[i].cb_allocated = cb_allocated;
-                region_->processes[i].last_update_timestamp =
+                processe.cb_allocated = cb_allocated;
+                processe.last_update_timestamp =
                     std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
                 break;
             }
