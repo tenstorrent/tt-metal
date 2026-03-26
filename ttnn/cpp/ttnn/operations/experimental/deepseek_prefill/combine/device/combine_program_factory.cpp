@@ -463,7 +463,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             expert_end,
         };
         if (init_zeros) {
-            uint32_t sender_page_start = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
+            uint32_t sender_page_start = (core_idx * pages_per_core) + std::min(core_idx, remainder_pages);
             uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
             reader_runtime_args.push_back(sender_page_start);
             reader_runtime_args.push_back(sender_page_end);
