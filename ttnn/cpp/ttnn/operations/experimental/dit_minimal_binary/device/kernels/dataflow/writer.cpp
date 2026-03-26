@@ -15,7 +15,6 @@ void kernel_main() {
     constexpr auto in1_args = TensorAccessorArgs<3>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
-    constexpr uint32_t tile_width_bytes = get_compile_time_arg_val(out_args.next_compile_time_args_offset() + 1);
 
     const uint32_t src1_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -32,8 +31,7 @@ void kernel_main() {
 
         cb_reserve_back(cb_in1_id, ntiles_per_row);
 
-        uint32_t base_l1_in1 = get_write_ptr(cb_in1_id);
-        uint32_t l1_ptr_in1 = base_l1_in1;
+        uint32_t l1_ptr_in1 = get_write_ptr(cb_in1_id);
         for (uint32_t k = 0; k < nrows; ++k) {
             noc_async_read_page(stick_id + k, src1, l1_ptr_in1);
             l1_ptr_in1 += stick_bytes;
@@ -44,8 +42,7 @@ void kernel_main() {
 
         cb_wait_front(cb_out_id, ntiles_per_row);
 
-        uint32_t base_l1_out = get_read_ptr(cb_out_id);
-        uint32_t l1_ptr_out = base_l1_out;
+        uint32_t l1_ptr_out = get_read_ptr(cb_out_id);
         for (uint32_t k = 0; k < nrows; ++k) {
             noc_async_write_page(stick_id + k, dst, l1_ptr_out);
             l1_ptr_out += stick_bytes;

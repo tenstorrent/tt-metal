@@ -9,14 +9,9 @@ against the torch reference, checking both numeric correctness and that the
 output remains in ROW_MAJOR_LAYOUT.
 """
 
-import csv
-import math
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
-from loguru import logger
 
 
 from tests.ttnn.utils_for_testing import assert_with_ulp
@@ -40,72 +35,9 @@ OPS = ["add", "mul"]
 
 DTYPES = [ttnn.bfloat16, ttnn.float32]
 
-# Minimum acceptable PSNR (dB) per dtype.
-# bf16 has ~2–3 significant decimal digits, so quantisation noise limits PSNR
-# to roughly 40–50 dB for typical randn tensors.  fp32 should be near-exact.
-_MIN_PSNR = {
-    ttnn.bfloat16: 40.0,
-    ttnn.float32: 70.0,
-}
-
 
 def _torch_dtype(ttnn_dtype):
     return torch.bfloat16 if ttnn_dtype == ttnn.bfloat16 else torch.float32
-
-
-def compute_psnr(out: torch.Tensor, ref: torch.Tensor) -> float:
-    """Compute Peak Signal-to-Noise Ratio between *out* and *ref*.
-
-    PSNR = 10 * log10(peak² / MSE)
-
-    *peak* is the maximum absolute value in *ref*, which normalises the metric
-    to the dynamic range of the reference signal.  Returns ``float('inf')``
-    when the tensors are identical.
-    """
-    out_f = out.float()
-    ref_f = ref.float()
-    mse = (out_f - ref_f).pow(2).mean().item()
-    if mse == 0.0:
-        return float("inf")
-    peak = ref_f.abs().max().item()
-    if peak == 0.0:
-        peak = 1.0
-    return 10.0 * math.log10(peak**2 / mse)
-
-
-def save_tensor_to_csv(tensor: torch.Tensor, path: str | Path) -> None:
-    """Save a torch tensor to a CSV file with aligned row/column indices.
-
-    The output has one header row with column indices (col_0, col_1, …) and
-    one header column with the flat row index.  The tensor is first cast to
-    float32 so that bfloat16 values are printed as readable decimals.
-
-    For tensors with more than 2 dimensions the trailing two dimensions are
-    used as (rows, cols); all leading dimensions are flattened into the row
-    axis so the file is always 2-D.
-    """
-    t = tensor.detach().float()
-    if t.dim() == 1:
-        t = t.unsqueeze(0)  # treat a 1-D vector as a single row
-    t = t.reshape(-1, t.shape[-1])  # flatten leading dims → (N_rows, N_cols)
-
-    n_rows, n_cols = t.shape
-    # Width needed to right-align the row-index column
-    row_idx_width = len(str(n_rows - 1))
-    col_idx_width = max(len(str(n_cols - 1)), 8)  # at least 8 chars per value
-
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        # Header row: blank corner cell + column indices
-        header = ["_"] + [f"{c:>{col_idx_width - 4}}" for c in range(n_cols)]
-        writer.writerow(header)
-        for r in range(n_rows):
-            row_label = f"{r:>{row_idx_width}}"
-            values = [f"{v:.6g}" for v in t[r].tolist()]
-            writer.writerow([row_label] + values)
-    logger.info(f"Saved tensor {list(tensor.shape)} → {path}")
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=[str(s) for s in SHAPES])
@@ -120,15 +52,6 @@ def test_minimal_binary(device, shape, op, dtype):
     # Generate random inputs; keep values small to avoid large fp32/bf16 errors
     A_torch = torch.randn(shape, dtype=tdtype)
     B_torch = torch.randn(shape, dtype=tdtype)
-
-    # A_torch = torch.randint(0, 10, shape, dtype=tdtype)
-    # B_torch = torch.randint(0, 10, shape, dtype=tdtype)
-
-    # A_torch = torch.full(shape, 1.0, dtype=tdtype)
-    # B_torch = torch.full(shape, 2.0, dtype=tdtype)
-
-    # print(f"A_torch: {A_torch}")
-    # print(f"B_torch: {B_torch}")
 
     # Torch ground truth
     if op == "add":
@@ -165,20 +88,6 @@ def test_minimal_binary(device, shape, op, dtype):
     # Compare values
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
-
-    # num_sticks = math.prod(shape[:-1])
-    # max_abs_err = (C_out - C_ref_cast).abs().max().item()
-    # psnr = compute_psnr(C_out, C_ref_cast)
-    # min_psnr = _MIN_PSNR[dtype]
-
-    # logger.info(
-    #     f"shape={shape} op={op} dtype={dtype} " f"sticks={num_sticks} max_abs_err={max_abs_err:.3e} PSNR={psnr:.2f} dB"
-    # )
-    # assert psnr >= min_psnr, (
-    #     f"ttnn.experimental.dit_minimal_binary({op}, {dtype}) PSNR too low — "
-    #     f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
-    # )
-
     assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
 
 
@@ -191,9 +100,6 @@ def test_minimal_binary_add_single_stick(device, dtype):
     """Edge case: tensor with exactly 1 stick (a single row)."""
     shape = (1, 1, 1, 1, 1024)
     tdtype = _torch_dtype(dtype)
-
-    # A_torch = torch.randn(shape, dtype=tdtype)
-    # B_torch = torch.randn(shape, dtype=tdtype)
 
     A_torch = torch.randn(shape, dtype=tdtype)
     B_torch = torch.randn(shape, dtype=tdtype)
@@ -210,24 +116,6 @@ def test_minimal_binary_add_single_stick(device, dtype):
     out = ttnn.experimental.dit_minimal_binary(A_rm, B_rm, op="add")
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
-
-    print(f"A_torch: {A_torch}")
-    print(f"B_torch: {B_torch}")
-    print(f"C_ref_cast: {C_ref_cast}")
-    print(f"C_out: {C_out}")
-
-    save_tensor_to_csv(C_out, "debug_csv/C_out.csv")
-    save_tensor_to_csv(C_ref_cast, "debug_csv/C_ref.csv")
-
-    # psnr = compute_psnr(C_out, C_ref_cast)
-    # min_psnr = _MIN_PSNR[dtype]
-    # max_abs_err = (C_out - C_ref_cast).abs().max().item()
-    # logger.info(f"single_stick add dtype={dtype} PSNR={psnr:.2f} dB max_abs_err={max_abs_err:.3e}")
-    # assert psnr >= min_psnr, (
-    #     f"ttnn.experimental.dit_minimal_binary(add, {dtype}) single-stick PSNR too low — "
-    #     f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
-    # )
-
     assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
 
 
@@ -333,17 +221,6 @@ def test_minimal_binary_wan_residual_add(device, shape, dtype):
 
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
-
-    num_sticks = math.prod(shape[:-1])
-    # max_abs_err = (C_out - C_ref_cast).abs().max().item()
-    # psnr = compute_psnr(C_out, C_ref_cast)
-    # min_psnr = _MIN_PSNR[dtype]
-    # logger.info(f"shape={shape} dtype={dtype} sticks={num_sticks} " f"max_abs_err={max_abs_err:.3e} PSNR={psnr:.2f} dB")
-    # assert psnr >= min_psnr, (
-    #     f"ttnn.experimental.dit_minimal_binary(add, {dtype}) Wan-shape PSNR too low — "
-    #     f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
-    # )
-
     assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
 
 

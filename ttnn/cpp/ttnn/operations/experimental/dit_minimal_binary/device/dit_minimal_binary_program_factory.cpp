@@ -60,9 +60,8 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     // Row / stick geometry -------------------------------------------------
     const auto padded_shape = input_a.padded_shape();
     const uint32_t last_dim = padded_shape[-1];
-    const uint32_t stick_size_bytes = last_dim * dtype_bytes;    // stick size
-    const uint32_t ntiles_per_row = last_dim / TILE_WIDTH;       // tile-columns per row
-    const uint32_t tile_width_bytes = TILE_WIDTH * dtype_bytes;  // bytes per tile-column per row
+    const uint32_t stick_size_bytes = last_dim * dtype_bytes;  // stick size
+    const uint32_t ntiles_per_row = last_dim / TILE_WIDTH;     // tile-columns per row
 
     const uint64_t num_elements_total = input_a.physical_volume();
     const uint32_t total_rows = static_cast<uint32_t>(num_elements_total / last_dim);
@@ -109,25 +108,21 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
 
     // ----------------------------------------------------------------------
     // Reader compile-time args
-    //   [stick_size, TensorAccessorArgs_A..., TensorAccessorArgs_B...,
-    //    ntiles_per_row, tile_width_bytes]
+    //   [stick_size, TensorAccessorArgs_A..., ntiles_per_row]
     // ----------------------------------------------------------------------
     std::vector<uint32_t> reader_ct_args = {stick_size_bytes};
     TensorAccessorArgs(*src_a_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*src_b_buffer).append_to(reader_ct_args);
     reader_ct_args.push_back(ntiles_per_row);
-    reader_ct_args.push_back(tile_width_bytes);
 
     // ----------------------------------------------------------------------
     // Writer compile-time args
-    //   [cb_out, stick_size, TensorAccessorArgs_out...,
-    //    ntiles_per_row, tile_width_bytes]
+    //   [cb_in1_id, cb_out_id, stick_size, TensorAccessorArgs_in1...,
+    //    TensorAccessorArgs_out..., ntiles_per_row]
     // ----------------------------------------------------------------------
     std::vector<uint32_t> writer_ct_args = {CB_B_RM, CB_OUT_RM, stick_size_bytes};
     TensorAccessorArgs(*src_b_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     writer_ct_args.push_back(ntiles_per_row);
-    writer_ct_args.push_back(tile_width_bytes);
 
     // ----------------------------------------------------------------------
     // Compute defines (unchanged from original)
@@ -198,9 +193,9 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     // ----------------------------------------------------------------------
     // Per-core runtime args
     //
-    // Reader  RT: [src_a_addr, src_b_addr, num_sticks, start_stick_id]
-    // Writer  RT: [dst_addr,   num_sticks, start_stick_id]
-    // Compute RT: [num_blocks, ntiles_per_row]
+    // Reader  RT: [src_a_addr, num_sticks, start_stick_id]
+    // Writer  RT: [src_b_addr, dst_addr, num_sticks, start_stick_id]
+    // Compute RT: [num_sticks, ntiles_per_row]
     // ----------------------------------------------------------------------
     uint32_t start_stick_id = 0;
 
@@ -217,7 +212,7 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                         program,
                         reader_kernel_id,
                         core,
-                        {src_a_buffer->address(), src_b_buffer->address(), num_sticks_per_core, start_stick_id});
+                        {src_a_buffer->address(), num_sticks_per_core, start_stick_id});
 
                     SetRuntimeArgs(
                         program,
@@ -266,15 +261,16 @@ void DitMinimalRmBinaryProgramFactory::override_runtime_arguments(
     auto grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_cg1, rows_per_cg2] =
         split_work_to_cores(grid, total_rows);
+    (void)num_cores;
+    (void)all_cores;
 
     uint32_t start_stick_id = 0;
 
     auto update_core = [&](const CoreCoord& core, uint32_t num_sticks_per_core) {
         auto& reader_rt = GetRuntimeArgs(program, shared.reader_kernel_id)[core.x][core.y];
         reader_rt[0] = src_a_buffer->address();
-        reader_rt[1] = src_b_buffer->address();
-        reader_rt[2] = num_sticks_per_core;
-        reader_rt[3] = start_stick_id;
+        reader_rt[1] = num_sticks_per_core;
+        reader_rt[2] = start_stick_id;
 
         auto& writer_rt = GetRuntimeArgs(program, shared.writer_kernel_id)[core.x][core.y];
         writer_rt[0] = src_b_buffer->address();

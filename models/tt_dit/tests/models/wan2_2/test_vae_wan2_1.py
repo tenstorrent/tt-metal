@@ -1127,6 +1127,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     ("B, C, T, H, W"),
     [
         (1, 16, 1, 60, 104),  # 480p
+        # TODO: 720p decoder test OOM on single-device — enable once memory is optimised
         # (1, 16, 1, 90, 160),  # 720p
     ],
     ids=[
@@ -1139,6 +1140,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
+        # TODO: fp32 decoder PCC threshold needs calibration before re-enabling
         # (ttnn.DataType.FLOAT32, 0.999_905, 0.014),
         (ttnn.DataType.BFLOAT16, 0.999_410, 0.035),
     ],

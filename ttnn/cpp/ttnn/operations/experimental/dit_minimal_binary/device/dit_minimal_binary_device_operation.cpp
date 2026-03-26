@@ -3,6 +3,7 @@
 
 #include "dit_minimal_binary_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -51,6 +52,13 @@ void DitMinimalRmBinaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a.padded_shape() == b.padded_shape(), "dit_minimal_binary: shape mismatch");
 
     TT_FATAL(a.physical_volume() > 0, "dit_minimal_binary: tensor has 0 elements");
+
+    const uint32_t last_dim = a.padded_shape()[-1];
+    TT_FATAL(
+        last_dim % tt::constants::TILE_WIDTH == 0,
+        "dit_minimal_binary: last_dim ({}) must be a multiple of TILE_WIDTH ({})",
+        last_dim,
+        tt::constants::TILE_WIDTH);
 }
 
 DitMinimalRmBinaryDeviceOperation::spec_return_value_t DitMinimalRmBinaryDeviceOperation::compute_output_specs(

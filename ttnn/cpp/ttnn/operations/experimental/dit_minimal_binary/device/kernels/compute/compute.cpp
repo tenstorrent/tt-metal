@@ -49,8 +49,6 @@ void kernel_main() {
     const uint32_t num_sticks = get_arg_val<uint32_t>(0);
     const uint32_t ntiles_per_row = get_arg_val<uint32_t>(1);
 
-    const uint32_t tiles_per_block = ntiles_per_row;
-
     binary_op_init_common(CB_A_RM, CB_B_RM, CB_OUT_TILED);
 
     constexpr uint32_t TILE_HEIGHT = 32;
@@ -58,31 +56,31 @@ void kernel_main() {
         // ============================================================
         // Phase 1: Tilize A tiles (ntiles_per_row tiles, 1 at a time)
         // ============================================================
-        cb_wait_front(CB_A_RM, tiles_per_block);
-        cb_reserve_back(CB_A_TILED, tiles_per_block);
+        cb_wait_front(CB_A_RM, ntiles_per_row);
+        cb_reserve_back(CB_A_TILED, ntiles_per_row);
 
         reconfig_data_format(CB_A_RM, CB_A_RM);
         pack_reconfig_data_format(CB_A_TILED);
-        tilize_init(CB_A_RM, tiles_per_block, CB_A_TILED);
+        tilize_init(CB_A_RM, ntiles_per_row, CB_A_TILED);
 
-        tilize_block(CB_A_RM, tiles_per_block, CB_A_TILED);
+        tilize_block(CB_A_RM, ntiles_per_row, CB_A_TILED);
 
-        cb_push_back(CB_A_TILED, tiles_per_block);
-        cb_pop_front(CB_A_RM, tiles_per_block);
+        cb_push_back(CB_A_TILED, ntiles_per_row);
+        cb_pop_front(CB_A_RM, ntiles_per_row);
 
         // ============================================================
         // Phase 2: Tilize B tiles — switch source CB to CB_B_RM
         // ============================================================
 
-        tilize_init_short_with_dt(CB_A_RM, CB_B_RM, tiles_per_block, CB_B_TILED);
+        tilize_init_short_with_dt(CB_A_RM, CB_B_RM, ntiles_per_row, CB_B_TILED);
 
-        cb_wait_front(CB_B_RM, tiles_per_block);
-        cb_reserve_back(CB_B_TILED, tiles_per_block);
+        cb_wait_front(CB_B_RM, ntiles_per_row);
+        cb_reserve_back(CB_B_TILED, ntiles_per_row);
 
-        tilize_block(CB_B_RM, tiles_per_block, CB_B_TILED);
+        tilize_block(CB_B_RM, ntiles_per_row, CB_B_TILED);
 
-        cb_push_back(CB_B_TILED, tiles_per_block);
-        cb_pop_front(CB_B_RM, tiles_per_block);
+        cb_push_back(CB_B_TILED, ntiles_per_row);
+        cb_pop_front(CB_B_RM, ntiles_per_row);
 
         // ============================================================
         // Phase 3: Binary op — switch from tilize to binary-op mode
@@ -96,7 +94,7 @@ void kernel_main() {
         BINARY_OP_INIT(CB_A_TILED, CB_B_TILED);
 #endif
 
-        for (uint32_t j = 0; j < tiles_per_block; ++j) {
+        for (uint32_t j = 0; j < ntiles_per_row; ++j) {
             cb_wait_front(CB_A_TILED, 1);
             cb_wait_front(CB_B_TILED, 1);
             cb_reserve_back(CB_OUT_TILED, 1);
@@ -131,15 +129,13 @@ void kernel_main() {
         // ============================================================
         reconfig_data_format(CB_OUT_TILED, CB_OUT_TILED);
         pack_untilize_init<1, ntiles_per_row_ct>(CB_OUT_TILED, CB_OUT_RM);
-        cb_reserve_back(CB_OUT_RM, tiles_per_block);
+        cb_reserve_back(CB_OUT_RM, ntiles_per_row);
         for (uint32_t c = 0; c < ntiles_per_row_ct; ++c) {
             cb_wait_front(CB_OUT_TILED, 1);
             pack_untilize_block<1, ntiles_per_row_ct>(CB_OUT_TILED, 1, CB_OUT_RM, c);
             cb_pop_front(CB_OUT_TILED, 1);
         }
-        cb_push_back(CB_OUT_RM, tiles_per_block);
+        cb_push_back(CB_OUT_RM, ntiles_per_row);
         pack_untilize_uninit(CB_OUT_RM);
-
-        tilize_init_short_with_dt(CB_B_RM, CB_A_RM, tiles_per_block, CB_A_TILED);
     }
 }
