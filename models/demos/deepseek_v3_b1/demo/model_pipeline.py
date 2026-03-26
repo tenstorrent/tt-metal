@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
 
 
@@ -47,6 +48,13 @@ class ModelPipeline:
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
         self.mesh_device = mesh_device
+
+        flash_mla_program_config = FlashMLADecode.ProgramConfig
+        assert (
+            self.mesh_device.shape[0] == flash_mla_program_config.sp_dim
+            and self.mesh_device.shape[1] == flash_mla_program_config.tp_dim
+        )
+
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -92,6 +100,33 @@ class ModelPipeline:
                 batch_size=1,
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
+
+    def get_kv_cache_metadata(self, layer_id: int, pos_id: int, slot_id: int) -> dict:
+        """
+        Get KV cache metadata.
+        """
+        kv_tile = ttnn.Tile([32, 32])
+        kv_tokens_per_tile = kv_tile.tile_shape[0]
+        kv_dim_per_tile = kv_tile.tile_shape[1]
+        flash_mla_program_config = FlashMLADecode.ProgramConfig
+        flash_mla_optimal_grid = flash_mla_program_config.grid
+        kv_cache_slot_size = (
+            flash_mla_program_config.k_chunk_size
+            * flash_mla_program_config.sp_dim
+            * flash_mla_optimal_grid.NUM_BLOCKS
+            * kv_tile.get_tile_size(ttnn.bfloat8_b)
+        )
+        print(f"kv_cache_slot_size: {kv_cache_slot_size}")
+        print(f"kv_tokens_per_tile: {kv_tokens_per_tile}")
+        print(f"kv_dim_per_tile: {kv_dim_per_tile}")
+        print(f"flash_mla_program_config.k_chunk_size: {flash_mla_program_config.k_chunk_size}")
+        print(f"flash_mla_program_config.sp_dim: {flash_mla_program_config.sp_dim}")
+        print(f"flash_mla_optimal_grid.NUM_BLOCKS: {flash_mla_optimal_grid.NUM_BLOCKS}")
+        print(f"kv_tile.get_tile_size(ttnn.bfloat8_b): {kv_tile.get_tile_size(ttnn.bfloat8_b)}")
+        return {
+            "position": self._position,
+            "output_buffer": self._output_buffer,
+        }
 
     def prefill_forward(self, tokens: list[int]) -> int:
         """Prefill 1 user's prompt tokens and return the next token id."""

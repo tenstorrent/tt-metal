@@ -155,6 +155,15 @@ class DeepSeekV3:
         self._position += 1
         return self._output_buffer
 
+    def get_kv_cache_metadata(self, layer_id: int, pos_id: int, slot_id: int, kv_chunk_size: int) -> dict:
+        """
+        Get KV cache metadata.
+        """
+        return {
+            "position": self._position,
+            "output_buffer": self._output_buffer,
+        }
+
     @property
     def position(self) -> int:
         """Current sequence position (number of tokens processed so far)."""

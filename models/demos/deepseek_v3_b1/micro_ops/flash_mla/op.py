@@ -249,6 +249,10 @@ class FlashMLAProgramConfig:
     exp_approx_mode: bool = True
     grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
     device_chunk_size: int = None
+    max_seq_len: int = 128 * 1024
+    max_kv_cache_slots: int = 64
+    sp_dim: int = 4
+    tp_dim: int = 2
 
     def __post_init__(self):
         expected = self.grid.CORES_PER_BLOCK * self.k_chunk_size
