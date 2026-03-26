@@ -276,9 +276,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
-        inplace = re.search(r"inplace=(\d+)", value_str)
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
+        inplace = re.search(r"(?<![a-z_])inplace=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -295,8 +295,8 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -317,6 +317,12 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
     core_coord = None
@@ -1355,6 +1361,8 @@ class MasterConfigLoader:
                     arg_idx += 1
 
                 # Process named keyword arguments (inside try so bad configs get skipped)
+                # Named tensor kwargs keep their original names from the JSON
+                # (e.g., input_tensor_q_shape, page_table_shape, etc.)
                 for key, value in named_kwargs.items():
                     tensor_config = self._extract_tensor_config(value)
                     if tensor_config:
