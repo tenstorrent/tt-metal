@@ -558,15 +558,15 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
     }
 
     // Not found, create new entry
-    for (size_t i = 0; i < MAX_PROCESSES; i++) {
-        if (region_->processes[i].pid.load(std::memory_order_relaxed) == 0) {
-            region_->processes[i].pid.store(pid, std::memory_order_relaxed);
-            region_->processes[i].dram_allocated.store(0, std::memory_order_relaxed);
-            region_->processes[i].l1_allocated.store(0, std::memory_order_relaxed);
-            region_->processes[i].l1_small_allocated.store(0, std::memory_order_relaxed);
-            region_->processes[i].trace_allocated.store(0, std::memory_order_relaxed);
-            region_->processes[i].cb_allocated.store(0, std::memory_order_relaxed);
-            region_->processes[i].last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
+    for (auto & processe : region_->processes) {
+        if (processe.pid.load(std::memory_order_relaxed) == 0) {
+            processe.pid.store(pid, std::memory_order_relaxed);
+            processe.dram_allocated.store(0, std::memory_order_relaxed);
+            processe.l1_allocated.store(0, std::memory_order_relaxed);
+            processe.l1_small_allocated.store(0, std::memory_order_relaxed);
+            processe.trace_allocated.store(0, std::memory_order_relaxed);
+            processe.cb_allocated.store(0, std::memory_order_relaxed);
+            processe.last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
             // Get process name
             std::string proc_name = get_process_name(pid);
