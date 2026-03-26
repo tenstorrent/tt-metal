@@ -77,7 +77,6 @@ struct SingleCoreBinaryConfig {
     std::string binary_op;
     bool acc_to_dest = false;
     bool full_init = true;
-    bool is_quasar = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
