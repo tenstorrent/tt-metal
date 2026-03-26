@@ -126,6 +126,13 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
 
+                // Push to own CB before multicast — critical to let compute start
+                // while we wait for the multicast handshake
+                bool is_own = (is_lower_block != (bool)injector_keeps_odd);
+                if (is_own) {
+                    cb_push_back(cb_id, block_size);
+                }
+
                 uint32_t recv_dst;
 
                 if (is_lower_block && lower_num_dests > 0) {
@@ -194,11 +201,6 @@ void kernel_main() {
                     upper_recv_offset += block_bytes;
                     if (upper_recv_offset >= cb_capacity_bytes)
                         upper_recv_offset = 0;
-                }
-
-                bool is_own = (is_lower_block != (bool)injector_keeps_odd);
-                if (is_own) {
-                    cb_push_back(cb_id, block_size);
                 }
             }
         }
