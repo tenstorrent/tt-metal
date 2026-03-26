@@ -25,6 +25,8 @@ def _get_bool_env(env_var, default):
     return True if value in ("1", "true", "yes") else False if value in ("0", "false", "no") else default
 
 
+ENABLE_CSV_DUMP = True
+
 USE_PCC = _get_bool_env("USE_PCC", True)  # Pearson Correlation Coefficient (existing default)
 USE_ALLCLOSE = _get_bool_env("USE_ALLCLOSE", False)  # Per-element closeness check
 USE_RELATIVE_FROBENIUS = _get_bool_env("USE_RELATIVE_FROBENIUS", False)  # Global error matrix norm
@@ -147,6 +149,41 @@ def _compute_frobenius_error_clusters(
 
 
 def collect_and_dump_numeric_metrics(
+    expected,
+    actual,
+    test_name="",
+    test_dtype=None,
+    input1_condition_number=None,
+    input2_condition_number=None,
+    csv_filename=None,
+    csv_dir=None,
+    test_params=None,
+    allclose_atol=ALLCLOSE_ATOL,
+    allclose_rtol=ALLCLOSE_RTOL,
+    ulp_threshold=ULP_THRESHOLD,
+    pcc_threshold=0.999,
+    k=None,
+):
+    if ENABLE_CSV_DUMP:
+        collect_and_dump_numeric_metrics_call(
+            expected,
+            actual,
+            test_name,
+            test_dtype,
+            input1_condition_number,
+            input2_condition_number,
+            csv_filename,
+            csv_dir,
+            test_params,
+            allclose_atol,
+            allclose_rtol,
+            ulp_threshold,
+            pcc_threshold,
+            k,
+        )
+
+
+def collect_and_dump_numeric_metrics_call(
     expected,
     actual,
     test_name="",
@@ -461,18 +498,16 @@ def collect_and_dump_numeric_metrics(
                         "max_abs_diff_ulp: (calculated-golden)/ulp_value @ [max abs_diff_index]",
                     ]
                 )
-                if k is not None:
-                    header.append("k")
-                    if k >= 1:
-                        header.extend(
-                            [
-                                "max_atol_div_k",
-                                "mean_atol_div_k",
-                                "max_rtol_div_k",
-                                "mean_rtol_div_k",
-                                "frobenius_value_div_k",
-                            ]
-                        )
+                header.extend(
+                    [
+                        "k",
+                        "max_atol_div_k",
+                        "mean_atol_div_k",
+                        "max_rtol_div_k",
+                        "mean_rtol_div_k",
+                        "frobenius_value_div_k",
+                    ]
+                )
                 header.extend(["input1_condition_number", "input2_condition_number"])
                 writer.writerow(header)
 
@@ -505,18 +540,19 @@ def collect_and_dump_numeric_metrics(
                     # json.dumps(frob_cluster_summary, separators=(",", ":")),
                 ]
             )
-            if k is not None:
-                row.append(str(k))
-                if k >= 1:
-                    row.extend(
-                        [
-                            f"{max_abs_dif / k:.6e}",
-                            f"{mean_abs_dif / k:.6e}",
-                            f"{max_rel_dif / k:.6e}",
-                            f"{mean_rel_dif / k:.6e}",
-                            f"{frob_val / k:.6e}",
-                        ]
-                    )
+            if k is not None and k >= 1:
+                row.extend(
+                    [
+                        str(k),
+                        f"{max_abs_dif / k:.6e}",
+                        f"{mean_abs_dif / k:.6e}",
+                        f"{max_rel_dif / k:.6e}",
+                        f"{mean_rel_dif / k:.6e}",
+                        f"{frob_val / k:.6e}",
+                    ]
+                )
+            else:
+                row.extend(["", "", "", "", "", ""])
             row.extend(
                 [
                     f"{float(input1_condition_number):.6e}" if input1_condition_number is not None else "",

@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_bank
 from models.common.utility_functions import comp_pcc, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 
 # numeric_check : comparison not necessary
@@ -417,7 +418,16 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    if test_dtype_str == "bfloat4":
+        assert_numeric_metrics(
+            pt_out, output_tensor, atol=0.0347 * k, rtol=24.625 * k, frobenius_threshold=0.0005 * k, pcc_threshold=0.99
+        )
+    elif test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            pt_out, output_tensor, atol=0.0028 * k, rtol=1.5 * k, frobenius_threshold=0.0001 * k, pcc_threshold=0.99
+        )
+    else:
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize(
@@ -656,7 +666,9 @@ def test_matmul_batched_dram_sharded(device, test_case):
         input1_condition_number=_cond(in0_orig),
         input2_condition_number=_cond(in1_orig),
     )
-    assert pcc_passed
+    assert_numeric_metrics(
+        pt_out, output_tensor, atol=0.0235 * k, rtol=27.875 * k, frobenius_threshold=0.0007 * k, pcc_threshold=0.99
+    )
 
 
 @pytest.mark.parametrize(
@@ -796,7 +808,9 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             input1_condition_number=_cond(in0_orig),
             input2_condition_number=_cond(in1_orig),
         )
-        assert_with_pcc(pt_out, output_tensor, expected_pcc)
+        assert_numeric_metrics(
+            pt_out, output_tensor, atol=0.0118 * k, rtol=6.0313 * k, frobenius_threshold=0.0004 * k, pcc_threshold=0.99
+        )
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)
         dummy_shape = [1, 1, 32, 32]
@@ -1095,4 +1109,6 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         input1_condition_number=_cond(cond_in0),
         input2_condition_number=_cond(cond_in1),
     )
-    assert pcc_passed, f"PCC check failed: {pcc_message}"
+    assert_numeric_metrics(
+        pt_out, output_tensor, atol=0.0098 * k, rtol=20.75 * k, frobenius_threshold=0.0002 * k, pcc_threshold=0.99
+    )

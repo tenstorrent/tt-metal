@@ -14,6 +14,7 @@ from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_asser
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose, assert_relative_frobenius
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 from ttnn.operations.activations import get_golden_function_for_activation
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 
 # ============================================================================
@@ -234,6 +235,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         input1_condition_number=None,
         input2_condition_number=None,
     )
+    assert_numeric_metrics(torch_input_tensor, output_tensor, pcc_threshold=0.989)
 
     # assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
     # assert_matmul_accuracy(torch_input_tensor, output_tensor, "test_tiny_tiles_bfloat")
@@ -296,6 +298,9 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor, output, atol=0.0003 * k, rtol=0.0001 * k, frobenius_threshold=20.99 * k, pcc_threshold=0.99
+    )
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         optional_output_tensor,
@@ -307,6 +312,14 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        optional_output_tensor,
+        atol=0.0003 * k,
+        rtol=0.0001 * k,
+        frobenius_threshold=20.99 * k,
+        pcc_threshold=0.99,
+    )
     collect_and_dump_numeric_metrics(
         output,
         optional_output_tensor,
@@ -317,6 +330,14 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        output,
+        optional_output_tensor,
+        atol=0.0003 * k,
+        rtol=0.0001 * k,
+        frobenius_threshold=20.99 * k,
+        pcc_threshold=0.99,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -360,6 +381,7 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
         input1_condition_number=None,
         input2_condition_number=None,
     )
+    assert_numeric_metrics(torch_input_tensor, output_tensor, pcc_threshold=0.99)
 
     # assert_with_pcc(torch_input_tensor, output_tensor, 1)
     # assert_matmul_accuracy(torch_input_tensor, output_tensor, "test_tiny_tiles")
@@ -395,6 +417,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
         input1_condition_number=_cond(x),
         input2_condition_number=_cond(y),
     )
+    assert_numeric_metrics(z_t, z, atol=0 * k, rtol=0 * k, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(z_t, z, "test_pytorch_2_0_failed_cases")
 
@@ -518,6 +541,9 @@ def test_matmul_reuse_config_sharded_fd_column(
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
+    assert_numeric_metrics(
+        pt_out, output_tensor, atol=11 * k, rtol=0.0001 * k, frobenius_threshold=38429.93 * k, pcc_threshold=0.993
+    )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_fd_column")
 
@@ -640,6 +666,21 @@ def test_matmul_reuse_config_sharded_tiny_tile(
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
+    if test_dtype_str == "bfloat4":
+        assert_numeric_metrics(
+            pt_out, output_tensor, atol=68.5 * k, rtol=0.0005 * k, frobenius_threshold=5550.466 * k, pcc_threshold=0.993
+        )
+    elif test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=8.6875 * k,
+            rtol=0.0001 * k,
+            frobenius_threshold=5550.466 * k,
+            pcc_threshold=0.993,
+        )
+    else:
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.993)
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_tiny_tile")
 
@@ -811,6 +852,26 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             input1_condition_number=_cond(in0),
             input2_condition_number=_cond(in1),
         )
+        if test_dtype_str == "bfloat8":
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor,
+                atol=0.6232 * k,
+                rtol=0.0001 * k,
+                frobenius_threshold=18.0393 * k,
+                pcc_threshold=0.999,
+            )
+        elif test_dtype_str == "bfloat16":
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor,
+                atol=0.2267 * k,
+                rtol=0.0001 * k,
+                frobenius_threshold=18.0393 * k,
+                pcc_threshold=0.999,
+            )
+        else:
+            assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.999)
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_in1_dram_sharded_tiny_tile")
 
@@ -957,6 +1018,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             input1_condition_number=_cond(in0),
             input2_condition_number=_cond(in1),
         )
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99)
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_multiple_output_blocks_per_core")
 
@@ -1151,6 +1213,7 @@ def run_matmul_2d_tiny_tile(
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
+    assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
@@ -1333,6 +1396,7 @@ def run_matmul_1d_tiny_tile(
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
+    assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
@@ -1561,6 +1625,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         input1_condition_number=_cond(in0),
         input2_condition_number=_cond(in1),
     )
+    assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
 
@@ -1713,6 +1778,14 @@ def test_padded_2d_matmul(device, side, tile_count):
         input1_condition_number=_cond(torch_act),
         input2_condition_number=_cond(torch_weight),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=3.6407 * K,
+        rtol=0.0001 * K,
+        frobenius_threshold=2.0895 * K,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_padded_2d_matmul")
     assert torch.all(lower == 2)
@@ -1820,6 +1893,14 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
             input1_condition_number=_cond(torch_act),
             input2_condition_number=_cond(torch_weight),
         )
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor_i,
+            atol=8.5834 * K,
+            rtol=0.0001 * K,
+            frobenius_threshold=1.7375 * K,
+            pcc_threshold=0.99,
+        )
         assert torch.all(lower == 2)
         assert torch.all(upper == 4)
 
@@ -1871,6 +1952,14 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.0038 * k_size,
+        rtol=0.0026 * k_size,
+        frobenius_threshold=11.8265 * k_size,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height")
 
@@ -1921,6 +2010,14 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.0025 * k_size,
+        rtol=0.0018 * k_size,
+        frobenius_threshold=11.8265 * k_size,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_from_1D")
 
@@ -1962,6 +2059,7 @@ def test_matmul_does_dot_product(device, w):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(torch_output_tensor, output, atol=0.0022 * w, rtol=0.0022 * w, pcc_threshold=0.99)
 
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
 
@@ -2010,6 +2108,14 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.0066 * w,
+        rtol=0.0031 * w,
+        frobenius_threshold=7.8758 * w,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_4D")
 
@@ -2055,6 +2161,14 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.0024 * w,
+        rtol=0.0009 * w,
+        frobenius_threshold=947.1858 * w,
+        pcc_threshold=0.99,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.9997)
@@ -2120,6 +2234,14 @@ def test_tutorial_matmul(device):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.9141 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=5.5667 * k_size,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul")
 
@@ -2158,6 +2280,14 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.9141 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=5.5667 * k_size,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul_inputs_and_output_in_l1_memory")
@@ -2200,6 +2330,14 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=2.4532 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=5.5667 * k_size,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(
@@ -2354,6 +2492,14 @@ def test_sharded_matmul(
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=9.5788 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=117.2906 * k_size,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_sharded_matmul")
 
@@ -2394,6 +2540,14 @@ def test_matmul_with_core_grid(device, batch_size):
         test_dtype=test_dtype,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=6.1563 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=2804.776 * k_size,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_with_core_grid")
@@ -2440,6 +2594,14 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         test_dtype=test_dtype,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=5.2552 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=49955.94 * k_size,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(
@@ -2489,6 +2651,14 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=6.7879 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=1.619 * k_size,
+        pcc_threshold=0.99,
+    )
 
     # assert_matmul_accuracy(
     #     torch_output_tensor, output_tensor, "test_tall_matmul_with_argument_for_core_grid_set_to_device_grid"
@@ -2536,6 +2706,14 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         test_dtype=test_dtype,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=6.1563 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=5040.389 * k_size,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(
@@ -2592,6 +2770,14 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.0024 * k,
+        rtol=0.0013 * k,
+        frobenius_threshold=23.3911 * k,
+        pcc_threshold=0.99,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -2656,6 +2842,14 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_a),
         input2_condition_number=_cond(torch_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0002 * k,
+        rtol=0.0001 * k,
+        frobenius_threshold=1.07e22 * k,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_transpose_a_with_core_grid")
@@ -2808,6 +3002,9 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor, output, atol=0.0012 * k, rtol=0.0007 * k, frobenius_threshold=20.99 * k, pcc_threshold=0.99
+    )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_and_configs")
 
@@ -2855,6 +3052,14 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.7043 * k_size,
+        rtol=0.0001 * k_size,
+        frobenius_threshold=145.2446 * k_size,
+        pcc_threshold=0.99,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_falcon_query_key_value_matmul")
 
@@ -3048,6 +3253,9 @@ def test_matmul_in0_in1_bias_sharded(
         input1_condition_number=_cond(input_tensor),
         input2_condition_number=_cond(weights_tensor),
     )
+    assert_numeric_metrics(
+        matmul_output, tt_mm_out, atol=2.5695 * K, rtol=0.0002 * K, frobenius_threshold=9.0074 * K, pcc_threshold=0.99
+    )
 
     # assert_matmul_accuracy(matmul_output, tt_mm_out, "test_matmul_in0_in1_bias_sharded")
 
@@ -3085,6 +3293,14 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=20.5 * K,
+        rtol=0.0009 * K,
+        frobenius_threshold=5436.976 * K,
+        pcc_threshold=0.99,
+    )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output2)
     test_name = f"test_alternating_dst_sync_mode_matmul[M={M},K={K},N={N}]_output2"
@@ -3100,6 +3316,14 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=20.5 * K,
+        rtol=0.0009 * K,
+        frobenius_threshold=5436.976 * K,
+        pcc_threshold=0.99,
+    )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output3)
     test_name = f"test_alternating_dst_sync_mode_matmul[M={M},K={K},N={N}]_output3"
@@ -3114,6 +3338,14 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         test_dtype=test_dtype,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=20.5 * K,
+        rtol=0.0009 * K,
+        frobenius_threshold=5436.976 * K,
+        pcc_threshold=0.99,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
 
@@ -3152,6 +3384,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
     # Block sharded
@@ -3176,6 +3409,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
     # Height sharded
@@ -3207,6 +3441,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
 
@@ -3246,6 +3481,9 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
+    assert_numeric_metrics(
+        torch_output_tensor, output, atol=0.0003 * k, rtol=0.0001 * k, frobenius_threshold=20.99 * k, pcc_threshold=0.99
+    )
 
     ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
@@ -3262,6 +3500,14 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        optional_output_tensor,
+        atol=0.0003 * k,
+        rtol=0.0001 * k,
+        frobenius_threshold=20.99 * k,
+        pcc_threshold=0.99,
     )
 
     assert len(output.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
@@ -3295,6 +3541,14 @@ def test_small_matmul_pcc(device):
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0001 * 2048,
+        rtol=0.0001 * 2048,
+        frobenius_threshold=180.1005 * 2048,
+        pcc_threshold=0.99,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_small_matmul_pcc")
@@ -3333,6 +3587,9 @@ def test_linear_with_optional_output_tensor(device, shape):
         test_dtype=test_dtype_str,
         input1_condition_number=None,
         input2_condition_number=None,
+    )
+    assert_numeric_metrics(
+        torch_out_tensor, result_tensor, atol=0 * shape[-1], rtol=5.3651 * shape[-1], pcc_threshold=0.99
     )
     # assert_matmul_accuracy(optional_output_tensor, result_tensor, "test_small_matmul_pcc")
 
@@ -3418,6 +3675,14 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         input1_condition_number=_cond(torch_input_tensor0),
         input2_condition_number=_cond(torch_input_tensor1),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0005 * 64,
+        rtol=0.0003 * 64,
+        frobenius_threshold=901.6499 * 64,
+        pcc_threshold=0.99,
+    )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
     # L1 Sharded output
@@ -3444,6 +3709,14 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         input1_condition_number=_cond(torch_input_tensor0),
         input2_condition_number=_cond(torch_input_tensor1),
     )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0005 * 64,
+        rtol=0.0003 * 64,
+        frobenius_threshold=901.6499 * 64,
+        pcc_threshold=0.99,
+    )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
     # L1 Sharded inferred output
@@ -3462,6 +3735,14 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         test_dtype=test_dtype_str,
         input1_condition_number=_cond(torch_input_tensor0),
         input2_condition_number=_cond(torch_input_tensor1),
+    )
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0005 * 64,
+        rtol=0.0003 * 64,
+        frobenius_threshold=901.6499 * 64,
+        pcc_threshold=0.99,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3679,6 +3960,7 @@ def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
         input1_condition_number=_cond(torch_input),
         input2_condition_number=_cond(torch_weight),
     )
+    assert_numeric_metrics(torch_output, output, pcc_threshold=0.99)
 
     # Verify correctness
     # assert_matmul_accuracy(torch_output, output, "test_linear_with_non_tile_aligned_bias")
@@ -3758,6 +4040,9 @@ def test_matmul_block_sharded_input_with_padding(device):
         input1_condition_number=_cond(torch_input_a),
         input2_condition_number=_cond(torch_input_b),
     )
+    assert_numeric_metrics(
+        torch_output, output, atol=12.3125 * 16, rtol=0.0003 * 16, frobenius_threshold=2.0066 * 16, pcc_threshold=0.99
+    )
 
     # assert_matmul_accuracy(torch_output, output, "test_matmul_block_sharded_input_with_padding")
 
@@ -3813,6 +4098,7 @@ def test_matmul_activation_with_sharded_input(device):
         input1_condition_number=_cond(torch_input_a),
         input2_condition_number=_cond(torch_input_b),
     )
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_block_sharded_input_with_padding")
 
@@ -3910,6 +4196,14 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             input1_condition_number=_cond(torch_input_a),
             input2_condition_number=_cond(torch_input_b),
         )
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.7891 * k_size,
+            rtol=0.0001 * k_size,
+            frobenius_threshold=1653.208 * k_size,
+            pcc_threshold=0.99,
+        )
 
         # assert_matmul_accuracy(torch_output, output, "test_matmul_on_subdevice_1d_mcast")
     finally:
@@ -3975,6 +4269,16 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         input1_condition_number=_cond(torch_A),
         input2_condition_number=_cond(torch_W),
     )
+    if test_dtype_str == "bfloat4":
+        assert_numeric_metrics(
+            golden, result_conv, atol=15.2196 * K, rtol=0.002 * K, frobenius_threshold=5.9379 * K, pcc_threshold=0.99
+        )
+    elif test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            golden, result_conv, atol=2.3001 * K, rtol=0.0002 * K, frobenius_threshold=5.9379 * K, pcc_threshold=0.99
+        )
+    else:
+        assert_numeric_metrics(golden, result_conv, pcc_threshold=0.99)
     collect_and_dump_numeric_metrics(
         golden,
         result_col,
@@ -3986,6 +4290,16 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         input1_condition_number=_cond(torch_A),
         input2_condition_number=_cond(torch_W),
     )
+    if test_dtype_str == "bfloat4":
+        assert_numeric_metrics(
+            golden, result_col, atol=15.2196 * K, rtol=0.002 * K, frobenius_threshold=5.9379 * K, pcc_threshold=0.99
+        )
+    elif test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            golden, result_col, atol=2.3001 * K, rtol=0.0002 * K, frobenius_threshold=5.9379 * K, pcc_threshold=0.99
+        )
+    else:
+        assert_numeric_metrics(golden, result_col, pcc_threshold=0.99)
     collect_and_dump_numeric_metrics(
         result_conv,
         result_col,
@@ -3997,6 +4311,26 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         input1_condition_number=_cond(torch_A),
         input2_condition_number=_cond(torch_W),
     )
+    if test_dtype_str == "bfloat4":
+        assert_numeric_metrics(
+            result_conv,
+            result_col,
+            atol=15.2196 * K,
+            rtol=0.002 * K,
+            frobenius_threshold=5.9379 * K,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            result_conv,
+            result_col,
+            atol=2.3001 * K,
+            rtol=0.0002 * K,
+            frobenius_threshold=5.9379 * K,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(result_conv, result_col, pcc_threshold=0.99)
 
     # assert_matmul_accuracy(golden, result_conv, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
     # assert_matmul_accuracy(golden, result_col, "test_matmul_column_wise_bfp_tilize_via_transpose_b")
@@ -4080,6 +4414,7 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
         input1_condition_number=None,
         input2_condition_number=None,
     )
+    assert_numeric_metrics(result_manual, result_col, pcc_threshold=0.99)
 
     # assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
     # assert_matmul_accuracy(result_manual, result_col, "test_from_torch_col_tilize_matches_manual_transpose")

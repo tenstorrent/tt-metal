@@ -13,6 +13,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -120,7 +121,14 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.0098 * k,
+            rtol=10.1875 * k,
+            frobenius_threshold=0.0002 * k,
+            pcc_threshold=0.99,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -228,7 +236,26 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+        if test_dtype_str == "bfloat8":
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor[b_i, s_i, 0, e_i, :, :],
+                atol=0.0079 * k,
+                rtol=6.3125 * k,
+                frobenius_threshold=0.0002 * k,
+                pcc_threshold=0.99,
+            )
+        elif test_dtype_str == "bfloat16":
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor[b_i, s_i, 0, e_i, :, :],
+                atol=0.0098 * k,
+                rtol=10.1875 * k,
+                frobenius_threshold=0.0002 * k,
+                pcc_threshold=0.99,
+            )
+        else:
+            assert_numeric_metrics(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -339,7 +366,14 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, :, :],
+            atol=0.0098 * k,
+            rtol=21.25 * k,
+            frobenius_threshold=0.0002 * k,
+            pcc_threshold=0.99,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -445,7 +479,7 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
+        assert_numeric_metrics(pt_out, output_tensor[b_i, s_i, :, :], atol=3.0679 * k, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -557,7 +591,14 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, e_i, :, :],
+            atol=0.0118 * k,
+            rtol=22.25 * k,
+            frobenius_threshold=0.0002 * k,
+            pcc_threshold=0.99,
+        )
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -665,4 +706,11 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             input1_condition_number=_cond(in0_batch),
             input2_condition_number=_cond(in1_batch),
         )
-        assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, e_i, :, :],
+            atol=0.0098 * k,
+            rtol=22.25 * k,
+            frobenius_threshold=0.0002 * k,
+            pcc_threshold=0.99,
+        )

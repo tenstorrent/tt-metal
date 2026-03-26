@@ -8,6 +8,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -63,7 +64,35 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0206 * matrix_size,
+            rtol=9.3125 * matrix_size,
+            frobenius_threshold=0.0053 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * matrix_size,
+            rtol=5.0313 * matrix_size,
+            frobenius_threshold=0.0008 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.002 * matrix_size,
+            rtol=0.2989 * matrix_size,
+            frobenius_threshold=0.0005 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
@@ -119,7 +148,35 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0333 * matrix_size,
+            rtol=12.125 * matrix_size,
+            frobenius_threshold=0.0055 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0079 * matrix_size,
+            rtol=0.5313 * matrix_size,
+            frobenius_threshold=0.0012 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * matrix_size,
+            rtol=0.1119 * matrix_size,
+            frobenius_threshold=0.0005 * matrix_size,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
@@ -188,7 +245,35 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0417 * m,
+            rtol=10.5625 * m,
+            frobenius_threshold=0.0046 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0105 * m,
+            rtol=0.5118 * m,
+            frobenius_threshold=0.0018 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * m,
+            rtol=0.126 * m,
+            frobenius_threshold=0.0007 * m,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
@@ -260,7 +345,35 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.0157 * m,
+            rtol=0.0435 * m,
+            frobenius_threshold=0.0049 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * m,
+            rtol=0.0085 * m,
+            frobenius_threshold=0.0012 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.001 * m,
+            rtol=0.0008 * m,
+            frobenius_threshold=0.0005 * m,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
@@ -330,7 +443,35 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor_torch,
+            atol=0.0169 * m,
+            rtol=2.6892 * m,
+            frobenius_threshold=0.0007 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor_torch,
+            atol=0.0051 * m,
+            rtol=0.3987 * m,
+            frobenius_threshold=0.0002 * m,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor_torch,
+            atol=0.0023 * m,
+            rtol=0.0203 * m,
+            frobenius_threshold=0.0001 * m,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor_torch, pcc_threshold=0.99)
 
 
 # numeric_check : comparison not necessary
@@ -561,7 +702,35 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
+    if test_dtype_str == "bfloat8":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.012 * 32,
+            rtol=0.8594 * 32,
+            frobenius_threshold=0.0007 * 32,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "bfloat16":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * 32,
+            rtol=0.0491 * 32,
+            frobenius_threshold=0.0002 * 32,
+            pcc_threshold=0.99,
+        )
+    elif test_dtype_str == "float32":
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.002 * 32,
+            rtol=0.0069 * 32,
+            frobenius_threshold=0.0001 * 32,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.99)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
 
 
@@ -621,5 +790,12 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
         input1_condition_number=_cond(torch_mat1_tensor),
         input2_condition_number=_cond(torch_mat2_tensor),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.004 * 32,
+        rtol=0.0413 * 32,
+        frobenius_threshold=0.0002 * 32,
+        pcc_threshold=0.9999,
+    )
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=0.9999)

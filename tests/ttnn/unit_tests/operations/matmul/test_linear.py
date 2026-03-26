@@ -11,6 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.common.utility_functions import torch_random
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -86,7 +87,14 @@ def test_linear(
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0001 * k_size,
+        rtol=0.0152 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -166,7 +174,14 @@ def test_linear_with_core_grid(
         input2_condition_number=_cond(torch_input_tensor_b),
     )
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0001 * k_size,
+        rtol=0.0548 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -205,7 +220,14 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0049 * k_size,
+        rtol=3.125 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -257,7 +279,14 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0025 * k_size,
+        rtol=1.3204 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -298,7 +327,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0049 * k_size,
+        rtol=2.2657 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize("m_size", [32, 512])
@@ -343,7 +379,14 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0625 * k_size,
+        rtol=0.1143 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 def test_bloom_ff2_linear(device):
@@ -395,7 +438,14 @@ def test_bloom_ff2_linear(device):
         input1_condition_number=_cond(torch_input_tensor),
         input2_condition_number=_cond(torch_weight),
     )
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        atol=0.0001 * 4096,
+        rtol=0.0197 * 4096,
+        frobenius_threshold=0.0001 * 4096,
+        pcc_threshold=0.9992,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -454,7 +504,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0059 * k_size,
+        rtol=7.9688 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
@@ -500,7 +557,14 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0017 * 384,
+        rtol=0.0001 * 384,
+        frobenius_threshold=0.0001 * 384,
+        pcc_threshold=0.99,
+    )
 
 
 def test_resnet50_linear(device):
@@ -583,7 +647,14 @@ def test_resnet50_linear(device):
         input1_condition_number=_cond(torch_input_tensor),
         input2_condition_number=_cond(torch_weight_tensor),
     )
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.0027 * 2048,
+        rtol=0.2579 * 2048,
+        frobenius_threshold=0.0001 * 2048,
+        pcc_threshold=0.99,
+    )
 
 
 @pytest.mark.parametrize(
@@ -685,7 +756,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         input1_condition_number=_cond(torch_a),
         input2_condition_number=_cond(torch_weight),
     )
-    assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
+    assert_numeric_metrics(
+        torch_result,
+        ttnn_result_torch,
+        atol=0.0157 * k_value,
+        rtol=0.1954 * k_value,
+        frobenius_threshold=0.0047 * k_value,
+        pcc_threshold=0.99,
+    )
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
@@ -819,7 +897,14 @@ def test_linear_yolov7(
         input1_condition_number=_cond(torch_input_tensor),
         input2_condition_number=_cond(torch_weight_tensor),
     )
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.0135 * 512,
+        rtol=24.25 * 512,
+        frobenius_threshold=0.0002 * 512,
+        pcc_threshold=0.99,
+    )
 
 
 # ============================================================================
@@ -923,7 +1008,14 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             input1_condition_number=_cond(torch_input_a),
             input2_condition_number=_cond(torch_input_b),
         )
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.0069 * k_size,
+            rtol=7.3125 * k_size,
+            frobenius_threshold=0.0001 * k_size,
+            pcc_threshold=0.999,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -970,7 +1062,14 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             input1_condition_number=_cond(torch_input_a),
             input2_condition_number=_cond(torch_input_b),
         )
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.0049 * k_size,
+            rtol=4.1875 * k_size,
+            frobenius_threshold=0.0001 * k_size,
+            pcc_threshold=0.999,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -1034,4 +1133,11 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         input1_condition_number=_cond(torch_input_a),
         input2_condition_number=_cond(torch_input_b),
     )
-    assert_with_pcc(torch_output, output, 0.99)
+    assert_numeric_metrics(
+        torch_output,
+        output,
+        atol=0.004 * k_size,
+        rtol=4.3334 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.99,
+    )

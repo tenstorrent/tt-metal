@@ -10,6 +10,7 @@ import ttnn
 from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
+from tests.ttnn.unit_tests.operations.matmul.numeric_assertions import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -42,7 +43,7 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
         input1_condition_number=None,
         input2_condition_number=None,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.9999)
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
@@ -75,7 +76,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.9999)
 
 
 @pytest.mark.requires_fast_runtime_mode_off
@@ -180,7 +181,7 @@ def test_ttnn_linear(
         input1_condition_number=_cond(torch_input_tensor_a),
         input2_condition_number=_cond(torch_input_tensor_b),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.9996)
 
 
 @pytest.mark.parametrize("m_size", [32])
@@ -271,7 +272,14 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         input1_condition_number=_cond(torch_input_tensor_in0),
         input2_condition_number=_cond(torch_input_tensor_in1),
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0005 * k_size,
+        rtol=0.033 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.9999,
+    )
 
 
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
@@ -344,4 +352,4 @@ def test_sharded_partial_op(device, H, num_cores, num_slices):
         input1_condition_number=None,
         input2_condition_number=None,
     )
-    assert_with_pcc(pt_out, tt_out)
+    assert_numeric_metrics(pt_out, tt_out, pcc_threshold=0.9999)
