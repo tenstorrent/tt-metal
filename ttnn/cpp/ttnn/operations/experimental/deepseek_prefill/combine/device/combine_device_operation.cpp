@@ -113,7 +113,8 @@ ttnn::Tensor prefill_combine(
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
     bool distributed_zero_init,
-    bool inline_zero_init) {
+    bool inline_zero_init,
+    bool column_sender_layout) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -128,7 +129,8 @@ ttnn::Tensor prefill_combine(
             .worker_core_range_set = worker_core_range_set,
             .init_zeros = init_zeros,
             .distributed_zero_init = distributed_zero_init,
-            .inline_zero_init = inline_zero_init},
+            .inline_zero_init = inline_zero_init,
+            .column_sender_layout = column_sender_layout},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

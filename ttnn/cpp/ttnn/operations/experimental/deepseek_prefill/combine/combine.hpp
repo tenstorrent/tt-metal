@@ -26,7 +26,8 @@ ttnn::Tensor combine(
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool init_zeros = true,
     bool distributed_zero_init = true,
-    bool inline_zero_init = false);
+    bool inline_zero_init = false,
+    bool column_sender_layout = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 

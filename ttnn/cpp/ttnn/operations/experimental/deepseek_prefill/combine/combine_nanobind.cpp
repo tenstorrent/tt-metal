@@ -76,7 +76,8 @@ void bind_combine(nb::module_& mod) {
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
             nb::arg("init_zeros") = true,
             nb::arg("distributed_zero_init") = true,
-            nb::arg("inline_zero_init") = false));
+            nb::arg("inline_zero_init") = false,
+            nb::arg("column_sender_layout") = false));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail
