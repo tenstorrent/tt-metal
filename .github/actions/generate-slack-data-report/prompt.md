@@ -12,18 +12,25 @@ Requirements:
 - Do not use subagents (`task`) and do not run shell/edit commands; work directly from the provided JSON content.
 - Minimize intermediate narration. Keep work output concise until the final report section.
 - Parse only from `messages[]`, each top-level item's `text`, and its `thread_replies[]` (plus useful text in `attachments[].text` / `attachments[].fallback` when present).
+- Primary decision gate: extract GitHub issue link(s) from each top-level message and check whether each referenced issue is currently open or closed.
+- Hard rule: if a referenced issue is closed, treat that top-level message as solved/fixed.
+- If a top-level message references multiple issues, and at least one referenced issue is still open, do not auto-mark as solved from closure alone; use thread evidence to decide conservatively.
 - Treat developer-posted PR links in the same thread as a strong signal and prioritize them over generic discussion text.
 - Recognize GitHub links in Slack format, including:
+  - `<https://github.com/tenstorrent/tt-metal/issues/12345|...>`
   - `<https://github.com/tenstorrent/tt-metal/pull/12345|...>`
   - `https://github.com/tenstorrent/tt-metal/pull/12345`
   - `/pull/12345/changes` and PR links with `#issuecomment-...`
 - Classification precedence (highest to lowest):
+  0) **Closed ticket signal**: referenced issue is closed -> solved/fixed.
   1) **Disabled**: thread contains phrases like "PR to disable", "disable the test", "disable for now", or clear disable-intent around a PR link.
   2) **Fixed/Resolved**: thread contains fix-intent PR references ("PR to fix", "fix here", "addresses this", "tests now pass", "now merged", "looks resolved") and no stronger disable signal.
   3) **Unresolved**: no convincing disable/fix signal, or evidence is ambiguous/conflicting.
 - If a PR link exists but status is uncertain, classify as unresolved unless nearby thread text explicitly indicates fix/resolve outcome.
+- If no issue link is present in a top-level message, fall back entirely to thread evidence.
 - For average time-to-fix, use the timestamp delta between top-level `ts` and the earliest reply that provides a clear fixed/resolved signal.
 - In the final report, include a short "High-confidence evidence examples" section with 3-5 concrete thread snippets (message ts + key phrase) that drove classifications.
+- In the methodology, explicitly report how many messages were classified via closed-ticket signal vs thread-evidence signal.
 - In the final report, include a section named "Unresolved Messages (Links)" that lists **every** unresolved top-level message with:
   - message `ts`
   - a one-line reason it is unresolved
