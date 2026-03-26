@@ -187,7 +187,7 @@ if __name__ == "__main__":
     logger.info(f"TT_VISIBLE_DEVICES={os.environ.get('TT_VISIBLE_DEVICES', '<unset>')}")
 
     original_default_device = ttnn.GetDefaultDevice()
-    with ttnn.create_mesh_device(mesh_shape=ttnn.MeshShape(1, 2)) as mesh_device:
+    with ttnn.create_mesh_device(mesh_shape=ttnn.MeshShape(1, 1)) as mesh_device:
         logger.info(
             "Opened mesh device with num_devices={} and grid={}",
             mesh_device.get_num_devices(),
