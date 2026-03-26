@@ -8,6 +8,7 @@ from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from .llama_overrides import LlamaCompositeKV
 import logging
+import os
 
 
 @dataclass

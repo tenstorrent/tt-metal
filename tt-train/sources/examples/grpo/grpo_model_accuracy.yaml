@@ -1,5 +1,5 @@
 training_config:
-  batch_size: 32
+  batch_size: 64
   num_epochs: 2
   model_config: "model_configs/llama3_2_1B.yaml"
 

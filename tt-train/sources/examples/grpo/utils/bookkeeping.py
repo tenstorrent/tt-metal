@@ -83,8 +83,32 @@ def _save_metadata(output_dir: str, run_name: str, timestamp: str, repo_root: st
         json.dump(metadata, f, indent=2)
 
 
+class _TeeStream:
+    """Write to both the original stream and a file."""
+
+    def __init__(self, original, log_file):
+        self._original = original
+        self._log_file = log_file
+
+    def write(self, data):
+        self._original.write(data)
+        self._log_file.write(data)
+        self._log_file.flush()
+
+    def flush(self):
+        self._original.flush()
+        self._log_file.flush()
+
+    def fileno(self):
+        return self._original.fileno()
+
+
 def _setup_logging(output_dir: str, log_filename: str = "grpo_training.log"):
     log_path = os.path.join(output_dir, log_filename)
+    log_file = open(log_path, "w")
+
+    sys.stdout = _TeeStream(sys.__stdout__, log_file)
+    sys.stderr = _TeeStream(sys.__stderr__, log_file)
 
     formatter = logging.Formatter(
         fmt="%(asctime)s.%(msecs)03d %(message)s",
@@ -94,7 +118,7 @@ def _setup_logging(output_dir: str, log_filename: str = "grpo_training.log"):
     file_handler = logging.FileHandler(log_path)
     file_handler.setFormatter(formatter)
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(sys.__stdout__)
     console_handler.setFormatter(formatter)
 
     logger = logging.getLogger("grpo")
