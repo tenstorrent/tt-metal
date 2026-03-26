@@ -45,6 +45,7 @@ def main() -> int:
 
     assistant_chars = 0
     assistant_buffer = ""
+    last_assistant_snapshot = ""
 
     def flush_assistant(force: bool = False) -> None:
         nonlocal assistant_buffer
@@ -61,9 +62,10 @@ def main() -> int:
             elif split_idx >= 80:
                 chunk = assistant_buffer[: split_idx + 1]
                 assistant_buffer = assistant_buffer[split_idx + 1 :]
-            elif len(assistant_buffer) >= 220:
-                chunk = assistant_buffer[:220]
-                assistant_buffer = assistant_buffer[220:]
+            elif len(assistant_buffer) >= 420:
+                # Force periodic emission on long unpunctuated spans.
+                chunk = assistant_buffer[:420]
+                assistant_buffer = assistant_buffer[420:]
             else:
                 break
 
@@ -104,15 +106,33 @@ def main() -> int:
             if event_type == "assistant":
                 text = safe_get_text(obj)
                 if text:
-                    assistant_chars += len(text)
-                    assistant_buffer += text
-                    flush_assistant(force=False)
+                    # stream-json may emit cumulative assistant snapshots.
+                    # Keep only novel suffix to avoid duplicate/repeated logs.
+                    if text.startswith(last_assistant_snapshot):
+                        delta = text[len(last_assistant_snapshot) :]
+                        last_assistant_snapshot = text
+                    elif last_assistant_snapshot.startswith(text):
+                        # Older snapshot replayed; ignore.
+                        delta = ""
+                    else:
+                        # Snapshot discontinuity (new turn / reset): emit separator.
+                        if assistant_buffer:
+                            flush_assistant(force=True)
+                        print("[assistant] ---", flush=True)
+                        delta = text
+                        last_assistant_snapshot = text
+
+                    if delta:
+                        assistant_chars += len(delta)
+                        assistant_buffer += delta
+                        flush_assistant(force=False)
                 continue
 
             if event_type == "result":
                 flush_assistant(force=True)
                 duration = obj.get("duration_ms")
                 print(f"[result] completed duration_ms={duration}", flush=True)
+                last_assistant_snapshot = ""
                 continue
 
     flush_assistant(force=True)
