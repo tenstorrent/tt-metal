@@ -43,8 +43,9 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        # Temporary E2E validation ref for PR #829.
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@dimitri/828-hangs-auto-triage
+        # Fork PR: branch lives on the fork, not tenstorrent/tt-auto-triage. After merge, switch to:
+        #   uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
+        uses: dimitri-tenstorrent/tt-auto-triage/.github/actions/auto-triage@dimitri/828-hangs-auto-triage
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
