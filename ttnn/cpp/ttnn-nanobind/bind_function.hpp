@@ -17,7 +17,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 // Added for the nanobind includes and types -- see the comments in the decorators.hpp
-#include "ttnn/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn {
 
