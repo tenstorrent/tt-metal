@@ -605,9 +605,9 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
     }
 
     // First, try to find existing entry
-    for (size_t i = 0; i < MAX_CHIPS_PER_DEVICE; i++) {
-        if (region_->chip_stats[i].chip_id == chip_id) {
-            return &region_->chip_stats[i];
+    for (auto & chip_stat : region_->chip_stats) {
+        if (chip_stat.chip_id == chip_id) {
+            return &chip_stat;
         }
     }
 
