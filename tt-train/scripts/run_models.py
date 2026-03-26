@@ -110,7 +110,7 @@ def main() -> int:
         model_name = model["name"]
         model_filename = model["filename"]
         binary = str(build_examples / model["binary"] / model["binary"])
-        args = [arg.replace("{TT_METAL_RUNTIME_ROOT}", str(tt_metal_runtime_root)) for arg in model["args"]]
+        args = [os.path.expandvars(arg) for arg in model["args"]]
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time_ns() // 1_000)
