@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoERoutingSetup as TtMoeRoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
@@ -273,15 +274,9 @@ def test_ttnn_combine(
         num_routed_experts=num_routed_experts,
     )
 
-    # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-        expert_dispatch_table=expert_dispatch_table,
+    # create tt-moe routing setup module
+    tt_moe_routing_setup = TtMoeRoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
     )
 
     # Initialize torch dispatch module with num_dispatch_groups support
@@ -320,7 +315,7 @@ def test_ttnn_combine(
         dtype=ttnn.int32,
     )
 
-    tt_expert_token_counts = ttnn.from_torch(
+    tt_expert_token_counts_OG = ttnn.from_torch(
         expert_token_counts,
         mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -338,7 +333,31 @@ def test_ttnn_combine(
 
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
 
-    # Run ttnn combine
+    # Step 5a: run ttnn moe routing setup to compute expert token counts for combine op
+    tt_indices = ttnn.from_torch(
+        indices,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(0, None),
+        ),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+    )
+
+    _, tt_expert_token_counts, _ = tt_moe_routing_setup(
+        ttnn_top_k_experts_indices=tt_indices,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=num_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+    )
+
+    logger.debug(f"{tt_expert_token_counts_OG.shape=}; {tt_expert_token_counts.shape=}")
+
+    # Step 5b: Run ttnn combine
     tt_combine = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,

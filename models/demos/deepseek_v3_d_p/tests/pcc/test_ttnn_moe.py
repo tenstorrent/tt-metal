@@ -31,7 +31,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_torch_expert_weights,
     extract_mesh_config,
     get_ep_mesh_composer,
-    get_sp_mesh_composer,
+    get_expert_token_counts_mesh_mapper,
+    get_gate_outputs,
     get_tp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -226,7 +227,65 @@ def test_ttnn_moe(
         profiler.end("torch_forward")
 
     # ========================================
-    # Step 4: TtMoe forward
+    # Step 4: Create TTNN tensors
+    # ========================================
+    profiler.start("ttnn_input_creation")
+    logger.debug("Creating TTNN tensors...")
+
+    mesh_rows, mesh_cols = mesh_device.shape
+
+    # For 2D mesh: shard x along dispatch_group_size (dim 0) across axis 0 AND emb_dim (dim -1) across axis 1
+    # This supports both dispatch (SP along axis 0) and shared expert (TP along axis 1)
+    if run_pcc_check:
+        mesh_mapper_2d_input = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(0, -1),  # Shard dim 0 across axis 0, shard dim -1 across axis 1
+        )
+        tt_x = ttnn.from_torch(
+            x, mesh_mapper=mesh_mapper_2d_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        )
+    else:
+        # Device-only allocation for x (large tensor) - no host-to-device transfer
+        per_device_x_shape = (dispatch_group_size // mesh_rows, seq_len_per_chip, emb_dim // mesh_cols)
+        tt_x = ttnn.empty(per_device_x_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    logger.debug(f"tt_x.shape: {tt_x.shape}")
+
+    # Weights and indices: shard on dispatch axis, replicate on TP axis
+    mesh_mapper_sp_only = ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(0, None),  # Shard dim 0 across axis 0, replicate on axis 1
+    )
+
+    tt_weights = ttnn.from_torch(
+        weights,
+        mesh_mapper=mesh_mapper_sp_only,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    tt_indices = ttnn.from_torch(
+        indices, mesh_mapper=mesh_mapper_sp_only, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+    )
+
+    # Expert offsets and dispatch table
+    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
+
+    # Expert token counts
+    tt_expert_token_counts = ttnn.from_torch(
+        expert_token_counts,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("ttnn_input_creation")
+
+    # ========================================
+    # Step 5: Create TtMoe and run forward
     # ========================================
     profiler.start("tt_moe_creation")
     logger.debug("Creating TtMoe...")

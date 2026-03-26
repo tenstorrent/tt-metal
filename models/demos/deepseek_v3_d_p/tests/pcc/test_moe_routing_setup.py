@@ -214,8 +214,22 @@ def test_prep_dispatch_combine(
                         f"Expected {ref}, got {host_tensor[i][j]}"
                     )
 
-    # Validate sparse -> dense across dispatch groups (rows)
+    # Validate values match torch reference
+    # Since indices are replicated across dispatch groups, all groups should have identical values
     for name, host_tensor, expected in tensors_to_validate:
-        tt_dense = sum(host_tensor[i][0].int() for i in range(num_dispatch_groups))
-        if not torch.allclose(tt_dense.flatten(), expected.int().flatten(), atol=0, rtol=0):
-            raise AssertionError(f"Sparse->dense mismatch for {name}. Expected {expected}, got {tt_dense}")
+        # Take first dispatch group (verified identical above)
+        tt_values = host_tensor[0].squeeze()  # Remove singleton dims
+
+        if name == "expert_offsets":
+            # expected shape: (dispatch_group_size, num_routed_experts)
+            # tt_values shape: (dispatch_group_size, num_routed_experts)
+            if not torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0):
+                raise AssertionError(f"Value mismatch for {name}. Expected {expected}, got {tt_values}")
+        elif name == "expert_token_counts":
+            # expected shape: (num_dispatch_groups, num_routed_experts) - all rows identical
+            # tt_values shape: (dispatch_group_size, num_routed_experts) - all rows identical
+            # Compare first row of each
+            expected_single = expected[0] if expected.dim() > 1 else expected
+            tt_single = tt_values[0] if tt_values.dim() > 1 else tt_values
+            if not torch.allclose(tt_single.int().flatten(), expected_single.int().flatten(), atol=0, rtol=0):
+                raise AssertionError(f"Value mismatch for {name}. Expected {expected_single}, got {tt_single}")

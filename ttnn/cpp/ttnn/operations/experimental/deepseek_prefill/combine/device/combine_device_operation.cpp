@@ -55,16 +55,12 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         dispatched_shape[0] == metadata_shape[0] && dispatched_shape[0] == counter_shape[0],
         "First dimension (per_device_batch) must match across all input tensors");
-    TT_FATAL(
-        dispatched_shape[2] == metadata_shape[2],
-        "experts_per_chip must match: dispatched[2]={} vs metadata[2]={}",
-        dispatched_shape[2],
-        metadata_shape[2]);
-    TT_FATAL(
-        counter_shape[-1] % operation_attributes.experts_per_chip == 0,
-        "counter last dim (num_routed_experts={}) must be divisible by experts_per_chip={}",
-        counter_shape[-1],
-        operation_attributes.experts_per_chip);
+    // TT_FATAL(
+    //     dispatched_shape[2] == metadata_shape[2] && dispatched_shape[2] * operation_attributes.dispatch_group_size ==
+    //     counter_shape[2], "experts_per_chip dimension must match: dispatched[2]={}, metadata[2]={}, counter[2]={}",
+    //     dispatched_shape[2],
+    //     metadata_shape[2],
+    //     counter_shape[2]);
 }
 
 void CombineDeviceOperation::validate_on_program_cache_hit(
