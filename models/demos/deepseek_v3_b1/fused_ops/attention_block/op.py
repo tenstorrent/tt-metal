@@ -1462,12 +1462,12 @@ class AttentionBlock:
             ("krope_Ht", krope_Ht),
         ]
 
-        # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
-        kv_cache_brisc_named_compile_time_args = [
+        # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
+        kv_cache_ncrisc_named_compile_time_args = [
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
-            ("kv_cache_output_cb", kv_cache_output_cb),
-            ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
             ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
             ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
@@ -1475,6 +1475,10 @@ class AttentionBlock:
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+        ]
+        kv_cache_brisc_named_compile_time_args = [
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -3067,6 +3071,7 @@ class AttentionBlock:
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
             + krope_ncrisc_named_compile_time_args
+            + kv_cache_ncrisc_named_compile_time_args
             + mla_ncrisc_named_compile_time_args
             + post_sdpa_ncrisc_named_compile_time_args
         )
