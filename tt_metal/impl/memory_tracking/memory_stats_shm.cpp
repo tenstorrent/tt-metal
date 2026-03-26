@@ -648,7 +648,7 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
 
     for (auto & chip_stat : region_->chip_stats) {
         if (chip_stat.chip_id != 0) {
-            ChipInfo info;
+            ChipInfo info{};
             info.chip_id = chip_stat.chip_id;
             info.is_remote = (chip_stat.is_remote != 0);
             info.dram_allocated = chip_stat.dram_allocated.load(std::memory_order_relaxed);
