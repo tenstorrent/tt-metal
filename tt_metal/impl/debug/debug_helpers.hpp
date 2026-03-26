@@ -100,7 +100,8 @@ inline std::string_view get_core_type_name(CoreType ct) {
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
-inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
+inline std::string get_debug_assert_message(
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint64_t hw_fault_info = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
             return fmt::format(
@@ -121,6 +122,12 @@ inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, 
                    "transactions (missing NOC posted writes sent barrier).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
+        case dev_msgs::DebugAssertHwFault:
+            return fmt::format(
+                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
+                line_num,
+                hw_fault_info & 0xffffffff,
+                (hw_fault_info >> 32) & 0xffffffff);
         default: return "";
     }
 }
