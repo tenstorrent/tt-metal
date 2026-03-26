@@ -126,7 +126,7 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
-        if self.args.is_ffn_norm:
+        if f"layers.{layer_num}.ffn_norm.weight" in state_dict:
             self.ff_norm = DistributedNorm(
                 RMSNorm(
                     device=mesh_device,
