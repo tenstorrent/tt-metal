@@ -55,7 +55,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
 
         // Track on all underlying Devices that have SHM provider
         for (auto* underlying_device : underlying_devices) {
-            auto* device = dynamic_cast<const Device*>(underlying_device);
+            const auto* device = dynamic_cast<const Device*>(underlying_device);
             if (device) {
                 auto* shm_provider = device->get_shm_stats_provider();
                 if (shm_provider) {
