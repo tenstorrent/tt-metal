@@ -73,7 +73,7 @@ The demo can also run on a single Galaxy in data parallel mode with a reduced nu
 
 ```bash
 MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
-             --prompts-file models/demos/deepseek_v3/demo/test_prompts.json \
+             --prompts-file models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json \
              --output-path deepseek_tt_out_batch_4.json \
              --max-new-tokens 128 \
              --model-path $DEEPSEEK_V3_HF_MODEL \
@@ -155,12 +155,12 @@ The CLI accepts JSON files in either of the following layouts:
 }
 ```
 
-Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
+Use `--num-prompts` to truncate large prompt sets. For example, `models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json` contains 512 prompts, but you can limit it to a 256-prompt subset when you only want a single pass through the attached AIME24/GPQA mix.
 
 ### Sample usage with JSON file:
 
 ```bash
-python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
+python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
 ```
 
 Use `--no-stop-at-eos` with the command above if you need fixed-length outputs for stress or benchmarking workflows.
@@ -323,3 +323,5 @@ curl http://localhost:8000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{ "model": "deepseek-ai/DeepSeek-R1-0528", "prompt": "San Francisco is a", "max_tokens": 32, "temperature": 0, "top_p": 0.9, "top_k": 10 }'
 ```
+
+For batched/manual vLLM request generation, the repo now includes `models/demos/deepseek_v3/demo/vllm_aime24_gpqa_short.json`, a 512-prompt copy of the issue attachment doubled in-place to match the existing demo batch sizes.
