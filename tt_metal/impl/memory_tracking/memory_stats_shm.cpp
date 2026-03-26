@@ -551,9 +551,9 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
     }
 
     // First, try to find existing entry
-    for (size_t i = 0; i < MAX_PROCESSES; i++) {
-        if (region_->processes[i].pid.load(std::memory_order_relaxed) == pid) {
-            return &region_->processes[i];
+    for (auto & processe : region_->processes) {
+        if (processe.pid == pid) {
+            return &processe;
         }
     }
 
