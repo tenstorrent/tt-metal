@@ -104,7 +104,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
     // Regular Device (non-MeshDevice) tracking
     std::lock_guard<std::mutex> tracking_lock(tracking_mutex_);
 
-    auto* device = dynamic_cast<const Device*>(buffer->device());
+    const auto* device = dynamic_cast<const Device*>(buffer->device());
     if (device) {
         auto* shm_provider = device->get_shm_stats_provider();
         if (shm_provider) {
