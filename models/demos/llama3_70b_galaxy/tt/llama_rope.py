@@ -291,3 +291,28 @@ class TtLlamaRotarySetup(LightweightModule):
         if return_rot_idxs:
             return [cos, sin], rot_idxs
         return [cos, sin]
+
+    def get_prefill_rot_mats(self, position_ids, seq_len):
+        """
+        Compute prefill rotary matrices from position indices using embedding lookup.
+
+        Args:
+            position_ids: ttnn tensor of shape [1, seq_len] with position indices (on device)
+            seq_len: sequence length
+
+        Returns:
+            [cos, sin] list where each has shape [1, 1, seq_len, head_dim]
+        """
+
+        # Reshape position_ids for embedding lookup: [1, seq_len] -> [seq_len, 1]
+        rot_idxs = ttnn.reshape(position_ids, [seq_len, 1])
+
+        # Look up cos/sin values from the pre-computed embedding tables
+        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)
+
+        # Reshape to [1, 1, seq_len, head_dim] to match expected prefill format
+        cos = ttnn.reshape(cos, [1, 1, seq_len, self.head_dim])
+        sin = ttnn.reshape(sin, [1, 1, seq_len, self.head_dim])
+
+        return [cos, sin]

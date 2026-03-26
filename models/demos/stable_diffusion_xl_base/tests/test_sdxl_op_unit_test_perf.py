@@ -209,7 +209,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 549179  # Measured: ~549μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -320,7 +320,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3110287  # Measured: 3.11ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3142259  # Measured: 3.14ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(

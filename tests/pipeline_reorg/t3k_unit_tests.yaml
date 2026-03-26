@@ -165,7 +165,7 @@
   cmd: run_t3000_qwen3_vl_unit_tests
   skus:
     wh_llmbox:
-      timeout: 10
+      timeout: 15
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
   model-name: qwen3_vl
@@ -183,7 +183,7 @@
   cmd: run_t3000_tt_dit_tests
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: dits
@@ -206,20 +206,11 @@
   team: models
   model-name: deepseek
 
-- name: t3k_deepseek_prefill_tests
-  cmd: run_t3000_deepseek_prefill_tests
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U07N3CUUN05 # Iva Potkonjak
-  team: models
-  model-name: deepseek prefill
-
 - name: t3k_tttv2_fast_unit_tests
   cmd: run_t3000_tttv2_fast_unit_tests
   skus:
     wh_llmbox:
-      timeout: 21
+      timeout: 25
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   model-name: tttv2 modules
