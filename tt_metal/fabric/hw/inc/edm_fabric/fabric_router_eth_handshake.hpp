@@ -37,10 +37,10 @@ FORCE_INLINE void fabric_sender_side_handshake(
     ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
-#ifndef ARCH_WORMHOLE
-            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
-#endif
+
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
             run_routing();
+#endif
         } else {
             count++;
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
@@ -68,10 +68,10 @@ FORCE_INLINE void fabric_receiver_side_handshake(
     ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
-#ifndef ARCH_WORMHOLE
-            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
-#endif
+
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
             run_routing();
+#endif
         } else {
             count++;
         }

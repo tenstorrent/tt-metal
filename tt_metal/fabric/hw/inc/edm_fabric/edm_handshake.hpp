@@ -83,10 +83,9 @@ FORCE_INLINE void sender_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
-#ifndef ARCH_WORMHOLE
-            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
-#endif
+#if defined(ARCH_WORMHOLE) || (defined(PHYSICAL_AERISC_ID) && PHYSICAL_AERISC_ID == 0)
             run_routing();
+#endif
         } else {
             count++;
             internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
@@ -108,10 +107,9 @@ FORCE_INLINE void receiver_side_handshake(
     while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
-#ifndef ARCH_WORMHOLE
-            static_assert(PHYSICAL_AERISC_ID == 0, "run_routing() is only safe from ERISC0");
-#endif
+#if defined(ARCH_WORMHOLE) || (defined(PHYSICAL_AERISC_ID) && PHYSICAL_AERISC_ID == 0)
             run_routing();
+#endif
         } else {
             count++;
         }
