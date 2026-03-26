@@ -1,0 +1,8 @@
+﻿ttnn.adaptive\_avg\_pool2d
+==========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.adaptive_avg_pool2d:
+
+.. autooperation:: ttnn.adaptive_avg_pool2d
