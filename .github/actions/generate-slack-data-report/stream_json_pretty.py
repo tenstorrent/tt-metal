@@ -22,6 +22,19 @@ def safe_get_text(obj: dict[str, Any]) -> str:
     return "".join(parts)
 
 
+def normalize_for_log(text: str) -> str:
+    return " ".join(text.replace("\r", "").replace("\n", " ").split())
+
+
+def tool_label(obj: dict[str, Any]) -> str:
+    tool_call = obj.get("tool_call", {})
+    if isinstance(tool_call, dict):
+        for key in tool_call:
+            if key.endswith("ToolCall"):
+                return key[: -len("ToolCall")]
+    return "unknown"
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: stream_json_pretty.py <raw_output_path>", file=sys.stderr)
@@ -31,6 +44,33 @@ def main() -> int:
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     assistant_chars = 0
+    assistant_buffer = ""
+
+    def flush_assistant(force: bool = False) -> None:
+        nonlocal assistant_buffer
+        while assistant_buffer:
+            split_idx = -1
+            for punct in ("\n", ".", "!", "?"):
+                idx = assistant_buffer.rfind(punct)
+                if idx > split_idx:
+                    split_idx = idx
+
+            if force:
+                chunk = assistant_buffer
+                assistant_buffer = ""
+            elif split_idx >= 80:
+                chunk = assistant_buffer[: split_idx + 1]
+                assistant_buffer = assistant_buffer[split_idx + 1 :]
+            elif len(assistant_buffer) >= 220:
+                chunk = assistant_buffer[:220]
+                assistant_buffer = assistant_buffer[220:]
+            else:
+                break
+
+            preview = normalize_for_log(chunk)
+            if preview:
+                print(f"[assistant] {preview}", flush=True)
+
     with raw_path.open("w", encoding="utf-8") as raw_out:
         for line in sys.stdin:
             raw_out.write(line)
@@ -56,27 +96,26 @@ def main() -> int:
 
             if event_type == "tool_call":
                 if subtype == "started":
-                    print("[tool] started", flush=True)
+                    print(f"[tool] started {tool_label(obj)}", flush=True)
                 elif subtype == "completed":
-                    print("[tool] completed", flush=True)
+                    print(f"[tool] completed {tool_label(obj)}", flush=True)
                 continue
 
             if event_type == "assistant":
                 text = safe_get_text(obj)
                 if text:
                     assistant_chars += len(text)
-                    preview = text.replace("\n", " ").strip()
-                    if len(preview) > 140:
-                        preview = f"{preview[:137]}..."
-                    if preview:
-                        print(f"[assistant] {preview}", flush=True)
+                    assistant_buffer += text
+                    flush_assistant(force=False)
                 continue
 
             if event_type == "result":
+                flush_assistant(force=True)
                 duration = obj.get("duration_ms")
                 print(f"[result] completed duration_ms={duration}", flush=True)
                 continue
 
+    flush_assistant(force=True)
     print(f"[summary] assistant_chars_streamed={assistant_chars}", flush=True)
     return 0
 
