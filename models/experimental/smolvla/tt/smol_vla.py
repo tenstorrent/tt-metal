@@ -3627,6 +3627,38 @@ class SmolVLAForActionPrediction(nn.Module):
 
         return actions[0]  # Remove batch dimension
 
+    def sample_actions(
+        self,
+        images: List[Image.Image],
+        instruction: str = "",
+        robot_state: Optional[torch.Tensor] = None,
+        num_inference_steps: int = 10,
+        action_dim: int = 6,
+    ) -> np.ndarray:
+        """
+        Uniform action sampling API compatible with PI0's interface.
+
+        This wraps predict_action() with a signature that mirrors PI0ModelTTNN's
+        sample_actions(), enabling uniform orchestration in multi-model demos.
+
+        Args:
+            images: List of PIL images (camera views)
+            instruction: Natural language task instruction
+            robot_state: Optional robot state tensor
+            num_inference_steps: Number of flow matching steps
+            action_dim: Output action dimensionality
+
+        Returns:
+            Predicted actions as numpy array [n_action_steps, action_dim]
+        """
+        return self.predict_action(
+            images=images,
+            robot_state=robot_state,
+            instruction=instruction,
+            num_inference_steps=num_inference_steps,
+            action_dim=action_dim,
+        )
+
 
 # ============================================================================
 # Pytest Tests

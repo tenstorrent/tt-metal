@@ -46,6 +46,8 @@ class PI0ModelTTNN:
 
     Maximizes execution on Tenstorrent hardware while keeping
     control flow and preprocessing on host.
+
+    Supports external device injection for multi-device / data-parallel scenarios.
     """
 
     def __init__(
@@ -53,6 +55,7 @@ class PI0ModelTTNN:
         config: PI0ModelConfig,
         weight_loader: PI0WeightLoader,
         device: ttnn.Device,
+        fresh_noise_per_call: bool = True,
     ):
         """
         Initialize PI0 model with TTNN.
@@ -60,11 +63,16 @@ class PI0ModelTTNN:
         Args:
             config: Model configuration
             weight_loader: Loaded weights
-            device: TTNN device
+            device: TTNN device (can be a submesh device for multi-chip setups)
+            fresh_noise_per_call: If True, generate new random noise for each
+                sample_actions() call. If False, reuse a fixed noise tensor
+                (legacy behavior for PCC reproducibility).
         """
         self.config = config
         self.weight_loader = weight_loader
         self.device = device
+        self.fresh_noise_per_call = fresh_noise_per_call
+        self._noise_seed = None
 
         # Initialize denoising config
         self.denoise_config = DenoiseConfig(
@@ -78,6 +86,14 @@ class PI0ModelTTNN:
         # Create timestep indices on device using ttnn.arange
         self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
 
+        # Pre-allocate a noise tensor; refreshed per call when fresh_noise_per_call=True
+        self._regenerate_noise()
+
+        # Initialize components
+        self._init_components()
+
+    def _regenerate_noise(self):
+        """Create a fresh random noise tensor on device."""
         x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -87,8 +103,9 @@ class PI0ModelTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Initialize components
-        self._init_components()
+    def set_noise_seed(self, seed: int):
+        """Set a specific seed for noise generation (useful for reproducibility)."""
+        self._noise_seed = seed
 
     def _init_components(self):
         """Initialize all model components."""
@@ -228,8 +245,11 @@ class PI0ModelTTNN:
         ttnn.deallocate(timestep_values)
 
         # Step 3: Sample initial noise (small tensor - host generation is fine)
-        # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
         # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
+        if self.fresh_noise_per_call:
+            if self._noise_seed is not None:
+                torch.manual_seed(self._noise_seed)
+            self._regenerate_noise()
         x_t_ttnn = self.x_t_ttnn
 
         # Step 4: Denoising loop (stays on device!)
@@ -280,14 +300,16 @@ class PI0ModelTTNN:
         model_path: Union[str, Path],
         device: ttnn.Device,
         config: Optional[PI0ModelConfig] = None,
+        fresh_noise_per_call: bool = True,
     ) -> "PI0ModelTTNN":
         """
         Load pretrained PI0 model to TTNN device.
 
         Args:
             model_path: Path to model or HuggingFace model ID
-            device: TTNN device
+            device: TTNN device (can be a submesh for multi-chip setups)
             config: Optional configuration override
+            fresh_noise_per_call: Generate new noise each inference call
 
         Returns:
             Loaded PI0 model
@@ -300,7 +322,7 @@ class PI0ModelTTNN:
                 action_horizon=weight_loader.config.action_horizon,
             )
 
-        return cls(config, weight_loader, device)
+        return cls(config, weight_loader, device, fresh_noise_per_call=fresh_noise_per_call)
 
 
 # Default export
