@@ -1,0 +1,906 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+import torch
+from loguru import logger
+
+import ttnn
+
+from models.common.rmsnorm import RMSNorm
+from models.demos.glm4_moe.tt.config import Glm4MoeHParams
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
+
+
+import math
+
+
+def _env_prefetch() -> bool:
+    """Return True if DRAM weight prefetching is enabled."""
+    return os.environ.get("GLM4_MOE_PREFETCH", "0").strip() == "1"
+
+
+def create_dram_sharded_mem_config(device, K: int, N: int, tile_size: int = 32):
+    """Create WIDTH_SHARDED DRAM memory config for weight prefetching.
+
+    Shards the N dimension across DRAM cores with tile-aligned padding.
+    Uses device.dram_grid_size() to get the actual DRAM bank grid (NOT hardcoded).
+    """
+    # Get actual DRAM grid from device (works for both Device and MeshDevice)
+    dram_grid = device.dram_grid_size()
+    num_dram_cores = dram_grid.x * dram_grid.y
+
+    padded_N = math.ceil(N / (tile_size * num_dram_cores)) * (tile_size * num_dram_cores)
+    shard_N = padded_N // num_dram_cores
+    dram_core_range = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1),
+            )
+        ]
+    )
+    shard_spec = ttnn.ShardSpec(
+        dram_core_range,
+        [K, shard_N],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+
+def _env_fp8_dequant() -> bool:
+    """Return True if FP8 dequant is enabled. Default off; auto-enabled on first FP8 weight."""
+    return os.environ.get("GLM4_MOE_FP8_DEQUANT", "0").strip() == "1"
+
+
+_FP8_AUTO_DETECTED = False  # set True on first FP8 weight encounter
+
+
+def _maybe_dequant_fp8(
+    state: dict[str, torch.Tensor],
+    key: str,
+    weight: torch.Tensor,
+    block_size: tuple[int, int] = (128, 128),
+) -> torch.Tensor:
+    """If weight is FP8, dequantize using scale from state dict. Returns BF16.
+
+    Scale key convention (tried in order):
+    1. {key}_scale_inv  (DSv3 convention)
+    2. {key}_scale      (REAP/compressed_tensors convention — already the dequant multiplier)
+
+    For {key} like "model.layers.0.self_attn.q_proj.weight", we strip ".weight"
+    and look for the scale under the base key.
+
+    Per-row scales [R, 1] are broadcast directly (block_shape=[1, C]).
+    Block-wise scales [ceil(R/bh), ceil(C/bw)] use the given block_size.
+    """
+    global _FP8_AUTO_DETECTED
+
+    if weight.dtype != torch.float8_e4m3fn:
+        return weight
+
+    explicit = _env_fp8_dequant()
+    if not explicit and not _FP8_AUTO_DETECTED:
+        _FP8_AUTO_DETECTED = True
+        logger.info("FP8 weights auto-detected — enabling dequantization")
+
+    # Derive base key: strip trailing ".weight" if present
+    base_key = key.rsplit(".weight", 1)[0] if key.endswith(".weight") else key
+
+    # Try scale key conventions
+    inv_scale = None
+    for scale_suffix in (".weight_scale_inv", "_scale_inv"):
+        scale_key = base_key + scale_suffix
+        if scale_key in state:
+            inv_scale = state[scale_key].float()
+            break
+
+    if inv_scale is None:
+        # Try _scale (already the dequant multiplier, no inversion needed)
+        for scale_suffix in (".weight_scale", "_scale"):
+            scale_key = base_key + scale_suffix
+            if scale_key in state:
+                inv_scale = state[scale_key].float()
+                logger.info("  FP8 dequant: using scale from {} (no inversion needed)", scale_key)
+                break
+
+    if inv_scale is None:
+        raise ValueError(
+            f"FP8 weight at {key} but no scale found. Tried: "
+            f"{base_key}.weight_scale_inv, {base_key}_scale_inv, "
+            f"{base_key}.weight_scale, {base_key}_scale"
+        )
+
+    # Detect per-row vs block-wise by scale shape
+    rows, cols = weight.shape
+    if inv_scale.shape == (rows, 1) or inv_scale.shape == (rows,):
+        # Per-row scale: reshape to [R, 1], block_shape = [1, cols]
+        inv_scale = inv_scale.reshape(rows, 1)
+        effective_block_size = (1, cols)
+    else:
+        effective_block_size = block_size
+
+    result = dequantize_tensor(weight, inv_scale, effective_block_size)
+    return result.to(torch.bfloat16)
+
+
+def _is_mesh_device(device: Any) -> bool:
+    return device.__class__.__name__ == "MeshDevice"
+
+
+def _tp_axis_and_size(device: Any) -> tuple[int | None, int]:
+    """Return (cluster_axis, tp_size) for a mesh.
+
+    Galaxy TG Mesh(8,4): TP=axis 0 (rows=8), DP=axis 1 (cols=4).
+    T3K Mesh(1,8): TP=axis 1 (cols=8).
+    """
+    if not _is_mesh_device(device):
+        return (None, 1)
+    mesh_rows, mesh_cols = int(device.shape[0]), int(device.shape[1])
+    if mesh_rows > 1 and mesh_cols > 1:
+        # 2D mesh (TG): TP is axis 0 (rows=8), DP is axis 1 (cols=4)
+        return (0, mesh_rows)
+    if mesh_cols > 1:
+        return (1, mesh_cols)
+    if mesh_rows > 1:
+        return (0, mesh_rows)
+    return (None, 1)
+
+
+def _tp_mesh_mapper(device: Any, *, shard_dim: int) -> Any | None:
+    """Shard a tensor across the TP axis, replicate across the other axis.
+
+    For Galaxy TG mesh (8, 4): TP=8 is axis 0 (rows), DP=4 is axis 1 (cols).
+    For T3K mesh (1, 8): TP=8 is axis 1 (cols).
+    """
+    if not _is_mesh_device(device):
+        return None
+    mesh_rows, mesh_cols = int(device.shape[0]), int(device.shape[1])
+    if mesh_rows > 1 and mesh_cols > 1:
+        # 2D mesh (TG): TP is axis 0 (rows=8), DP is axis 1 (cols=4)
+        return ttnn.ShardTensor2dMesh(device, dims=(int(shard_dim), None), mesh_shape=list(device.shape))
+    if mesh_cols > 1:
+        return ttnn.ShardTensor2dMesh(device, dims=(None, int(shard_dim)), mesh_shape=list(device.shape))
+    if mesh_rows > 1:
+        return ttnn.ShardTensor2dMesh(device, dims=(int(shard_dim), None), mesh_shape=list(device.shape))
+    return ttnn.ReplicateTensorToMesh(device)
+
+
+def _replicate_mapper(device: Any) -> Any | None:
+    if not _is_mesh_device(device):
+        return None
+    return ttnn.ReplicateTensorToMesh(device)
+
+
+def _env_experts_dtype() -> ttnn.DataType:
+    """Return TT dtype for routed expert weights.
+
+    Default is BF8 for memory efficiency; override via GLM4_MOE_EXPERTS_TT_DTYPE.
+    """
+    override = os.environ.get("GLM4_MOE_EXPERTS_TT_DTYPE", "").strip().lower()
+    if not override:
+        return ttnn.bfloat8_b
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid GLM4_MOE_EXPERTS_TT_DTYPE={override!r}")
+
+
+def _env_expert_projection_dtype(proj_name: str) -> ttnn.DataType:
+    """Per-projection dtype override. Falls back to GLM4_MOE_EXPERTS_TT_DTYPE."""
+    env_key = f"GLM4_MOE_EXPERTS_{proj_name.upper()}_DTYPE"
+    override = os.environ.get(env_key, "").strip().lower()
+    if not override:
+        return _env_experts_dtype()
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid {env_key}={override!r}")
+
+
+def _env_dense_dtype() -> ttnn.DataType:
+    """Return TT dtype for dense projection weights (attention Q/O, dense MLP).
+
+    Default is BF8 for memory efficiency; override via GLM4_MOE_DENSE_TT_DTYPE.
+    """
+    override = os.environ.get("GLM4_MOE_DENSE_TT_DTYPE", "").strip().lower()
+    if not override:
+        return ttnn.bfloat8_b
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid GLM4_MOE_DENSE_TT_DTYPE={override!r}")
+
+
+def _env_dram_shard() -> bool:
+    """Return True if DRAM-sharded weights are enabled for attention projections."""
+    return os.environ.get("GLM4_MOE_DRAM_SHARD", "0").strip() == "1"
+
+
+def _dram_shard_weight(weight: ttnn.Tensor, device) -> ttnn.Tensor:
+    """Convert a [1,1,K,N] weight to DRAM WIDTH_SHARDED format for decode perf.
+
+    Distributes N dimension across all DRAM banks for full bandwidth utilization.
+    Uses host round-trip because interleaved_to_sharded kernel dispatch to DRAM core
+    coordinates exceeds the harvested TENSIX grid (see glm4_moe_lite layer_weights.py).
+    """
+    from models.demos.deepseek_v3.utils.config_helpers import dram_sharded_weight_config
+
+    K = int(weight.shape[2])
+    N = int(weight.shape[3])
+
+    dram_grid = device.dram_grid_size()
+
+    dram_mc = dram_sharded_weight_config(K, N, dram_grid)
+    host_weight = ttnn.from_device(weight)
+    ttnn.deallocate(weight, force=True)
+    return host_weight.to(device, dram_mc)
+
+
+def _env_attn_dtype() -> ttnn.DataType:
+    """Attention weight dtype (QKV and O projections), separate from dense MLP dtype.
+
+    Override via GLM4_MOE_ATTN_TT_DTYPE. Falls back to _env_dense_dtype() if unset.
+    """
+    override = os.environ.get("GLM4_MOE_ATTN_TT_DTYPE", "").strip().lower()
+    if not override:
+        return _env_dense_dtype()
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if override in {"f32", "fp32", "float32"}:
+        return ttnn.float32
+    raise ValueError(f"Invalid GLM4_MOE_ATTN_TT_DTYPE={override!r}")
+
+
+def _linear_weight_tt(
+    *,
+    device,
+    torch_weight_out_in: torch.Tensor,
+    cache_file: Optional[Path] = None,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    mesh_mapper: Any | None = None,
+    memory_config: Any | None = None,
+) -> ttnn.Tensor:
+    """Convert a torch Linear weight in HF layout [out, in] into TT layout [1, 1, in, out]."""
+    if torch_weight_out_in.ndim != 2:
+        raise ValueError(f"expected 2D weight, got shape={tuple(torch_weight_out_in.shape)}")
+    w = torch_weight_out_in.transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+    is_mesh = _is_mesh_device(device)
+    if is_mesh and mesh_mapper is None:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    if memory_config is None:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.as_tensor(
+        w,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper if is_mesh else None,
+        cache_file_name=None if cache_file is None else Path(cache_file),
+    )
+
+
+def _vector_weight_tt(
+    *,
+    device,
+    torch_vector: torch.Tensor,
+    cache_file: Optional[Path] = None,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    mesh_mapper: Any | None = None,
+) -> ttnn.Tensor:
+    """Convert a torch vector into TT [1,1,1,E] ROW_MAJOR."""
+    if torch_vector.ndim != 1:
+        raise ValueError(f"expected 1D vector, got shape={tuple(torch_vector.shape)}")
+    v = torch_vector.contiguous().view(1, 1, 1, -1)
+    is_mesh = _is_mesh_device(device)
+    if is_mesh and mesh_mapper is None:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    return ttnn.as_tensor(
+        v,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper if is_mesh else None,
+        cache_file_name=None if cache_file is None else Path(cache_file),
+    )
+
+
+def _experts_weight_tt(
+    *,
+    device,
+    torch_weights: torch.Tensor,
+    cache_file: Optional[Path] = None,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+) -> ttnn.Tensor:
+    """Convert stacked expert weights for sparse MoE matmuls.
+
+    For a MeshDevice with EP=32, expert weights are sharded across ALL 32 devices
+    (3 experts per device for 96 total).
+
+    Host tensor shape: [num_devices, 1, experts_per_device, in, out]
+    mesh_mapper: ShardTensorToMesh(dim=0)
+    """
+    if torch_weights.ndim != 3:
+        raise ValueError(f"expected [E,in,out] weights, got shape={tuple(torch_weights.shape)}")
+    is_mesh = _is_mesh_device(device)
+    if is_mesh:
+        num_devices = int(device.get_num_devices())
+        num_experts = int(torch_weights.shape[0])
+        if num_experts % num_devices != 0:
+            raise ValueError(
+                f"num_experts={num_experts} must be divisible by num_devices={num_devices} for expert sharding"
+            )
+        experts_per_device = num_experts // num_devices
+        w = (
+            torch_weights.contiguous()
+            .view(num_devices, experts_per_device, int(torch_weights.shape[1]), int(torch_weights.shape[2]))
+            .unsqueeze(1)
+            .contiguous()
+        )
+        mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+    else:
+        w = torch_weights.unsqueeze(0).contiguous()
+        mesh_mapper = None
+    return ttnn.as_tensor(
+        w,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+        cache_file_name=None if cache_file is None else Path(cache_file),
+    )
+
+
+@dataclass(frozen=True)
+class MoELayerTTWeights:
+    """Per-layer routed MoE weights (gate + experts).
+
+    Shapes (after conversion, TT layout):
+    - w_gate: [1,1,hidden,n_routed_experts]
+    - e_score_correction_bias: [1,1,1,n_routed_experts] row-major
+    - w1_experts (gate_proj): per-device [1,experts_per_device,hidden,moe_intermediate]
+    - w3_experts (up_proj):   per-device [1,experts_per_device,hidden,moe_intermediate]
+    - w2_experts (down_proj): per-device [1,experts_per_device,moe_intermediate,hidden]
+    - w1w3_experts (fused gate+up): [1,experts_per_device,hidden,2*moe_intermediate] (optional)
+    """
+
+    w_gate: ttnn.Tensor
+    e_score_correction_bias: ttnn.Tensor
+    w1_experts: Optional[ttnn.Tensor]  # None when fused gate+up is active
+    w2_experts: ttnn.Tensor
+    w3_experts: Optional[ttnn.Tensor]  # None when fused gate+up is active
+    e_score_correction_bias_tile: Optional[ttnn.Tensor] = None
+    w1w3_experts: Optional[ttnn.Tensor] = None
+
+
+@dataclass(frozen=True)
+class DecoderLayerTTWeights:
+    """Per-layer weights for GLM-4.7-REAP decoder with standard GQA attention.
+
+    Attention uses fused QKV (following tt_transformers pattern):
+    - w_qkv: [1,1,hidden, (q_local+k_local+v_local)*num_devices] sharded across TP
+    - w_qkv_bias: fused bias for QKV, sharded same as w_qkv
+    - w_o: [1,1,total_head_dim/tp, hidden] row-parallel across TP
+
+    MLP: dense layers (0-2) or shared expert + routed MoE (layers 3-91).
+    """
+
+    layer_idx: int
+
+    # Layer norms
+    input_layernorm: Any
+    post_attention_layernorm: Any
+
+    # Attention: fused QKV weight + bias
+    w_qkv: ttnn.Tensor
+    w_qkv_bias: ttnn.Tensor
+    w_o: ttnn.Tensor
+
+    # QK norm weights (per-head RMSNorm, dim=head_dim=128, replicated)
+    q_norm: Any
+    k_norm: Any
+
+    # MLP projections (dense layers 0-2, or shared expert for MoE layers)
+    w_mlp_gate: ttnn.Tensor
+    w_mlp_up: ttnn.Tensor
+    w_mlp_down: ttnn.Tensor
+
+    # Fused gate+up weight: [1,1,hidden,2*inter/TP] for single-matmul shared expert
+    w_mlp_gate_up: Optional[ttnn.Tensor] = None
+
+    # Optional routed MoE weights (layers >= first_k_dense_replace)
+    moe: Optional[MoELayerTTWeights] = None
+
+    # Interleaved copies of QKV/O-proj for prefill when prefetch is active.
+    # Decode uses DRAM-sharded w_qkv/w_o (for GlobalCB gather_in0), but prefill
+    # needs standard interleaved DRAM weights for regular ttnn.linear calls.
+    w_qkv_interleaved: Optional[ttnn.Tensor] = None
+    w_o_interleaved: Optional[ttnn.Tensor] = None
+
+
+def convert_decoder_layer_weights(
+    *,
+    device,
+    state,
+    layer_idx: int,
+    hparams: Glm4MoeHParams,
+    cache_dir: Optional[Path] = None,
+    enable_moe: bool = True,
+) -> DecoderLayerTTWeights:
+    """Convert weights for a single decoder layer from HF safetensors to TT format.
+
+    Handles:
+    - Fused QKV with TP=8 sharding (chunk Q/K/V per head, fuse per device)
+    - QKV bias fusion (same TP chunking)
+    - QK norm replication
+    - O projection row-parallel TP sharding
+    - Dense MLP (layers 0-2) with column/row parallel TP
+    - Shared expert MLP with column/row parallel TP
+    - Routed expert weights with EP=32 sharding (3 experts/device for 96 total)
+    """
+    cache_dir = None if cache_dir is None else Path(cache_dir)
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    layer_idx = int(layer_idx)
+
+    def c(name: str, variant: str = "") -> Optional[Path]:
+        suffix = variant.strip()
+        suffix = f"_{suffix}" if suffix and not suffix.startswith("_") else suffix
+        return None if cache_dir is None else cache_dir / f"layer{layer_idx}_{name}{suffix}"
+
+    dense_dtype = _env_dense_dtype()
+    attn_dtype = _env_attn_dtype()
+    tp_axis, tp_size = _tp_axis_and_size(device)
+    num_devices = int(device.get_num_devices()) if _is_mesh_device(device) else 1
+
+    tp_variant = f"tp{tp_size}" if tp_size > 1 else ""
+
+    # ---- Layer Norms (replicated) ----
+    input_layernorm = RMSNorm(
+        device=device,
+        dim=hparams.hidden_size,
+        eps=hparams.rms_norm_eps,
+        state_dict=state,
+        state_dict_prefix=f"model.layers.{layer_idx}.",
+        weight_key="input_layernorm",
+        weight_cache_path=cache_dir,
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=False,
+    )
+    post_attention_layernorm = RMSNorm(
+        device=device,
+        dim=hparams.hidden_size,
+        eps=hparams.rms_norm_eps,
+        state_dict=state,
+        state_dict_prefix=f"model.layers.{layer_idx}.",
+        weight_key="post_attention_layernorm",
+        weight_cache_path=cache_dir,
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=False,
+    )
+
+    # ---- QK Norm (replicated, per-head dim=128) ----
+    q_norm = RMSNorm(
+        device=device,
+        dim=hparams.head_dim,
+        eps=hparams.rms_norm_eps,
+        state_dict=state,
+        state_dict_prefix=f"model.layers.{layer_idx}.self_attn.",
+        weight_key="q_norm",
+        weight_cache_path=cache_dir,
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=False,
+    )
+    k_norm = RMSNorm(
+        device=device,
+        dim=hparams.head_dim,
+        eps=hparams.rms_norm_eps,
+        state_dict=state,
+        state_dict_prefix=f"model.layers.{layer_idx}.self_attn.",
+        weight_key="k_norm",
+        weight_cache_path=cache_dir,
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=False,
+    )
+    logger.info("  [DEBUG L{}] norms done", layer_idx)
+
+    # ---- Fused QKV Weights (following tt_transformers/attention.py pattern) ----
+    # Load Q [12288, 5120], K [1024, 5120], V [1024, 5120]
+    _qk = f"model.layers.{layer_idx}.self_attn.q_proj.weight"
+    _kk = f"model.layers.{layer_idx}.self_attn.k_proj.weight"
+    _vk = f"model.layers.{layer_idx}.self_attn.v_proj.weight"
+    wq_full = _maybe_dequant_fp8(state, _qk, state[_qk])
+    wk_full = _maybe_dequant_fp8(state, _kk, state[_kk])
+    wv_full = _maybe_dequant_fp8(state, _vk, state[_vk])
+
+    # Chunk by TP=8 along output dim (head dim), transpose, and fuse per device
+    # Q: [12288, 5120] -> 8 chunks of [1536, 5120] -> transpose -> [5120, 1536]
+    # K: [1024, 5120]  -> 8 chunks of [128, 5120]  -> transpose -> [5120, 128]
+    # V: [1024, 5120]  -> 8 chunks of [128, 5120]  -> transpose -> [5120, 128]
+    # Fused per device: [5120, 1536+128+128] = [5120, 1792]
+    wq_chunks = torch.chunk(wq_full, tp_size, dim=0)
+    wk_chunks = torch.chunk(wk_full, tp_size, dim=0)
+    wv_chunks = torch.chunk(wv_full, tp_size, dim=0)
+
+    qkv_list = []
+    for i in range(tp_size):
+        wq_t = wq_chunks[i].transpose(-2, -1)  # [5120, 1536]
+        wk_t = wk_chunks[i].transpose(-2, -1)  # [5120, 128]
+        wv_t = wv_chunks[i].transpose(-2, -1)  # [5120, 128]
+        qkv = torch.cat([wq_t, wk_t, wv_t], dim=-1)  # [5120, 1792]
+        qkv_list.append(qkv)
+
+    # Concatenate all TP chunks along last dim -> [5120, 1792*tp_size]
+    # Then shard across mesh via ShardTensor2dMesh
+    qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, 5120, 1792*tp_size]
+
+    if _is_mesh_device(device):
+        # Shard along dim=3 across TP, replicate across DP
+        qkv_mapper = _tp_mesh_mapper(device, shard_dim=3)
+    else:
+        qkv_mapper = None
+
+    _prefetch = _env_prefetch()
+
+    # DRAM-interleaved: used for compile warmup (ttnn.linear auto-selects program config)
+    # and prefill. DRAM-sharded crashes with "Only L1 buffers can have circular buffer".
+    w_qkv = ttnn.as_tensor(
+        qkv_cat,
+        dtype=attn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=qkv_mapper,
+        cache_file_name=c("w_qkv", tp_variant),
+    )
+    # When prefetcher is active: replace interleaved with DRAM-sharded copy.
+    # NO dual storage — saves 1.66 GB/device across 92 layers (was causing OOM with MTP).
+    # Llama Galaxy uses DRAM-sharded weights for both prefill and decode.
+    # Prefill uses the same DRAM-sharded weight with explicit program_config.
+    w_qkv_interleaved = None
+    if _prefetch:
+        ttnn.deallocate(w_qkv, force=False)  # free the interleaved copy
+        w_qkv = ttnn.as_tensor(
+            qkv_cat,
+            dtype=attn_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_dram_sharded_mem_config(device, 5120, 1792),
+            mesh_mapper=qkv_mapper,
+            cache_file_name=c("w_qkv", tp_variant + "_dram_shard"),
+        )
+        logger.info("  [DEBUG L{}] QKV DRAM-sharded (single copy, no dual storage)", layer_idx)
+    logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
+
+    # ---- Fused QKV Bias ----
+    bq_full = state[f"model.layers.{layer_idx}.self_attn.q_proj.bias"]  # [12288]
+    bk_full = state[f"model.layers.{layer_idx}.self_attn.k_proj.bias"]  # [1024]
+    bv_full = state[f"model.layers.{layer_idx}.self_attn.v_proj.bias"]  # [1024]
+
+    bq_chunks = torch.chunk(bq_full, tp_size, dim=0)
+    bk_chunks = torch.chunk(bk_full, tp_size, dim=0)
+    bv_chunks = torch.chunk(bv_full, tp_size, dim=0)
+
+    bias_list = []
+    for i in range(tp_size):
+        b_fused = torch.cat([bq_chunks[i], bk_chunks[i], bv_chunks[i]], dim=-1)  # [1792]
+        bias_list.append(b_fused)
+
+    # Concatenate all TP chunks -> [1792*tp_size], reshape to [1, 1, 1, 1792*tp_size]
+    bias_cat = torch.cat(bias_list, dim=-1).unsqueeze(0).unsqueeze(0).unsqueeze(0)
+
+    w_qkv_bias = ttnn.as_tensor(
+        bias_cat,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=qkv_mapper,
+        cache_file_name=c("w_qkv_bias", tp_variant),
+    )
+    logger.info("  [DEBUG L{}] w_qkv_bias done", layer_idx)
+
+    # ---- O Projection (row-parallel: shard input dim by TP) ----
+    # HF: [5120, 12288] -> TT: [1, 1, 12288, 5120], shard dim=2 (input) by TP
+    # Each device gets [1, 1, 1536, 5120]
+    wo_mapper = _tp_mesh_mapper(device, shard_dim=2) if tp_size > 1 else _replicate_mapper(device)
+    _ok = f"model.layers.{layer_idx}.self_attn.o_proj.weight"
+    _wo_torch = _maybe_dequant_fp8(state, _ok, state[_ok])
+    w_o = _linear_weight_tt(
+        device=device,
+        torch_weight_out_in=_wo_torch,
+        cache_file=c("w_o", tp_variant),
+        dtype=attn_dtype,
+        mesh_mapper=wo_mapper,
+        memory_config=None,  # DRAM-interleaved (default)
+    )
+    w_o_interleaved = None
+    if _prefetch:
+        ttnn.deallocate(w_o, force=False)  # free the interleaved copy
+        w_o = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_wo_torch,
+            cache_file=c("w_o", tp_variant + "_dram_shard"),
+            dtype=attn_dtype,
+            mesh_mapper=wo_mapper,
+            memory_config=create_dram_sharded_mem_config(device, 1536, 5120),
+        )
+        logger.info("  [DEBUG L{}] O-proj DRAM-sharded (single copy, no dual storage)", layer_idx)
+    logger.info("  [DEBUG L{}] w_o done", layer_idx)
+
+    # ---- MLP Weights ----
+    dense_layer = layer_idx < int(hparams.first_k_dense_replace)
+
+    if dense_layer:
+        # Dense MLP (layers 0-2): intermediate_size=12288
+        mlp_prefix = f"model.layers.{layer_idx}.mlp."
+    else:
+        # Shared expert MLP: moe_intermediate_size=1536
+        mlp_prefix = f"model.layers.{layer_idx}.mlp.shared_experts."
+
+    # Column-parallel: gate/up shard output dim (dim=3 in TT layout after transpose)
+    # Row-parallel: down shard input dim (dim=2 in TT layout after transpose)
+    mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3) if tp_size > 1 else _replicate_mapper(device)
+    mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2) if tp_size > 1 else _replicate_mapper(device)
+
+    mlp_variant = tp_variant
+
+    _gate_k = f"{mlp_prefix}gate_proj.weight"
+    _up_k = f"{mlp_prefix}up_proj.weight"
+    _gate_w = _maybe_dequant_fp8(state, _gate_k, state[_gate_k])
+    _up_w = _maybe_dequant_fp8(state, _up_k, state[_up_k])
+
+    if dense_layer:
+        # Dense layers (0-2): keep separate gate/up for _dense_mlp_forward.
+        w_mlp_gate_up = None
+        w_mlp_gate = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_gate_w,
+            cache_file=c("w_mlp_gate", mlp_variant),
+            dtype=dense_dtype,
+            mesh_mapper=mlp_gate_mapper,
+        )
+        w_mlp_up = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_up_w,
+            cache_file=c("w_mlp_up", mlp_variant),
+            dtype=dense_dtype,
+            mesh_mapper=mlp_gate_mapper,
+        )
+    else:
+        # MoE layers (3-91): fuse gate+up, skip separate weights to save DRAM.
+        # Interleave gate/up chunks so column-parallel TP sharding gives each
+        # device [gate_shard, up_shard] instead of a contiguous slice of the
+        # concatenated [gate_full; up_full] which would be wrong.
+        inter = _gate_w.shape[0]  # 1536
+        chunk = inter // tp_size  # 192 per device
+        _gate_chunks = _gate_w.reshape(tp_size, chunk, -1)  # [TP, chunk, hidden]
+        _up_chunks = _up_w.reshape(tp_size, chunk, -1)
+        # Stack [gate_i, up_i] for each TP rank, then flatten:
+        # [TP, 2, chunk, hidden] → [TP*2*chunk, hidden] = [2*inter, hidden]
+        _gate_up_fused = torch.stack([_gate_chunks, _up_chunks], dim=1).reshape(-1, _gate_w.shape[1])
+        w_mlp_gate_up = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_gate_up_fused,
+            cache_file=c("w_mlp_gate_up_v2", mlp_variant),
+            dtype=dense_dtype,
+            mesh_mapper=mlp_gate_mapper,
+        )
+        w_mlp_gate = w_mlp_gate_up  # placeholder (unused when w_gate_up is set)
+        w_mlp_up = w_mlp_gate_up  # placeholder (unused when w_gate_up is set)
+    logger.info("  [DEBUG L{}] mlp gate/up done (dense={})", layer_idx, dense_layer)
+    _down_k = f"{mlp_prefix}down_proj.weight"
+    w_mlp_down = _linear_weight_tt(
+        device=device,
+        torch_weight_out_in=_maybe_dequant_fp8(state, _down_k, state[_down_k]),
+        cache_file=c("w_mlp_down", mlp_variant),
+        dtype=dense_dtype,
+        mesh_mapper=mlp_down_mapper,
+    )
+    logger.info("  [DEBUG L{}] mlp down done", layer_idx)
+
+    # ---- Routed MoE (layers >= first_k_dense_replace) ----
+    moe: Optional[MoELayerTTWeights] = None
+    if enable_moe and not dense_layer:
+        import sys as _sys
+
+        _dbg_sync = os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
+
+        def _msync(label):
+            if _dbg_sync:
+                print(f"  [DEBUG MOE L{layer_idx}] {label} ...", flush=True, file=_sys.stderr)
+                ttnn.synchronize_device(device)
+                print(f"  [DEBUG MOE L{layer_idx}] {label} OK", flush=True, file=_sys.stderr)
+
+        # Gate: [96, 5120] -> [1, 1, 5120, 96] replicated
+        w_gate = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=state[f"model.layers.{layer_idx}.mlp.gate.weight"],
+            cache_file=c("w_moe_gate"),
+            dtype=ttnn.bfloat16,
+        )
+        _msync("after gate weight")
+
+        # e_score_correction_bias: center before BF16 cast to preserve ordering
+        e_bias_torch = state[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"].to(dtype=torch.float32)
+        e_bias_centered = e_bias_torch - float(e_bias_torch.min().item())
+        e_bias = _vector_weight_tt(
+            device=device,
+            torch_vector=e_bias_centered,
+            cache_file=c("e_score_correction_bias_centered_v1"),
+            dtype=ttnn.bfloat16,
+        )
+        _msync("after e_bias vector")
+        # Create tile-layout version directly via as_tensor (ttnn.to_layout hangs on TG mesh)
+        is_mesh = _is_mesh_device(device)
+        e_bias_tile = ttnn.as_tensor(
+            e_bias_centered.contiguous().view(1, 1, 1, -1),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+        )
+        _msync("after e_bias_tile as_tensor")
+
+        # Stack and shard expert weights across all 32 devices (EP=32)
+        w1_dtype = _env_expert_projection_dtype("W1")
+        w2_dtype = _env_expert_projection_dtype("W2")
+        w3_dtype = _env_expert_projection_dtype("W3")
+        num_experts = int(hparams.n_routed_experts)
+        moe_intermediate = int(hparams.moe_intermediate_size)
+        hidden = int(hparams.hidden_size)
+        dtype_tag = f"{w1_dtype.name}_{w2_dtype.name}_{w3_dtype.name}"
+        experts_variant = f"ep{num_devices}_{dtype_tag}_v1"
+        if layer_idx == int(hparams.first_k_dense_replace):
+            logger.info(f"  Expert dtypes: w1={w1_dtype.name}, w2={w2_dtype.name}, w3={w3_dtype.name}")
+
+        # Fast path: skip loading expert tensors from safetensors when cache is warm.
+        # On warm cache, ttnn.as_tensor() loads from .tensorbin files directly, making
+        # the CPU-side dequant + transpose + stack completely redundant (~4-6s/layer saved).
+        _expert_cache_hit = False
+        if cache_dir is not None:
+            _w1_cache = c("w1_experts", experts_variant)
+            if _w1_cache is not None:
+                _w1_path = str(_w1_cache) + f"_dtype_{w1_dtype.name}_layout_TILE.tensorbin"
+                _expert_cache_hit = os.path.isfile(_w1_path)
+            if _expert_cache_hit:
+                logger.info("  [L{}] Expert weight cache HIT — skipping {} expert loads", layer_idx, num_experts * 3)
+
+        if _expert_cache_hit:
+            # Dummy tensors — ttnn.as_tensor ignores input when cache file exists
+            w1_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
+            w3_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
+            w2_stacked = torch.zeros(num_experts, moe_intermediate, hidden, dtype=torch.bfloat16)
+        else:
+            w1_list: list[torch.Tensor] = []
+            w3_list: list[torch.Tensor] = []
+            w2_list: list[torch.Tensor] = []
+            for expert_id in range(num_experts):
+                _w1k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.gate_proj.weight"
+                _w3k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.up_proj.weight"
+                _w2k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.down_proj.weight"
+                w1 = _maybe_dequant_fp8(state, _w1k, state[_w1k])
+                w3 = _maybe_dequant_fp8(state, _w3k, state[_w3k])
+                w2 = _maybe_dequant_fp8(state, _w2k, state[_w2k])
+                if tuple(w1.shape) != (moe_intermediate, hidden):
+                    raise ValueError(
+                        f"Unexpected gate_proj shape for layer{layer_idx} expert{expert_id}: {tuple(w1.shape)}, "
+                        f"expected ({moe_intermediate}, {hidden})"
+                    )
+                if tuple(w3.shape) != (moe_intermediate, hidden):
+                    raise ValueError(
+                        f"Unexpected up_proj shape for layer{layer_idx} expert{expert_id}: {tuple(w3.shape)}, "
+                        f"expected ({moe_intermediate}, {hidden})"
+                    )
+                if tuple(w2.shape) != (hidden, moe_intermediate):
+                    raise ValueError(
+                        f"Unexpected down_proj shape for layer{layer_idx} expert{expert_id}: {tuple(w2.shape)}, "
+                        f"expected ({hidden}, {moe_intermediate})"
+                    )
+                # Transpose to TT convention: [in, out]
+                w1_list.append(w1.transpose(-2, -1).contiguous())  # [hidden, moe_intermediate]
+                w3_list.append(w3.transpose(-2, -1).contiguous())  # [hidden, moe_intermediate]
+                w2_list.append(w2.transpose(-2, -1).contiguous())  # [moe_intermediate, hidden]
+
+            w1_stacked = torch.stack(w1_list, dim=0)  # [num_experts, hidden, moe_intermediate]
+            w3_stacked = torch.stack(w3_list, dim=0)  # [num_experts, hidden, moe_intermediate]
+            w2_stacked = torch.stack(w2_list, dim=0)  # [num_experts, moe_intermediate, hidden]
+
+        _msync("after expert stacking")
+
+        fuse_gate_up = os.environ.get("GLM4_MOE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+
+        if fuse_gate_up:
+            # Fused gate+up: single w1w3 tensor replaces separate w1 and w3 (saves DRAM).
+            w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
+            w1w3_experts_tt = _experts_weight_tt(
+                device=device,
+                torch_weights=w1w3_stacked,
+                cache_file=c("w1w3_experts", experts_variant),
+                dtype=w1_dtype,
+            )
+            _msync("after w1w3_experts")
+            w1_experts: Optional[ttnn.Tensor] = None
+            w3_experts: Optional[ttnn.Tensor] = None
+        else:
+            w1_experts = _experts_weight_tt(
+                device=device,
+                torch_weights=w1_stacked,
+                cache_file=c("w1_experts", experts_variant),
+                dtype=w1_dtype,
+            )
+            _msync("after w1_experts")
+            w3_experts = _experts_weight_tt(
+                device=device,
+                torch_weights=w3_stacked,
+                cache_file=c("w3_experts", experts_variant),
+                dtype=w3_dtype,
+            )
+            _msync("after w3_experts")
+            w1w3_experts_tt = None
+
+        w2_experts = _experts_weight_tt(
+            device=device,
+            torch_weights=w2_stacked,
+            cache_file=c("w2_experts", experts_variant),
+            dtype=w2_dtype,
+        )
+        _msync("after w2_experts")
+
+        moe = MoELayerTTWeights(
+            w_gate=w_gate,
+            e_score_correction_bias=e_bias,
+            w1_experts=w1_experts,
+            w2_experts=w2_experts,
+            w3_experts=w3_experts,
+            e_score_correction_bias_tile=e_bias_tile,
+            w1w3_experts=w1w3_experts_tt,
+        )
+
+    return DecoderLayerTTWeights(
+        layer_idx=layer_idx,
+        input_layernorm=input_layernorm,
+        post_attention_layernorm=post_attention_layernorm,
+        w_qkv=w_qkv,
+        w_qkv_bias=w_qkv_bias,
+        w_o=w_o,
+        q_norm=q_norm,
+        k_norm=k_norm,
+        w_mlp_gate=w_mlp_gate,
+        w_mlp_up=w_mlp_up,
+        w_mlp_down=w_mlp_down,
+        w_mlp_gate_up=w_mlp_gate_up,
+        moe=moe,
+        w_qkv_interleaved=w_qkv_interleaved,
+        w_o_interleaved=w_o_interleaved,
+    )
