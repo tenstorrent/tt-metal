@@ -390,10 +390,8 @@ void run_single_core_reduce_program(
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
             .entry_size = single_tile_bytes,
             .num_entries = num_buffer_tiles,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -404,10 +402,8 @@ void run_single_core_reduce_program(
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_temp_reduce_tile_config = {
             .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
             .num_entries = 2,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -418,10 +414,8 @@ void run_single_core_reduce_program(
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
             .entry_size = single_tile_bytes,
             .num_entries = num_output_buffer_tiles,
-            .producer_risc_mask = 0x100,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
