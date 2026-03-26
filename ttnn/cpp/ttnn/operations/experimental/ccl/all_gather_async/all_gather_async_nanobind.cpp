@@ -38,7 +38,7 @@ ttnn::Tensor all_gather_async_wrapper_sub_core_grids(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const GlobalSemaphoreArg& multi_device_global_semaphore,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -86,7 +86,7 @@ ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
     const GlobalSemaphoreArg& multi_device_global_semaphore,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -219,7 +219,7 @@ void bind_all_gather_async(nb::module_& mod) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to the maximum available.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring` for overloads without `cluster_axis`; the cluster-axis overload requires an explicit value.
 
@@ -250,7 +250,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
@@ -266,7 +266,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
@@ -311,7 +311,7 @@ void bind_all_gather_async(nb::module_& mod) {
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to the maximum available.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
@@ -332,7 +332,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
@@ -348,7 +348,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
