@@ -597,23 +597,18 @@ Tensor set_tensor_id(const Tensor& tensor) {
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 
-std::uint64_t Tensor::to_hash() const noexcept {
+std::uint64_t Tensor::to_hash() const {
     if (this->tensor_attributes == nullptr) {
-        // No per-handle identity: avoid cache fragmentation when tensor_id changes (e.g. graph tracking) while
-        // tensor_attributes stays null.
+        // Default-constructed tensors (null tensor_attributes) must hash safely.  attribute_values() calls storage()
+        // which would dereference the null pointer, so we short-circuit here.  See #40745.
         return ttsl::hash::hash_objects(static_cast<ttsl::hash::hash_t>(0), std::uint8_t{0});
     }
+    // Delegate to the same fields that the reflective attribute_values() path would hash (storage + tensor_spec),
+    // plus tensor_topology which is not part of attribute_values but affects program identity on multi-device.
+    // Using attribute_values() directly ensures we never silently drop a field when TensorSpec/TensorLayout/etc. add
+    // new attributes — the recursive hash_object walk picks them up automatically.
     return ttsl::hash::hash_objects(
-        static_cast<ttsl::hash::hash_t>(0),
-        this->dtype(),
-        this->memory_config(),
-        this->layout(),
-        this->tensor_spec().tile(),
-        this->logical_shape(),
-        this->padded_shape(),
-        this->shard_spec(),
-        this->nd_shard_spec(),
-        this->tensor_topology());
+        static_cast<ttsl::hash::hash_t>(0), this->storage(), this->tensor_spec(), this->tensor_topology());
 }
 
 const tt::tt_metal::Shape& Tensor::logical_shape() const {
