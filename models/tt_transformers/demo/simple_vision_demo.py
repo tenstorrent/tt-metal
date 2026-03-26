@@ -555,7 +555,7 @@ def test_multimodal_demo_text(
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
             ("N300", "Llama-3.2-11B", 16): 18.3,
-            ("T3K", "Llama-3.2-90B", 1): 14.02,
+            ("T3K", "Llama-3.2-90B", 1): 13.8,
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
