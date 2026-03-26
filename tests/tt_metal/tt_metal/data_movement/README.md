@@ -54,7 +54,8 @@ Both API versions run the same test cases but use different underlying implement
 | Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
 | DRAM Neighbour Tests        | 502-505                         | Each core reads from its clostest DRAM.                                                 |
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
-| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 

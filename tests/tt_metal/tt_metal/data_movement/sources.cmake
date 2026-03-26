@@ -24,6 +24,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     transaction_id/test_transaction_id.cpp
     direct_write/test_direct_write.cpp
     pcie_read_bw/test_pcie_read_bw.cpp
+    pcie_write_bw/test_pcie_write_bw.cpp
     atomics/test_atomic_semaphore_bandwidth.cpp
     multicast_atomics/test_multicast_atomic_semaphore.cpp
     noc_api_latency/test_noc_api_latency.cpp
