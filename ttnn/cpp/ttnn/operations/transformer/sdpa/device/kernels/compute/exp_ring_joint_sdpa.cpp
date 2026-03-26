@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_fused_op_indexer.hpp"
 
 void kernel_main() {
     constexpr uint32_t NH = get_compile_time_arg_val(0);

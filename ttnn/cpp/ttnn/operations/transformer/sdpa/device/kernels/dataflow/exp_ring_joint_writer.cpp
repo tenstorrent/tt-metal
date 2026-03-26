@@ -6,7 +6,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "fused_op_receiver.hpp"
+#include "exp_fused_op_receiver.hpp"
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"

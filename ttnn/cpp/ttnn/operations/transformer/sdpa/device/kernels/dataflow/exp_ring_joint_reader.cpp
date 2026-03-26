@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
-#include "fused_op_receiver.hpp"
+#include "exp_fused_op_receiver.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
