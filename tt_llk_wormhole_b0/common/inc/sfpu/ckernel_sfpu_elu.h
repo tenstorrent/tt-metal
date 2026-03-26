@@ -13,38 +13,28 @@
 namespace ckernel::sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void _calculate_elu_(std::uint32_t slope)
 {
-    const bool SCALE_EN                       = false; // Elu does not use scale.
-    const bool SKIP_POSITIVE_CHECK            = false; // Elu does not skip positive check.
-    const std::uint16_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B;
-
     sfpi::vFloat s = Converter::as_float(slope);
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
-
         v_if (v < 0.0f)
         {
-            sfpi::vFloat v_exp = _calculate_exponential_piecewise_<APPROXIMATION_MODE, SCALE_EN, SKIP_POSITIVE_CHECK>(v, exp_base_scale_factor);
-            v                  = s * (v_exp - 1.0f);
+            sfpi::vFloat v_exp = _sfpu_exp_21f_bf16_<true>(v) - sfpi::vConst1; // is_fp32_dest_acc_en set to true to avoid rounding as
+                                                                               // it has to be done at the end of operation
+            sfpi::vFloat result = s * v_exp;
+            if constexpr (!is_fp32_dest_acc_en)
+            {
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            }
+            sfpi::dst_reg[0] = result;
         }
         v_endif;
-
-        sfpi::dst_reg[0] = v;
-
         sfpi::dst_reg++;
     }
-}
-
-template <bool APPROXIMATION_MODE>
-inline void _init_elu_()
-{
-    const std::uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
-    const bool FAST_APPROX                    = false; // Elu does not use fast approximation.
-    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, EXP_BASE_SCALE_FACTOR>();
 }
 
 } // namespace ckernel::sfpu
