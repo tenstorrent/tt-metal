@@ -1013,7 +1013,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         // Report CB allocations for any NEW devices (using cached addresses)
         if (!new_devices.empty() && !this->circular_buffers_.empty()) {
             for (const IDevice* dev : new_devices) {
-                // Only report for NEW devices
                 for (const auto& circular_buffer : this->circular_buffers_) {
                     if (!circular_buffer->globally_allocated()) {
                         tt::tt_metal::GraphTracker::instance().track_allocate_cb(
