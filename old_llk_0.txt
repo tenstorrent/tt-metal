@@ -1,0 +1,189 @@
+============================================================
+  ROW SUM ACCURACY REPORT
+============================================================
+  Shape:          32 x 64
+  Dtype:          bfloat16
+  Input layout:   TILE
+  Output layout:  TILE
+  FP32 dest acc:  False
+  Distribution:   rand
+------------------------------------------------------------
+  Mean abs diff:  0.110596
+  Max abs diff:   0.312500
+  PCC:            0.99921036
+  Mean ULP:       22058952032256.0
+  Max ULP:        50577534877696.0
+  Rel RMS error:  0.004323
+============================================================
+
+PASSED
+tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-f32-1x2_tiles] 2026-03-26 13:44:59.107 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mstaletovic/tt-metal/tt_metal/pre-compiled/9532443183819849460/ (build_env_manager.cpp:259)
+
+============================================================
+  ROW SUM ACCURACY REPORT
+============================================================
+  Shape:          32 x 64
+  Dtype:          float32
+  Input layout:   TILE
+  Output layout:  TILE
+  FP32 dest acc:  False
+  Distribution:   rand
+------------------------------------------------------------
+  Mean abs diff:  0.012383
+  Max abs diff:   0.036419
+  PCC:            0.99997920
+  Mean ULP:       2583640932352.0
+  Max ULP:        10251013193728.0
+  Rel RMS error:  0.000480
+============================================================
+
+PASSED
+tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles] 2026-03-26 13:44:59.631 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mstaletovic/tt-metal/tt_metal/pre-compiled/9532443183819849460/ (build_env_manager.cpp:259)
+
+============================================================
+  ROW SUM ACCURACY REPORT
+============================================================
+  Shape:          32 x 64
+  Dtype:          bfloat16
+  Input layout:   TILE
+  Output layout:  TILE
+  FP32 dest acc:  True
+  Distribution:   rand
+------------------------------------------------------------
+  Mean abs diff:  0.043945
+  Max abs diff:   0.105469
+  PCC:            0.99975508
+  Mean ULP:       9002251452416.0
+  Max ULP:        17592186044416.0
+  Rel RMS error:  0.001584
+============================================================
+
+FAILED
+tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-f32-1x2_tiles] 2026-03-26 13:45:00.207 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mstaletovic/tt-metal/tt_metal/pre-compiled/9532443183819849460/ (build_env_manager.cpp:259)
+
+============================================================
+  ROW SUM ACCURACY REPORT
+============================================================
+  Shape:          32 x 64
+  Dtype:          float32
+  Input layout:   TILE
+  Output layout:  TILE
+  FP32 dest acc:  True
+  Distribution:   rand
+------------------------------------------------------------
+  Mean abs diff:  0.082346
+  Max abs diff:   0.093794
+  PCC:            0.99999696
+  Mean ULP:       17342591401984.0
+  Max ULP:        26400627097600.0
+  Rel RMS error:  0.002578
+============================================================
+
+PASSED
+tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum_smoke[minimal] 2026-03-26 13:45:00.740 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mstaletovic/tt-metal/tt_metal/pre-compiled/9532443183819849460/ (build_env_manager.cpp:259)
+PASSED
+
+=================================== FAILURES ===================================
+_________ test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles] __________
+
+device = MeshDevice(1x1 grid, 1 devices), shape = (32, 64)
+dtype = DataType.BFLOAT16, input_layout = Layout.TILE
+output_layout = Layout.TILE, fp32_dest_acc_en = True, distribution = 'rand'
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            # pytest.param((32, 32), id="single_tile"),
+            # pytest.param((64, 128), id="2x4_tiles"),
+            pytest.param((32, 64), id="1x2_tiles"),
+            # pytest.param((128, 256), id="4x8_tiles"),
+        ],
+    )
+    @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+    @pytest.mark.parametrize(
+        "input_layout", [ttnn.TILE_LAYOUT]#, ttnn.ROW_MAJOR_LAYOUT]
+        , ids=["tile_in"]#, "rm_in"]
+    )
+    @pytest.mark.parametrize(
+        "output_layout", [ttnn.TILE_LAYOUT],#, ttnn.ROW_MAJOR_LAYOUT]
+        ids=["tile_out"]#, "rm_out"]
+    )
+    @pytest.mark.parametrize(
+        "fp32_dest_acc_en", [False, True], ids=["fp16_acc", "fp32_acc"]
+    )
+    @pytest.mark.parametrize(
+        "distribution", ["rand"], #, "randn", "ones"],
+          ids=["rand"]#, "randn", "ones"]
+    )
+    def test_row_sum(device, shape, dtype, input_layout, output_layout, fp32_dest_acc_en, distribution):
+        """Test row_sum against PyTorch reference for all parameter combinations."""
+        torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
+        torch_input = make_input(distribution, shape, torch_dtype)
+
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            layout=input_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        result = row_sum(ttnn_input, output_layout=output_layout, fp32_dest_acc_en=fp32_dest_acc_en)
+
+        # Output shape is [H, 32]
+        H = shape[0]
+        assert list(result.shape) == [H, 32], f"Expected shape [{H}, 32], got {list(result.shape)}"
+
+        torch_result = ttnn.to_torch(result)  # [H, 32]
+        torch_expected = torch_input.float().sum(dim=-1, keepdim=True)  # [H, 1] in fp32
+
+        actual = torch_result[:, 0:1].float()
+        expected = torch_expected
+
+        metrics = compute_metrics(actual, expected)
+        print_report(shape, dtype, input_layout, output_layout, fp32_dest_acc_en, distribution, metrics)
+
+        # Pass/fail based on PCC threshold
+        # Known bug: tilize + bf16 + fp32_dest_acc_en corrupts data (DEST 32-bit mode
+        # incompatible with bf16 tilize). Leave failing for reproducibility.
+        if fp32_dest_acc_en:
+            pcc_threshold = 0.9999
+        elif dtype == ttnn.bfloat16:
+            pcc_threshold = 0.999
+        else:
+            pcc_threshold = 0.9999
+>       assert metrics["pcc"] >= pcc_threshold, (
+            f"PCC {metrics['pcc']:.8f} below threshold {pcc_threshold}"
+        )
+E       AssertionError: PCC 0.99975508 below threshold 0.9999
+E       assert 0.9997550845146179 >= 0.9999
+
+tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py:162: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /localdev/mstaletovic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+0.50s call     tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-f32-1x2_tiles]
+0.50s call     tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles]
+0.50s call     tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-f32-1x2_tiles]
+0.49s call     tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum_smoke[minimal]
+0.49s call     tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-bf16-1x2_tiles]
+0.21s setup    tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-bf16-1x2_tiles]
+0.03s setup    tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-f32-1x2_tiles]
+0.03s setup    tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles]
+0.02s setup    tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum_smoke[minimal]
+0.02s setup    tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-f32-1x2_tiles]
+0.00s teardown tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-f32-1x2_tiles]
+0.00s teardown tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-f32-1x2_tiles]
+0.00s teardown tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum_smoke[minimal]
+0.00s teardown tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-bf16-1x2_tiles]
+0.00s teardown tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles]
+=========================== short test summary info ============================
+PASSED tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-bf16-1x2_tiles]
+PASSED tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp16_acc-tile_out-tile_in-f32-1x2_tiles]
+PASSED tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-f32-1x2_tiles]
+PASSED tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum_smoke[minimal]
+FAILED tests/ttnn/unit_tests/operations/row_sum/test_row_sum.py::test_row_sum[rand-fp32_acc-tile_out-tile_in-bf16-1x2_tiles] - AssertionError: PCC 0.99975508 below threshold 0.9999
+assert 0.9997550845146179 >= 0.9999
+========================= 1 failed, 4 passed in 2.87s ==========================
+2026-03-26 13:45:02.356 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-03-26 13:45:02.356 | info     |             UMD | Closing devices in cluster (cluster.cpp:963)

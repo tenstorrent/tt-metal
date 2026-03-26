@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.18, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mstaletovic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mstaletovic/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, timeout-2.4.0, split-0.10.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, benchmark-5.1.0, anyio-4.12.1
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 0 items
+
+- generated xml file: /localdev/mstaletovic/tt-metal/tt_metal/generated/test_reports/most_recent_tests.xml -
+============================ no tests ran in 0.00s =============================
