@@ -646,8 +646,8 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
         return result;
     }
 
-    for (size_t i = 0; i < MAX_CHIPS_PER_DEVICE; i++) {
-        if (region_->chip_stats[i].chip_id != 0) {
+    for (auto & chip_stat : region_->chip_stats) {
+        if (chip_stat.chip_id != 0) {
             ChipInfo info;
             info.chip_id = region_->chip_stats[i].chip_id;
             info.is_remote = (region_->chip_stats[i].is_remote != 0);
