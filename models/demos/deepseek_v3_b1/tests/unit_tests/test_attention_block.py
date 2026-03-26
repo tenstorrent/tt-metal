@@ -55,6 +55,7 @@ from models.demos.deepseek_v3_b1.utils import generate_mm_weights
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
