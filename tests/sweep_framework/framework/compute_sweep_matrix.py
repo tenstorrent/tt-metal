@@ -45,6 +45,28 @@ def get_mesh_shape(module_name):
     return get_mesh_shape_string(module_name)
 
 
+def format_runs_on(runs_on):
+    """Render runner configuration for stderr logs."""
+    if isinstance(runs_on, list):
+        return json.dumps(runs_on)
+    return runs_on
+
+
+def log_matrix_entries(include_entries):
+    """Print one stderr log line per generated matrix entry."""
+    for index, entry in enumerate(include_entries, start=1):
+        print(
+            "  "
+            f"[{index}/{len(include_entries)}] "
+            f"group={entry['test_group_name']} "
+            f"runner={entry['runner_label']} "
+            f"runs_on={format_runs_on(entry['runs_on'])} "
+            f"suite={entry['suite_name'] or 'default'} "
+            f"modules={entry['module_selector']}",
+            file=sys.stderr,
+        )
+
+
 def get_lead_models_mesh_runner_config():
     """
     Configuration: Map mesh shapes to runner configurations.
@@ -187,6 +209,7 @@ def compute_lead_models_matrix(modules, batch_size):
             f"  no mesh suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
             file=sys.stderr,
         )
+    log_matrix_entries(include_entries)
 
     return include_entries, batches, []  # No CCL batches for lead models
 
@@ -255,6 +278,19 @@ def compute_standard_matrix(modules, batch_size, suite_name):
                     "suite_name": "generality_suite_fabric_1d",
                 }
             )
+
+    run_label = suite_name or "comprehensive"
+    print(
+        f"Standard run ({run_label}): {len(modules)} vector files ({len(base_modules)} unique modules), "
+        f"{len(regular_batches)} regular batches, {len(ccl_batches)} ccl batches, "
+        f"{len(include_entries)} matrix entries",
+        file=sys.stderr,
+    )
+    print(
+        f"  regular modules: {len(base_modules)} total, {len(ccl_modules)} ccl-prefixed",
+        file=sys.stderr,
+    )
+    log_matrix_entries(include_entries)
 
     return include_entries, batches, ccl_batches
 
