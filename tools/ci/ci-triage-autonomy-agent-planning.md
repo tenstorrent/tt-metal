@@ -1,0 +1,928 @@
+# CI Triage Autonomy Fresh-Agent Handoff Spec
+
+## 1) Mission Contract
+
+This document is the execution specification for a fresh agent with no prior conversation context.
+The agent must implement and validate an autonomous CI-triage control loop with minimal human oversight.
+
+Primary outcomes:
+
+- No duplicate disable PRs for the same failing signal
+- Existing disable PRs are resumed/extended when new failures appear
+- Successful completion triggers one terminal Slack notification
+- Bug-escape attribution is tracked post-facto by mapping issue -> fix commit/PR
+- New failures are continuously ingested from aggregate workflow data
+- Ticket lifecycle is fully automated (create/update/close/reopen as needed)
+- Assignment/follow-up/escalation loops continue even after temporary disables
+- Small-scope fix PR drafting is attempted when confidence is high
+
+Non-goals for initial delivery:
+
+- public Slack channel rollout
+- broad multi-repo orchestration
+- bypassing repository protections/policies
+
+---
+
+## 2) Reader Profile And Operating Mode
+
+This spec assumes the executing model:
+
+- can read/write repository files
+- can run git, gh, and workflow commands
+- can inspect workflow logs/artifacts
+- can perform iterative implementation + validation
+
+This spec does not assume prior knowledge of this repository.
+
+---
+
+## 3) Placeholder Contract (Portable Template)
+
+Use placeholders throughout implementation and map them per repository.
+
+Required placeholders:
+
+- `{{TRIAGE_WORKFLOW_PATH}}`
+- `{{TRIAGE_WORKFLOW_NAME}}`
+- `{{STATE_ARTIFACT_NAME}}`
+- `{{ACTIONS_ARTIFACT_NAME}}`
+- `{{SLACK_READ_CHANNEL_ID}}`
+- `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}`
+- `{{DEFAULT_STALE_HOURS}}`
+- `{{DEFAULT_MAX_ACTIONS}}`
+- `{{AUTO_DISABLE_COMMAND_PATH}}`
+- `{{KICKOFF_COMMAND_PATH}}`
+- `{{REPO_SLUG}}`
+
+If values are unknown at runtime, agent must stop and request clarification before write actions.
+
+---
+
+## 4) Preflight Contract (Hard Gate Before Any Writes)
+
+The agent must verify all of the following before enabling live writes:
+
+### 4.1 Environment/Access
+
+- `gh auth status` succeeds
+- repository write scopes are available for:
+  - contents
+  - pull requests
+  - actions/workflow dispatch
+- secrets are configured for:
+  - Slack read/export path
+  - Slack notify path (test channel only)
+  - agent API key (if required by CLI)
+
+### 4.2 Workflow Safety
+
+- workflow supports dry-run mode for auto-disable path
+- workflow supports data-gathering/read-only mode
+- test channel IDs are configured and validated
+- public-channel posting is disabled by default
+
+### 4.3 Kill Switches
+
+All of these must exist:
+
+- `auto-disable-dry-run`
+- max actions per run limit
+- max attempts per candidate limit
+- single-flag disable for Slack notify writes
+
+If any preflight check fails, agent must only produce a preflight report and no writes.
+
+---
+
+## 5) Non-Negotiable Invariants
+
+These invariants must always hold:
+
+1. One candidate key maps to at most one active disable PR.
+2. Malformed model output never triggers write actions.
+3. Completed candidates never re-enter active disable flow.
+4. Notifications are terminal-only (no per-attempt spam).
+5. Test-mode channels only until explicit promotion.
+6. State is source of truth; run-time behavior must reconcile state with live GitHub data.
+
+Violation of any invariant is a release blocker.
+
+---
+
+## 6) State Schema Contract
+
+Canonical state artifact path:
+
+- `build_ci/triage_state/ci_triage_state.json`
+
+Minimum schema:
+
+```json
+{
+  "version": 1,
+  "updated_at_utc": "string",
+  "items": [
+    {
+      "key": "slack_ts:<ts>",
+      "slack_ts": "string",
+      "issue_numbers": [12345],
+      "status": "new|planned|pr_open|kickoff_running|kickoff_failed_new_failure|completed|needs_human|paused",
+      "disable_pr": {
+        "number": 0,
+        "url": "string",
+        "branch": "string",
+        "head_sha": "string"
+      },
+      "attempts": 0,
+      "last_kickoff_runs": [
+        {"workflow": "string", "run_id": 0, "url": "string", "conclusion": "string"}
+      ],
+      "notification": {
+        "terminal_notified": false,
+        "last_error": ""
+      },
+      "terminal_reason": "",
+      "history": [
+        {"ts_utc": "string", "event": "string", "details": "string"}
+      ]
+    }
+  ]
+}
+```
+
+Schema rules:
+
+- `key` is unique and deterministic (default `slack_ts:<ts>`)
+- `attempts` is monotonic increasing
+- `history` append-only
+- unknown status values are invalid and must fail closed
+
+---
+
+## 7) Decision Tables (Deterministic Control Logic)
+
+## 7.1 Candidate Routing
+
+| Condition | Action | State Transition |
+|---|---|---|
+| `status in {completed, paused}` | skip | unchanged |
+| no state entry | create entry | `new -> planned` |
+| open PR exists for key | resume existing PR flow | `planned/pr_open -> pr_open` |
+| no PR + eligible candidate | create disable PR | `planned -> pr_open` |
+| malformed planner output | no write | `planned -> needs_human` |
+
+## 7.2 Existing PR Workflow Outcome
+
+| Workflow result | Action | State Transition |
+|---|---|---|
+| all required workflows pass | send terminal notify | `pr_open/kickoff_running -> completed` |
+| fail with known already-disabled target | bounded retry kickoff | `kickoff_running -> kickoff_running` |
+| fail with new target | branch resume and incremental disable | `pr_open/kickoff_running -> kickoff_failed_new_failure -> pr_open` |
+| dispatch/log fetch failure after retries | escalate | `* -> needs_human` |
+
+## 7.3 Notification Logic
+
+| Condition | Action |
+|---|---|
+| completed and not notified | send one Slack terminal message |
+| completed and notified | no-op |
+| non-terminal states | no Slack notification (unless explicitly enabled for diagnostics) |
+
+---
+
+## 8) Milestone Runbooks (Execution Contract Layer)
+
+Each milestone must include Inputs, Actions, Evidence, Go/No-Go gate, Rollback.
+
+## M0 - Baseline Verification
+
+Inputs:
+
+- current repo state
+- workflow dispatch access
+
+Actions:
+
+1. run data-gathering mode once
+2. run auto-disable dry-run twice
+
+Evidence:
+
+- artifacts exist for both modes
+- summary has single report section
+- dry-run outputs are deterministic
+
+Go/No-Go:
+
+- Go only if both dry-runs match expected shape and no write side effects
+
+Rollback:
+
+- set workflow to dry-run-only path and disable notify
+
+## M1 - State Persistence
+
+Inputs:
+
+- previous run state artifact (if present)
+
+Actions:
+
+1. download latest state artifact
+2. bootstrap if absent
+3. merge candidate updates
+4. upload new state artifact
+
+Evidence:
+
+- run N+1 sees previous state
+- no duplicate `key` entries
+
+Go/No-Go:
+
+- Go only if state survives across 2 consecutive runs
+
+Rollback:
+
+- revert to stateless mode but keep dry-run only
+
+## M2 - Duplicate Prevention
+
+Inputs:
+
+- state + open PR list
+
+Actions:
+
+1. enforce key-level idempotency
+2. enforce PR body marker check
+3. block second PR creation when active PR exists
+
+Evidence:
+
+- replay run creates zero extra PRs
+
+Go/No-Go:
+
+- Must pass replay test 3 times consecutively
+
+Rollback:
+
+- disable creation path; keep state reconciliation only
+
+## M3 - Resume Existing PR Branch
+
+Inputs:
+
+- existing disable PR with failing workflows
+
+Actions:
+
+1. checkout existing PR branch
+2. identify new failing target
+3. apply incremental disable
+4. push to same PR
+5. rerun kickoff workflows
+6. append attempt history
+
+Evidence:
+
+- no second PR
+- same PR updated with new commit
+- kickoff reruns linked in summary/state
+
+Go/No-Go:
+
+- Must pass one controlled scenario end-to-end
+
+Rollback:
+
+- lock candidate to `needs_human` and halt auto-extension
+
+## M4 - Terminal Completion + Notify
+
+Inputs:
+
+- PR with successful workflows
+
+Actions:
+
+1. mark state `completed`
+2. send one terminal Slack message to `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}`
+3. set `terminal_notified=true`
+
+Evidence:
+
+- one Slack message
+- no further actions on rerun
+
+Go/No-Go:
+
+- rerun must produce no write actions for completed key
+
+Rollback:
+
+- disable notify while keeping completed state updates
+
+## M5 - Bug Escape Attribution
+
+Inputs:
+
+- resolved item state + fix PR/commit metadata
+
+Actions:
+
+1. map issue -> fix commit/PR
+2. infer failure layer and fix layer
+3. classify escape type
+4. append bug escape event
+
+Evidence:
+
+- `bug_escape_events.json` updated
+- rollup summary includes counts and examples
+
+Go/No-Go:
+
+- sample set must show traceable issue->fix mapping
+
+Rollback:
+
+- keep disable loop active; suspend attribution writes
+
+---
+
+## 9) Failure Recovery Matrix
+
+| Failure Mode | Detect Signal | Retry Policy | Escalation Condition | Escalation Action |
+|---|---|---|---|---|
+| artifact download missing | artifact fetch 404 | 0 retries | immediate | bootstrap new state + warning |
+| malformed model output | missing marker / JSON parse fail | 0 retries | immediate | fail closed, mark `needs_human` |
+| PR create failure | gh non-zero | 2 retries with backoff | still failing | set `needs_human`, persist error |
+| kickoff dispatch failure | no run IDs / gh error | 3 retries | still failing | set `needs_human` |
+| workflow logs unavailable | API/log fetch errors | 3 retries | still failing | keep state, defer next run |
+| push rejected | non-fast-forward/policy | 1 rebase attempt | policy block persists | set `needs_human` |
+| Slack notify failure | Slack API non-ok | retry next run until success | >N configurable retries | keep completed, mark notify pending |
+
+---
+
+## 10) Acceptance Test Matrix (Portable + Repo Example)
+
+| Test ID | Scenario | Mode | Expected Result |
+|---|---|---|---|
+| A1 | no prior state | dry-run | state bootstraps, no writes |
+| A2 | prior state with open PR | dry-run | no duplicate PR planned |
+| A3 | completed item replay | dry-run | skipped with explicit reason |
+| A4 | malformed planner output | dry-run/live | no writes, `needs_human` |
+| A5 | first live candidate | live test | one draft PR + kickoff runs |
+| A6 | unchanged replay | live test | zero new PRs |
+| A7 | new failure on existing PR | live test | same PR updated |
+| A8 | successful terminal run | live test | completed + one Slack notify |
+| A9 | data-gathering regression check | live test | report behavior unchanged |
+| A10 | bug escape attribution | live test | issue->fix mapping recorded |
+
+Minimum promotion threshold:
+
+- A1-A9 pass
+- A6 passes 3 consecutive runs
+- no invariant violations
+
+---
+
+## 11) Minimal-Oversight Operator Checkpoints
+
+Use this schedule for overnight or low-touch execution:
+
+- T0: preflight contract pass and kill-switch confirmation
+- T+30m: M0 evidence review
+- T+90m: first live PR and kickoff validation
+- T+3h: replay/no-duplicate validation
+- T+6h: resume-existing-PR validation
+- T+end: completed-state + notify + bug-escape evidence
+
+At any failed checkpoint:
+
+- freeze promotion
+- force dry-run
+- execute rollback path for current milestone
+
+---
+
+## 12) Fresh-Agent Bootstrap Prompt (Copy/Paste)
+
+Use this prompt with a fresh agent:
+
+```text
+You are a fresh execution agent for CI triage autonomy.
+Repository root: {{REPO_ROOT}}.
+
+Primary spec to follow exactly:
+tools/ci/ci-triage-autonomy-agent-planning.md
+
+Rules:
+1) Enforce all non-negotiable invariants in the spec.
+2) Run preflight contract first. If any hard gate fails, stop and report only.
+3) Execute milestones in order M0 -> M5.
+4) Do not skip Go/No-Go gates.
+5) Fail closed on malformed LLM output or schema mismatches.
+6) Use placeholders from the spec and map to repo values via Appendix A.
+7) Use test-only Slack channels and dry-run first.
+8) Preserve state as source of truth and reconcile against live PR/workflow data each run.
+9) Produce evidence artifacts and checkpoint report at each milestone.
+10) If blocked, output exact blocker and proposed minimal fix.
+
+Start now with:
+- Read spec
+- Generate preflight report
+- Propose M0 execution steps
+```
+
+---
+
+## 13) Zero-Context Dry-Run Simulation Walkthrough
+
+This section proves a fresh agent can start from zero context.
+
+Step 1:
+
+- read this spec
+- resolve placeholders from Appendix A
+
+Step 2:
+
+- execute preflight contract
+- if any requirement missing, output blocking report and stop
+
+Step 3:
+
+- run M0 only in dry-run mode
+- generate checkpoint evidence:
+  - artifact presence
+  - summary integrity
+  - deterministic output comparison
+
+Step 4:
+
+- if M0 passes, continue to M1 in dry-run mode first
+- perform replay run to validate idempotency logic before live writes
+
+Step 5:
+
+- only after M2 pass criteria, enable limited live run (`max_actions=1`)
+
+Expected outputs for this walkthrough:
+
+- preflight report markdown
+- milestone status table
+- evidence artifact index
+- explicit next action recommendation
+
+---
+
+## 14) Commit-History Discovery Requirement
+
+A fresh agent must inspect recent commits before major edits to avoid reintroducing removed logic.
+
+Required checks:
+
+- recent commit messages around `{{TRIAGE_WORKFLOW_PATH}}`
+- diff history for triage scripts/actions
+- identification of previously failed approaches
+
+If unclear why a behavior exists, agent must document assumption and continue with reversible changes.
+
+---
+
+## 15) Rollback Protocol
+
+If instability or invariant breach is detected:
+
+1. force `auto-disable-dry-run=true`
+2. disable live Slack notifications
+3. stop PR create/update writes
+4. continue state read + observability artifacts
+5. revert only latest milestone changes
+6. rerun M0 to verify recovery baseline
+
+---
+
+## 16) Definition Of Ready / Done
+
+Definition of ready (before live writes):
+
+- preflight pass
+- placeholders mapped
+- dry-run checkpoints M0-M2 pass
+
+Definition of done:
+
+- repeated runs converge with no duplicate PRs
+- existing PR resume/extend path proven
+- terminal completion emits exactly one notification
+- bug escape events map issue->fix commit/PR with classification
+- data-gathering mode remains non-regressed
+- aggregate-data intake, ticket create/update/close, Slack lifecycle, and escalation loops are all validated end-to-end
+
+---
+
+## Appendix A: Example Placeholder Mapping For This Repository
+
+Use these as examples; do not hardcode in portable implementations.
+
+- `{{TRIAGE_WORKFLOW_PATH}}` -> `.github/workflows/triage-ci.yaml`
+- `{{TRIAGE_WORKFLOW_NAME}}` -> `(triage) Export Evan Slack threads`
+- `{{STATE_ARTIFACT_NAME}}` -> `triage-state` (recommended)
+- `{{ACTIONS_ARTIFACT_NAME}}` -> `triage-actions` (recommended)
+- `{{SLACK_READ_CHANNEL_ID}}` -> `C05GRJC4J4A` (current test read source)
+- `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` -> `C09EC0QNSB0`
+- `{{DEFAULT_STALE_HOURS}}` -> `32`
+- `{{DEFAULT_MAX_ACTIONS}}` -> `3`
+- `{{AUTO_DISABLE_COMMAND_PATH}}` -> `.cursor/commands/ci/ci-disable-test-ci.md`
+- `{{KICKOFF_COMMAND_PATH}}` -> `.cursor/commands/ci/ci-kickoff-workflows.md`
+- `{{REPO_SLUG}}` -> `tenstorrent/tt-metal`
+
+---
+
+## Appendix B: Required Evidence Bundle Per Milestone
+
+For each milestone, the agent must produce:
+
+- run summary section with pass/fail gate
+- artifact list with paths
+- key decision log (state transitions)
+- rollback command set for the exact milestone
+
+---
+
+## 17) Full CI Maintenance Feature Set (Expanded Scope)
+
+This section upgrades the system from "auto-disable loop" to full CI maintenance automation.
+
+Feature domains:
+
+1. Failure ingestion from aggregate workflow data
+2. Ticket lifecycle automation
+3. Slack lifecycle automation
+4. Disable-vs-fix action selection
+5. Assignment and escalation automation
+6. Continuous follow-up after disable
+7. Testing strategy with synthetic scenarios/mocks
+
+All domains must integrate into one state machine with shared keys and audit history.
+
+---
+
+## 18) Failure Ingestion Contract (Aggregate Workflow Data)
+
+Primary intake source:
+
+- aggregate workflow data runs (latest successful and recent failed runs)
+
+Intake requirements:
+
+- pull new failure clusters since last processed cursor timestamp
+- normalize each failure into a deterministic `failure_fingerprint`
+- map each fingerprint to existing issue(s), PR(s), and prior state item(s)
+- deduplicate across retried runs and mirrored workflow names
+
+Minimum normalized fields per failure:
+
+```json
+{
+  "failure_fingerprint": "string",
+  "workflow_name": "string",
+  "workflow_run_id": 0,
+  "job_name": "string",
+  "test_target": "string",
+  "first_seen_utc": "string",
+  "last_seen_utc": "string",
+  "signal_strength": "high|medium|low",
+  "source_links": []
+}
+```
+
+Hard rules:
+
+- no ticket creation without a stable fingerprint
+- no action if fingerprint confidence is low and no corroborating evidence exists
+- every downstream action must reference fingerprint + source links
+
+---
+
+## 19) Ticket Lifecycle Automation Contract
+
+Ticket states:
+
+- `new_candidate`
+- `open_active`
+- `open_waiting_on_owner`
+- `open_disabled_temporarily`
+- `resolved_pending_verification`
+- `closed_resolved`
+- `closed_obsolete`
+
+### 19.1 Create
+
+Create a ticket when:
+
+- fingerprint is persistent (above configurable repeat threshold)
+- no active ticket already linked to same fingerprint
+
+Ticket body must include:
+
+- source runs/jobs links
+- failing target fingerprint
+- owner/team hint
+- initial remediation recommendation
+- non-closing references to related work
+
+### 19.2 Update
+
+Periodic update cadence:
+
+- each triage cycle or bounded interval
+
+Update fields:
+
+- fresh run links
+- current status summary
+- latest owner response state
+- open PR links (disable/fix)
+
+### 19.3 Close
+
+Close when either:
+
+1. objective resolved condition met (stable pass window), or
+2. superseded/invalid signal with rationale
+
+Close operation must capture:
+
+- resolving PR/commit linkage
+- resolution evidence window
+- bug-escape classification placeholder (for later enrichment if not available yet)
+
+### 19.4 Reopen
+
+Reopen if same fingerprint recurs after close beyond hysteresis threshold.
+
+---
+
+## 20) Slack Lifecycle Contract
+
+Slack domains:
+
+- read channel(s) for triage signals
+- notify channel(s) for agent actions
+- optional owner-specific follow-up threads
+
+Slack capabilities:
+
+1. read latest relevant thread context
+2. post/update triage status message
+3. post disable/fix PR links
+4. post completion/escalation notices
+
+Message policy:
+
+- concise, factual, action-oriented
+- include direct links to ticket, PR, workflow runs
+- avoid repeated spam by message keying (`fingerprint + phase + day`)
+
+Thread policy:
+
+- one anchor message per fingerprint lifecycle
+- updates stay in thread unless escalation requires separate visibility
+
+---
+
+## 21) Action Selector Contract (Disable vs Fix vs Observe)
+
+Action options:
+
+- `observe_only`
+- `create_or_update_ticket`
+- `draft_disable_pr`
+- `draft_fix_pr`
+- `kickoff_targeted_workflows`
+- `notify_owner`
+- `escalate`
+
+Selection inputs:
+
+- failure stability
+- blast radius
+- fix complexity estimate
+- prior attempts count
+- owner responsiveness
+
+### 21.1 Disable Path
+
+Prefer disable when:
+
+- severe CI blockage + no quick deterministic fix
+- repeated failures crossing stale threshold
+
+### 21.2 Fix Path
+
+Allow small fix PR drafting only when:
+
+- likely fix is scoped and high-confidence
+- affected files/area are limited
+- tests to validate fix are known and runnable
+
+Fix PRs must be draft by default unless policy allows direct ready-for-review.
+
+### 21.3 Observe Path
+
+Use observe-only when:
+
+- evidence is ambiguous
+- signal is too fresh/noisy
+- previous action is still pending verification
+
+---
+
+## 22) Assignment, Follow-Up, And Escalation Contract
+
+### 22.1 Auto-Assignment
+
+Assignment sources (in priority order):
+
+1. existing ticket owner
+2. CODEOWNERS/service ownership map
+3. fallback on-call rotation
+
+### 22.2 Follow-Up
+
+Follow-up runs independently from disable/fix status.
+
+Even after disable:
+
+- continue ping cadence until root cause is fixed or accepted as deferred with explicit owner approval
+
+Follow-up schedule (example):
+
+- initial assignment ping
+- reminder at +24h
+- reminder at +48h
+
+### 22.3 Escalation
+
+Escalate when:
+
+- no owner acknowledgment after threshold
+- no progress updates after threshold
+- repeated disable extensions without root-cause trajectory
+
+Escalation targets:
+
+- owner manager/lead channel (configured mapping required)
+
+Escalation safeguards:
+
+- require at least one prior reminder
+- include concise evidence packet
+- limit escalation frequency per fingerprint
+
+---
+
+## 23) Post-Disable Continuous Control Loop
+
+After a test is disabled, the loop must continue:
+
+1. monitor whether underlying issue is being worked
+2. continue owner reminders/escalation cadence
+3. detect when true fix PR appears
+4. link fix PR/commit to ticket and bug-escape records
+5. recommend/perform re-enable path when confidence is sufficient
+
+Re-enable gate (minimum):
+
+- sustained pass window on relevant workflows
+- owner acknowledgment or policy-approved auto-reenable
+- no conflicting active incidents for same target
+
+---
+
+## 24) Bug Escape Enrichment Contract (Full)
+
+Bug-escape enrichment runs after resolution events and may be backfilled.
+
+Required record fields:
+
+```json
+{
+  "fingerprint": "string",
+  "issue_number": 0,
+  "disable_pr_number": 0,
+  "fix_pr_number": 0,
+  "fix_commit_sha": "string",
+  "failure_layer": "llk|metalium|ttnn|models|unknown",
+  "fix_layer": "llk|metalium|ttnn|models|unknown",
+  "escape_type": "gate_coverage_gap|layer_escape_lower_to_higher|unknown",
+  "explanation": "string",
+  "captured_at_utc": "string"
+}
+```
+
+Interpretation requirements:
+
+- include "why classified this way" text
+- include shift-left recommendation candidate
+- never block ticket close if enrichment temporarily unavailable; mark pending and retry
+
+---
+
+## 25) Expanded Test Strategy For Sparse Real-World Scenarios
+
+Real pipelines may not naturally produce all permutations. A synthetic test harness is required.
+
+### 25.1 Scenario Fixture Packs
+
+Create fixture packs for:
+
+- no stale Slack messages
+- stale Slack with open issue
+- stale Slack with closed issue
+- no existing ticket + persistent fingerprint
+- existing open ticket + no owner response
+- disable PR exists + same failure persists
+- disable PR exists + new failure appears
+- fix PR appears and resolves failure
+- false positive/noisy transient
+
+### 25.2 Mock/Replay Sources
+
+Mock inputs should include:
+
+- aggregate workflow data snapshots
+- Slack export JSON snapshots
+- issue/PR metadata snapshots
+- workflow run conclusions
+
+### 25.3 Permutation Matrix
+
+Must cover at least these cross products:
+
+- issue state (`none/open/closed`) x failure persistence (`new/stable/flaky`)
+- owner state (`unassigned/assigned/unresponsive/responding`)
+- action state (`none/disable/fix`) x verification state (`pending/pass/fail`)
+
+### 25.4 Test Gates
+
+Before production rollout:
+
+- all fixture packs pass deterministically in dry-run
+- at least one controlled live run per major lifecycle branch
+- escalation and notification suppression rules verified
+
+---
+
+## 26) End-To-End State Machine (Unified)
+
+```mermaid
+flowchart TD
+    ingest[IngestAggregateFailures]
+    normalize[NormalizeFingerprint]
+    correlate[CorrelateIssuePRSlackState]
+    choose{SelectAction}
+    ticket[CreateOrUpdateTicket]
+    disable[DraftOrExtendDisablePR]
+    fix[DraftSmallFixPR]
+    kickoff[KickoffTargetedWorkflows]
+    verify{VerifyOutcome}
+    close[CloseOrReopenTicket]
+    notify[NotifyOrEscalate]
+    enrich[RecordBugEscapeAttribution]
+    loopback[NextTriageCycle]
+
+    ingest --> normalize --> correlate --> choose
+    choose --> ticket
+    choose --> disable
+    choose --> fix
+    disable --> kickoff --> verify
+    fix --> kickoff --> verify
+    ticket --> notify --> loopback
+    verify -->|pass| close --> enrich --> notify --> loopback
+    verify -->|fail_new_target| disable
+    verify -->|fail_ambiguous| ticket
+```
+
+---
+
+## 27) Fresh-Agent Validation Checklist For Full Feature Set
+
+A fresh agent must explicitly confirm all "yes" before claiming completion:
+
+- Aggregate failure ingestion implemented and tested
+- Ticket create/update/close/reopen implemented and tested
+- Slack read/post/update thread lifecycle implemented and tested in test channels
+- Disable and small-fix selection logic implemented and tested
+- Assignment/follow-up/escalation loops implemented and tested
+- Post-disable continuity behavior implemented and tested
+- Bug-escape enrichment (issue->fix commit mapping) implemented and tested
+- Synthetic fixture/permutation suite implemented and passing
+
+Any "no" means not done.
