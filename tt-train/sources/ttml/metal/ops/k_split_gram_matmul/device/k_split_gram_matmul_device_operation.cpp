@@ -56,4 +56,10 @@ KSplitGramMatmulDeviceOperation::tensor_return_value_t KSplitGramMatmulDeviceOpe
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
+ttsl::hash::hash_t KSplitGramMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return tt::tt_metal::operation::hash_operation<KSplitGramMatmulDeviceOperation>(
+        operation_attributes.output_mode, operation_attributes.math_fidelity, tensor_args.input_tensor.logical_shape());
+}
+
 }  // namespace ttml::metal::ops::k_split_gram_matmul::device
