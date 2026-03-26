@@ -27,7 +27,7 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
-    
+
     _llk_unpack_reduce_init_<reduce_dim>(operandA_id, operandB_id, tensor_shape);
 }
 
