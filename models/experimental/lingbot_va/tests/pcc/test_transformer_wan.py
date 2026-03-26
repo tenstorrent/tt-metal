@@ -1,17 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC tests for Lingbot-VA WanTransformer3DModel (video and action path).
-
-Compares TT model (lingbot_va.tt) vs reference. Uses (1,1) submesh; loads from cache or mmap to avoid OOM.
-
-Demo-like test cases use the same input shapes as inference_ttnn.py / inference_torch.py
-(va_robotwin_cfg: frame_chunk_size=2, latent 24x20, action 2x16, prompt_seq_len=512).
-"""
+"""PCC: Lingbot-VA TT WanTransformer3DModel vs reference (video and action paths)."""
 
 import gc
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -22,10 +16,9 @@ from loguru import logger
 
 import ttnn
 
-# Ensure tt-metal root is on path when running from various working directories
 _tt_metal_root = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
-if str(_tt_metal_root) not in __import__("sys").path:
-    __import__("sys").path.insert(0, str(_tt_metal_root))
+if str(_tt_metal_root) not in sys.path:
+    sys.path.insert(0, str(_tt_metal_root))
 
 from models.experimental.lingbot_va.reference.transformer_wan import (
     WanTransformer3DModel as TorchWanTransformer3DModel,
@@ -37,7 +30,6 @@ from models.tt_dit.utils.cache import model_cache_dir
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params
 
-# Lingbot-VA model config (matches reference/model.py)
 DIM = 24 * 128  # 3072
 FFN_DIM = 14336
 NUM_HEADS = 24
@@ -55,7 +47,6 @@ ROPE_MAX_SEQ_LEN = 1024
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", _tt_metal_root)
 LINGBOT_VA_CHECKPOINT = Path(TT_METAL_HOME) / "models/experimental/lingbot_va/reference/checkpoints/transformer"
 
-# Demo (va_robotwin_cfg): same shapes as inference_ttnn.py / inference_torch.py
 DEMO_FRAME_CHUNK = 2
 DEMO_LATENT_H = 24
 DEMO_LATENT_W = 20
@@ -99,7 +90,7 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 
 
 def _make_grid_id(B: int, F: int, H: int, W: int, patch_size: tuple, device: torch.device) -> torch.Tensor:
-    """Build grid_id (B, 3, L) for reference model RoPE; L = (F//p0)*(H//p1)*(W//p2)."""
+    # RoPE grid: L = (F//p0)*(H//p1)*(W//p2)
     p0, p1, p2 = patch_size
     f_p, h_p, w_p = F // p0, H // p1, W // p2
     f_idx = torch.arange(f_p, dtype=torch.float32, device=device)
@@ -114,7 +105,7 @@ def _make_grid_id(B: int, F: int, H: int, W: int, patch_size: tuple, device: tor
 def _ref_output_to_bcfhw(
     ref_out: torch.Tensor, B: int, F: int, H: int, W: int, patch_size: tuple, out_c: int
 ) -> torch.Tensor:
-    """Reshape reference output (B, L*n, out_c) to (B, out_c, F, H, W) to match TT output."""
+    # Reference returns (B, L*n, C); TT returns (B, C, F, H, W).
     p0, p1, p2 = patch_size
     patch_F, patch_H, patch_W = F // p0, H // p1, W // p2
     n = p0 * p1 * p2
@@ -133,7 +124,7 @@ def _make_action_grid_id(
     f_w: int = 1,
     f_shift: int = 0,
 ) -> torch.Tensor:
-    """Build grid_id (B, 3, L) for action path RoPE; L = F_action * action_per_frame * 1."""
+    # Action RoPE: L = F_action * action_per_frame
     f_idx = torch.arange(f_shift, F_action + f_shift, dtype=torch.float32, device=device) * f_w
     h_idx = torch.arange(action_per_frame, dtype=torch.float32, device=device)
     w_idx = torch.arange(1, dtype=torch.float32, device=device)
@@ -147,7 +138,6 @@ def _make_action_grid_id(
     return grid_id
 
 
-# Video path: (1,1) submesh; cache or mmap load.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -158,7 +148,6 @@ def _make_action_grid_id(
 @pytest.mark.parametrize(
     ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        # pytest.param(1, 8, 24, 24, 77, id="lingbot_va_short"),
         pytest.param(
             1,
             DEMO_FRAME_CHUNK,
@@ -184,7 +173,6 @@ def test_wan_transformer_model(
     is_fsdp: bool,
     reset_seeds,
 ) -> None:
-    """PCC: TT WanTransformer3DModel vs reference (video path). Uses cache or mmap to avoid OOM."""
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
 
@@ -290,12 +278,6 @@ def test_wan_transformer_model(
     assert_quality(ref_out_bcfhw, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
-ACTION_PER_FRAME = 16
-F_ACTION = 8
-
-
-# Action path: (1,1) submesh; cache or mmap load.
-# Demo uses F_action=frame_chunk_size=2, action_per_frame=16, prompt_seq_len=512.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -306,7 +288,6 @@ F_ACTION = 8
 @pytest.mark.parametrize(
     ("B", "F_action", "action_per_frame", "prompt_seq_len"),
     [
-        # pytest.param(1, F_ACTION, ACTION_PER_FRAME, 77, id="lingbot_va_action_short"),
         pytest.param(
             1,
             DEMO_FRAME_CHUNK,
@@ -330,7 +311,6 @@ def test_wan_transformer_model_action_mode(
     is_fsdp: bool,
     reset_seeds,
 ) -> None:
-    """PCC: TT WanTransformer3DModel vs reference (action path). Output (B, N, action_dim)."""
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
 
