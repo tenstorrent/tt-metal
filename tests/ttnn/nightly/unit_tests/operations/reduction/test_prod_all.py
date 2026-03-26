@@ -5,18 +5,8 @@
 import pytest
 import torch
 from loguru import logger
-from functools import partial
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc
-
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-    generation_funcs,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
-    run_single_pytorch_test,
-)
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -64,32 +54,11 @@ def test_prod(shapes, device):
     logger.info("Torch Output")
     logger.info(torch_output)
 
-    # test for equivalence
-    # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
-    # rtol = atol = 0.12
-    # # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-    # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-    # logger.info(f"Out passing={passing}")
-    # logger.info(f"Output pcc={output_pcc}")
-    # if torch.isfinite(torch_output).all() and torch.isfinite(tt_output_cpu).all():
-    #     assert_numeric_metrics(
-    #         torch_output,
-    #         tt_output_cpu,
-    #         pcc_threshold=0.9999,
-    #         rtol=1e-06,
-    #         atol=1e-06,
-    #         frobenius_threshold=1e-09,
-
-    #     )
-    # else:
-    #     logger.warning("Skipping numeric metrics check due to non-finite values in prod outputs.")
-
-    # assert passing
     if torch.isfinite(torch_output).all() and torch.isfinite(tt_output_cpu).all():
         check_frobenius = True
     else:
         check_frobenius = False
+    # test for equivalance
     assert_numeric_metrics(
         torch_output,
         tt_output_cpu,

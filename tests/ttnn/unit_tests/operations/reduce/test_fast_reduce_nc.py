@@ -91,6 +91,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
         csv_filename="test_fast_reduce_nc_numeric_results.csv",
         test_params=None,
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_output,
         tt_output_cpu,
@@ -99,9 +100,6 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
-
-    # test for equivalance
-    # rtol = atol = 0.12
 
 
 # Program caching test
@@ -163,15 +161,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         cpu_layout = ttnn.ROW_MAJOR_LAYOUT
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_1).to_torch()
-        # Collect numeric metrics and dump to CSV using reusable function
-        # Collect numeric metrics and dump to CSV using reusable function
-        # test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_1},iteration={_}]"
-        #     torch_output,
-        #     tt_output_cpu,
-        #     test_name=test_name,
-        #     csv_filename="test_fast_reduce_nc_numeric_results.csv",
-        #     test_params=None,
-        # )
+        # test for equivalance
         assert_numeric_metrics(
             torch_output,
             tt_output_cpu,
@@ -181,10 +171,6 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
             frobenius_threshold=1e-09,
             check_ulp=True,
         )
-
-        # # test for equivalance
-        # rtol = atol = 0.12
-        # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
         assert device.num_program_cache_entries() == len(dims) + 1
 
@@ -203,14 +189,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         cpu_layout = ttnn.ROW_MAJOR_LAYOUT
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
-        # test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_2},iteration={_}]"
-        #     torch_output,
-        #     tt_output_cpu,
-        #     test_name=test_name,
-        #     csv_filename="test_fast_reduce_nc_numeric_results.csv",
-        #     test_params=None,
-        # )
-        # # test for equivalance
+        # test for equivalance
         assert_numeric_metrics(
             torch_output,
             tt_output_cpu,
@@ -220,8 +199,5 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
             frobenius_threshold=1e-09,
             check_ulp=True,
         )
-
-        # rtol = atol = 0.12
-        # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
         assert device.num_program_cache_entries() == 2 * len(dims) + 1

@@ -61,9 +61,9 @@ def test_cumprod_normal(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
-            # assert values with pcc
             ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
             if dtypes[0] == torch.float32:
+                # test for equivalance
                 assert_numeric_metrics(
                     torch_result_tensor,
                     ttnn_result_torch,
@@ -73,6 +73,7 @@ def test_cumprod_normal(dim, shape, dtypes, device):
                     frobenius_threshold=0.02,
                 )
             else:
+                # test for equivalance
                 assert_numeric_metrics(
                     torch_result_tensor,
                     ttnn_result_torch,
@@ -124,21 +125,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         )
 
         assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-        # test_name = f"test_cumprod_backward[dim={dim},shape={shape},dtypes={dtypes}]"
-        #     torch_input_tensor.grad,
-        #     tt_input_grad_cpu,
-        #     test_name=test_name,
-        #     csv_filename="test_cumprod_numeric_results.csv",
-        #     test_params=None,
-        # )
-        # test for equivalance
         rtol = atol = 0.1
-        #         torch_input_tensor.grad,
-        #         tt_input_grad_cpu,
-        #     )
-        #         torch_input_tensor.grad,
-        #         tt_input_grad_cpu,
-        #     )
         assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     else:
@@ -183,9 +170,9 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_input_tensor.shape
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
-            # assert values with pcc
             ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
             ttnn_preallocated_torch = ttnn.to_torch(ttnn_preallocated_tensor)
+            # test for equivalance
             assert_numeric_metrics(
                 torch_result_tensor,
                 ttnn_result_torch,
@@ -194,6 +181,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
                 atol=1.47,
                 frobenius_threshold=0.01,
             )
+            # test for equivalance
             assert_numeric_metrics(
                 torch_preallocated_tensor,
                 ttnn_preallocated_torch,

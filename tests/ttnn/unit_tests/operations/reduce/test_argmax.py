@@ -114,6 +114,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_result,
         ttnn_result,
@@ -122,15 +123,3 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
-    # pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    # assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"
-
-    # # Convert torch dtype from uint64 to int32
-    # # Note: torch does not have uint32
-    # torch_result = torch_result.to(torch.int32)
-
-    # atol = rtol = 0.1
-    # assert torch.allclose(
-    #     torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
-    # ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"

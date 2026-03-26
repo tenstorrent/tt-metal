@@ -53,6 +53,7 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -97,6 +98,7 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -107,7 +109,6 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
         check_ulp=True,
         ulp_threshold=65,
     )
-    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -135,6 +136,7 @@ def test_sum_global_row_major(device, input_shape):
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -171,6 +173,7 @@ def test_max_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -209,6 +212,7 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.to_torch(output_tensor)
     print(torch.max(torch.abs(output_tensor - torch_output_tensor)))
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -244,6 +248,7 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -280,6 +285,7 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -312,11 +318,10 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
     # Create tensor without specifying layout - defaults to ROW_MAJOR
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
-    # assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
-
     output_tensor = ttnn.mean(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -326,7 +331,6 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
         frobenius_threshold=0.00196106014,
         check_ulp=True,
     )
-    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
 
 
 @pytest.mark.parametrize(
@@ -354,6 +358,7 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
     output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -362,4 +367,3 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
         atol=32.64,
         frobenius_threshold=0.003,
     )
-    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

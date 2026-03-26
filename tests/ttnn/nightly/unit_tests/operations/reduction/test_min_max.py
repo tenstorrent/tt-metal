@@ -60,8 +60,6 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     else:
         raise AttributeError()
 
-    # print(f"x.max/min = {value}")
-
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
@@ -72,11 +70,8 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         tt_npu = ttnn.mean(tt_input)
 
     tt_output = tt_npu.cpu().to_torch()
-    comparison_fn = torch.equal
     if kind == "mean":
-        comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)
-    assert comparison_fn(tt_output, torch_output)
-    if kind == "mean":
+        # test for equivalance
         assert_numeric_metrics(
             torch_output,
             tt_output,
@@ -86,6 +81,7 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
             frobenius_threshold=0.006,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output,
             tt_output,

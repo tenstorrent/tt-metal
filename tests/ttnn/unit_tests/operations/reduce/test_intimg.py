@@ -53,6 +53,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             ttnn_output_tensor,
@@ -62,6 +63,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
             frobenius_threshold=0.050,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             ttnn_output_tensor,
@@ -78,6 +80,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             ttnn_output_tensor_2,
@@ -87,6 +90,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
             frobenius_threshold=0.011,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             ttnn_output_tensor_2,

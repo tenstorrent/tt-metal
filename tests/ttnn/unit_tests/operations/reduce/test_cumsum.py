@@ -83,6 +83,7 @@ def test_cumsum(size, dim, dtypes, device):
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
         if torch_output.numel() > 0:
+            # test for equivalance
             assert_numeric_metrics(
                 expected_output,
                 torch_output,
@@ -145,6 +146,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert preallocated_output_tensor == output_tensor
 
     if torch_output.numel() > 0:
+        # test for equivalance
         assert_numeric_metrics(
             expected_output,
             torch_output,
@@ -203,7 +205,6 @@ def test_cumsum_backward(size, dim, dtypes, device):
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
 
     # test for equivalance
-    rtol = atol = 0.1
     assert_numeric_metrics(
         torch_input_tensor.grad,
         tt_input_grad_cpu,
@@ -211,20 +212,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
         rtol=1e-06,
         atol=1e-06,
         frobenius_threshold=1e-09,
-        # check_allclose=False,
-        # check_frobenius=False,
-        # check_pcc=True,
-        # check_ulp=True,
     )
-    #     torch_output,
-    #     tt_output_cpu,
-    #     pcc_threshold=0.9999,
-    #     rtol=1e-06,
-    #     atol=1e-06,
-    #     frobenius_threshold=1e-09,
-    #     check_ulp=True,
-    # )
-    # passing, output = comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize(

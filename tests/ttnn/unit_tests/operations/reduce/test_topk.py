@@ -59,6 +59,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert list(ttnn_topk_values.shape) == desired_shape
     assert list(ttnn_topk_indices.shape) == desired_shape
 
+    # test for equivalance
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,

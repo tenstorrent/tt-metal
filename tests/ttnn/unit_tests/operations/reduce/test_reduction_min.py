@@ -32,10 +32,7 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    #         torch_output_tensor,
-    #         output_tensor,
-    #         check_ulp=True,
-    #     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -64,6 +61,7 @@ def test_min_global(device, batch_size, h, w):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -86,6 +84,7 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,

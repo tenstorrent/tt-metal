@@ -10,7 +10,7 @@ import torch
 from functools import partial
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -59,6 +59,7 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -116,6 +117,7 @@ def test_2D_tensor_full_grid(
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -124,7 +126,6 @@ def test_2D_tensor_full_grid(
         atol=8.160,
         frobenius_threshold=0.009,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -170,6 +171,7 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,

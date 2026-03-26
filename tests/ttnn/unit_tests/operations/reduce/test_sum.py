@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
@@ -31,6 +31,7 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -39,7 +40,6 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
         atol=65.280,
         frobenius_threshold=0.007,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -61,6 +61,7 @@ def test_sum_global(device, batch_size, h, w, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if dtype == ttnn.float32:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -70,6 +71,7 @@ def test_sum_global(device, batch_size, h, w, dtype):
             frobenius_threshold=0.02,
         )
     elif dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -79,6 +81,7 @@ def test_sum_global(device, batch_size, h, w, dtype):
             frobenius_threshold=0.009,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -87,7 +90,6 @@ def test_sum_global(device, batch_size, h, w, dtype):
             atol=228.480,
             frobenius_threshold=0.062,
         )
-    assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [1, 9])
@@ -105,6 +107,7 @@ def test_sum_4d(device, n, c, h, w, dim):
 
     output_tensor = ttnn.sum(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -113,7 +116,6 @@ def test_sum_4d(device, n, c, h, w, dim):
         atol=472.500,
         frobenius_threshold=0.005,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -143,6 +145,7 @@ def test_sum_nd_shard(device, shapes, keepdim):
     )
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -151,7 +154,6 @@ def test_sum_nd_shard(device, shapes, keepdim):
         atol=0.194,
         frobenius_threshold=0.001,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -186,6 +188,7 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -195,6 +198,7 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
             frobenius_threshold=1e-09,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -203,4 +207,3 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
             atol=4177.920,
             frobenius_threshold=0.015,
         )
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

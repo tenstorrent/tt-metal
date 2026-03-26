@@ -63,6 +63,7 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -74,6 +75,7 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -97,6 +99,7 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -107,6 +110,7 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     )
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.max, shape, dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -125,6 +129,7 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 
     # dim=-1 (W): ReduceMultiCoreWProgramFactory
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -136,6 +141,7 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 
     # dim=-2 (H): ReduceMultiCoreHProgramFactory
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-2, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -155,6 +161,7 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.float32)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -164,6 +171,7 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
         frobenius_threshold=0.001,
         check_ulp=True,
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -186,6 +194,7 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
     torch_ref2, tt_out2 = run_reduce_op(
         device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -195,6 +204,7 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -214,6 +224,7 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, [1, 1, 32, 64], dim=-1, dtype=ttnn.bfloat16)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
@@ -223,6 +234,7 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
@@ -249,6 +261,7 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
 
     torch_ref = torch.sum(torch_a, dim=-1, keepdim=True)
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref,
         ttnn.to_torch(tt_out1),
@@ -257,6 +270,7 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
+    # test for equivalance
     assert_numeric_metrics(
         torch_ref,
         ttnn.to_torch(tt_out2),

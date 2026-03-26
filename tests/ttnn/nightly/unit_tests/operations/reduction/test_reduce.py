@@ -6,11 +6,6 @@
 import pytest
 import torch
 import ttnn
-from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -72,6 +67,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
     y = torch.amax(x, 2)
 
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             y,
             tt_got_back,
@@ -80,8 +76,8 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             atol=1e-06,
             frobenius_threshold=1e-09,
         )
-        passing, output = comp_equal(y, tt_got_back)
     else:
+        # test for equivalance
         assert_numeric_metrics(
             y,
             tt_got_back,
@@ -90,7 +86,3 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             atol=0.039,
             frobenius_threshold=0.005,
         )
-        passing, output = comp_pcc(y, tt_got_back, 0.999)
-    logger.info(output)
-
-    assert passing

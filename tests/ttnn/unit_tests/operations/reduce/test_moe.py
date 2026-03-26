@@ -45,7 +45,7 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
-        # pcc_values = 0.95
+        # test for equivalance
         assert_numeric_metrics(
             torch_weights_1SB1,
             ttnn_weights_1SB1,

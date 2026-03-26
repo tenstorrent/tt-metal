@@ -30,6 +30,7 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -57,6 +58,7 @@ def test_mean_scaling(device, shape, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -82,6 +84,7 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -122,6 +125,7 @@ def test_mean_shard(device, mem_config, keepdim):
     )
     tt_output_torch = ttnn.to_torch(output_tensor)
     torch_output = torch.mean(torch_input_tensor, -1, keepdim)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output,
         tt_output_torch,

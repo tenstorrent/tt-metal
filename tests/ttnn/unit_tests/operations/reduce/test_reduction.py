@@ -31,6 +31,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -39,7 +40,6 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
         atol=0.012,
         frobenius_threshold=0.005,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -63,6 +63,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -71,7 +72,6 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
         atol=0.016,
         frobenius_threshold=0.007,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
@@ -117,6 +117,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -125,7 +126,6 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         atol=0.255,
         frobenius_threshold=0.071,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -150,6 +150,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -158,7 +159,6 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         atol=0.128,
         frobenius_threshold=0.003,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -183,6 +183,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -191,7 +192,6 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         atol=0.032,
         frobenius_threshold=0.003,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("dim_1", [1])
@@ -215,6 +215,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -223,7 +224,6 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
         atol=0.128,
         frobenius_threshold=0.007,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("dim_1", [33])
@@ -246,6 +246,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -254,7 +255,6 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         atol=0.255,
         frobenius_threshold=0.003,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -276,6 +276,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -284,7 +285,6 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         atol=4.080,
         frobenius_threshold=0.004,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("dim1", [1])
@@ -340,6 +340,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -349,6 +350,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
             frobenius_threshold=1e-9,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -357,7 +359,6 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
             atol=0.016,
             frobenius_threshold=0.007,
         )
-    assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
 @pytest.mark.parametrize("dim1", [1])
@@ -406,6 +407,7 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert (
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+    # test for equivalance
     assert_numeric_metrics(
         pyt_topk_values,
         ttnn_torch_values,
@@ -466,6 +468,7 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -475,6 +478,7 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
             frobenius_threshold=1e-9,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -483,7 +487,6 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
             atol=0.026,
             frobenius_threshold=0.010,
         )
-    assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
 # returns larger padded tensor instead of desired shape
@@ -537,6 +540,7 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -546,6 +550,7 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
             frobenius_threshold=1e-9,
         )
     else:
+        # test for equivalance
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
@@ -554,7 +559,6 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
             atol=0.026,
             frobenius_threshold=0.011,
         )
-    assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
 @pytest.mark.parametrize("c", [3])
@@ -575,6 +579,7 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -583,7 +588,6 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
         atol=0.255,
         frobenius_threshold=0.005,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [41])
@@ -603,6 +607,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -611,7 +616,6 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
         atol=0.128,
         frobenius_threshold=0.005,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("batch_size", [3])
@@ -633,6 +637,7 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -641,7 +646,6 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         atol=0.016,
         frobenius_threshold=0.007,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("c", [3])
@@ -662,6 +666,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -670,7 +675,6 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
         atol=0.001,
         frobenius_threshold=0.007,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [41])
@@ -690,6 +694,7 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -698,7 +703,6 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
         atol=0.002,
         frobenius_threshold=0.006,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
@@ -814,6 +818,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     outputs_all_finite = torch.isfinite(torch_result).all() and torch.isfinite(ttnn_result).all()
     if outputs_all_finite and torch_result.numel() > 0:
+        # test for equivalance
         assert_numeric_metrics(
             torch_result,
             ttnn_result,
@@ -822,7 +827,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
             atol=0.038,
             frobenius_threshold=0.004,
         )
-        assert_with_pcc(torch_result, ttnn_result, 0.99)
 
     atol = rtol = 0.1
     # There is a scale factor difference between torch and ttnn for std and var

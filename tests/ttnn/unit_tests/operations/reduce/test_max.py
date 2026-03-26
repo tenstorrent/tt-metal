@@ -32,6 +32,7 @@ def test_max(device, batch_size, h, w, dim, dtype):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -62,6 +63,7 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -90,6 +92,7 @@ def test_max_2d(device, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -115,6 +118,7 @@ def test_max_global(device, batch_size, h, w):
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -160,6 +164,7 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,

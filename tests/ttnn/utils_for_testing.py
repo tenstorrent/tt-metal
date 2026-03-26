@@ -530,42 +530,66 @@ def flush_subnormal_values_to_zero(tensor):
 
 
 def assert_numeric_metrics(
-    expected,
-    actual,
+    expected_result,
+    actual_result,
     rtol=1e-05,
     atol=1e-08,
     frobenius_threshold=0.01,
-    pcc_threshold=0.99,
+    pcc_threshold=0.999,
     ulp_threshold=10,
     check_allclose=True,
     check_frobenius=True,
     check_pcc=True,
     check_ulp=False,
 ):
-    if expected.dtype != actual.dtype:
-        actual = actual.type(expected.dtype)
-    # pcc_threshold = 1
+    """
+    Run one or more numeric similarity checks between a golden tensor and an actual tensor.
+
+    Intended for TTNN tests that compare PyTorch reference output against device or CPU
+    round-trip results. Individual checks can be disabled when a metric does not apply
+    (for example, skip Frobenius for degenerate or non-finite cases).
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): Reference (golden) tensor.
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): Tensor under test; cast to ``expected_result.dtype`` if dtypes differ.
+        rtol (float, optional): Relative tolerance for ``assert_allclose``. Defaults to 1e-05.
+        atol (float, optional): Absolute tolerance for ``assert_allclose``. Defaults to 1e-08.
+        frobenius_threshold (float, optional): Maximum allowed relative Frobenius error for
+            ``assert_relative_frobenius``. Defaults to 0.01.
+        pcc_threshold (float, optional): Minimum Pearson correlation for ``comp_pcc``. Defaults to 0.999.
+        ulp_threshold (float, optional): Maximum ULP distance for ``assert_with_ulp``. Defaults to 10.
+        check_allclose (bool, optional): If True, run element-wise allclose. Defaults to True.
+        check_frobenius (bool, optional): If True, run relative Frobenius check. Defaults to True.
+        check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
+        check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        AssertionError: If any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
+
+    Notes:
+        - PCC is skipped when ``torch.numel(expected_result) == 1`` because correlation is undefined for a scalar.
+        - Allclose and Frobenius use helpers that normalize ``ttnn.Tensor`` inputs to PyTorch tensors.
+    """
+    # Align dtypes first so all downstream numeric checks compare values in the same precision.
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.type(expected_result.dtype)
+
+    # Element-wise tolerance check (absolute + relative).
     if check_allclose:
-        allclose_kwargs = {}
-        if rtol is not None:
-            allclose_kwargs["rtol"] = rtol
-        if atol is not None:
-            allclose_kwargs["atol"] = atol
-        assert_allclose(expected, actual, **allclose_kwargs)
+        assert_allclose(expected_result, actual_result, rtol=rtol, atol=atol)
 
+    # Global error-magnitude check using relative Frobenius norm.
     if check_frobenius:
-        frobenius_kwargs = {}
-        if frobenius_threshold is not None:
-            frobenius_kwargs["threshold"] = frobenius_threshold
-        assert_relative_frobenius(expected, actual, **frobenius_kwargs)
+        assert_relative_frobenius(expected_result, actual_result, threshold=frobenius_threshold)
 
-    if check_pcc:
-        if torch.numel(expected) != 1:
-            threshold = 0.98 if pcc_threshold is None else pcc_threshold
-            passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
-            assert passing_pcc, pcc_message
+    # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
+    if check_pcc and torch.numel(expected_result) != 1:
+        passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
+        assert passing_pcc, pcc_message
+
+    # ULP-based comparison is stricter for floating-point representation differences.
     if check_ulp:
-        ulp_kwargs = {}
-        # if ulp_threshold is not None:
-        #     ulp_kwargs["threshold"] = ulp_threshold
-        assert_with_ulp(expected, actual, ulp_threshold=ulp_threshold, allow_nonfinite=False)
+        assert_with_ulp(expected_result, actual_result, ulp_threshold=ulp_threshold, allow_nonfinite=False)

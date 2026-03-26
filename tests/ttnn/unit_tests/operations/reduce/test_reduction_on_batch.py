@@ -48,7 +48,6 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
     grid = ttnn.CoreRangeSet([core_range])
 
-    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
     output_shard_shape = list(shard_shape)
     output_shard_shape[0] = 1
     memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
@@ -63,6 +62,7 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
