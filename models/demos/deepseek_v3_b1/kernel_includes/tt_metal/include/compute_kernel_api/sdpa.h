@@ -183,10 +183,10 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
     sfpi::vFloat exp_top_4 =
-        ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+        ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_top_4, scale_bf16);
     sfpi::vFloat exp_bottom_4 =
-        ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+        ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -393,10 +393,10 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
         // Exponentials of differences
         sfpi::vFloat exp_prev =
-            ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            ckernel::sfpu::_ckernel_sfpu_exp_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
