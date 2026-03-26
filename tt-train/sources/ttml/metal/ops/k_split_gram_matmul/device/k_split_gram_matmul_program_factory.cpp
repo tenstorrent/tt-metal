@@ -70,15 +70,17 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // Find optimal (kb, mb) config that minimizes subs (= ceil(Mpc/mb)), then maximizes kb.
     // Two L1 formulas: per-msb uses c_3 (Mpc*mb), per-nsb replaces c_3 with smaller c_5 (mb²).
     // Per-nsb is selected only when it achieves subs=1 and per-msb doesn't.
-    constexpr uint32_t db_factor_required = 2;
+    // Input CBs (c_0, c_1) hold 2 blocks each for double-buffered DRAM streaming
+    constexpr uint32_t input_cb_num_blocks = 2;
 
-    auto find_max_mb = [&](uint32_t kb, bool per_nsb) -> uint32_t {
+    auto find_max_mb = [&](uint32_t kb, bool block_streaming) -> uint32_t {
         for (uint32_t mb = Mpc; mb >= 1; mb--) {
             uint32_t l1 =
-                per_nsb ? mb * mb * (intermed_tile_sz + out_tile_sz) +
-                              mb * (out_tile_sz + mirror_out_overhead + 2 * db_factor_required * kb * tile_sz)
-                        : mb * mb * intermed_tile_sz + mb * (2 * Mpc * out_tile_sz + out_tile_sz + mirror_out_overhead +
-                                                             2 * db_factor_required * kb * tile_sz);
+                block_streaming
+                    ? mb * mb * (intermed_tile_sz + out_tile_sz) +
+                          mb * (out_tile_sz + mirror_out_overhead + 2 * input_cb_num_blocks * kb * tile_sz)
+                    : mb * mb * intermed_tile_sz + mb * (2 * Mpc * out_tile_sz + out_tile_sz + mirror_out_overhead +
+                                                         2 * input_cb_num_blocks * kb * tile_sz);
             if (l1 <= L1_BUDGET)
                 return mb;
         }
@@ -126,12 +128,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t K_block_tiles = best_kb;
     uint32_t M_block = best_mb;
     uint32_t N_block = M_block;
-    uint32_t db_factor = db_factor_required;
     uint32_t num_m_blocks = best_num_m_blocks;
     uint32_t num_n_blocks = (Mpc + N_block - 1) / N_block;
     uint32_t block_sz = K_block_tiles * M_block;
-    uint32_t cb_size = db_factor * block_sz;
-    uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per nsb pass
+    uint32_t cb_size = input_cb_num_blocks * block_sz;
+    uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per m_sub/n_sub pass
     // Output tensor is logical [M, M] — width in tiles matches logical_M_tiles
     uint32_t padded_out_tiles = logical_M_tiles;
     uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per nsb pass
