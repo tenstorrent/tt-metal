@@ -66,7 +66,7 @@ tt-metal/
         tt-tester/                   # test quality, expose weaknesses
         tt-debugger/                 # debug kernels, hangs
         tt-code-review/              # review with TT standards
-        tt-learn/                    # research codebase, write findings to notes/
+        tt-learn/                    # research codebase via deepwiki-mcp, write findings to notes/
       meta/
         tt-skill-creator/            # help write new TT skills
     knowledge/
@@ -124,8 +124,8 @@ Concrete, single-purpose skills. Each does one thing well. Invoked by workflow s
 - **`tt-profiler`** — invoke Tracy or device profiler, interpret output, identify bottlenecks
 - **`tt-tester`** — write and run tests, evaluate coverage, expose quality issues
 - **`tt-debugger`** — debug device kernels, trace hangs, interpret RISC-V core state
-- **`tt-code-review`** — review code with TT-specific standards: CB sizing vs L1, tile alignment, NOC conventions, program cache hash, sharding validity, PCC test coverage
-- **`tt-learn`** — research a topic in the live codebase, write a dated context brief to `notes/`
+- **`tt-code-review`** — review code with TT-specific standards and good practices: CB sizing vs L1, tile alignment, NOC conventions, program cache hash, sharding validity, PCC test coverage
+- **`tt-learn`** — research a topic in the live codebase, write a dated context brief to `notes/` (wraps deepwiki-mcp)
 
 ### Meta layer
 
@@ -151,9 +151,9 @@ program factory, runtime args.
 
 ## tt-learn and the Notes Blackboard
 
-`tt-learn` is the bridge between agents and the live codebase. When a workflow or tool skill needs to understand something volatile (current matmul implementation, CCL patterns, sharding conventions in use), it invokes `tt-learn` with a topic. `tt-learn` reads relevant source files, tech reports, test files, and programming examples, then writes a structured context brief to `notes/`.
+`tt-learn` is the bridge between agents and the live codebase. When a workflow or tool skill needs to understand something volatile (current matmul implementation, CCL patterns, sharding conventions in use), it invokes `tt-learn` with a topic. `tt-learn` uses **deepwiki-mcp** to query the codebase — reading source files, tech reports, test files, and programming examples — then writes a structured context brief to `notes/`. `knowledge/references/` files serve as the starting point, steering deepwiki-mcp toward canonical sources before it does a broader search.
 
-Example invocation: `tt-learn("matmul sharding strategies")` reads `ttnn/cpp/ttnn/operations/matmul/`, `tech_reports/tensor_sharding/`, and related tests, then writes `notes/context-matmul.md`.
+Example invocation: `tt-learn("matmul sharding strategies")` consults `knowledge/references/matmul.md` for starting points, queries deepwiki-mcp across `ttnn/cpp/ttnn/operations/matmul/`, `tech_reports/tensor_sharding/`, and related tests, then writes `notes/context-matmul.md`.
 
 Context brief format:
 ```markdown
@@ -173,7 +173,12 @@ The notes/ directory is the team's shared, growing, codebase-derived knowledge b
 
 ## MCP Dependencies
 
-tt-agent declares one MCP dependency: **[tt-device-mcp](https://github.com/tenstorrent/tt-device-mcp)**. This provides the hardware execution capability: running kernels and tests on actual TT devices and returning structured results. Everything else (build, profile, file I/O) is achieved via CLI and Bash.
+tt-agent declares two MCP dependencies:
+
+- **[tt-device-mcp](https://github.com/tenstorrent/tt-device-mcp)** — hardware execution: running kernels and tests on actual TT devices, returning structured results. Used by `tt-device`.
+- **deepwiki-mcp** — codebase research: semantic search and reading across source files, tech reports, and documentation. Used by `tt-learn`.
+
+Everything else (build, profile, file I/O) is achieved via CLI and Bash.
 
 Declared in `tt-agent.yaml`:
 ```yaml
@@ -183,6 +188,8 @@ description: Agentic tooling for Tenstorrent hardware development
 mcps:
   - name: tt-device
     source: https://github.com/tenstorrent/tt-device-mcp
+  - name: deepwiki
+    source: deepwiki-mcp
 ```
 
 ---
@@ -205,7 +212,7 @@ Three documents at the tt-agent root serve distinct audiences:
 
 **`README.md`** — for someone who just discovered the repo. What it is, prerequisites, install instructions per platform, two quick-start examples. Links to DESIGN.md and CONTRIBUTING.md.
 
-**`DESIGN.md`** — for someone who wants to understand the decisions. Every non-obvious architectural choice is recorded here with rationale and date. This document preserves the intent behind the system so future agents and developers can continue in the same direction without re-litigating settled questions. Key decisions documented: co-location in tt-metal, own-the-stack vs superpowers, skills/knowledge/notes split, volatile knowledge via tt-learn, notes/ as shared blackboard, workflow layer as thin base loop, one MCP dependency, extraction path.
+**`DESIGN.md`** — for someone who wants to understand the decisions. Every non-obvious architectural choice is recorded here with rationale and date. This document preserves the intent behind the system so future agents and developers can continue in the same direction without re-litigating settled questions. Key decisions documented: co-location in tt-metal, own-the-stack vs superpowers, skills/knowledge/notes split, volatile knowledge via tt-learn + deepwiki-mcp, notes/ as shared blackboard, workflow layer as thin base loop, two MCP dependencies (tt-device-mcp + deepwiki-mcp), extraction path.
 
 **`CONTRIBUTING.md`** — for someone who wants to extend the system. How to write a new skill (SKILL.md format, progressive load table), what belongs in knowledge/ vs learned via tt-learn, how to add a platform adapter, the "point to code not inline APIs" rule and why, PR conventions.
 
