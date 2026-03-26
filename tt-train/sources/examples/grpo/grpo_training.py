@@ -152,4 +152,4 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-interval", type=int, default=50)
     args, _ = parser.parse_known_args()
 
-    train_grpo(args.yaml_path, args.checkpoint_interval, args.dataset)
+    train_grpo(args.yaml_path, args.checkpoint_interval)

@@ -17,8 +17,8 @@ grpo_config:
   group_size: 8                # Keep this at 8 if possible for better math
   micro_batch_size: 8          # One full group per optimizer step
   warmup_steps: 100            # Increased warmup because the signal is noisier
-  max_tokens_to_complete: 512
-  prompts_to_train: 1536
+  max_tokens_to_complete: 128
+  prompts_to_train: 1024
   clip_eps: 0.2
 
 eval_config:
