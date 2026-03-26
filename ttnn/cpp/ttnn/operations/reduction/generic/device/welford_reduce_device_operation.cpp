@@ -47,6 +47,7 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
         // host dispatch.  Collapse them to 1 so the output volume matches the
         // number of output tiles the program will produce.
         if (operation_attributes.reduce_batch_size > 1) {
+            TT_FATAL(output_shape.rank() >= 3, "Output shape rank should be at least 3");
             uint32_t remaining = operation_attributes.reduce_batch_size;
             for (int i = static_cast<int>(output_shape.rank()) - 3; i >= 0 && remaining > 1; --i) {
                 TT_FATAL(

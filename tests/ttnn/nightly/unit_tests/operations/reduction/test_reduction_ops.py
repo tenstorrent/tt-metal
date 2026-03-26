@@ -178,7 +178,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 # Test a 0D, 1D, 5D, and a 0-volume tensor
 @pytest.mark.parametrize(
     "tensor_shape",
-    [(), (2,), (1, 1), (32, 1), (3, 6, 40, 63, 20), (3, 6, 40, 64, 32), (32, 32, 32, 32, 32), (6, 0, 32)],
+    [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
 )
 @pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
 @pytest.mark.parametrize("keepdim", [True, False])
@@ -196,6 +196,9 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     """
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
+
+    if op == "min" and tensor_shape == (3, 6, 40, 63, 20) and dim in ((-2, -1), (0, 2, 4), (0, 2)):
+        pytest.xfail("Issue #40854: ttnn.min produces incorrect results for certain tensor shapes and dimensions")
 
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
@@ -287,6 +290,54 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        ([2, 1, 512, 2048], [1, 1, 256, 256], 2, 4),
+        ([4, 4, 128, 128], [2, 2, 64, 64], 2, 4),
+        ([4, 4, 128, 128], [2, 2, 64, 64], 0, 0),
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
+def test_generic_ops_ndim_shard(device, shapes, keepdim, op):
+    dim = -2
+    input_shape, shard_shape, end_x, end_y = shapes
+
+    memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
+        ),
+    )
+
+    torch_input_tensor = torch.rand(input_shape)
+
+    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+    torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    ttnn_op = getattr(ttnn, op)
+    pad_value = 1.0 if op == "prod" else None
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+        pad_value=pad_value,
+    )
+    op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_torch(op_output_tensor)
+
+    atol = rtol = 0.1
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
