@@ -60,7 +60,8 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
         const auto output_tile =
             tensor_args.output_tensor.has_value()
                 ? tensor_args.output_tensor.value().tensor_spec().tile()
-                : TensorLayout(output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config)
+                : tt::tt_metal::TensorLayout(
+                      output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config)
                       .get_tile();
         TT_FATAL(
             input_tensor.tensor_spec().tile().get_tile_shape() == output_tile.get_tile_shape(),
@@ -76,7 +77,7 @@ RedistributeToMemoryConfigDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto output_layout = TensorLayout(
+    auto output_layout = tt::tt_metal::TensorLayout(
         operation_attributes.output_dtype,
         tt::tt_metal::PageConfig(input_tensor.layout()),
         operation_attributes.output_mem_config);
