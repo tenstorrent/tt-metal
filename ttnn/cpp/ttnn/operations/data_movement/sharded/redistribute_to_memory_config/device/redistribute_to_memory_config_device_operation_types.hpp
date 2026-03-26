@@ -9,17 +9,17 @@
 
 namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct RedistributeToMemoryConfigOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
 };
 
-struct tensor_args_t {
+struct RedistributeToMemoryConfigTensorArgs {
     tt::tt_metal::Tensor input_tensor;
     std::optional<tt::tt_metal::Tensor> output_tensor;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
+using RedistributeToMemoryConfigSpecReturnValue = TensorSpec;
+using RedistributeToMemoryConfigTensorReturnValue = Tensor;
 
 }  // namespace ttnn::prim

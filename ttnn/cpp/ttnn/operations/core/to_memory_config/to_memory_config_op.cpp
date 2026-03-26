@@ -25,9 +25,10 @@ Tensor to_memory_config(
         memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         TT_FATAL(
             memory_config.is_sharded(),
-            "Memory config must be sharded for this operation");  // TODO: this is a placeholder here until the path
-                                                                  // supporting interleaved outputs is implemented in
-                                                                  // redistribute_to_memory_config in the follow-up PR.
+            "Output memory config must be sharded for this operation");  // TODO: this is a placeholder here until the
+                                                                         // path supporting interleaved outputs is
+                                                                         // implemented in redistribute_to_memory_config
+                                                                         // in the follow-up PR.
         return ttnn::redistribute_to_memory_config(
             tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
     }

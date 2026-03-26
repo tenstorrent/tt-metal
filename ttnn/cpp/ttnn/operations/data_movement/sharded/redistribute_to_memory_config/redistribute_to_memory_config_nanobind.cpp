@@ -25,9 +25,11 @@ void bind_redistribute_to_memory_config(nb::module_& mod) {
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor
             * :attr:`memory_config` (MemoryConfig): Memory config for the output tensor.
-
-        Keyword Args:
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input. If it is different from the input, then the tensor must be tilized.
+            * :attr:`preallocated_output` (Optional[ttnn.Tensor]): Preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the converted tensor that has memory_config as its memory layout.
 
         Example:
             >>> # Let's say we have an input_tensor with shape [3, 160, 160], and we want to convert it to an ND sharded tensor with shard shape [2, 64, 64] sharded over 4 cores:
@@ -57,7 +59,6 @@ void bind_redistribute_to_memory_config(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("memory_config"),
             nb::arg("output_dtype") = nb::none(),
-            nb::kw_only(),
             nb::arg("preallocated_output") = nb::none()));
 }
 

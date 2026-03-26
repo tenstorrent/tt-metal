@@ -16,8 +16,6 @@ struct InputPageReadInfo {
     uint32_t output_page_valid_data_bytes;
 };
 
-inline uint32_t div_up_u32(uint32_t value, uint32_t divisor) { return (value + divisor - 1) / divisor; }
-
 inline InputPageReadInfo get_input_page_read_info(
     uint32_t output_page_id,
     uint32_t num_output_pages_in_row,
@@ -74,8 +72,8 @@ void kernel_main() {
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
 
     constexpr uint32_t input_page_size_bytes = elements_per_input_page * bytes_per_element;
-    const uint32_t input_pages_l1_write_addr = get_write_ptr(cb_id_in0);
     cb_reserve_back(cb_id_in0, 1);
+    const uint32_t input_pages_l1_write_addr = get_write_ptr(cb_id_in0);
 
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_dst.shard_pages(shard_id);

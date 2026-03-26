@@ -21,7 +21,6 @@ void kernel_main() {
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_dst.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); page_iter++) {
-            auto output_page_id = page_iter->page_id();
             cb_wait_front(cb_id_in16, 1);
             const uint64_t output_page_noc_addr = page_iter->noc_addr();
             uint32_t output_page_read_addr = get_read_ptr(cb_id_in16);

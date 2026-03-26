@@ -31,17 +31,19 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
     const auto& output_mem_config = operation_attributes.output_mem_config;
     const auto& output_dtype = operation_attributes.output_dtype;
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor needs to be allocated in buffers on device!");
 
     if (tensor_args.output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.output_tensor.value();
         TT_FATAL(output_tensor.logical_shape() == input_tensor.logical_shape(), "Mismatched output shape");
         TT_FATAL(output_tensor.memory_config() == output_mem_config, "Mismatched output memory config");
         TT_FATAL(output_tensor.dtype() == output_dtype, "Mismatched output dtype");
-        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-        TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
-        TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor needs to be on device!");
+        TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor needs to be allocated in buffers on device!");
+        TT_FATAL(
+            output_tensor.device() == input_tensor.device(),
+            "Output tensor needs to be on the same device as the input tensor!");
     }
 
     TT_FATAL(
@@ -119,7 +121,7 @@ Tensor redistribute_to_memory_config(
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
     return ttnn::device_operation::launch<RedistributeToMemoryConfigDeviceOperation>(
-        operation_attributes_t{output_mem_config, output_dtype},  // keep_l1_aligned},
-        tensor_args_t{input_tensor, preallocated_output});
+        RedistributeToMemoryConfigOperationAttributes{output_mem_config, output_dtype},
+        RedistributeToMemoryConfigTensorArgs{input_tensor, preallocated_output});
 }
 }  // namespace ttnn::prim
