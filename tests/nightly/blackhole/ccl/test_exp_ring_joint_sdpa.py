@@ -205,7 +205,6 @@ def run_exp_ring_joint_sdpa_nightly(
         mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
         # Input tensors — bfloat16-rounded so reference matches hardware precision
-        torch.manual_seed(1234)
         Q = fa_rand(b, nh, total_seq, d).bfloat16().float()
         K = fa_rand(b, nh, total_seq, d).bfloat16().float()
         V = fa_rand(b, nh, total_seq, d).bfloat16().float()
@@ -426,7 +425,7 @@ def test_exp_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, total_seq, d, q_ch
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
-def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
     """
     Accuracy verification: 1 iteration, compare against PyTorch SDPA reference.
 
@@ -451,7 +450,7 @@ def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_siz
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
-def test_exp_ring_joint_attention_sdpa_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+def test_exp_ring_joint_attention_sdpa_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
     """
     Determinism verification: run 10 times with same inputs, verify all outputs are bitwise equal.
     """
