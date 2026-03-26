@@ -80,7 +80,8 @@ class DecoderStage(StageKind):
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
         reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
 
-        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        # exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        exit_upstream_core = ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core)
 
         return PipelineBlock(
             mesh_device,
@@ -90,8 +91,9 @@ class DecoderStage(StageKind):
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
-            exit_node_upstream=exit_upstream_cores,
-            exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            exit_node_upstream=exit_upstream_core,
+            # exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            # exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -174,7 +176,7 @@ class DecoderStage(StageKind):
             num_links=1,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
-            downstream_sockets=self._state["downstream_sockets"],
+            downstream_socket=self._state["downstream_socket"],
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
@@ -233,7 +235,7 @@ class DecoderStage(StageKind):
         ttnn.synchronize_device(mesh_device)
 
         recv_socket = pipeline_block.get_downstream_socket()
-        downstream_sockets = pipeline_block.get_upstream_sockets()
+        downstream_socket = pipeline_block.get_upstream_socket()
 
         self._state = {
             "d": d,
@@ -242,7 +244,7 @@ class DecoderStage(StageKind):
             "reduce_semaphores": reduce_semaphores,
             "reduce_root_coord": reduce_root_coord,
             "recv_socket": recv_socket,
-            "downstream_sockets": downstream_sockets,
+            "downstream_socket": downstream_socket,
         }
 
         if persistent_next_iter_semaphore is not None:
