@@ -31,7 +31,6 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     auto all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t shard_height = shard_spec.shape[0];
-    uint32_t W = shard_spec.shape[1];
 
     uint32_t h_brisc = shard_height / 2;
     uint32_t h_ncrisc = shard_height - h_brisc;
@@ -79,10 +78,11 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             .set_page_size(cb_gather_tmp, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gather_config);
 
-    // CB 4: expert mask (UINT32, one value per expert)
+    // CB 4: expert dispatch table (INT32, one value per expert; negative = absent, non-negative = present)
+    tt::DataFormat mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::INT32);
     uint32_t cb_mask = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_mask_config =
-        tt::tt_metal::CircularBufferConfig(mask_page_size, {{cb_mask, output_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(mask_page_size, {{cb_mask, mask_cb_data_format}})
             .set_page_size(cb_mask, mask_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_config);
 
@@ -104,7 +104,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         input_page_size,
         output_page_size,
         h_brisc,
-        W,
+        operation_attributes.num_experts_per_token,
         n_routed_experts,
         1,  // is_initializer
         init_sem_idx,
@@ -126,7 +126,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         input_page_size,
         output_page_size,
         h_ncrisc,
-        W,
+        operation_attributes.num_experts_per_token,
         n_routed_experts,
         0,  // is_initializer
         init_sem_idx,

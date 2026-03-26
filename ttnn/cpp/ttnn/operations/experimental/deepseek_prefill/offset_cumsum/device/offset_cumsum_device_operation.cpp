@@ -23,7 +23,6 @@ void OffsetCumsumDeviceOperation::validate_on_program_cache_miss(
 OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& input_tensor) {
     const auto& logical_shape = input_tensor.logical_shape();
-    uint32_t H = logical_shape[-2];
     uint32_t W = logical_shape[-1];
 
     auto layout = tt::tt_metal::TensorLayout(
@@ -31,9 +30,32 @@ OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::co
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
 
-    auto offsets_spec = TensorSpec(ttnn::Shape({H, W}), layout);
+    auto offsets_spec = TensorSpec(ttnn::Shape({1, W}), layout);
     auto totals_spec = TensorSpec(ttnn::Shape({1, W}), layout);
     return {offsets_spec, totals_spec};
+}
+
+OffsetCumsumDeviceOperation::topology_return_value_t OffsetCumsumDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& input_tensor) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+
+    const auto& input_topology = input_tensor.tensor_topology();
+    const auto& dist_shape = input_topology.distribution_shape();
+    size_t ndims = dist_shape.dims();
+
+    // Both outputs are unique per device on all mesh dimensions:
+    //  - Along cluster_axis: each device holds a different row of the prefix sum
+    //  - Along other axes: masked_bincount uses per-dispatch-group expert masks,
+    //    so histograms (and therefore cumsums/totals) differ across dispatch groups
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
+    for (size_t i = 0; i < ndims; i++) {
+        placements.push_back(Shard{static_cast<int>(i)});
+    }
+
+    auto offsets_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
+    auto totals_topology = tt::tt_metal::TensorTopology(dist_shape, placements, input_topology.mesh_coords());
+
+    return {offsets_topology, totals_topology};
 }
 
 tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
@@ -56,9 +78,9 @@ OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::
 
 namespace ttnn::prim {
 
-std::array<Tensor, 2> offset_cumsum(const Tensor& input_tensor) {
+std::array<Tensor, 2> offset_cumsum(const Tensor& input_tensor, uint32_t cluster_axis) {
     using OperationType = ttnn::experimental::prim::OffsetCumsumDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto operation_attributes = OperationType::operation_attributes_t{cluster_axis};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
 }
 

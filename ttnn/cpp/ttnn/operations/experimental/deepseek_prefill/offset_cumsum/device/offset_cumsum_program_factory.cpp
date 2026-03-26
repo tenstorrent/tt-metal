@@ -11,13 +11,18 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::experimental::prim {
 
-OffsetCumsumProgramFactory::cached_program_t OffsetCumsumProgramFactory::create(
-    const OffsetCumsumParams& /*operation_attributes*/,
-    const Tensor& input,
-    tensor_return_value_t& tensor_return_value) {
+namespace {
+
+struct CreatedProgram {
+    tt::tt_metal::Program program;
+    OffsetCumsumSharedVariables shared_variables;
+};
+
+CreatedProgram create_program(const Tensor& input, std::array<Tensor, 2>& tensor_return_value, uint32_t row_idx) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
@@ -77,27 +82,55 @@ OffsetCumsumProgramFactory::cached_program_t OffsetCumsumProgramFactory::create(
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args, kernel_defines));
 
     tt::tt_metal::SetRuntimeArgs(
-        program, kernel_id, core, {src_buffer->address(), dst_offsets_buffer->address(), dst_totals_buffer->address()});
+        program,
+        kernel_id,
+        core,
+        {src_buffer->address(), dst_offsets_buffer->address(), dst_totals_buffer->address(), row_idx});
 
-    return cached_program_t{
+    return CreatedProgram{
         std::move(program),
         {/* kernel_id = */ kernel_id,
          /* core      = */ core}};
 }
 
-void OffsetCumsumProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const OffsetCumsumParams&,
+}  // namespace
+
+OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::create_mesh_workload(
+    const OffsetCumsumParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const Tensor& input,
     tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& core = cached_program.shared_variables.core;
-    const auto& kernel_id = cached_program.shared_variables.kernel_id;
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
-    runtime_args[0] = input.buffer()->address();
-    runtime_args[1] = tensor_return_value.at(0).buffer()->address();
-    runtime_args[2] = tensor_return_value.at(1).buffer()->address();
+    for (const auto& coord : tensor_coords.coords()) {
+        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+
+        auto result = create_program(input, tensor_return_value, row_idx);
+        auto coord_range = ttnn::MeshCoordinateRange(coord);
+        mesh_workload.add_program(coord_range, std::move(result.program));
+        shared_variables.emplace(coord_range, result.shared_variables);
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void OffsetCumsumProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const OffsetCumsumParams& operation_attributes,
+    const Tensor& input,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
+        auto coord = *(coord_range.begin());
+        uint32_t row_idx = coord[operation_attributes.cluster_axis];
+
+        auto& shared_vars = cached_workload.shared_variables.at(coord_range);
+        auto& runtime_args = GetRuntimeArgs(program, shared_vars.kernel_id, shared_vars.core);
+        runtime_args[0] = input.buffer()->address();
+        runtime_args[1] = tensor_return_value.at(0).buffer()->address();
+        runtime_args[2] = tensor_return_value.at(1).buffer()->address();
+        runtime_args[3] = row_idx;
+    }
 }
 
 }  // namespace ttnn::experimental::prim

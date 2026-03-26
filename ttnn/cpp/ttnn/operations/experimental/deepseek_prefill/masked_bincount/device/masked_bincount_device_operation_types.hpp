@@ -10,6 +10,7 @@ namespace ttnn::experimental::prim {
 
 struct MaskedBincountParams {
     const uint32_t n_routed_experts;
+    const uint32_t num_experts_per_token;
 };
 
 struct MaskedBincountInputs {

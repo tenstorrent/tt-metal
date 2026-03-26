@@ -9,7 +9,7 @@
 namespace ttnn::experimental::prim {
 
 struct OffsetCumsumParams {
-    // Shape is derived from the input tensor; no extra params needed.
+    uint32_t cluster_axis;
 };
 
 }  // namespace ttnn::experimental::prim
