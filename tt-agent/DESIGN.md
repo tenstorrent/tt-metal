@@ -99,6 +99,28 @@ Bookend to `tt-code-review`: designer before writing code, code-review after.
 
 ---
 
+## 2026-03-26: Two languages, one stack
+
+The TT software stack spans two distinct language ecosystems:
+
+- **C++** — kernels (bare-metal RISC-V), ttnn operators (host-side program factories),
+  and the tt-metal runtime. Low-level, hardware-aware, compiled per-processor.
+- **Python** — models (composing ttnn operators), training scripts, and tooling.
+  High-level, dynamic, PyTorch-adjacent.
+
+tt-agent must cover expertise at both levels. A kernel developer and a model developer
+have different mental models, different failure modes, different debug workflows, and
+different quality bars. Skills must not assume one language or the other — they must
+be explicit about which level they operate at.
+
+**Why this matters for skill design:** A skill like `tt-debugger` needs different
+procedures for a C++ kernel hang vs a Python model producing wrong outputs. A skill
+like `tt-tester` writes C++ unit tests for operators and Python pytests for models.
+Skills should state their target level explicitly, and `tt-orchestrator` should route
+based on which level the request targets.
+
+---
+
 ## 2026-03-26: tt-skill-creator first, then use it to build everything
 
 All skills after tt-skill-creator are built using tt-skill-creator itself.
