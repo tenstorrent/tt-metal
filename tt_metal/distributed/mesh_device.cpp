@@ -1769,8 +1769,25 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         }
         uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
 
+        // Get PCIe core NOC-0 coordinates for WH (NCRISC kernel translates to NOC 1)
+        uint32_t pcie_noc_x = 0;
+        uint32_t pcie_noc_y = 0;
+        bool need_pcie_noc_defines = false;
+        {
+            const auto& cluster = MetalContext::instance().get_cluster();
+            auto arch = MetalContext::instance().hal().get_arch();
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
+                const auto& soc = cluster.get_soc_desc(mmio_device_id);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+                TT_ASSERT(!pcie_cores.empty());
+                pcie_noc_x = pcie_cores.front().x;
+                pcie_noc_y = pcie_cores.front().y;
+                need_pcie_noc_defines = true;
+            }
+        }
+
         // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher)
-        // Note: PCIE_NOC_X/Y are provided automatically by the JIT build infrastructure
         {
             Program realtime_profiler_program;
 
@@ -1810,6 +1827,10 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ncrisc_config.processor = DataMovementProcessor::RISCV_1;
             ncrisc_config.noc = NOC::RISCV_1_default;
             ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
+            if (need_pcie_noc_defines) {
+                ncrisc_config.defines["PCIE_NOC_X"] = std::to_string(pcie_noc_x);
+                ncrisc_config.defines["PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
+            }
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
