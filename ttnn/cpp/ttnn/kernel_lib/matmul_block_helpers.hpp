@@ -21,7 +21,7 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
     UnpackAndPackReconfigure
 };
 
-// Controls whether mm_init is called.
+// Controls whether mm_block_init is called.
 // Note: there is no mm_uninit in the LLK API, so UninitOnly and Neither are both no-ops.
 enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
 
@@ -47,26 +47,26 @@ struct OutSubblockParams {
     uint32_t num_tiles;  // Tiles per output sub-block (= h * w)
 };
 
+// Default no-op post-compute functor.
+struct NoPostCompute {
+    ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
+};
+
 }  // namespace matmul_block_config
 
 /**
  * matmul_block: sub-blocked tiled matrix multiplication C = A × B with spill/reload.
  *
- * Performs matrix multiplication using sub-blocks that fit within DST registers.
- * When the inner dimension (K) is split across multiple blocks (num_blocks > 1),
- * partial results are spilled to an intermediate CB (interm_cb) and reloaded for
- * accumulation, enabling matmul of larger matrices than DST can hold at once.
+ * Performs matrix multiplication using hardware block-level matmul_block LLK with
+ * sub-block indexing and automatic spill/reload for K-dimension blocking.
  *
- * This wraps mm_init + matmul_tiles with sub-block indexing, matching the pattern
- * used in bmm_large_block_zm.cpp. Input tiles are consumed in full blocks (all
- * in0_block_num_tiles and in1_block_num_tiles at once) rather than one-at-a-time
- * as in matmul_tile. The spill/reload path uses _with_dt variants for correct
+ * Uses mm_block_init + matmul_block (the LLK function with hardware unroll) for
+ * optimal performance. The spill/reload path uses _with_dt variants for correct
  * data format reconfiguration when in1_cb and interm_cb have different formats.
  *
  * NOTE: Unlike matmul_tile, this helper does NOT require compute_kernel_hw_startup()
- * to be called first. The mm_init() call inside the helper performs all necessary
- * hardware initialization. Calling compute_kernel_hw_startup() before this helper
- * may cause incorrect results due to conflicting hardware configuration.
+ * to be called first. The mm_block_init() call inside the helper performs all
+ * necessary hardware initialization.
  *
  * ── Template Parameters ────────────────────────────────────────────────────
  *
@@ -80,6 +80,24 @@ struct OutSubblockParams {
  *                final block is ready.
  *   transpose  — If true, transpose B tiles before multiplication (default: false).
  *
+ * ── PostComputeFn ────────────────────────────────────────────────────────
+ *
+ *   Optional functor called on each output sub-block after the last K-block's
+ *   matmul, before tiles are packed. Receives out_subblock_num_tiles as argument.
+ *   Tiles are in DST registers at indices 0..num_tiles-1. Use for fused SFPU
+ *   activations (relu, gelu, etc.) on the final matmul output.
+ *
+ *   Example:
+ *     struct ApplyRelu {
+ *         ALWI void operator()(uint32_t num_tiles) const {
+ *             for (uint32_t i = 0; i < num_tiles; i++) {
+ *                 SFPU_OP_FUNC_ACTIVATION  // or relu_tile(i)
+ *             }
+ *         }
+ *     };
+ *     compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm,
+ *         ..., ApplyRelu>(..., ApplyRelu{});
+ *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
  *   in0        — A-matrix block parameters (see In0BlockParams).
@@ -87,26 +105,6 @@ struct OutSubblockParams {
  *   num_blocks — Number of blocks along the K dimension.
  *   out        — Output sub-block dimensions (see OutSubblockParams).
  *   batch      — Number of independent batch slices (default: 1).
- *
- * ── CB Sizing Requirements ─────────────────────────────────────────────────
- *
- *   in0_cb:    >= in0.block_num_tiles pages (full A block loaded at once)
- *   in1_cb:    >= in1.block_num_tiles pages (full B block loaded at once)
- *   out_cb:    >= total output tiles for reservation tracking
- *   interm_cb: >= out.num_tiles pages (one sub-block of partial results)
- *
- * ── Examples ───────────────────────────────────────────────────────────────
- *
- *   #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
- *   using namespace compute_kernel_lib::matmul_block_config;
- *
- *   // Sub-blocked matmul: 4x4 output divided into 2x2 sub-blocks, inner block width 2
- *   compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
- *       {.block_w = 2, .num_subblocks = 2, .block_num_tiles = 8, .subblock_num_tiles = 4},
- *       {.num_subblocks = 2, .block_num_tiles = 8, .per_core_w = 4},
- *       3,  // num_blocks
- *       {.h = 2, .w = 2, .num_tiles = 4},
- *       1); // batch
  */
 template <
     uint32_t in0_cb,
@@ -116,13 +114,15 @@ template <
     matmul_block_config::InitUninitMode init_uninit_mode = matmul_block_config::InitUninitMode::InitAndUninit,
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         matmul_block_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    bool transpose = false>
+    bool transpose = false,
+    typename PostComputeFn = matmul_block_config::NoPostCompute>
 ALWI void matmul_block(
     matmul_block_config::In0BlockParams in0,
     matmul_block_config::In1BlockParams in1,
     uint32_t num_blocks,
     matmul_block_config::OutSubblockParams out,
-    uint32_t batch = 1);
+    uint32_t batch = 1,
+    PostComputeFn post_compute = {});
 
 }  // namespace compute_kernel_lib
 

@@ -9,7 +9,7 @@
  * @file matmul_block_helpers.inl
  * @brief Implementation of matmul_block helper function.
  *
- * Wraps the sub-blocked matmul pattern from bmm_large_block_zm.cpp.
+ * Uses mm_block_init + matmul_block LLK for hardware-optimized block matmul.
  * This file should only be included by matmul_block_helpers.hpp.
  */
 
@@ -22,13 +22,15 @@ template <
     uint32_t interm_cb,
     matmul_block_config::InitUninitMode init_uninit_mode,
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode,
-    bool transpose>
+    bool transpose,
+    typename PostComputeFn>
 ALWI void matmul_block(
     matmul_block_config::In0BlockParams in0,
     matmul_block_config::In1BlockParams in1,
     uint32_t num_blocks,
     matmul_block_config::OutSubblockParams out,
-    uint32_t batch) {
+    uint32_t batch,
+    PostComputeFn post_compute) {
 
     // Compile-time validation
     static_assert(in0_cb != out_cb, "matmul_block: in0_cb and out_cb must be different CBs");
@@ -65,14 +67,13 @@ ALWI void matmul_block(
         pack_reconfig_data_format(out_cb);
     }
 
-    // Init — configure packer with interm_cb because during K-blocking we spill
-    // partial results to the intermediate buffer. The final pack to out_cb works
-    // because pack_tile takes the destination CB at call time.
-    // This matches the production pattern: mm_init(cb_in0, cb_in1, cb_intermed0).
+    // Init — use mm_block_init for hardware block-level matmul optimization.
+    // Configure packer with interm_cb because during K-blocking we spill
+    // partial results to the intermediate buffer.
     if constexpr (
         init_uninit_mode == matmul_block_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == matmul_block_config::InitUninitMode::InitOnly) {
-        mm_init(in0_cb, in1_cb, interm_cb, transpose);
+        mm_block_init(in0_cb, in1_cb, interm_cb, transpose, out.w, out.h, in0.block_w);
     }
 
     for (uint32_t b = 0; b < batch; b++) {
@@ -94,8 +95,6 @@ ALWI void matmul_block(
                     acquire_dst();
 
                     // Reload partial results from intermediate CB if accumulating across blocks.
-                    // Uses _with_dt variants to handle data format reconfiguration between
-                    // in1_cb and interm_cb (e.g., bf16 inputs with fp32 intermediate accumulation).
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb, interm_cb);
                         cb_wait_front(interm_cb, out.num_tiles);
@@ -103,27 +102,38 @@ ALWI void matmul_block(
                             copy_tile(interm_cb, i, i);
                         }
                         cb_pop_front(interm_cb, out.num_tiles);
-                        mm_init_short_with_dt(in0_cb, in1_cb, interm_cb, transpose);
+                        mm_block_init_short_with_dt(
+                            in0_cb, in1_cb, interm_cb, transpose, out.w, out.h, in0.block_w);
                     }
 
-                    // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out.h; h++) {
-                        for (uint32_t w = 0; w < out.w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0.block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(in0_cb, in1_cb, in0_index, in1_index, dst_index);
-                                in1_index_inner_dim_offset += in1.per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0.block_w;
+                    // Compute output sub-block using hardware block matmul.
+                    // matmul_block LLK handles the sub-block tile iteration internally
+                    // (out.h × out.w), so we only iterate over the inner K dimension.
+                    uint32_t dst_index = 0;
+                    uint32_t in0_index = in0_index_subblock_offset;
+                    uint32_t in1_index = in1_index_subblock_offset;
+                    for (uint32_t inner_dim = 0; inner_dim < in0.block_w; inner_dim++) {
+                        // Explicit ckernel:: to call the LLK matmul_block function,
+                        // not this helper (which has the same name in a different namespace).
+                        ckernel::matmul_block(
+                            in0_cb,
+                            in1_cb,
+                            in0_index,
+                            in1_index,
+                            dst_index,
+                            transpose,
+                            out.w,
+                            out.h,
+                            in0.block_w);
+                        in0_index++;
+                        in1_index += in1.per_core_w;
                     }
 
                     if (last_out) {
+                        // Apply optional post-compute operation (e.g., SFPU activation)
+                        // on DST tiles before packing.
+                        post_compute(out.num_tiles);
+
                         // Final block: pack to output buffer
                         cb_reserve_back(out_cb, out.num_tiles);
                         for (uint32_t i = 0; i < out.num_tiles; i++) {
