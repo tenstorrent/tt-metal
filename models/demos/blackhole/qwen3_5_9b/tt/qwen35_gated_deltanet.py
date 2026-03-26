@@ -184,6 +184,7 @@ class Qwen35GatedDeltaNet:
         self.conv_state_v = None
         # Fused conv state [B, kernel_size-1, D_total] where D_total = q_dim + k_dim + v_dim
         self.fused_conv_state = None
+        self.split_conv_state = None
         # Trace capture support
         self.use_inplace_state = False
 
@@ -290,6 +291,7 @@ class Qwen35GatedDeltaNet:
         if T == 1 and self.fused_conv_state is None and self.conv_state_q is not None:
             self.fused_conv_state = ttnn.concat([self.conv_state_q, self.conv_state_k, self.conv_state_v], dim=2)
             self.fused_conv_state = ttnn.to_layout(self.fused_conv_state, ttnn.TILE_LAYOUT)
+            self._split_fused_conv_state()
 
         # Use cached masks for chunk mode with matching chunk_size
         if mode == "chunk" and chunk_size == self.prefill_chunk_size:
@@ -347,6 +349,7 @@ class Qwen35GatedDeltaNet:
             fused_conv_weight_taps=self.fused_conv_weight_taps,
             fused_conv_bias_dev=self.fused_conv_bias_dev,
             fused_conv_state=self.fused_conv_state,
+            fused_conv_state_split=getattr(self, "split_conv_state", None),
             ab_proj_weight=self.ab_proj_weight,
             mega_fused_weight=self.mega_fused_weight,
             mega_qkv_dim=self.mega_qkv_dim,
@@ -358,7 +361,9 @@ class Qwen35GatedDeltaNet:
         )
 
         self.recurrent_state = new_state
-        if new_fused_conv is not None:
+        if isinstance(new_fused_conv, list):
+            self.split_conv_state = new_fused_conv
+        elif new_fused_conv is not None:
             self.fused_conv_state = new_fused_conv
         else:
             self.conv_state_q = new_conv_q
@@ -369,6 +374,18 @@ class Qwen35GatedDeltaNet:
     def enable_inplace_state(self):
         """Enable inplace state updates for trace capture."""
         self.use_inplace_state = True
+
+    def _split_fused_conv_state(self):
+        """Convert fused conv state [B, 3, D_total] into list of 3 [B, 1, D_total] tensors."""
+        if self.fused_conv_state is None:
+            return
+        self.split_conv_state = []
+        for k in range(self.conv_kernel_size - 1):
+            s_k = self.fused_conv_state[:, k : k + 1, :]
+            s_k = ttnn.to_layout(s_k, ttnn.TILE_LAYOUT)
+            buf = ttnn.clone(s_k, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(s_k)
+            self.split_conv_state.append(buf)
 
     def init_fused_conv_buffer(self, batch_size):
         """Pre-allocate fused conv state buffer for trace capture."""
@@ -387,3 +404,4 @@ class Qwen35GatedDeltaNet:
         self.conv_state_k = None
         self.conv_state_v = None
         self.fused_conv_state = None
+        self.split_conv_state = None

@@ -72,6 +72,38 @@ def _causal_conv1d_decode_t1_split(
     return ttnn.silu(out, memory_config=mc), new_state_list
 
 
+def _causal_conv1d_decode_t1_split_inplace(
+    x, conv_state_list, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None
+):
+    """Split-state conv1d with inplace update for trace capture.
+
+    Like _causal_conv1d_decode_t1_split but updates state buffers in-place
+    via ttnn.copy() so tensor addresses are stable for trace replay.
+
+    Args:
+        conv_state_list: list of kernel_size-1 pre-allocated [B, 1, D] tensors
+    Returns:
+        output: [B, 1, D] (TILE_LAYOUT on device)
+        conv_state_list: same list, updated in-place
+    """
+    mc = memory_config
+
+    out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
+    for k in range(kernel_size - 1):
+        term = ttnn.multiply(conv_state_list[k], weight_taps[k], memory_config=mc)
+        out = ttnn.add(out, term, memory_config=mc)
+
+    if bias_dev is not None:
+        out = ttnn.add(out, bias_dev, memory_config=mc)
+
+    # Inplace state update: shift left, copy new values into existing buffers
+    for k in range(kernel_size - 2):
+        ttnn.copy(conv_state_list[k + 1], conv_state_list[k])
+    ttnn.copy(x, conv_state_list[kernel_size - 2])
+
+    return ttnn.silu(out, memory_config=mc), conv_state_list
+
+
 def _causal_conv1d_decode_t1(x, conv_state, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None):
     """
     Optimized conv1d + SiLU for T=1 decode with conv state.
@@ -393,6 +425,8 @@ def gated_deltanet_forward_ttnn(
     fused_conv_weight_taps=None,
     fused_conv_bias_dev=None,
     fused_conv_state=None,
+    # Split conv state for optimized decode (list of [B, 1, D] tensors)
+    fused_conv_state_split=None,
     # Fused a+b projection weight (optimization: 1 matmul instead of 2)
     ab_proj_weight=None,
     # Mega-fused weight: QKV + a + b + g in one matmul
@@ -473,17 +507,29 @@ def gated_deltanet_forward_ttnn(
         gate_raw = ttnn.to_layout(gate_raw, ttnn.TILE_LAYOUT)
         ttnn.deallocate(mega_out)
 
-        # Fused conv1d on QKV
-        conv_fn = _causal_conv1d_decode_t1_inplace if use_inplace_state else _causal_conv1d_decode_t1
-        qkv, new_fused_conv_state = conv_fn(
-            qkv,
-            fused_conv_state,
-            conv_kernel_size,
-            device,
-            memory_config=mc,
-            weight_taps=fused_conv_weight_taps,
-            bias_dev=fused_conv_bias_dev,
-        )
+        # Fused conv1d on QKV — prefer split state (eliminates slice+to_layout ops)
+        if fused_conv_state_split is not None:
+            conv_fn = _causal_conv1d_decode_t1_split_inplace if use_inplace_state else _causal_conv1d_decode_t1_split
+            qkv, new_fused_conv_state = conv_fn(
+                qkv,
+                fused_conv_state_split,
+                conv_kernel_size,
+                device,
+                memory_config=mc,
+                weight_taps=fused_conv_weight_taps,
+                bias_dev=fused_conv_bias_dev,
+            )
+        else:
+            conv_fn = _causal_conv1d_decode_t1_inplace if use_inplace_state else _causal_conv1d_decode_t1
+            qkv, new_fused_conv_state = conv_fn(
+                qkv,
+                fused_conv_state,
+                conv_kernel_size,
+                device,
+                memory_config=mc,
+                weight_taps=fused_conv_weight_taps,
+                bias_dev=fused_conv_bias_dev,
+            )
         # Split QKV after conv
         q = qkv[:, :, :q_dim]
         k = qkv[:, :, q_dim : q_dim + k_dim]
