@@ -245,3 +245,67 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+# Generate rank bindings tool
+add_executable(generate_rank_bindings src/generate_rank_bindings.cpp)
+
+set_target_properties(
+    generate_rank_bindings
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+        BUILD_RPATH
+            "$ORIGIN/../../lib"
+        INSTALL_RPATH
+            "$ORIGIN/../lib"
+)
+
+add_dependencies(
+    generate_rank_bindings
+    scaleout_generated_protos
+    fabric_generated_protos
+    fabric
+)
+
+target_include_directories(
+    generate_rank_bindings
+    PRIVATE
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
+)
+
+target_link_libraries(
+    generate_rank_bindings
+    PRIVATE
+        scaleout_tools
+        tt_metal
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+)
+
+# Install generate_rank_bindings executable
+if(TT_INSTALL)
+    install(
+        TARGETS
+            generate_rank_bindings
+        RUNTIME
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT metalium-runtime
+    )
+
+    # Install default physical grouping descriptor file
+    # This file is used as a fallback when cluster-specific PGD is not found
+    # The executable searches for it at: TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
+    install(
+        FILES
+            ${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings
+        COMPONENT metalium-runtime
+    )
+endif()
