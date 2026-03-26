@@ -1167,23 +1167,29 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
+    // PGD names this MESH grouping "2x2 Mesh" (one halftray_2x2 HALFTRAY ref, 4 ASICs); see
+    // bh_galaxy_physical_grouping_descriptor.textproto.
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     PhysicalGroupingDescriptor desc(text_proto_file_path);
 
+    constexpr const char* kMeshGroupingName = "2x2 Mesh";
+
     GroupingInfo mesh_halftray;
     bool found = false;
     for (const auto& mesh : desc.get_groupings_by_type("MESH")) {
-        if (mesh.name == "2x2 Mesh") {
+        if (mesh.name == kMeshGroupingName) {
             mesh_halftray = mesh;
             found = true;
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find '2x2 Mesh' grouping";
+    ASSERT_TRUE(found) << "Expected MESH grouping named \"" << kMeshGroupingName << "\" in " << text_proto_file_path;
 
-    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2 Mesh should have 4 ASICs (1 halftray)";
-    EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2 Mesh should have 1 instance (halftray)";
+    EXPECT_EQ(mesh_halftray.asic_count, 4u)
+        << "MESH grouping \"" << kMeshGroupingName << "\" should have 4 ASICs (1 halftray_2x2 instance)";
+    EXPECT_EQ(mesh_halftray.items.size(), 1u)
+        << "MESH grouping \"" << kMeshGroupingName << "\" should have 1 instance (one halftray ref)";
 
     auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_halftray);
     ASSERT_FALSE(flattened_meshes.empty());
