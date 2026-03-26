@@ -310,6 +310,8 @@ class MoEDecoderStage(DecoderStage):
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
         reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
 
+        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -318,81 +320,12 @@ class MoEDecoderStage(DecoderStage):
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
-            exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+            exit_node_upstream=exit_upstream_cores,
+            exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
         )
 
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        mesh_device = ctx.mesh_device
-        pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
-
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
-
-        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
-
-        num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
-        available_cores = ttnn.num_cores_to_corerangeset(
-            num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
-        )
-
-        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
-        moe_semaphores = MoeOp.create_semaphores(mesh_device)
-        reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
-        persistent_next_iter_semaphore = (
-            ttnn.create_global_semaphore(mesh_device, available_cores, 1) if self._persistent_mode else None
-        )
-
-        if self._is_moe:
-            d = create_decoder_block_tensors(
-                mesh_device,
-                mesh_device.shape[0],
-                mesh_device.shape[1],
-                sender_coord[0],
-                sender_coord[1],
-                self._position_id,
-                self._state_dict,
-                self._layer_idx,
-                self._max_seq_len,
-                reduce_root_coord=reduce_root_coord,
-                num_routed_experts=self._num_routed_experts,
-                preloaded_weights=self._weights,
-            )
-        else:
-            d = create_decoder_block_tensors(
-                mesh_device,
-                mesh_device.shape[0],
-                mesh_device.shape[1],
-                sender_coord[0],
-                sender_coord[1],
-                self._position_id,
-                self._state_dict,
-                self._layer_idx,
-                self._max_seq_len,
-                reduce_root_coord=reduce_root_coord,
-                is_moe=False,
-                preloaded_weights=self._weights,
-            )
-        ttnn.synchronize_device(mesh_device)
-
-        recv_socket = pipeline_block.get_downstream_socket()
-
-        self._state = {
-            "d": d,
-            "attn_semaphores": attn_semaphores,
-            "moe_semaphores": moe_semaphores,
-            "reduce_semaphores": reduce_semaphores,
-            "reduce_root_coord": reduce_root_coord,
-            "recv_socket": recv_socket,
-            "downstream_socket": downstream_socket,
-        }
-
-        if persistent_next_iter_semaphore is not None:
-            self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
-
-        logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
-
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
+        """Build DecoderBlock program before pipeline launch; requires ``self._state`` fully populated."""
         d = self._state["d"]
         if self._is_moe:
             gate_mm_weights_tensor = d["gate_mm_overlapped"]
@@ -411,7 +344,7 @@ class MoEDecoderStage(DecoderStage):
             enable_routing = False
             use_hardcoded_expert_index = False
 
-        DecoderBlock.op(
+        return DecoderBlock.get_program_context(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
             d["matmul_weights_overlapped"],
@@ -468,15 +401,89 @@ class MoEDecoderStage(DecoderStage):
             bcast_secondary_cluster_axis=1,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            sdpa_scale_fp32=d["scale"],
             num_links=1,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
-            downstream_socket=self._state["downstream_socket"],
+            downstream_sockets=self._state["downstream_sockets"],
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
         )
+
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_mesh_id = ctx.my_mesh_id
+
+        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+        num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
+        available_cores = ttnn.num_cores_to_corerangeset(
+            num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
+        )
+
+        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
+        moe_semaphores = MoeOp.create_semaphores(mesh_device)
+        reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
+        persistent_next_iter_semaphore = (
+            ttnn.create_global_semaphore(mesh_device, available_cores, 1) if self._persistent_mode else None
+        )
+
+        if self._is_moe:
+            d = create_decoder_block_tensors(
+                mesh_device,
+                mesh_device.shape[0],
+                mesh_device.shape[1],
+                sender_coord[0],
+                sender_coord[1],
+                self._position_id,
+                self._state_dict,
+                self._layer_idx,
+                self._max_seq_len,
+                reduce_root_coord=reduce_root_coord,
+                num_routed_experts=self._num_routed_experts,
+                preloaded_weights=self._weights,
+            )
+        else:
+            d = create_decoder_block_tensors(
+                mesh_device,
+                mesh_device.shape[0],
+                mesh_device.shape[1],
+                sender_coord[0],
+                sender_coord[1],
+                self._position_id,
+                self._state_dict,
+                self._layer_idx,
+                self._max_seq_len,
+                reduce_root_coord=reduce_root_coord,
+                is_moe=False,
+                preloaded_weights=self._weights,
+            )
+        ttnn.synchronize_device(mesh_device)
+
+        recv_socket = pipeline_block.get_downstream_socket()
+        downstream_sockets = pipeline_block.get_upstream_sockets()
+
+        self._state = {
+            "d": d,
+            "attn_semaphores": attn_semaphores,
+            "moe_semaphores": moe_semaphores,
+            "reduce_semaphores": reduce_semaphores,
+            "reduce_root_coord": reduce_root_coord,
+            "recv_socket": recv_socket,
+            "downstream_sockets": downstream_sockets,
+        }
+
+        if persistent_next_iter_semaphore is not None:
+            self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
+
+        self._state["decoder_program_context"] = self._build_decoder_program_context()
+
+        logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
+
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        DecoderBlock.execute(*self._state["decoder_program_context"])
 
 
 class MoEDecoderStage(DecoderStage):
