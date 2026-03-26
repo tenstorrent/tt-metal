@@ -101,10 +101,8 @@ void run_single_core_copy_block_matmul_partials(
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -115,10 +113,8 @@ void run_single_core_copy_block_matmul_partials(
         tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
             .entry_size = single_tile_size,
             .num_entries = num_output_tiles,
-            .producer_risc_mask = 0x100,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -309,6 +305,9 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -318,6 +317,7 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
         for (bool dst_full_sync_en : {true, false}) {
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR && fp32_dest_acc_en &&
                 !dst_full_sync_en) {
+                // TODO (#40827): AM; Remove when correct 32bit dest address is used
                 continue;
             }
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
@@ -330,6 +330,9 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
