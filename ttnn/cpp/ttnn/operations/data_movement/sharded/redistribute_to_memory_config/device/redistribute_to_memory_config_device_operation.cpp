@@ -60,7 +60,8 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
         const auto output_tile =
             tensor_args.output_tensor.has_value()
                 ? tensor_args.output_tensor.value().tensor_spec().tile()
-                : TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config).get_tile();
+                : TensorLayout(output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config)
+                      .get_tile();
         TT_FATAL(
             input_tensor.tensor_spec().tile().get_tile_shape() == output_tile.get_tile_shape(),
             "Input and output tensors must have the same tile shape when layout is TILE");
@@ -76,7 +77,9 @@ RedistributeToMemoryConfigDeviceOperation::compute_output_specs(
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(input_tensor.layout()), operation_attributes.output_mem_config);
+        operation_attributes.output_dtype,
+        tt::tt_metal::PageConfig(input_tensor.layout()),
+        operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a
     // different padded_shape due to having a different shard_spec.
