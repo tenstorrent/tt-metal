@@ -99,14 +99,13 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
-    constexpr uint32_t read_batch_size = 8;
-
 #if INIT_ZEROS
+    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
     {
-        uint32_t inline_page_start = get_arg_val<uint32_t>(rt_args++);
-        uint32_t inline_page_end = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_semaphore_id_inline = get_arg_val<uint32_t>(rt_args++);
-        uint32_t zi_done_sem_address_inline = get_semaphore(zi_done_semaphore_id_inline);
+        uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
+        uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
 
         constexpr uint32_t zi_cb_id = INLINE_ZI_CB_ID;
         cb_reserve_back(zi_cb_id, 1);
@@ -119,9 +118,8 @@ void kernel_main() {
         }
         noc_async_read_barrier();
 
-        const auto zi_output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
-        for (uint32_t page = inline_page_start; page < inline_page_end; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, zi_output_addr_gen);
+        for (uint32_t page = page_start; page < page_end; page++) {
+            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
             uint32_t remaining = aligned_output_page_size;
             while (remaining > 0) {
                 uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
@@ -132,15 +130,15 @@ void kernel_main() {
         }
 
 #if INLINE_ZI_NUM_IDLE_CORES > 0
-        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr_inline =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address_inline);
-        noc_semaphore_wait(zi_done_sem_ptr_inline, INLINE_ZI_NUM_IDLE_CORES);
-        noc_semaphore_set(zi_done_sem_ptr_inline, 0);
+        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
+        noc_semaphore_wait(zi_done_sem_ptr, INLINE_ZI_NUM_IDLE_CORES);
+        noc_semaphore_set(zi_done_sem_ptr, 0);
 #endif
     }
 #endif
 
-    // Signal writer that zero-init is complete (or skipped for non-core-0)
+    // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_set(zero_init_sem_ptr, 1);
@@ -167,6 +165,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr);
 
     // Set up scratch buffers for batched reads
+    constexpr uint32_t read_batch_size = 8;
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);

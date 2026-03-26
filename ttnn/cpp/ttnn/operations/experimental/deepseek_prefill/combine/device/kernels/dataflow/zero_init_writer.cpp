@@ -58,12 +58,10 @@ void kernel_main() {
     for (uint32_t page = page_start; page < page_end; page++) {
         uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
         uint32_t remaining = aligned_output_page_size;
-        uint64_t dst_addr = page_noc_addr;
-
         while (remaining > 0) {
             uint32_t chunk = (remaining > NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
-            noc_async_write(zero_buffer_addr, dst_addr, chunk);
-            dst_addr += chunk;
+            noc_async_write(zero_buffer_addr, page_noc_addr, chunk);
+            page_noc_addr += chunk;
             remaining -= chunk;
         }
     }

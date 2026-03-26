@@ -307,26 +307,26 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
-    bool use_inline_zero_init = operation_attributes.init_zeros;
+    const bool init_zeros = operation_attributes.init_zeros;
     tt::tt_metal::KernelHandle zero_init_kernel_id = 0;
     std::vector<CoreCoord> zero_init_cores_vec;
     uint32_t zi_done_semaphore_id = 0;
     uint32_t num_zero_init_cores = 0;
-    uint32_t inline_total_cores = 0;
-    uint32_t inline_pages_per_core = 0;
-    uint32_t inline_remainder_pages = 0;
+    uint32_t total_zero_init_cores = 0;
+    uint32_t pages_per_core = 0;
+    uint32_t remainder_pages = 0;
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
 
-    if (use_inline_zero_init) {
+    if (init_zeros) {
         uint32_t noc_max_burst_size;
-        auto arch_for_zi = mesh_device->arch();
-        if (arch_for_zi == tt::ARCH::BLACKHOLE) {
+        const auto arch = mesh_device->arch();
+        if (arch == tt::ARCH::BLACKHOLE) {
             noc_max_burst_size = 16384;
-        } else if (arch_for_zi == tt::ARCH::WORMHOLE_B0) {
+        } else if (arch == tt::ARCH::WORMHOLE_B0) {
             noc_max_burst_size = 8192;
         } else {
-            noc_max_burst_size = 65536;
+            TT_THROW("Unsupported architecture for zero-init: {}", arch);
         }
 
         tt::tt_metal::CircularBufferConfig zi_inline_cb_config =
@@ -347,11 +347,11 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
 
         num_zero_init_cores = idle_row_cores.size();
-        inline_total_cores = num_cores + num_zero_init_cores;
+        total_zero_init_cores = num_cores + num_zero_init_cores;
 
-        uint32_t total_output_pages_inline = detail::get_num_pages(output_tensor);
-        inline_pages_per_core = total_output_pages_inline / inline_total_cores;
-        inline_remainder_pages = total_output_pages_inline % inline_total_cores;
+        uint32_t total_output_pages = detail::get_num_pages(output_tensor);
+        pages_per_core = total_output_pages / total_zero_init_cores;
+        remainder_pages = total_output_pages % total_zero_init_cores;
 
         reader_defines["INLINE_ZI_NUM_IDLE_CORES"] = std::to_string(num_zero_init_cores);
 
@@ -380,7 +380,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             zero_init_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
-                "zero_init_output.cpp",
+                "zero_init_writer.cpp",
                 idle_core_grid,
                 tt::tt_metal::DataMovementConfig{
                     .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -418,12 +418,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
-    // Set runtime args for inline hybrid idle row cores
-    if (use_inline_zero_init && num_zero_init_cores > 0) {
+    // Set runtime args for hybrid idle row cores
+    if (init_zeros && num_zero_init_cores > 0) {
         for (uint32_t idle_idx = 0; idle_idx < num_zero_init_cores; idle_idx++) {
             uint32_t row_idx = num_cores + idle_idx;
-            uint32_t page_start = row_idx * inline_pages_per_core + std::min(row_idx, inline_remainder_pages);
-            uint32_t page_end = page_start + inline_pages_per_core + (row_idx < inline_remainder_pages ? 1 : 0);
+            uint32_t page_start = row_idx * pages_per_core + std::min(row_idx, remainder_pages);
+            uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
 
             std::vector<uint32_t> zi_runtime_args = {
                 output_tensor.buffer()->address(),
@@ -456,10 +456,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             expert_start,
             expert_end,
         };
-        if (use_inline_zero_init) {
-            uint32_t sender_page_start = core_idx * inline_pages_per_core + std::min(core_idx, inline_remainder_pages);
-            uint32_t sender_page_end =
-                sender_page_start + inline_pages_per_core + (core_idx < inline_remainder_pages ? 1 : 0);
+        if (init_zeros) {
+            uint32_t sender_page_start = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
+            uint32_t sender_page_end = sender_page_start + pages_per_core + (core_idx < remainder_pages ? 1 : 0);
             reader_runtime_args.push_back(sender_page_start);
             reader_runtime_args.push_back(sender_page_end);
             reader_runtime_args.push_back(zi_done_semaphore_id);
