@@ -14,13 +14,28 @@ MAX_QKV_MM_SEQ_LEN = 2048
 # Match Attention1D long-sequence WO matmul guard.
 MAX_MM_SEQ_LEN = 1024
 
+# SDPA chunk sizes must be multiples of the Tensor tile width (see sdpa_device_operation validation).
+_SDPA_Q_CHUNK = 128
+_SDPA_CANDIDATE_K_CHUNKS = (512, 256, 128)
 
-def _hifi2_mm_kernel() -> ttnn.WormholeComputeKernelConfig:
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+
+def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
+    """Largest K chunk (128/256/512) that divides seq_len; Q chunk matches the model's 128-token tiling."""
+    if seq_len % _SDPA_Q_CHUNK != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by {_SDPA_Q_CHUNK}")
+    for k_chunk in _SDPA_CANDIDATE_K_CHUNKS:
+        if k_chunk <= seq_len and seq_len % k_chunk == 0:
+            return _SDPA_Q_CHUNK, k_chunk
+    raise ValueError(f"Unable to pick k_chunk_size for seq_len={seq_len} (expected a multiple of 128)")
+
+
+def _sdpa_program_config_for_seq_len(seq_len: int) -> ttnn.SDPAProgramConfig:
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len)
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=True,
     )
 
 
@@ -166,15 +181,6 @@ class BgeM3Attention(LightweightModule):
         cfg = self.config
 
         if seq_len > MAX_QKV_MM_SEQ_LEN:
-            qkv_ck = _hifi2_mm_kernel()
-            out_ck = _hifi2_mm_kernel()
-            score_ck = _hifi2_mm_kernel()
-        else:
-            qkv_ck = cfg.qkv_compute_kernel_cfg
-            out_ck = cfg.output_compute_kernel_cfg
-            score_ck = cfg.score_compute_kernel_cfg
-
-        if seq_len > MAX_QKV_MM_SEQ_LEN:
             if seq_len % MAX_QKV_MM_SEQ_LEN != 0:
                 raise ValueError(f"seq_len {seq_len} must be divisible by {MAX_QKV_MM_SEQ_LEN}")
             hidden_states = ttnn.reshape(
@@ -190,7 +196,7 @@ class BgeM3Attention(LightweightModule):
             dtype=cfg.qkv_dtype,
             bias=self.bqkv,
             program_config=cfg.qkv_prg_config,
-            compute_kernel_config=qkv_ck,
+            compute_kernel_config=cfg.qkv_compute_kernel_cfg,
         )
         if seq_len > MAX_QKV_MM_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
@@ -203,7 +209,6 @@ class BgeM3Attention(LightweightModule):
             transpose_k_heads=False,
             memory_config=cfg.score_memcfg,
         )
-
         ttnn.deallocate(qkv_fused)
 
         # Stage 3: optional deterministic cast to score dtype.
@@ -220,47 +225,32 @@ class BgeM3Attention(LightweightModule):
             ttnn.deallocate(v)
             v = v_cast
 
-        # sdpa_mask = attention_mask
-        # if sdpa_mask is not None:
-        #     if len(sdpa_mask.shape) != 4:
-        #         raise ValueError(f"attention_mask must have rank 4 [B, 1, 1, S], got shape={sdpa_mask.shape}")
-        #     if (
-        #         sdpa_mask.shape[0] != batch_size
-        #         or sdpa_mask.shape[1] != 1
-        #         or sdpa_mask.shape[2] != 1
-        #         or sdpa_mask.shape[3] != seq_len
-        #     ):
-        #         raise ValueError(
-        #             f"attention_mask must have shape [B, 1, 1, S]=[{batch_size}, 1, 1, {seq_len}], "
-        #             f"got shape={sdpa_mask.shape}"
-        #         )
-        #     sdpa_mask = ttnn.expand(sdpa_mask, [-1, -1, seq_len, -1])
         sdpa_mask = attention_mask
         if sdpa_mask is not None:
             if len(sdpa_mask.shape) != 4:
-                raise ValueError(f"attention_mask must have rank 4, got shape={sdpa_mask.shape}")
-            if sdpa_mask.shape[0] != batch_size or sdpa_mask.shape[1] != 1 or sdpa_mask.shape[3] != seq_len:
+                raise ValueError(f"attention_mask must have rank 4 [B, 1, 1, S], got shape={sdpa_mask.shape}")
+            if (
+                sdpa_mask.shape[0] != batch_size
+                or sdpa_mask.shape[1] != 1
+                or sdpa_mask.shape[2] != 1
+                or sdpa_mask.shape[3] != seq_len
+            ):
                 raise ValueError(
-                    f"attention_mask must be [B, 1, ?, S] with B={batch_size}, S={seq_len}, "
+                    f"attention_mask must have shape [B, 1, 1, S]=[{batch_size}, 1, 1, {seq_len}], "
                     f"got shape={sdpa_mask.shape}"
                 )
-            if sdpa_mask.shape[2] == 1:
-                sdpa_mask = ttnn.expand(sdpa_mask, [-1, -1, seq_len, -1])
-            # elif sdpa_mask.shape[2] != seq_len:
-            #     raise ValueError(
-            #         f"attention_mask dim 2 must be 1 or {seq_len}, got shape={sdpa_mask.shape}"
-            #     )
+            sdpa_mask = ttnn.expand(sdpa_mask, [-1, -1, seq_len, -1])
 
             if cfg.score_dtype is not None and sdpa_mask.dtype != cfg.score_dtype:
                 sdpa_mask = ttnn.typecast(sdpa_mask, dtype=cfg.score_dtype)
 
-            # score_memcfg = cfg.score_memcfg or ttnn.DRAM_MEMORY_CONFIG
-            score_memcfg = ttnn.DRAM_MEMORY_CONFIG
+            score_memcfg = cfg.score_memcfg or ttnn.DRAM_MEMORY_CONFIG
 
             if sdpa_mask.memory_config() != score_memcfg:
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)
 
         # Stage 4: encoder SDPA.
+        sdpa_program_config = cfg.score_prg_config or _sdpa_program_config_for_seq_len(seq_len)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -268,8 +258,8 @@ class BgeM3Attention(LightweightModule):
             is_causal=False,
             attn_mask=sdpa_mask,
             scale=cfg.attention_scale,
-            program_config=cfg.score_prg_config,
-            compute_kernel_config=score_ck,
+            program_config=sdpa_program_config,
+            compute_kernel_config=cfg.score_compute_kernel_cfg,
             memory_config=cfg.score_memcfg,
         )
         ttnn.deallocate(q)
@@ -292,7 +282,7 @@ class BgeM3Attention(LightweightModule):
             dtype=cfg.output_dtype,
             bias=self.wo_bias,
             program_config=cfg.output_prg_config,
-            compute_kernel_config=out_ck,
+            compute_kernel_config=cfg.output_compute_kernel_cfg,
         )
         ttnn.deallocate(context)
 
@@ -338,25 +328,17 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     if config.qkv_compute_kernel_cfg is None:
         to_set["qkv_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,  # HiFi4 to2
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
     if config.output_compute_kernel_cfg is None:
         to_set["output_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,  # HiFi4 to2
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
-        )
-
-    if config.score_prg_config is None:
-        to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),  # (8,8)
-            q_chunk_size=128,
-            k_chunk_size=512,
-            exp_approx_mode=True,
         )
 
     # Phase D: resolve single target device.
