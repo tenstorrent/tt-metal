@@ -77,6 +77,7 @@ struct SingleCoreBinaryConfig {
     std::string binary_op;
     bool acc_to_dest = false;
     bool full_init = true;
+    bool is_quasar = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
@@ -152,13 +153,11 @@ bool single_core_binary(
     uint32_t inp2_dfb = 0;
     uint32_t out_dfb = 0;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_dfb_config = {
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_input0_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -169,10 +168,8 @@ bool single_core_binary(
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input1_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -180,13 +177,11 @@ bool single_core_binary(
             .tile = tt_metal::Tile({32, 32}),
         };
 
-        tt_metal::experimental::dfb::DataflowBufferConfig l2_input1_dfb_config = {
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_input2_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x1,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x100,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -197,10 +192,8 @@ bool single_core_binary(
         tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
-            .producer_risc_mask = 0x100,
             .num_producers = 1,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .consumer_risc_mask = 0x2,
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
@@ -208,26 +201,26 @@ bool single_core_binary(
             .tile = tt_metal::Tile({32, 32}),
         };
 
-        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_dfb_config);
+        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input0_dfb_config);
         inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input1_dfb_config);
-        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l2_input1_dfb_config);
+        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input2_dfb_config);
         out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
 
     } else {
-        tt_metal::CircularBufferConfig l1_cb_config =
+        tt_metal::CircularBufferConfig l1_input0_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
                 .set_page_size(0, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_cb_config);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input0_cb_config);
 
         tt_metal::CircularBufferConfig l1_input1_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
                 .set_page_size(1, test_config.tile_byte_size);
         tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input1_cb_config);
 
-        tt_metal::CircularBufferConfig l2_input1_cb_config =
+        tt_metal::CircularBufferConfig l1_input2_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{2, test_config.l1_input_data_format}})
                 .set_page_size(2, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, test_config.core, l2_input1_cb_config);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input2_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
@@ -331,7 +324,13 @@ bool single_core_binary(
     std::vector<float> temp_golden(input0.size());
     uint16_t srca_fid_mask = 0xFFFF;
     uint16_t srcb_fid_mask = 0xFFFF;
-    set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
+
+    // Quasar has 8x8 mantissa multipliers so fidelity has no effect on bfloat16 multiplications.
+    // Only set FID masks for non-Quasar to ensure we are testing the effect of reduced math fidelity on the binary compute results.
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
+    }
+    
     std::transform(
         input0.begin(),
         input0.end(),
@@ -471,7 +470,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -536,7 +535,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -558,6 +557,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -578,6 +580,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -598,6 +603,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -660,7 +668,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -682,7 +690,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
     if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKs for Quasar";
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
     }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
@@ -707,7 +715,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
     if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKs for Quasar";
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
     }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
@@ -732,7 +740,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
     if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKsfor Quasar";
+        GTEST_SKIP() << "DestAcc test support will be added with DestReuse bring-up";
     }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
