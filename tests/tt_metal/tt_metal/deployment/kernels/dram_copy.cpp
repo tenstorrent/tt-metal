@@ -34,8 +34,8 @@ void kernel_main() {
         uint64_t noc_src_addr = get_noc_addr_from_bank_id<true>(src_bank, curr_addr);
         noc_async_read(noc_src_addr, buffer_next, transfer_size);
 
-        uint64_t noc_dst_addr = get_noc_addr_from_bank_id<true>(dst_bank, curr_addr - transfer_size);
-        noc_async_write(buffer, noc_dst_addr, transfer_size, 1);
+        uint64_t noc_dst_addr = get_noc_addr_from_bank_id<true>(dst_bank, curr_addr - transfer_size, 1);
+        noc_async_write(buffer, noc_dst_addr, transfer_size);
 
         noc_async_read_barrier();
         noc_async_write_barrier(1);
