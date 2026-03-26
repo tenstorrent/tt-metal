@@ -4,8 +4,8 @@
 
 // Real-time profiler NCRISC kernel (slow path)
 // Drains the L1 ring buffer populated by the BRISC kernel and pushes each
-// entry to the host via PCIe using the D2H socket. Runs on NOC 1 (NCRISC
-// dedicated NOC) so all PCIe coordinates are automatically translated.
+// entry to the host via PCIe using the D2H socket. Uses the host-provided
+// PCIe encoding from the socket config (both NOCs share the same coordinate space).
 
 #include <cstdint>
 #include "risc_common.h"
@@ -18,10 +18,8 @@
 // Real-time profiler page size - must match host-side kRealtimeProfilerPageSize
 constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 bytes
 
-// Compile-time defines set by host:
-// RING_BUFFER_ADDR  - L1 address of the shared ring buffer
-// PCIE_NOC_X        - PCIe core X coordinate in NOC-0 space
-// PCIE_NOC_Y        - PCIe core Y coordinate in NOC-0 space
+// Compile-time defines:
+// RING_BUFFER_ADDR  - L1 address of the shared ring buffer (set by host)
 
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
@@ -36,12 +34,6 @@ static uint32_t data_addr_hi = 0;
 static uint32_t host_write_ptr = 0;
 static uint32_t host_fifo_start = 0;
 static uint32_t fifo_page_aligned_size = 0;
-
-// PCIe core NOC encoding for this RISC's NOC (NOC 1 on NCRISC)
-// NOC_X_PHYS_COORD / NOC_Y_PHYS_COORD auto-transpose for noc_index
-constexpr uint64_t pcie_noc_xy_full =
-    uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
-constexpr uint32_t pcie_xy_enc_noc1 = static_cast<uint32_t>(pcie_noc_xy_full >> 32);
 
 FORCE_INLINE
 bool init_socket() {
@@ -59,11 +51,7 @@ bool init_socket() {
     profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
 
-    // Override pcie_xy_enc with NOC-1 encoding so all PCIe writes
-    // use the correct NOC-1 coordinates for the PCIe core.
-    profiler_socket.d2h.pcie_xy_enc = pcie_xy_enc_noc1;
-
-    pcie_xy_enc = pcie_xy_enc_noc1;
+    pcie_xy_enc = profiler_socket.d2h.pcie_xy_enc;
     data_addr_hi = profiler_socket.d2h.data_addr_hi;
     uint32_t data_addr_lo = profiler_socket.downstream_fifo_addr;
 
@@ -94,6 +82,7 @@ __attribute__((noinline)) void push_entry_to_host(uint32_t slot_addr) {
 
     socket_push_pages(profiler_socket, 1);
     socket_notify_receiver(profiler_socket);
+
     noc_async_write_barrier();
 }
 

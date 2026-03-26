@@ -1316,6 +1316,10 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     // Use half-round-trip bracketing: capture host time before the PCIe write and
     // after the device response, then use the midpoint. This cancels the one-way
     // PCIe latency bias under the assumption the path is roughly symmetric.
+    constexpr uint32_t kSyncReadTimeoutMs = 2000;
+    uint32_t consecutive_timeouts = 0;
+    constexpr uint32_t kMaxConsecutiveTimeouts = 3;
+
     for (uint32_t i = 0; i < num_samples + 1; i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
@@ -1330,7 +1334,42 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
             host_time_data,
             CoreType::WORKER);
 
-        // Wait for response from D2H socket
+        // Poll for response with timeout instead of blocking forever
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncReadTimeoutMs);
+        bool got_response = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (dev_state.socket->pages_available() > 0) {
+                got_response = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+
+        if (!got_response) {
+            consecutive_timeouts++;
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} sync sample {}/{} timed out after {}ms "
+                "(consecutive timeouts: {}/{})",
+                dev_state.chip_id,
+                i,
+                num_samples,
+                kSyncReadTimeoutMs,
+                consecutive_timeouts,
+                kMaxConsecutiveTimeouts);
+            if (consecutive_timeouts >= kMaxConsecutiveTimeouts) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} sync aborted: {} consecutive timeouts. "
+                    "Device kernel may not be responding (check DPRINT output).",
+                    dev_state.chip_id,
+                    consecutive_timeouts);
+                break;
+            }
+            continue;
+        }
+
+        consecutive_timeouts = 0;
         std::vector<uint32_t> sync_data(kSyncPageWords);
         dev_state.socket->read(sync_data.data(), 1);
         int64_t host_after = TracyGetCpuTime() - host_start_time;
@@ -1730,20 +1769,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         }
         uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
 
-        // Get PCIe core NOC-0 coordinates (NCRISC kernel auto-translates to NOC 1)
-        uint32_t pcie_noc_x = 0;
-        uint32_t pcie_noc_y = 0;
-        {
-            const auto& cluster = MetalContext::instance().get_cluster();
-            ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
-            const auto& soc = cluster.get_soc_desc(mmio_device_id);
-            const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-            TT_ASSERT(!pcie_cores.empty());
-            pcie_noc_x = pcie_cores.front().x;
-            pcie_noc_y = pcie_cores.front().y;
-        }
-
         // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher)
+        // Note: PCIE_NOC_X/Y are provided automatically by the JIT build infrastructure
         {
             Program realtime_profiler_program;
 
@@ -1783,8 +1810,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ncrisc_config.processor = DataMovementProcessor::RISCV_1;
             ncrisc_config.noc = NOC::RISCV_1_default;
             ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
-            ncrisc_config.defines["PCIE_NOC_X"] = std::to_string(pcie_noc_x);
-            ncrisc_config.defines["PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
@@ -1797,13 +1822,11 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             log_info(
                 tt::LogMetal,
                 "Device {}: launched real-time profiler BRISC+NCRISC kernels on core ({}, {}), "
-                "ring_buffer_addr=0x{:x}, pcie_noc=({}, {})",
+                "ring_buffer_addr=0x{:x}",
                 device_id,
                 realtime_profiler_core.x,
                 realtime_profiler_core.y,
-                ring_buffer_addr,
-                pcie_noc_x,
-                pcie_noc_y);
+                ring_buffer_addr);
         }
 
         realtime_profiler_devices_.push_back(std::move(dev_state));
@@ -1910,14 +1933,19 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             host_time_data,
             CoreType::WORKER);
 
-        // Wait for device response — emit host mark immediately so it's as close
-        // to the device capture moment as possible.
-        std::vector<uint32_t> sync_page(kRealtimeProfilerPageSize / sizeof(uint32_t));
-        dev_state.socket->read(sync_page.data(), 1);
-        TracyMessageL("SYNC_CHECK");
-        uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
+        // Wait for device response with timeout
+        constexpr uint32_t kSyncCheckTimeoutMs = 3000;
+        auto sc_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncCheckTimeoutMs);
+        bool sc_got_response = false;
+        while (std::chrono::steady_clock::now() < sc_deadline) {
+            if (dev_state.socket->pages_available() > 0) {
+                sc_got_response = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
 
-        // Exit sync mode
+        // Exit sync mode regardless of whether we got a response
         sync_req[0] = 0;
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
@@ -1926,14 +1954,27 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             sync_req,
             CoreType::WORKER);
 
-        // Push device-side mark at the device timestamp we just measured
-        realtime_profiler_tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+        if (sc_got_response) {
+            std::vector<uint32_t> sync_page(kRealtimeProfilerPageSize / sizeof(uint32_t));
+            dev_state.socket->read(sync_page.data(), 1);
+            TracyMessageL("SYNC_CHECK");
+            uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
 
-        log_info(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} sync check: device_time={} cycles",
-            dev_state.chip_id,
-            device_time);
+            realtime_profiler_tracy_handler_->PushSyncCheckMarker(
+                dev_state.chip_id, device_time, dev_state.sync_frequency);
+
+            log_info(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} sync check: device_time={} cycles",
+                dev_state.chip_id,
+                device_time);
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} sync check timed out after {}ms, skipping",
+                dev_state.chip_id,
+                kSyncCheckTimeoutMs);
+        }
     }
 
     // Start background receiver thread that polls all device sockets round-robin
