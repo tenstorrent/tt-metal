@@ -8,6 +8,7 @@ from typing import List, Sequence, Iterator
 import ttnn
 import ttml
 import time
+import argparse
 from ttml.common.utils import no_grad
 
 from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, setup_training_optimizer
@@ -47,11 +48,10 @@ def iter_micro_batch(prompts, answers, completions, micro_batch_size=16):
         yield prompts[start:end], answers[start:end], completions[start:end]
 
 
-def train_grpo():
+def train_grpo(yaml_config_path, checkpoint_interval):
     run = setup_training_run()
     metrics = TrainingMetricsTracker(run.output_dir)
 
-    yaml_config_path = "tt-train/configs/training_configs/training_grpo_gsm8k_unsloth_llama_3_2_1b_instruct.yaml"
     ctx = setup_inference(
         yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
@@ -126,7 +126,7 @@ def train_grpo():
                 lr=grpo_cfg.base_lr * warmup_factor,
             )
 
-            if num_steps % 50 == 1:
+            if num_steps % checkpoint_interval == 1:
                 run.save_checkpoint(ctx.tt_model, step=num_steps)
 
             run.logger.info(f"{mini_epoch=} done!")
@@ -143,4 +143,13 @@ def train_grpo():
 
 
 if __name__ == "__main__":
-    train_grpo()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--yaml-path",
+        type=str,
+        default="tt-train/configs/training_configs/training_grpo_gsm8k_unsloth_llama_3_2_1b_instruct.yaml",
+    )
+    parser.add_argument("--checkpoint-interval", type=int, default=50)
+    args, _ = parser.parse_known_args()
+
+    train_grpo(args.yaml_path, args.checkpoint_interval)
