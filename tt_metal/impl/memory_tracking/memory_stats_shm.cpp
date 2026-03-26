@@ -527,8 +527,8 @@ std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::g
         return result;
     }
 
-    for (size_t i = 0; i < MAX_PROCESSES; i++) {
-        if (region_->processes[i].pid.load(std::memory_order_relaxed) != 0) {
+    for (auto & processe : region_->processes) {
+        if (processe.pid.load(std::memory_order_relaxed) != 0) {
             ProcessInfo info;
             info.pid = processe.pid.load(std::memory_order_relaxed);
             info.dram_allocated = processe.dram_allocated.load(std::memory_order_relaxed);
