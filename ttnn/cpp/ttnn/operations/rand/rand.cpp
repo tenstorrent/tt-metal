@@ -69,6 +69,11 @@ Tensor rand(
     if (mesh_mapper.has_value()) {
         const auto& config = mesh_mapper.value();
         auto mesh_shape = config.mesh_shape_override.value_or(device.shape());
+        TT_FATAL(
+            config.placements.size() == mesh_shape.dims(),
+            "ttnn::rand: placements size ({}) must match mesh dimensions ({})",
+            config.placements.size(),
+            mesh_shape.dims());
         device_shape = compute_shard_shape(shape, config, mesh_shape);
         unique_per_device = has_shard_placement(config);
     }
