@@ -198,9 +198,21 @@ TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
     SUCCEED();
 }
 
-// NOTE: 8192x8192 (subs=3) has a multicast semaphore race condition that causes hangs
-// on the 3rd+ consecutive dispatch. Single dispatch works fine. This benchmark excludes
-// 8192 to avoid hangs. Use SmokeAllShapes for single-dispatch 8192 verification.
+TEST_F(KSplitGramMatmulTest, StressTest8192x8192) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto input = make_test_tensor(256, 8192);
+    constexpr int N = 5;
+    for (int i = 0; i < N; i++) {
+        auto out = ttml::metal::gram_matmul(input);
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        out.deallocate();
+        std::cout << "  dispatch " << (i + 1) << "/" << N << " OK\n" << std::flush;
+    }
+    SUCCEED();
+}
+
+// NOTE: 8192x8192 (subs>1) deadlocks on repeated dispatch.
+// 8192x8192 uses subs=3 (per-msb reduction path).
 TEST_F(KSplitGramMatmulTest, Benchmark) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto device_grid = device->compute_with_storage_grid_size();
@@ -215,6 +227,7 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
         {64, 5632, "2048x5632"},
         {128, 4096, "4096x4096"},
         {128, 11008, "4096x11008"},
+        {256, 8192, "8192x8192"},
     };
 
     constexpr int warmup = 2;
