@@ -172,7 +172,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                         .defines = reader_defines});
             }
 
-            std::vector<uint32_t> writer_compile_args = {};
+            std::vector<uint32_t> writer_compile_args = {tt::CBIndex::c_16};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
@@ -235,7 +235,7 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
                         .compile_args = reader_compile_args});
             }
 
-            std::vector<uint32_t> writer_compile_args = {};
+            std::vector<uint32_t> writer_compile_args = {tt::CBIndex::c_16};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
