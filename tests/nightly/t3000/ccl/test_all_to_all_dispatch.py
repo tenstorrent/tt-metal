@@ -494,7 +494,7 @@ def run_all_to_all_dispatch_test(
         delays[0][0] = 400000
 
     def run_op(n_iters, store_all_results=True):
-        with mesh_device.cache_entries_counter.total_counter():
+        with mesh_device.cache_entries_counter.measure():
             tt_output_list = []
             tt_metadata_list = []
 
