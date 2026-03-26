@@ -14,7 +14,6 @@ from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_conv2d import TtMistralConv2dPatch
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer import TtPixtralTransformer
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionRotarySetup as RotarySetup
-from ttnn import ConcatMeshToTensor
 
 
 class MistralVisionTower(LightweightModule):
@@ -152,9 +151,9 @@ class MistralVisionTower(LightweightModule):
             device=self.mesh_device,
         )
 
-        torch_position_ids = ttnn.to_torch(position_ids, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[
-            : position_ids.shape[-1]
-        ]
+        torch_position_ids = ttnn.to_torch(
+            position_ids, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )[: position_ids.shape[-1]]
 
         position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
 

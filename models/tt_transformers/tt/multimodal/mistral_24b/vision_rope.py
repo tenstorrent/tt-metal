@@ -12,7 +12,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
-from ttnn import ReplicateTensorToMesh
 
 
 def compute_gather_cos_sin(dhead, max_patches_per_side, theta, scale_factor, orig_context_len):
@@ -62,14 +61,14 @@ class VisionRotarySetup(LightweightModule):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
@@ -88,7 +87,7 @@ class VisionRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         # Send the idxs to device
         if rot_idxs.device != device:

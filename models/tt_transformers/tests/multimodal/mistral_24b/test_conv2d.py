@@ -14,7 +14,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_conv2d import TtMistralConv2dPatch
-from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize(
@@ -81,7 +80,7 @@ def test_conv2d_inference(
 
     ##### Check the outputs #####
     out = ttnn.from_device(tt_output)
-    tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=2))
+    tt_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[0, ..., :out_channels]
