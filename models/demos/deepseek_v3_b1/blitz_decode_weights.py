@@ -1049,6 +1049,82 @@ class BlitzDecodeWeights:
             ),
         ]
 
+    def get_tt_dkv_input_rmsnorm_gamma(
+        self,
+        attn_norm: torch.Tensor,
+        *,
+        move_to_device: bool = True,
+    ) -> OverlappedTensor:
+        """Create attn_norm gamma replicated on all DKV matmul cores.
+
+        The DKV matmul path applies RMSNorm locally on each DKV matmul core
+        using the attn_norm gamma (7168 elements).  This method creates a
+        small WIDTH_SHARDED tensor that replicates the gamma data on every
+        core in the kv_core_range_set (9x2 = 18 cores).
+
+        Args:
+            attn_norm: attn_norm gamma tensor, shape ``(1, 7168)``.
+            move_to_device: If True (default), place on the mesh device.
+
+        Returns:
+            An :class:`OverlappedTensor` view backed by a dedicated fused buffer.
+        """
+        cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+        kv_num_cores = cfg.kv_core_range_set.num_cores()
+
+        # Pack gamma as raw bfloat16 1x32 tiles
+        gamma_raw = BlitzDecodeWeights._pack_bfloat16_1x32(attn_norm)
+        gamma_bytes = len(gamma_raw)
+
+        # Replicate on all kv cores — each core gets the same gamma shard
+        shard_bytes = gamma_bytes
+        # Pad to uint32 alignment
+        assert shard_bytes % 4 == 0
+        uint32_per_shard = shard_bytes // 4
+
+        # Build combined buffer: replicate gamma for each core
+        combined_raw = bytearray()
+        for _ in range(kv_num_cores):
+            combined_raw.extend(gamma_raw)
+
+        combined = torch.frombuffer(bytes(combined_raw), dtype=torch.int32).clone()
+        combined = combined.reshape(1, uint32_per_shard * kv_num_cores)
+
+        shard_spec = ttnn.ShardSpec(
+            cfg.kv_core_range_set,
+            (1, uint32_per_shard),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self._device)
+        device_for_torch = self._device if move_to_device else None
+
+        fused = ttnn.from_torch(
+            combined,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device_for_torch,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        tile_1x32 = (1, 32)
+        return OverlappedTensor(
+            fused_tensor=fused,
+            tensor_shape=(1, attn_norm.shape[-1]),
+            shard_shape=(1, attn_norm.shape[-1]),
+            core_range_set=cfg.kv_core_range_set,
+            dtype=ttnn.bfloat16,
+            tile_shape=tile_1x32,
+            byte_offset=0,
+            total_size=gamma_bytes,
+        )
+
     def get_tt_kv_b12_proj_weights(
         self,
         kv_b1_proj_weights: torch.Tensor,

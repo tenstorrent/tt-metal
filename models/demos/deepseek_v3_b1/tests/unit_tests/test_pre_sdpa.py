@@ -593,6 +593,9 @@ def test_pre_sdpa(
         torch_ffn_norm,
     )
 
+    # DKV input RMSNorm gamma: attn_norm replicated on DKV matmul cores
+    dkv_input_rmsnorm_gamma_overlapped = bdw.get_tt_dkv_input_rmsnorm_gamma(torch_gamma)
+
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
     krope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
@@ -704,6 +707,7 @@ def test_pre_sdpa(
             ttnn_krope_sin,
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
+            dkv_input_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
             position_id,
             ttnn_position_ids,

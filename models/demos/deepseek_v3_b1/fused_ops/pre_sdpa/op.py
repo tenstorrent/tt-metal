@@ -121,9 +121,8 @@ class PreSDPA:
             normalized = x * torch.rsqrt(variance + epsilon)
             return normalized * gamma
 
-        # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
-        input_layernorm = rmsnorm(input_tensor, gamma_tensor)
-        matmul_result = input_layernorm @ matmul_weights_tensor
+        # Matmul: [1, K] @ [K, N] -> [1, N]  (raw input, no RMSNorm)
+        matmul_result = input_tensor @ matmul_weights_tensor
 
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
         matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
@@ -149,7 +148,7 @@ class PreSDPA:
         new_kv = None
 
         if kv_cache_update:
-            dkv = input_layernorm @ dkv_matmul_weights_tensor
+            dkv = rmsnorm(input_tensor, gamma_tensor) @ dkv_matmul_weights_tensor
             kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
             kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
             k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, global_position_ids).squeeze(0)
@@ -191,6 +190,7 @@ class PreSDPA:
         krope_sin_tensor,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
+        dkv_input_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_id,
         position_ids_tensor,
@@ -257,6 +257,9 @@ class PreSDPA:
         gamma_fused_tensors_per_device = ttnn.get_device_tensors(gamma_tensor.fused_tensor)
         fused_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor.fused_tensor)
         kv_b12_fused_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor.fused_tensor)
+        dkv_input_rmsnorm_gamma_fused_tensors_per_device = ttnn.get_device_tensors(
+            dkv_input_rmsnorm_gamma_tensor.fused_tensor
+        )
         qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
         qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
@@ -553,6 +556,10 @@ class PreSDPA:
         qrope_rotated_input_interm_cb = 20  # Rotated input intermediate CB for RoPE
         qrope_cos_sin_interm_cb = 21  # Cos/Sin intermediate CB for RoPE
         # KV cache branch
+        dkv_input_rmsnorm_input_cb = 30  # Input CB for DKV input RMSNorm (full tile overlay of mcast data)
+        dkv_input_rmsnorm_output_cb = 18  # Output CB for DKV input RMSNorm (full tile format)
+        dkv_input_rmsnorm_gamma_cb = 22  # Gamma CB for DKV input RMSNorm (attn_norm on DKV matmul cores)
+        dkv_matmul_in0_cb = 45  # DKV matmul activation input (1x32 overlay of RMSNorm output)
         dkv_matmul_weights_cb = 23  # DKV Matmul weights CB
         dkv_matmul_output_cb = 24  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
         kv_rmsnorm_input_cb = 25  # Input CB for KV Cache Branch RMSNorm
@@ -655,7 +662,7 @@ class PreSDPA:
             ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
-            ("mcast_src_cb", rmsnorm_output_cb),
+            ("mcast_src_cb", input_cb),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_src_num_pages", mcast_src_num_pages),
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
@@ -958,6 +965,7 @@ class PreSDPA:
         # KV Cache Branch
         # DKV Matmul (9x2)
         dkv_matmul_ncrisc_named_compile_time_args = [
+            ("dkv_matmul_in0", dkv_matmul_in0_cb),
             ("dkv_matmul_in1", dkv_matmul_weights_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
@@ -965,12 +973,27 @@ class PreSDPA:
         dkv_matmul_trisc_named_compile_time_args = [
             (
                 "dkv_matmul_in0",
-                matmul_input_cb,
-            ),  # Inputs are multicasted from the main branch, same input as first matmul
+                dkv_matmul_in0_cb,
+            ),  # 1x32 overlay of RMSNorm output
             ("dkv_matmul_in1", dkv_matmul_weights_cb),
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
+        ]
+
+        # DKV Input RMSNorm: local RMSNorm on each DKV matmul core before DKV matmul
+        # Uses full tile format (same as original Q-path RMSNorm) via a separate CB overlay
+        # that interprets the mcast data in full tiles.
+        dkv_input_rmsnorm_ncrisc_named_compile_time_args = [
+            ("dkv_input_rmsnorm_input_cb", dkv_input_rmsnorm_input_cb),
+            ("dkv_input_rmsnorm_gamma_cb", dkv_input_rmsnorm_gamma_cb),
+            ("dkv_input_rmsnorm_num_tiles", num_tiles),
+        ]
+        dkv_input_rmsnorm_trisc_named_compile_time_args = [
+            ("dkv_input_rmsnorm_input_cb", dkv_input_rmsnorm_input_cb),  # CB 30 - full tile overlay of mcast data
+            ("dkv_input_rmsnorm_gamma_cb", dkv_input_rmsnorm_gamma_cb),
+            ("dkv_input_rmsnorm_output_cb", dkv_input_rmsnorm_output_cb),
+            ("dkv_input_rmsnorm_num_tiles", num_tiles),
         ]
 
         # KV Cache Branch: RMSNorm
@@ -1297,6 +1320,9 @@ class PreSDPA:
                 gamma_fused_tensor_device = gamma_fused_tensors_per_device[device_idx]
                 fused_weights_tensor_device = fused_weights_tensors_per_device[device_idx]
                 kv_b12_fused_tensor_device = kv_b12_fused_tensors_per_device[device_idx]
+                dkv_input_rmsnorm_gamma_fused_tensor_device = dkv_input_rmsnorm_gamma_fused_tensors_per_device[
+                    device_idx
+                ]
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 trans_mat_tensor_device = trans_mat_tensors_per_device[device_idx]
@@ -1665,6 +1691,66 @@ class PreSDPA:
                 dkv_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
                     dkv_matmul_weights_cb, dkv_matmul_weights_tensor, fused_weights_tensor_device
                 )
+
+                # CB 30: DKV input RMSNorm input — full tile overlay of matmul_input_cb (CB 5)
+                # Same L1 address as CB 5 but interpreted as full tiles for RMSNorm
+                dkv_input_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    dkv_input_rmsnorm_input_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=0,  # Same address as matmul_input_cb
+                    total_size=matmul_input_total_size,
+                )
+                dkv_input_rmsnorm_input_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=dkv_input_rmsnorm_input_cb,
+                        data_format=data_format,
+                        page_size=cb_page_size,
+                        tile=tile_descriptor,
+                    )
+                ]
+
+                # CB: DKV input RMSNorm gamma (backed by fused overlapped tensor on DKV matmul cores)
+                # Override to full tile format (same as original Q-path RMSNorm gamma)
+                dkv_input_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    dkv_input_rmsnorm_gamma_cb,
+                    dkv_input_rmsnorm_gamma_tensor,
+                    dkv_input_rmsnorm_gamma_fused_tensor_device,
+                )
+                dkv_input_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+                dkv_input_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+
+                # CB 18: DKV input RMSNorm output — overlap with sdpa_out_interm L1 buffer
+                # On DKV matmul cores, place right after matmul_input_cb. Uses full tile format.
+                dkv_input_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    dkv_input_rmsnorm_output_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=matmul_input_total_size,  # Right after matmul_input_cb
+                    total_size=num_tiles * cb_page_size,
+                )
+                dkv_input_rmsnorm_output_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=dkv_input_rmsnorm_output_cb,
+                        data_format=data_format,
+                        page_size=cb_page_size,
+                        tile=tile_descriptor,
+                    )
+                ]
+                # CB 45: DKV matmul activation input — 1x32 overlay of RMSNorm output memory
+                dkv_matmul_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    dkv_matmul_in0_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=matmul_input_total_size,  # Same address as RMSNorm output
+                    total_size=matmul_input_total_size,
+                )
+                dkv_matmul_in0_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=dkv_matmul_in0_cb,
+                        data_format=data_format,
+                        page_size=matmul_input_page_size,
+                        tile=ttnn.TileDescriptor(TILE_1x32),
+                    )
+                ]
+                # No running_offset increment — these CBs reuse space on DKV matmul cores only
 
                 # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
                 # This CB is consumed before SDPA runs.
@@ -2089,6 +2175,7 @@ class PreSDPA:
                     + qrope_ncrisc_addr_args
                     + create_q_heads_ncrisc_named_compile_time_args
                     + dkv_matmul_ncrisc_named_compile_time_args
+                    + dkv_input_rmsnorm_ncrisc_named_compile_time_args
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
@@ -2130,6 +2217,7 @@ class PreSDPA:
                     + qrope_trisc_named_compile_time_args
                     + create_q_heads_trisc_named_compile_time_args
                     + dkv_matmul_trisc_named_compile_time_args
+                    + dkv_input_rmsnorm_trisc_named_compile_time_args
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
                     + kv_cache_trisc_named_compile_time_args
@@ -2249,6 +2337,10 @@ class PreSDPA:
                     qrope_rotated_input_interm_cb_descriptor,
                     qrope_cos_sin_interm_cb_descriptor,
                     dkv_matmul_weights_cb_descriptor,
+                    dkv_input_rmsnorm_input_cb_descriptor,
+                    dkv_input_rmsnorm_gamma_cb_descriptor,
+                    dkv_input_rmsnorm_output_cb_descriptor,
+                    dkv_matmul_in0_cb_descriptor,
                     dkv_matmul_output_cb_descriptor,
                     kv_rmsnorm_input_cb_descriptor,
                     kv_rmsnorm_gamma_cb_descriptor,
@@ -2308,6 +2400,7 @@ class PreSDPA:
         krope_sin_tensor,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
+        dkv_input_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_id,
         position_ids_tensor,
@@ -2341,6 +2434,7 @@ class PreSDPA:
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
+            dkv_input_rmsnorm_gamma_tensor.fused_tensor,
             output_tensor,
         ]
         full_device_grid, per_device_contexts, bcast_config = PreSDPA.get_program_context(
@@ -2358,6 +2452,7 @@ class PreSDPA:
             krope_sin_tensor,
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
+            dkv_input_rmsnorm_gamma_tensor,
             kv_cache_tensor,
             position_id,
             position_ids_tensor,
