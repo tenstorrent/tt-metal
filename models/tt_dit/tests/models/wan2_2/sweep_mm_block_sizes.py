@@ -29,6 +29,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 
 import pytest
@@ -127,7 +128,7 @@ SHAPES = [
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}" for M, K, N, cgx, cgy, agmm in SHAPES]
 
 # Block sweep range
-MAX_BLOCK = 16
+MAX_BLOCK = 64
 
 CSV_FILE = "sweep_results_mm.csv"
 CSV_COLUMNS = [
@@ -173,6 +174,20 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
                 best = (h, w)
                 best_product = h * w
     return best
+
+
+def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+    """Generate all valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume."""
+    combos = []
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume:
+                combos.append((h, w))
+    return combos
 
 
 def generate_kn_combos(K_tiles, N_tiles):
@@ -282,6 +297,7 @@ def parse_ops_log(subdir):
 # ============================================================================
 
 
+@pytest.mark.timeout(3000)
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
 @pytest.mark.parametrize("m_block", range(1, MAX_BLOCK + 1), ids=[f"m{i}" for i in range(1, MAX_BLOCK + 1)])
@@ -442,20 +458,229 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 )
                 ttnn.synchronize_device(mesh_device)
 
-        # Warmup: compile all programs (outside signpost region)
+        # Warmup: compile all programs, skip combos that OOM
+        valid_combos = []
         for k_blk, n_blk in kn_combos:
-            run_op(k_blk, n_blk)
-        logger.info("Warmup done, starting measured run")
+            try:
+                run_op(k_blk, n_blk)
+                valid_combos.append((k_blk, n_blk))
+            except Exception as e:
+                logger.warning(f"Skipping K_block={k_blk} N_block={n_blk}: {e}")
 
-        # Measured run
+        if not valid_combos:
+            pytest.skip("All K/N combos failed during warmup")
+
+        skipped = len(kn_combos) - len(valid_combos)
+        if skipped:
+            logger.info(f"Warmup done: {len(valid_combos)} valid, {skipped} skipped (L1 OOM)")
+        else:
+            logger.info(f"Warmup done: all {len(valid_combos)} combos valid")
+
+        # Write valid combos file so orchestrator knows which ran
+        combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
+        if combos_file:
+            with open(combos_file, "w") as f:
+                json.dump(valid_combos, f)
+
+        # Measured run — only valid combos
         from tracy import signpost
 
         signpost("start")
-        for k_blk, n_blk in kn_combos:
+        for k_blk, n_blk in valid_combos:
             run_op(k_blk, n_blk)
         signpost("stop")
 
-        logger.info(f"Worker done: {len(kn_combos)} combos measured")
+        logger.info(f"Worker done: {len(valid_combos)} combos measured")
+
+    finally:
+        close_mesh(mesh_device)
+
+
+# ============================================================================
+# SUBBLOCK SWEEP WORKER — sweeps subblocks for a fixed (M, K, N) block config
+# ============================================================================
+
+
+@pytest.mark.timeout(3000)
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_mm_subblock_sweep_worker(device_config, shape):
+    """Sweep subblock sizes for fixed (M_block, K_block, N_block) read from env vars.
+
+    Designed to be invoked by the orchestrator's pass 2 via run_device_profiler.
+    Block sizes are passed via MM_SWEEP_M_BLOCK, MM_SWEEP_K_BLOCK, MM_SWEEP_N_BLOCK env vars.
+    """
+    m_block = int(os.environ["MM_SWEEP_M_BLOCK"])
+    k_block = int(os.environ["MM_SWEEP_K_BLOCK"])
+    n_block = int(os.environ["MM_SWEEP_N_BLOCK"])
+
+    cfg = resolve_config(device_config)
+    M, K, N, cgx, cgy, is_agmm = shape
+
+    sb_combos = generate_subblock_combos(m_block, n_block)
+    if len(sb_combos) <= 1:
+        pytest.skip("Only one valid subblock combo")
+
+    logger.info(
+        f"Subblock worker [{device_config}]: M={M} K={K} N={N} "
+        f"blocks=({m_block},{k_block},{n_block}), {len(sb_combos)} subblock combos"
+    )
+
+    mesh_device = open_mesh(cfg)
+    try:
+        core_grid = ttnn.CoreCoord(cgx, cgy)
+        dtype = ttnn.bfloat16
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        if is_agmm:
+            sp_axis = cfg["sp_axis"]
+            tp_axis = cfg["tp_axis"]
+            sp_size = cfg["mesh_shape"][sp_axis]
+
+            full_M = M * sp_size
+            shard_dims = [sp_axis, tp_axis]
+            tt_input = ttnn.from_torch(
+                torch.randn((full_M, K), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+            tt_weight = ttnn.from_torch(
+                torch.randn((K, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            tt_bias = ttnn.from_torch(
+                torch.randn((1, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+            ccl_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            )
+            ccl_semaphore_handles = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), ccl_cores, 0)
+
+            persistent_output_buffer = ttnn.from_torch(
+                torch.zeros((M, K), dtype=torch.float32),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+            )
+
+            def run_op(sb_h, sb_w):
+                matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=m_block,
+                    K_block_size=k_block,
+                    N_block_size=n_block,
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+                ttnn.experimental.all_gather_minimal_matmul_async(
+                    tt_input,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    fused_activation=None,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                    persistent_output_buffer=persistent_output_buffer,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
+                    num_links=cfg["num_links"],
+                    topology=cfg["topology"],
+                    cluster_axis=cfg["cluster_axis"],
+                    barrier_semaphore=None,
+                    force_transpose=True,
+                    num_workers_per_link=cfg["num_workers_per_link"],
+                    num_buffers_per_channel=48,
+                    scalar=None,
+                    addcmul_input_tensor1=None,
+                    addcmul_input_tensor2=None,
+                    chunks=1,
+                )
+                ttnn.synchronize_device(mesh_device)
+
+        else:
+            tt_input = ttnn.from_torch(
+                torch.randn((M, K), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_weight = ttnn.from_torch(
+                torch.randn((K, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_bias = ttnn.from_torch(
+                torch.randn((1, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+            def run_op(sb_h, sb_w):
+                matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=m_block,
+                    K_block_size=k_block,
+                    N_block_size=n_block,
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+                ttnn.experimental.minimal_matmul(
+                    input_tensor=tt_input,
+                    weight_tensor=tt_weight,
+                    bias_tensor=tt_bias,
+                    config=matmul_config,
+                    fused_activation=None,
+                    compute_kernel_config=compute_config,
+                )
+                ttnn.synchronize_device(mesh_device)
+
+        # Warmup — skip combos that OOM
+        valid_combos = []
+        for sb_h, sb_w in sb_combos:
+            try:
+                run_op(sb_h, sb_w)
+                valid_combos.append((sb_h, sb_w))
+            except Exception as e:
+                logger.warning(f"Skipping subblock ({sb_h},{sb_w}): {e}")
+
+        if not valid_combos:
+            pytest.skip("All subblock combos failed during warmup")
+
+        logger.info(f"Subblock warmup done: {len(valid_combos)}/{len(sb_combos)} valid")
+
+        combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
+        if combos_file:
+            with open(combos_file, "w") as f:
+                json.dump(valid_combos, f)
+
+        from tracy import signpost
+
+        signpost("start")
+        for sb_h, sb_w in valid_combos:
+            run_op(sb_h, sb_w)
+        signpost("stop")
+
+        logger.info(f"Subblock worker done: {len(valid_combos)} combos measured")
 
     finally:
         close_mesh(mesh_device)
@@ -466,6 +691,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
 # ============================================================================
 
 
+@pytest.mark.timeout(3000)
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
@@ -500,6 +726,8 @@ def test_mm_sweep(device_config, shape):
 
     for m_block in m_blocks:
         subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
+        combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}.json"
+        os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
         command = (
             f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
             f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
@@ -511,12 +739,24 @@ def test_mm_sweep(device_config, shape):
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
             durations = parse_ops_log(subdir)
 
-            if len(durations) != len(kn_combos):
+            # Read valid combos from worker (may be subset of kn_combos due to L1 OOM)
+            if os.path.exists(combos_file):
+                with open(combos_file) as f:
+                    valid_combos = [tuple(c) for c in json.load(f)]
+                os.remove(combos_file)
+            else:
+                valid_combos = kn_combos
+
+            if len(durations) != len(valid_combos):
                 logger.warning(
-                    f"  M_block={m_block}: expected {len(kn_combos)} ops, " f"got {len(durations)} in profiler log"
+                    f"  M_block={m_block}: expected {len(valid_combos)} ops, " f"got {len(durations)} in profiler log"
                 )
 
-            for i, (k_blk, n_blk) in enumerate(kn_combos):
+            skipped = len(kn_combos) - len(valid_combos)
+            if skipped:
+                logger.info(f"  M_block={m_block}: {skipped} combos skipped (L1 OOM)")
+
+            for i, (k_blk, n_blk) in enumerate(valid_combos):
                 sb_h, sb_w = pick_subblock(m_block, n_blk)
                 if i < len(durations):
                     duration_ns = durations[i]
@@ -554,7 +794,7 @@ def test_mm_sweep(device_config, shape):
                     ],
                 )
 
-            logger.info(f"  M_block={m_block}: done, " f"{min(len(durations), len(kn_combos))} results recorded")
+            logger.info(f"  M_block={m_block}: done, " f"{min(len(durations), len(valid_combos))} results recorded")
 
         except Exception as e:
             err_msg = str(e)
@@ -582,24 +822,105 @@ def test_mm_sweep(device_config, shape):
                     ],
                 )
 
-    # Print summary of best configs
-    if all_results:
-        all_results.sort(key=lambda r: r["duration_ns"])
-        best = all_results[0]
-        logger.info(
-            f"BEST for [{device_config}] {shape_id}: "
-            f"M={best['M_block']} K={best['K_block']} N={best['N_block']} "
-            f"sb_h={best['subblock_h']} sb_w={best['subblock_w']} "
-            f"-> {best['duration_ns']:.0f} ns"
-        )
-        logger.info("Top 5 configs:")
-        for rank, r in enumerate(all_results[:5], 1):
-            logger.info(
-                f"  #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
-                f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
-            )
-    else:
+    # Pass 1 summary
+    if not all_results:
         logger.warning(f"No valid results for [{device_config}] {shape_id}")
+        return
+
+    all_results.sort(key=lambda r: r["duration_ns"])
+    best = all_results[0]
+    logger.info(
+        f"Pass 1 BEST for [{device_config}] {shape_id}: "
+        f"M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+        f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
+    )
+    logger.info("Pass 1 top 5:")
+    for rank, r in enumerate(all_results[:5], 1):
+        logger.info(
+            f"  #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
+            f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
+        )
+
+    # Pass 2: subblock sweep on best (M_block, K_block, N_block)
+    best_m, best_k, best_n = best["M_block"], best["K_block"], best["N_block"]
+    sb_combos = generate_subblock_combos(best_m, best_n)
+
+    if len(sb_combos) > 1:
+        logger.info(f"Pass 2: sweeping {len(sb_combos)} subblock combos for " f"blocks=({best_m},{best_k},{best_n})...")
+
+        os.environ["MM_SWEEP_M_BLOCK"] = str(best_m)
+        os.environ["MM_SWEEP_K_BLOCK"] = str(best_k)
+        os.environ["MM_SWEEP_N_BLOCK"] = str(best_n)
+
+        subdir = f"mm_sweep_{device_config}_{shape_id}_subblock"
+        combos_file = f"valid_combos_{device_config}_{shape_id}_subblock.json"
+        os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+        command = (
+            f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+            f"::test_mm_subblock_sweep_worker[{shape_id}-{device_config}] -x"
+        )
+
+        try:
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+            durations = parse_ops_log(subdir)
+
+            if os.path.exists(combos_file):
+                with open(combos_file) as f:
+                    valid_sb_combos = [tuple(c) for c in json.load(f)]
+                os.remove(combos_file)
+            else:
+                valid_sb_combos = sb_combos
+
+            if len(durations) != len(valid_sb_combos):
+                logger.warning(f"  Subblock sweep: expected {len(valid_sb_combos)} ops, got {len(durations)}")
+
+            sb_results = []
+            for i, (sb_h, sb_w) in enumerate(valid_sb_combos):
+                if i < len(durations):
+                    duration_ns = durations[i]
+                    sb_results.append({"subblock_h": sb_h, "subblock_w": sb_w, "duration_ns": duration_ns})
+                    append_csv_row(
+                        CSV_FILE,
+                        [
+                            device_config,
+                            op_type,
+                            M,
+                            K,
+                            N,
+                            core_grid_str,
+                            best_m,
+                            best_k,
+                            best_n,
+                            sb_h,
+                            sb_w,
+                            f"{duration_ns:.0f}",
+                            "OK_SB",
+                        ],
+                    )
+
+            if sb_results:
+                sb_results.sort(key=lambda r: r["duration_ns"])
+                best_sb = sb_results[0]
+                if best_sb["duration_ns"] < best["duration_ns"]:
+                    best["subblock_h"] = best_sb["subblock_h"]
+                    best["subblock_w"] = best_sb["subblock_w"]
+                    best["duration_ns"] = best_sb["duration_ns"]
+
+                logger.info("Pass 2 subblock results:")
+                for rank, r in enumerate(sb_results, 1):
+                    logger.info(f"  #{rank}: sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns")
+
+        except Exception as e:
+            logger.warning(f"  Subblock sweep FAILED: {str(e)[:200]}")
+    else:
+        logger.info("Pass 2: skipped (only one valid subblock combo)")
+
+    # Final result
+    logger.info(
+        f"FINAL BEST for [{device_config}] {shape_id}: "
+        f"M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+        f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
+    )
 
 
 # ============================================================================
@@ -625,7 +946,7 @@ def main():
         help="Filter to a single shape as M,K,N (e.g. 6144,5120,3456)",
     )
     parser.add_argument("--csv", type=str, default=CSV_FILE)
-    parser.add_argument("--max-block", type=int, default=MAX_BLOCK, help="Max block size in tiles (default: 16)")
+    parser.add_argument("--max-block", type=int, default=MAX_BLOCK, help="Max block size in tiles (default: 64)")
     args = parser.parse_args()
 
     device_config = args.device_config
@@ -674,6 +995,8 @@ def main():
 
         for m_block in m_blocks:
             subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
+            combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}.json"
+            os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
             command = (
                 f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
                 f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
@@ -685,8 +1008,17 @@ def main():
                 run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
                 durations = parse_ops_log(subdir)
 
-                matched = min(len(durations), len(kn_combos))
-                for i, (k_blk, n_blk) in enumerate(kn_combos):
+                # Read valid combos from worker (may be subset due to L1 OOM)
+                if os.path.exists(combos_file):
+                    with open(combos_file) as f:
+                        valid_combos = [tuple(c) for c in json.load(f)]
+                    os.remove(combos_file)
+                else:
+                    valid_combos = kn_combos
+
+                skipped = len(kn_combos) - len(valid_combos)
+                matched = min(len(durations), len(valid_combos))
+                for i, (k_blk, n_blk) in enumerate(valid_combos):
                     sb_h, sb_w = pick_subblock(m_block, n_blk)
                     if i < len(durations):
                         duration_ns = durations[i]
@@ -738,7 +1070,8 @@ def main():
                             ],
                         )
 
-                print(f"{matched} results OK")
+                suffix = f" ({skipped} skipped L1 OOM)" if skipped else ""
+                print(f"{matched} results OK{suffix}")
 
             except Exception as e:
                 print(f"FAILED: {str(e)[:100]}")
@@ -765,12 +1098,101 @@ def main():
 
         if shape_results:
             shape_results.sort(key=lambda r: r["duration_ns"])
-            all_best[(M, K, N, cgx, cgy, op_type)] = shape_results[0]
             best = shape_results[0]
             print(
-                f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+                f"  Pass 1 BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
                 f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
             )
+            print("  Pass 1 top 5:")
+            for rank, r in enumerate(shape_results[:5], 1):
+                print(
+                    f"    #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
+                    f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
+                )
+
+            # Pass 2: subblock sweep on best (M_block, K_block, N_block)
+            best_m, best_k, best_n = best["M_block"], best["K_block"], best["N_block"]
+            sb_combos = generate_subblock_combos(best_m, best_n)
+
+            if len(sb_combos) > 1:
+                print(
+                    f"  Pass 2: sweeping {len(sb_combos)} subblock combos for "
+                    f"blocks=({best_m},{best_k},{best_n})..."
+                )
+
+                os.environ["MM_SWEEP_M_BLOCK"] = str(best_m)
+                os.environ["MM_SWEEP_K_BLOCK"] = str(best_k)
+                os.environ["MM_SWEEP_N_BLOCK"] = str(best_n)
+
+                subdir = f"mm_sweep_{device_config}_{shape_id}_subblock"
+                combos_file = f"valid_combos_{device_config}_{shape_id}_subblock.json"
+                os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+                command = (
+                    f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                    f"::test_mm_subblock_sweep_worker[{shape_id}-{device_config}] -x"
+                )
+
+                try:
+                    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+                    durations = parse_ops_log(subdir)
+
+                    if os.path.exists(combos_file):
+                        with open(combos_file) as f:
+                            valid_sb_combos = [tuple(c) for c in json.load(f)]
+                        os.remove(combos_file)
+                    else:
+                        valid_sb_combos = sb_combos
+
+                    if len(durations) != len(valid_sb_combos):
+                        print(f"  Subblock sweep: expected {len(valid_sb_combos)} ops, got {len(durations)}")
+
+                    sb_results = []
+                    for i, (sb_h, sb_w) in enumerate(valid_sb_combos):
+                        if i < len(durations):
+                            duration_ns = durations[i]
+                            sb_results.append({"subblock_h": sb_h, "subblock_w": sb_w, "duration_ns": duration_ns})
+                            append_csv_row(
+                                args.csv,
+                                [
+                                    device_config,
+                                    op_type,
+                                    M,
+                                    K,
+                                    N,
+                                    core_grid_str,
+                                    best_m,
+                                    best_k,
+                                    best_n,
+                                    sb_h,
+                                    sb_w,
+                                    f"{duration_ns:.0f}",
+                                    "OK_SB",
+                                ],
+                            )
+
+                    if sb_results:
+                        sb_results.sort(key=lambda r: r["duration_ns"])
+                        best_sb = sb_results[0]
+                        if best_sb["duration_ns"] < best["duration_ns"]:
+                            best["subblock_h"] = best_sb["subblock_h"]
+                            best["subblock_w"] = best_sb["subblock_w"]
+                            best["duration_ns"] = best_sb["duration_ns"]
+
+                        print("  Pass 2 subblock results:")
+                        for rank, r in enumerate(sb_results, 1):
+                            print(f"    #{rank}: sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns")
+
+                except Exception as e:
+                    print(f"  Subblock sweep FAILED: {str(e)[:200]}")
+            else:
+                print("  Pass 2: skipped (only one valid subblock combo)")
+
+            # Final best for this shape
+            print(
+                f"  FINAL BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+                f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
+            )
+            all_best[(M, K, N, cgx, cgy, op_type)] = best
 
     # Print summary
     if all_best:
