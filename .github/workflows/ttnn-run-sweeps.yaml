@@ -979,6 +979,9 @@ jobs:
           VECTORS_DIR: /tmp/vectors
         run: |
           matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py)
+          echo "::group::Computed matrix JSON"
+          printf '%s\n' "$matrix_json" | python3 -m json.tool
+          echo "::endgroup::"
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
   ttnn-run-single-sweep:
     name: Run single sweep
