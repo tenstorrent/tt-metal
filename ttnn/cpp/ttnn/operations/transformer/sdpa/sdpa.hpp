@@ -117,20 +117,6 @@ struct ExecuteExpRingJointAttention {
         uint32_t num_buffers_per_channel = 8);
 };
 
-struct ExecuteFlashMLAPrefill {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        uint32_t head_dim_v,
-        const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
-        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-};
-
 ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,

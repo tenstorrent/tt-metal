@@ -258,7 +258,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         output_tensors[prim::EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
-ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
+ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
