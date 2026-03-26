@@ -2379,14 +2379,17 @@ class TTNNBailingMoEAttention(TTNNModule):
 
         # QK norms use non-distributed version (head_dim too small to shard across devices)
         if new_attn.use_qk_norm:
-            # Permute norm weights to Meta layout to match Q/K data
+            # Clone norm modules to avoid mutating the original PyTorch model's weights
+            import copy
+
+            q_norm_clone = copy.deepcopy(torch_attn.query_layernorm)
+            k_norm_clone = copy.deepcopy(torch_attn.key_layernorm)
+            # Permute cloned norm weights to Meta layout to match Q/K data
             with torch.no_grad():
-                torch_attn.query_layernorm.weight.copy_(
-                    _reverse_permute_1d(torch_attn.query_layernorm.weight, rotary_dim)
-                )
-                torch_attn.key_layernorm.weight.copy_(_reverse_permute_1d(torch_attn.key_layernorm.weight, rotary_dim))
-            new_attn.query_layernorm = TTNNRMSNorm.from_torch(torch_attn.query_layernorm)
-            new_attn.key_layernorm = TTNNRMSNorm.from_torch(torch_attn.key_layernorm)
+                q_norm_clone.weight.copy_(_reverse_permute_1d(q_norm_clone.weight, rotary_dim))
+                k_norm_clone.weight.copy_(_reverse_permute_1d(k_norm_clone.weight, rotary_dim))
+            new_attn.query_layernorm = TTNNRMSNorm.from_torch(q_norm_clone)
+            new_attn.key_layernorm = TTNNRMSNorm.from_torch(k_norm_clone)
 
         # Create RoPE and SDPA modules
         # When partial_rotary_factor < 1.0, use non-distributed RoPE which handles
