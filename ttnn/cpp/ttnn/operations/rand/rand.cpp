@@ -42,13 +42,13 @@ ttnn::Shape compute_shard_shape(
     return ttnn::Shape(std::move(shard_dims));
 }
 
-bool has_shard_placement(const tt::tt_metal::distributed::MeshMapperConfig& config) {
+ttsl::SmallVector<bool> build_shard_mask(const tt::tt_metal::distributed::MeshMapperConfig& config) {
+    ttsl::SmallVector<bool> mask;
+    mask.reserve(config.placements.size());
     for (const auto& p : config.placements) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(p)) {
-            return true;
-        }
+        mask.push_back(std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(p));
     }
-    return false;
+    return mask;
 }
 
 }  // namespace
@@ -66,7 +66,7 @@ Tensor rand(
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
     ttnn::Shape device_shape = shape;
-    bool unique_per_device = false;
+    ttsl::SmallVector<bool> mesh_dim_is_sharded;
     if (mesh_mapper.has_value()) {
         const auto& config = mesh_mapper.value();
         auto mesh_shape = config.mesh_shape_override.value_or(device.shape());
@@ -76,11 +76,19 @@ Tensor rand(
             config.placements.size(),
             mesh_shape.dims());
         device_shape = compute_shard_shape(shape, config, mesh_shape);
-        unique_per_device = has_shard_placement(config);
+        mesh_dim_is_sharded = build_shard_mask(config);
     }
 
     auto tensor = ttnn::prim::uniform(
-        device_shape, DataType::FLOAT32, Layout::TILE, memory_config, device, from, to, seed, unique_per_device);
+        device_shape,
+        DataType::FLOAT32,
+        Layout::TILE,
+        memory_config,
+        device,
+        from,
+        to,
+        seed,
+        std::move(mesh_dim_is_sharded));
     if (dtype != DataType::FLOAT32) {
         tensor = ttnn::typecast(tensor, dtype);
     }

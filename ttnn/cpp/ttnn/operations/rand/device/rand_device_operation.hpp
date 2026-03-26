@@ -19,7 +19,7 @@ struct RandDeviceOperation {
         const float from;
         const float to;
         uint32_t seed;
-        bool unique_per_device = false;
+        ttsl::SmallVector<bool> mesh_dim_is_sharded;
     };
 
     struct tensor_args_t {};
@@ -78,5 +78,5 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float from,
     float to,
     uint32_t seed,
-    bool unique_per_device = false);
+    ttsl::SmallVector<bool> mesh_dim_is_sharded = {});
 }  // namespace ttnn::prim

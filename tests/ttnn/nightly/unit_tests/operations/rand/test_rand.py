@@ -361,3 +361,72 @@ def test_rand_mesh_shard_matches_single_device(mesh_device):
         assert torch.equal(shards[d], reference), (
             f"Shard {d} does not match replicated rand with seed={device_seed} " f"(offset {d * num_active_cores})"
         )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, shard_mesh_dim",
+    [
+        pytest.param((2, 2), 0, id="2x2_shard_dim0"),
+        pytest.param((2, 2), 1, id="2x2_shard_dim1"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_rand_mesh_2d_shard_and_replicate(mesh_device, shard_mesh_dim):
+    """
+    On a 2D mesh, shard along one mesh dimension and replicate along the other.
+    Verify:
+      - Devices along the replicate axis hold identical data.
+      - Devices along the shard axis hold distinct data.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    rows, cols = mesh_shape
+    if rows * cols < 4:
+        pytest.skip("Need at least 4 devices for a 2x2 mesh")
+
+    seed = 77
+    shard_dim = 0
+    per_shard_rows = 256
+    num_shards = mesh_shape[shard_mesh_dim]
+    full_shape = (per_shard_rows * num_shards, 256)
+    dtype = ttnn.float32
+
+    placements = [
+        ttnn.PlacementShard(shard_dim) if i == shard_mesh_dim else ttnn.PlacementReplicate()
+        for i in range(len(mesh_shape))
+    ]
+
+    sharded_tensor = ttnn.rand(
+        full_shape,
+        mesh_device,
+        dtype=dtype,
+        seed=seed,
+        mesh_mapper=ttnn.MeshMapperConfig(placements),
+    )
+
+    device_tensors = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_tensor)]
+
+    replicate_mesh_dim = 1 - shard_mesh_dim
+
+    for r in range(rows):
+        for c in range(cols):
+            idx = r * cols + c
+            coord = (r, c)
+
+            # Check replicas: devices differing only on the replicate axis must match.
+            if coord[replicate_mesh_dim] > 0:
+                replica_coord = list(coord)
+                replica_coord[replicate_mesh_dim] = 0
+                replica_idx = replica_coord[0] * cols + replica_coord[1]
+                assert torch.equal(device_tensors[idx], device_tensors[replica_idx]), (
+                    f"Device {coord} should be a replica of device {tuple(replica_coord)} " f"but data differs"
+                )
+
+            # Check shards: devices differing on the shard axis must differ.
+            if coord[shard_mesh_dim] > 0:
+                shard_neighbor = list(coord)
+                shard_neighbor[shard_mesh_dim] = 0
+                neighbor_idx = shard_neighbor[0] * cols + shard_neighbor[1]
+                assert not torch.equal(device_tensors[idx], device_tensors[neighbor_idx]), (
+                    f"Device {coord} and device {tuple(shard_neighbor)} are on different "
+                    f"shards but hold identical data"
+                )

@@ -105,14 +105,23 @@ Factory::cached_program_t Factory::create_at(
             .compile_args = compute_compile_time_args,
         });
 
-    // When unique_per_device is set (i.e. sharded mesh_mapper), derive a per-device seed
-    // offset from the mesh coordinate so each device in the mesh generates a distinct
-    // random sequence.  The offset is scaled by the number of cores so that core-level
-    // seed ranges never overlap across devices.
+    // Derive a per-device seed offset so that devices holding different shards
+    // generate distinct random sequences, while replicas share the same seed.
+    // Only mesh dimensions marked as sharded contribute to the index; replicate
+    // dimensions are ignored so that all replicas of the same shard are identical.
     uint32_t device_seed_offset = 0;
-    if (operation_attributes.unique_per_device) {
-        auto linear_idx = mesh_coordinate.to_linear_index(operation_attributes.device->shape());
-        device_seed_offset = static_cast<uint32_t>(linear_idx) * static_cast<uint32_t>(cores.size());
+    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
+    if (!shard_mask.empty()) {
+        const auto& mesh_shape = operation_attributes.device->shape();
+        size_t shard_linear_idx = 0;
+        size_t shard_stride = 1;
+        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+            if (shard_mask[i]) {
+                shard_linear_idx += mesh_coordinate[i] * shard_stride;
+                shard_stride *= mesh_shape[i];
+            }
+        }
+        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
     }
 
     uint32_t tile_offset = 0;
@@ -160,7 +169,9 @@ void Factory::override_runtime_arguments(
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    size_t device_index = 0;
+    const auto& shard_mask = operation_attributes.mesh_dim_is_sharded;
+    const auto& mesh_shape = operation_attributes.device->shape();
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
         auto& cores = shared_vars.cores;
@@ -168,8 +179,17 @@ void Factory::override_runtime_arguments(
         const uint32_t output_addr = output.buffer()->address();
 
         uint32_t device_seed_offset = 0;
-        if (operation_attributes.unique_per_device) {
-            device_seed_offset = static_cast<uint32_t>(device_index) * static_cast<uint32_t>(cores.size());
+        if (!shard_mask.empty()) {
+            const auto& coord = coordinate_range.start_coord();
+            size_t shard_linear_idx = 0;
+            size_t shard_stride = 1;
+            for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+                if (shard_mask[i]) {
+                    shard_linear_idx += coord[i] * shard_stride;
+                    shard_stride *= mesh_shape[i];
+                }
+            }
+            device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(cores.size());
         }
 
         for (int i = 0; i < cores.size(); ++i) {
@@ -185,7 +205,6 @@ void Factory::override_runtime_arguments(
                 runtime_args[0] = output_addr;
             }
         }
-        ++device_index;
     }
 }
 

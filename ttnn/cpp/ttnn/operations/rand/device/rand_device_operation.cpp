@@ -62,11 +62,19 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float from,
     float to,
     uint32_t seed,
-    bool unique_per_device) {
+    ttsl::SmallVector<bool> mesh_dim_is_sharded) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed, unique_per_device},
+            shape,
+            dtype,
+            layout,
+            memory_config,
+            std::addressof(device),
+            from,
+            to,
+            seed,
+            std::move(mesh_dim_is_sharded)},
         OperationType::tensor_args_t{});
 }
 }  // namespace ttnn::prim
