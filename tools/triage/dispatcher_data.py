@@ -47,6 +47,7 @@ script_config = ScriptConfig(
 
 MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
 # Keep the error short on large systems; a few unique IDs are enough to spot mapping mismatches.
+# Quad+ Galaxy tends to flood devices in the logs.
 MAX_DEVICE_IDS_IN_ERROR_SUMMARY = 5
 
 
@@ -113,6 +114,10 @@ class DispatcherData:
         self._build_env_cache = {}
 
         # Prefill cache from no-arg RPC (best effort); strict handling happens on-demand.
+        # Impending upgrades to JIT build moves to using relative paths for firmware
+        # dephashes and build configs, so best-effort is fine here. Short circuits
+        # the device presence check to give more precise error up front in cases where
+        # device mappings are not applied correctly.
         self._populate_build_env_cache(strict=False)
 
         if not run_checks.devices:

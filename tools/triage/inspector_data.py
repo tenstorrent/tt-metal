@@ -109,6 +109,12 @@ class InspectorRpcController(InspectorData):
         def method(*args, **kwargs):
             try:
                 return asyncio.run_coroutine_threadsafe(self.__call_rpc(name, *args, **kwargs), self.loop).result()
+
+            # The asyncio call can fail with either an exception from the capnproto library itself or an exception
+            # from the code that is running in the RPC. Checking the error message for the prefix outputted when
+            # the error is from the RPC itself makes an explicit designation on whether the RPC errored out
+            # or capnproto had a socket error. This is one of the places that could throw an exception if
+            # there was a multihost port collision.
             except capnp.lib.capnp.KjException as e:
                 if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
                     message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
