@@ -10,7 +10,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy Wormhole system health
+- name: Galaxy Wormhole health
   cmd: |
     for i in {0..31}; do TT_VISIBLE_DEVICES="$i" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter=Cluster.ReportSystemHealth; done
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*";
@@ -26,8 +26,8 @@
   skus:
     wh_galaxy:
       timeout: 20
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
   arch: wormhole_b0
 
 - name: Galaxy Blackhole health
@@ -37,6 +37,6 @@
   skus:
     bh_galaxy:
       timeout: 10
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: fabric
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
   arch: blackhole
