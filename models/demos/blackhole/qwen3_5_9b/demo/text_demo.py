@@ -249,14 +249,6 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         if layer.is_full_attention:
             layer.attention.update_cache_after_trace(T)
 
-    # Profile one eager decode step to see per-layer breakdown
-    logger.info("=" * 70)
-    logger.info("PROFILING EAGER DECODE (per-layer breakdown):")
-    profile_input = torch.tensor([[warmup_token]], dtype=torch.long)
-    model.decode(profile_input, current_pos=T + 1, profile=True)
-    ttnn.synchronize_device(device)
-    logger.info("=" * 70)
-
     # Capture trace (embedding inside trace, internal warmup compiles new path)
     model.capture_decode_trace(device)
 
@@ -269,7 +261,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         next_input = torch.tensor([[current_token]], dtype=torch.long)
 
         t_step = time.time()
-        logits = model.decode_traced(next_input, current_pos=current_pos, profile=(i < 5))
+        logits = model.decode_traced(next_input, current_pos=current_pos)
         ttnn.synchronize_device(device)
         decode_times.append(time.time() - t_step)
 

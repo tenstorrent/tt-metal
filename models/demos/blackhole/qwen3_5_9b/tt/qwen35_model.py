@@ -178,7 +178,7 @@ class Qwen35Model:
 
         return logits
 
-    def prefill_layer_chunked(self, token_ids, chunk_size=2048, profile=False):
+    def prefill_layer_chunked(self, token_ids, chunk_size=2048):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Unlike prefill_segmented (segment through all layers), this processes
@@ -192,39 +192,14 @@ class Qwen35Model:
         Args:
             token_ids: [B, T] token IDs
             chunk_size: tokens per chunk (default 2048, matches direct prefill limit)
-            profile: if True, log per-layer timing and activation diagnostics
         """
-        import time as _time
-
         B, T = token_ids.shape
         self.reset_state(batch_size=B)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t_embed_start = _time.time()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(token_ids_ttnn)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t_embed_end = _time.time()
-            logger.info(
-                f"[PROFILE] embedding: {(_t_embed_end - _t_embed_start)*1000:.1f}ms "
-                f"(B={B}, T={T}, chunk_size={chunk_size})"
-            )
-            _layer_summary = {"deltanet": [], "attention": []}
-            _component_totals = {
-                "attn_norm": 0.0,
-                "attn": 0.0,
-                "resid_ffnorm": 0.0,
-                "mlp": 0.0,
-                "resid_out": 0.0,
-                "slice_rope": 0.0,
-                "concat_dram": 0.0,
-            }
 
         # Attention layers can use larger chunks than DeltaNet — no Neumann series
         # limitation, and fewer chunks means fewer unique KV cache sizes for SDPA
@@ -234,19 +209,9 @@ class Qwen35Model:
         for layer_idx, layer in enumerate(self.layers):
             layer_chunk_size = attn_chunk_size if layer.is_full_attention else chunk_size
 
-            if profile:
-                ttnn.synchronize_device(self.device)
-                _tl0 = _time.time()
-                _chunk_times = []
-
             chunks_out = []
-            num_chunks = (T + layer_chunk_size - 1) // layer_chunk_size
-            for chunk_i, chunk_start in enumerate(range(0, T, layer_chunk_size)):
+            for chunk_start in range(0, T, layer_chunk_size):
                 chunk_end = min(chunk_start + layer_chunk_size, T)
-
-                if profile:
-                    ttnn.synchronize_device(self.device)
-                    _tc0 = _time.time()
 
                 x_chunk = x[:, chunk_start:chunk_end, :]
                 x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)
@@ -254,7 +219,7 @@ class Qwen35Model:
                 if layer.is_full_attention:
                     cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
                     sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
-                    x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill", profile=profile)
+                    x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                 else:
                     x_chunk = layer.forward(
                         x_chunk,
@@ -262,19 +227,9 @@ class Qwen35Model:
                         sin=None,
                         mode="prefill",
                         chunk_size=layer.attention.long_prefill_chunk_size,
-                        profile=profile,
                     )
 
-                if profile:
-                    ttnn.synchronize_device(self.device)
-                    _tc1 = _time.time()
-                    _chunk_times.append((_tc1 - _tc0) * 1000)
-
                 chunks_out.append(x_chunk)
-
-            if profile:
-                ttnn.synchronize_device(self.device)
-                _t_concat0 = _time.time()
 
             if len(chunks_out) == 1:
                 x_new = chunks_out[0]
@@ -287,100 +242,15 @@ class Qwen35Model:
             ttnn.deallocate(x)
             x = x_new
 
-            if profile:
-                ttnn.synchronize_device(self.device)
-                _tl1 = _time.time()
-                _concat_dram_ms = (_tl1 - _t_concat0) * 1000
-                kind = "attention" if layer.is_full_attention else "deltanet"
-                layer_total_ms = (_tl1 - _tl0) * 1000
-                _layer_summary[kind].append(layer_total_ms)
-                _component_totals["concat_dram"] += _concat_dram_ms
-
-                # Accumulate component breakdown from decoder forward
-                if hasattr(layer, "_last_profile"):
-                    # Sum across chunks for this layer (last chunk's profile only for single chunk)
-                    p = layer._last_profile
-                    _component_totals["attn_norm"] += p["attn_norm_ms"]
-                    _component_totals["attn"] += p["attn_ms"]
-                    _component_totals["resid_ffnorm"] += p["resid_ffnorm_ms"]
-                    _component_totals["mlp"] += p["mlp_ms"]
-                    _component_totals["resid_out"] += p["resid_out_ms"]
-
-                # Per-chunk detail for this layer
-                chunk_detail = " ".join(f"{ct:.0f}" for ct in _chunk_times)
-                chunk_avg = sum(_chunk_times) / len(_chunk_times) if _chunk_times else 0
-                diag_msg = (
-                    f"  Layer {layer_idx:2d} ({kind:9s}) {layer_total_ms:7.0f}ms | "
-                    f"chunks({num_chunks}): [{chunk_detail}]ms avg={chunk_avg:.0f}ms | "
-                    f"concat+dram: {_concat_dram_ms:.0f}ms"
-                )
-                if hasattr(layer, "_last_profile"):
-                    p = layer._last_profile
-                    diag_msg += (
-                        f" | norm={p['attn_norm_ms']:.0f} "
-                        f"{'attn' if layer.is_full_attention else 'delta'}={p['attn_ms']:.0f} "
-                        f"mlp={p['mlp_ms']:.0f}"
-                    )
-                logger.info(diag_msg)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t_head0 = _time.time()
-
         x_last = x[:, -1:, :]
         x_last = rms_norm_ttnn(x_last, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x_last, self.lm_head_weight)
         ttnn.deallocate(x)
 
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t_head1 = _time.time()
-            head_ms = (_t_head1 - _t_head0) * 1000
-
-            dn_times = _layer_summary["deltanet"]
-            att_times = _layer_summary["attention"]
-            dn_total = sum(dn_times)
-            att_total = sum(att_times)
-            dn_avg = dn_total / len(dn_times) if dn_times else 0
-            att_avg = att_total / len(att_times) if att_times else 0
-            total_ms = (_t_head1 - _t_embed_start) * 1000
-
-            logger.info("=" * 80)
-            logger.info(f"[PROFILE] PREFILL SUMMARY (T={T}, chunk_size={chunk_size})")
-            logger.info(f"  embedding:      {(_t_embed_end - _t_embed_start)*1000:8.1f}ms")
-            logger.info(
-                f"  deltanet (x{len(dn_times)}): {dn_total:8.1f}ms  "
-                f"(avg {dn_avg:.1f}ms, min {min(dn_times):.1f}ms, max {max(dn_times):.1f}ms)"
-                if dn_times
-                else f"  deltanet (x0):        0.0ms"
-            )
-            logger.info(
-                f"  attention (x{len(att_times)}): {att_total:8.1f}ms  "
-                f"(avg {att_avg:.1f}ms, min {min(att_times):.1f}ms, max {max(att_times):.1f}ms)"
-                if att_times
-                else f"  attention (x0):       0.0ms"
-            )
-            logger.info(f"  norm+lm_head:   {head_ms:8.1f}ms")
-            logger.info(f"  TOTAL:          {total_ms:8.1f}ms  ({T / (total_ms / 1000):.0f} tok/s)")
-            logger.info(f"  --- Component breakdown (last chunk per layer, summed across layers) ---")
-            logger.info(f"  attn_norm:      {_component_totals['attn_norm']:8.1f}ms")
-            logger.info(f"  attn/deltanet:  {_component_totals['attn']:8.1f}ms")
-            logger.info(f"  resid+ff_norm:  {_component_totals['resid_ffnorm']:8.1f}ms")
-            logger.info(f"  mlp:            {_component_totals['mlp']:8.1f}ms")
-            logger.info(f"  resid_out:      {_component_totals['resid_out']:8.1f}ms")
-            logger.info(f"  concat+dram:    {_component_totals['concat_dram']:8.1f}ms")
-            logger.info("=" * 80)
-
         return logits
 
-    def decode(self, token_ids, current_pos, profile=False):
-        import time as _time
-
+    def decode(self, token_ids, current_pos):
         B = token_ids.shape[0]
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t0 = _time.time()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
@@ -389,57 +259,12 @@ class Qwen35Model:
         position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
         cos, sin = self.rope.get_rot_mats(position_ids)
 
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t1 = _time.time()
-            _layer_times = {"deltanet": [], "attention": []}
-
         for i, layer in enumerate(self.layers):
-            if profile:
-                ttnn.synchronize_device(self.device)
-                _tl0 = _time.time()
-            x = layer.forward(x, cos=cos, sin=sin, mode="decode", profile=profile)
-            if profile:
-                ttnn.synchronize_device(self.device)
-                _tl1 = _time.time()
-                key = "attention" if layer.is_full_attention else "deltanet"
-                _layer_times[key].append((_tl1 - _tl0, i))
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t2 = _time.time()
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode")
 
         x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x, self.lm_head_weight)
         ttnn.deallocate(x)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t3 = _time.time()
-            dn_times = [t for t, _ in _layer_times["deltanet"]]
-            att_times = [t for t, _ in _layer_times["attention"]]
-            dn_avg = sum(dn_times) / len(dn_times) * 1000 if dn_times else 0
-            att_avg = sum(att_times) / len(att_times) * 1000 if att_times else 0
-            logger.info(
-                f"  [DECODE LAYER PROFILE] embed+rope: {(_t1-_t0)*1000:.1f}ms | "
-                f"deltanet(24): {sum(dn_times)*1000:.1f}ms (avg {dn_avg:.1f}ms) | "
-                f"attention(8): {sum(att_times)*1000:.1f}ms (avg {att_avg:.1f}ms) | "
-                f"norm+lmhead: {(_t3-_t2)*1000:.1f}ms | "
-                f"total: {(_t3-_t0)*1000:.1f}ms"
-            )
-            # Per-layer component breakdown
-            for i, layer in enumerate(self.layers):
-                if hasattr(layer, "_last_profile"):
-                    p = layer._last_profile
-                    logger.info(
-                        f"    Layer {i:2d} ({p['kind']:9s}) "
-                        f"{p['total_ms']:6.1f}ms | "
-                        f"norm={p['attn_norm_ms']:.1f} "
-                        f"{'attn' if p['kind']=='attention' else 'delta'}={p['attn_ms']:.1f} "
-                        f"resid+ffnorm={p['resid_ffnorm_ms']:.1f} "
-                        f"mlp={p['mlp_ms']:.1f} "
-                        f"resid_out={p['resid_out_ms']:.1f}"
-                    )
 
         return logits
 
@@ -679,20 +504,13 @@ class Qwen35Model:
 
         logger.info("Trace captured successfully (embedding inside trace)!")
 
-    def decode_traced(self, token_ids, current_pos, profile=False):
+    def decode_traced(self, token_ids, current_pos):
         """Execute traced decode: write inputs via host DMA, replay trace.
 
         Args:
             token_ids: torch.Tensor [1, 1] — token IDs (int64 or int32)
             current_pos: int — current position in the sequence
-            profile: if True, log per-phase timing breakdown
         """
-        import time as _time
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t0 = _time.time()
-
         # Host→device copies (fast DMA, before trace replay)
         token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(token_host, self._trace_token_ids)
@@ -701,10 +519,6 @@ class Qwen35Model:
         cos_host, sin_host = self.rope.get_cos_sin_host(current_pos)
         ttnn.copy_host_to_device_tensor(cos_host, self._trace_cos)
         ttnn.copy_host_to_device_tensor(sin_host, self._trace_sin)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t1 = _time.time()
 
         # Phase 2: update position tensor for paged_update_cache
         if self._trace_position is not None:
@@ -720,33 +534,14 @@ class Qwen35Model:
             if layer.is_full_attention:
                 layer.attention.update_mask_for_pos(current_pos)
 
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t2 = _time.time()
-
         # Replay the captured trace
         ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t3 = _time.time()
 
         # Phase 1: post-trace KV cache update (only if paged_update_cache not used)
         if self._trace_position is None:
             for layer in self.layers:
                 if layer.is_full_attention:
                     layer.attention.update_cache_after_trace(current_pos)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t4 = _time.time()
-            logger.info(
-                f"  [DECODE PROFILE] host_dma: {(_t1-_t0)*1000:.1f}ms | "
-                f"mask_update: {(_t2-_t1)*1000:.1f}ms | "
-                f"trace_exec: {(_t3-_t2)*1000:.1f}ms | "
-                f"cache_update: {(_t4-_t3)*1000:.1f}ms | "
-                f"total: {(_t4-_t0)*1000:.1f}ms"
-            )
 
         return self._trace_output
 

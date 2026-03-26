@@ -66,21 +66,11 @@ class Qwen35TransformerBlock:
 
         self.feed_forward = Qwen35MLP(args, state_dict, layer_num, device, weight_cache_path)
 
-    def forward(self, x, cos=None, sin=None, mode="decode", chunk_size=64, profile=False, position_tensor=None):
-        import time as _time
-
+    def forward(self, x, cos=None, sin=None, mode="decode", chunk_size=64, position_tensor=None):
         mc = ttnn.L1_MEMORY_CONFIG if mode == "decode" else None
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t0 = _time.time()
 
         # "prefill_segmented" acts like prefill but forces recurrent for DeltaNet
         attn_input = rms_norm_ttnn(x, self.attention_norm_weight, eps=self.norm_eps, memory_config=mc)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t1 = _time.time()
 
         if self.is_full_attention:
             attn_output = self.attention.forward(attn_input, cos, sin, position_tensor=position_tensor)
@@ -89,42 +79,16 @@ class Qwen35TransformerBlock:
             attn_output = self.attention.forward(attn_input, mode=deltanet_mode, chunk_size=chunk_size)
         ttnn.deallocate(attn_input)
 
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t2 = _time.time()
-
         h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
         ff_input = rms_norm_ttnn(h, self.ff_norm_weight, eps=self.norm_eps, memory_config=mc)
 
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t3 = _time.time()
-
         ff_output = self.feed_forward.forward(ff_input)
         ttnn.deallocate(ff_input)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t4 = _time.time()
 
         output = ttnn.add(h, ff_output)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
-
-        if profile:
-            ttnn.synchronize_device(self.device)
-            _t5 = _time.time()
-            kind = "attention" if self.is_full_attention else "deltanet"
-            self._last_profile = {
-                "attn_norm_ms": (_t1 - _t0) * 1000,
-                "attn_ms": (_t2 - _t1) * 1000,
-                "resid_ffnorm_ms": (_t3 - _t2) * 1000,
-                "mlp_ms": (_t4 - _t3) * 1000,
-                "resid_out_ms": (_t5 - _t4) * 1000,
-                "total_ms": (_t5 - _t0) * 1000,
-                "kind": kind,
-            }
 
         return output
