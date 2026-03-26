@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Unified same-NOC multicast sender with M_block x N_block streaming.
-// Row senders (c_0) read M_block rows indexed by msb, col senders (c_1) read N_block rows indexed by nsb.
-// Loop: for msb: for nsb: for blk: read + multicast.
+// Row senders (c_0) read M_block rows indexed by m_sub, col senders (c_1) read N_block rows indexed by n_sub.
+// Loop: for m_sub: for n_sub: for blk: read + multicast.
 // Even blocks → lower/diag, odd blocks → upper. One handshake per K-block batch.
 // Only pushes tiles of sender's own parity to CB.
 
@@ -40,13 +40,13 @@ void kernel_main() {
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(11);
     uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(12));
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(13);
     constexpr uint32_t M_block = get_compile_time_arg_val(14);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(15);
     constexpr auto tensor_args = TensorAccessorArgs<16>();
 #else
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(9);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(10);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(10);
     constexpr auto tensor_args = TensorAccessorArgs<11>();
 #endif
 
@@ -95,10 +95,10 @@ void kernel_main() {
 
     uint32_t recv_cb_base = get_write_ptr(cb_id);
 
-    for (uint32_t msb = 0; msb < M_num_subblocks; msb++) {
-        for (uint32_t nsb = 0; nsb < N_num_subblocks; nsb++) {
-            // Row sender (c_0): reads rows msb*M_block+m; col sender (c_1): reads rows nsb*N_block+n
-            uint32_t row_base = (cb_id == 0) ? msb * rows_per_block : nsb * rows_per_block;
+    for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
+        for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
+            // Row sender (c_0): reads rows m_sub*M_block+m; col sender (c_1): reads rows n_sub*N_block+n
+            uint32_t row_base = (cb_id == 0) ? m_sub * rows_per_block : n_sub * rows_per_block;
 
             uint32_t lower_recv_offset = 0;
             uint32_t upper_recv_offset = 0;
@@ -210,20 +210,20 @@ void kernel_main() {
 
 #ifdef SENDER_REDUCE_SEND
         {
-            uint32_t M_start = msb * rows_per_block;
+            uint32_t M_start = m_sub * rows_per_block;
             uint32_t current_M_block = (rows_per_block < Mpc - M_start) ? rows_per_block : (Mpc - M_start);
-            uint32_t msb_tiles = current_M_block * Mpc;
+            uint32_t m_sub_tiles = current_M_block * Mpc;
 
             uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
             uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
 
-            cb_wait_front(cb_out, msb_tiles);
+            cb_wait_front(cb_out, m_sub_tiles);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
             uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
-            noc_async_write(l1_read_addr, partner_noc_addr, msb_tiles * out_tile_size);
+            noc_async_write(l1_read_addr, partner_noc_addr, m_sub_tiles * out_tile_size);
             noc_async_write_barrier();
             noc_semaphore_inc(partner_sem_noc, 1);
-            cb_pop_front(cb_out, msb_tiles);
+            cb_pop_front(cb_out, m_sub_tiles);
         }
 #endif
     }
