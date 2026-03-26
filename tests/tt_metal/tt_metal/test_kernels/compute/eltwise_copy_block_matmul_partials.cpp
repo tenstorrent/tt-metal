@@ -34,8 +34,8 @@ void kernel_main() {
     for (uint32_t b = 0; b < outer_loop; ++b) {
 #ifdef ARCH_QUASAR
         dfb_in.wait_front(num_single_transfer);
-        acquire_dst();
         dfb_out.reserve_back(num_single_transfer);
+        acquire_dst();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
             copy_block_matmul_partials(dfb_in.get_id(), i, i, 1);
@@ -49,10 +49,10 @@ void kernel_main() {
 #else
         // Wait for num_single_transfer tiles to be available in in_cb
         cb_in.wait_front(num_single_transfer);
-        // Acquire DEST reg for MATH/PACK
-        acquire_dst();
         // Reserve out_cb space for num_single_transfer tiles
         cb_out.reserve_back(num_single_transfer);
+        // Acquire DEST reg for MATH/PACK
+        acquire_dst();
 
         // Copy num_single_transfer tiles from in_cb to DEST
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
