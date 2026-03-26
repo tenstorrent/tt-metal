@@ -96,3 +96,110 @@
 - `ttnn.to_torch(fused_ttnn)` before prefill trace → replaced by `ttnn.copy`
 
 **Unified trace:** Enabled. `--use-unified-trace` now works end-to-end.
+
+---
+
+### 2026-03-25 — vLLM Generator Refactoring
+
+**Status:** Completed. Removed `Molmo2Generator` dependency from `generator_vllm.py`.
+
+**Problem:** State corruption when vLLM interleaves multiple requests:
+- Position state corruption: `run_prefill()` calls `reset_kv_cache(original_seq_len)` which corrupts decode state for in-flight requests
+- Dual KV cache conflict: Demo's internal `self.kv_caches` conflicted with vLLM's paged cache
+- Trace conflict: Demo captured traces during inference after vLLM warmup
+
+**Solution:** Make `generator_vllm.py` completely independent from `demo.py`:
+
+| File | Change |
+|------|--------|
+| `tt/utils.py` | Created shared utilities (constants, image preprocessing, padding) |
+| `tt/model_loader.py` | Created shared model loading functions |
+| `tt/generator_vllm.py` | Removed `Molmo2Generator`, added direct model calls |
+| `demo/demo.py` | Updated to import from shared modules |
+
+**Changes to `Molmo2ForConditionalGeneration`:**
+1. Added state management: `kv_caches`, `current_pos`, `rot_mat_idxs`, `prefill_traces`, etc.
+2. Added `init_kv_cache()` - placeholder for KV cache initialization
+3. Added `_prepare_text_inputs()` - handles vision+text embedding fusion
+4. Added `_run_prefill()` - calls model forward directly (not Molmo2Generator)
+5. Added `_reset_kv_cache()` - initializes position tensors for decode
+6. Removed deprecated `_warmup_traces` method
+
+**Architecture Pattern:** Follows `tt_transformers/generator_vllm.py` where `LlamaForCausalLM` calls model forward directly.
+
+**Pending Testing:**
+- vLLM server with all modalities (text, image, video)
+- Standalone demo with tracing and paged attention
+
+---
+
+### 2026-03-26 — Demo Warmup & tt-inference-server Integration
+
+**Status:** Completed. Demo warmup added for accurate perf metrics. Server integration verified.
+
+**Demo Changes:**
+| Change | Description |
+|--------|-------------|
+| Warmup run | Added warmup inference before actual run to capture accurate post-compilation metrics |
+| Paged attention + trace | Fixed compatibility: prefill traces incompatible with paged attention (vLLM writes to KV cache during trace) |
+| Decode trace | Works with paged attention (page_table is trace input tensor) |
+| Position reset | Changed `kv_caches = None` to `reset_kv_cache(0)` to preserve KV cache and traces |
+
+**Performance (post-warmup, paged attention + decode trace):**
+| Metric | Measured |
+|--------|----------|
+| Vision (traced) | ~97 ms |
+| E2E TTFT | ~403 ms |
+| Decode (traced) | ~31 tok/s |
+
+**tt-inference-server Integration:**
+- `generator_vllm.py` implements vLLM interface directly (no demo.py dependency)
+- `warmup_model_prefill()` captures prefill traces for bucket sizes [128, 256, 512, 1024]
+- `warmup_model_decode()` captures decode trace with paged attention support
+- Model registered in `tt-vllm-plugin/__init__.py` as `TTMolmo2ForConditionalGeneration`
+- Configured in `model_spec.json` for T3K with vLLM
+
+**Test Script Created:**
+- `tests/test_vllm_server.py` - Tests text-only, image+text, and sequential requests
+
+**Verified Working:**
+- `--use-decode-trace` with paged attention
+- Warmup phase for accurate performance metrics
+- Sequential requests without state corruption
+
+**Trace Compatibility (fixed 2026-03-26):**
+- Prefill traces (`--use-trace`) now work with paged attention (page_table is a trace input tensor)
+- Decode traces work with paged attention (page_table updated via ttnn.copy before execution)
+- `--use-unified-trace` still incompatible with paged attention (vision trace issue)
+
+---
+
+### 2026-03-26 — Warmup and Trace Fixes for All Modalities
+
+**Status:** Completed. All 3 demo modes (text, image, video) working with paged attention + tracing.
+
+**Issues Fixed:**
+| Issue | Fix |
+|-------|-----|
+| Prefill traces incorrectly disabled with paged attention | Removed erroneous incompatibility check; page_table is a trace input tensor |
+| Garbage output when using prefill traces | Initialize KV cache BEFORE capturing traces so KV ops are included |
+| Uninitialized page_table during warmup | Copy sequential block mapping to trace tensors before warmup |
+| Trace memory corruption with multiple buckets | Restructure warmup: allocate ALL tensors first, then capture traces |
+
+**Warmup Configuration:**
+- Default bucket sizes: [128, 256, 512, 1024, 2048, 4096]
+- Buckets exceeding max_seq_len are skipped
+- KV cache and page_table initialized before trace capture
+
+**Performance (post-warmup, paged attention + prefill trace + decode trace):**
+| Mode | Prefill-only TTFT | E2E TTFT | Decode |
+|------|-------------------|----------|--------|
+| Text-only | 66.51ms | 116.16ms | 33.09 tok/s |
+| Image (1 crop) | 99.55ms | 2178ms | ~33 tok/s |
+| Video (8 frames) | 579.19ms | 6332ms | 30.36 tok/s |
+
+**Key Code Changes:**
+- `warmup_all_buckets()`: Two-phase approach - allocate first, then capture
+- `init_kv_cache()` called before prefill trace capture
+- Page_table trace tensors initialized with `torch.arange(max_num_blocks)`
+- Removed incorrect paged attention + prefill trace incompatibility check
