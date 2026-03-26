@@ -70,6 +70,9 @@ struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
 };
 
+// Sentinel for "no CB" — beyond the valid 0-31 range.
+constexpr uint32_t INVALID_CB = 32;
+
 /**
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
@@ -142,7 +145,8 @@ void reduce_c_row_group(
     bool do_eltwise_max,
     uint32_t sbh,
     uint32_t reduce_cols,
-    bool respect_trigger = false) {
+    bool respect_trigger = false,
+    uint32_t mirror_cb = INVALID_CB) {
     const uint32_t group_size = sbh;
     const uint32_t row_start = row_group_index * group_size;
 
@@ -184,6 +188,14 @@ void reduce_c_row_group(
 
     for (uint32_t i = 0; i < group_size; i++) {
         pack_tile<false>(i, out_cb);
+    }
+
+    // Dual-write: same DST data to writer's staging CB (e.g. cb_max_out).
+    // DST is read non-destructively by pack, so this is safe before tile_regs_release().
+    if (mirror_cb != INVALID_CB) {
+        for (uint32_t i = 0; i < group_size; i++) {
+            pack_tile<false>(i, mirror_cb);
+        }
     }
 
     tile_regs_release();
@@ -361,6 +373,9 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
  * Folds the sum correction tile(s) into the output correction's last DEST batch
  * when there's room, or appends a minimal extra batch otherwise.
  * Eliminates the separate init + acquire/release overhead for sum correction.
+ *
+ * ob_q_subblock controls read offset for out_in_cb and bcast_cb (0 when popped row-by-row).
+ * sum_q_subblock controls read offset for sum_in_cb (cumulative when not popped per-row).
  */
 template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
 void salad_correct_fused(
@@ -369,7 +384,8 @@ void salad_correct_fused(
     uint32_t bcast_cb,
     uint32_t out_out_cb,
     uint32_t sum_out_cb,
-    uint32_t q_subblock,
+    uint32_t ob_q_subblock,
+    uint32_t sum_q_subblock,
     uint32_t write_q_subblock) {
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
@@ -377,14 +393,17 @@ void salad_correct_fused(
     constexpr uint32_t last_out_cols = (sbw_t % col_batch == 0) ? col_batch : (sbw_t % col_batch);
     constexpr bool can_fuse_last = (last_out_cols * sbh_t + sbh_t <= dst_size);
 
-    const uint32_t read_row_base = q_subblock * tiles_per_row;
+    // out_in_cb and bcast_cb may be popped row-by-row (ob_q_subblock=0) while
+    // sum_in_cb retains cumulative indexing (sum_q_subblock=salad_row).
+    const uint32_t ob_row_base = ob_q_subblock * tiles_per_row;
+    const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
     mul_bcast_cols_init_short(out_in_cb, bcast_cb);
 
-    cb_wait_front(out_in_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
-    cb_wait_front(sum_in_cb, (q_subblock + 1) * tiles_per_row);
-    cb_wait_front(bcast_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(out_in_cb, (ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
+    cb_wait_front(sum_in_cb, (sum_q_subblock + 1) * tiles_per_row);
+    cb_wait_front(bcast_cb, (ob_q_subblock + 1) * tiles_per_row);
 
     constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
@@ -397,13 +416,13 @@ void salad_correct_fused(
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < cur_cols; j++) {
-                uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + col_base + j;
-                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, read_row_base + i, dst_index++);
+                uint32_t in0_tile_index = (ob_row_base + i) * tiles_per_column + col_base + j;
+                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, ob_row_base + i, dst_index++);
             }
         }
         if (fuse_sum_here) {
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, dst_index++);
+                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, dst_index++);
             }
         }
         tile_regs_commit();
@@ -441,7 +460,7 @@ void salad_correct_fused(
     if constexpr (!can_fuse_last) {
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, i);
+            mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, ob_row_base + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -659,7 +678,9 @@ static void sdpa_inner_loop_step(
     const uint32_t lw_partial_tile_idx = 0,
     const uint32_t active_Sk = Sk_chunk_t,
     const bool reduce_trigger = false,
-    const uint32_t actual_sbw = qkt_subblock_w) {
+    const uint32_t actual_sbw = qkt_subblock_w,
+    const uint32_t save_out_cb = INVALID_CB,
+    const uint32_t save_max_cb = INVALID_CB) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     // TODO: pick up the size of dest from dest_helper once it is merged to main.
@@ -688,6 +709,9 @@ static void sdpa_inner_loop_step(
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * KT_stride);
 
     cb_reserve_back(cur.sum, Sq_chunk_t);
+    if (save_max_cb != INVALID_CB) {
+        cb_reserve_back(save_max_cb, Sq_chunk_t);
+    }
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
@@ -808,8 +832,12 @@ static void sdpa_inner_loop_step(
                 !is_first_iter /*do_eltwise_max*/,
                 qkt_subblock_h,
                 active_Sk,
-                reduce_trigger);
+                reduce_trigger,
+                save_max_cb);
             cb_push_back(cur.max, qkt_subblock_h);
+            if (save_max_cb != INVALID_CB) {
+                cb_push_back(save_max_cb, qkt_subblock_h);
+            }
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
 #endif
@@ -856,9 +884,13 @@ static void sdpa_inner_loop_step(
         uint32_t qktv_in0_index_offset = 0;
         uint32_t qktv_in0_wait_tiles = qktv_in0_row_tiles;
 
+        // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
+        // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
+        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
+
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        cb_reserve_back(cur.out, qktv_output_num_tiles);
+        cb_reserve_back(out_cb, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
 #ifdef ARCH_BLACKHOLE
@@ -893,7 +925,7 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
                     if constexpr (!uniform_unpack_format) {
-                        reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
+                        reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                     }
 #ifdef ARCH_BLACKHOLE
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
@@ -904,7 +936,7 @@ static void sdpa_inner_loop_step(
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
-                            cur.out,
+                            out_cb,
                             qktv_in0_index_offset + kt_sub * matmul_inner,
                             kt_sub * matmul_inner * vDHt + v_index_offset,
                             0,
@@ -916,7 +948,7 @@ static void sdpa_inner_loop_step(
                         v_index_offset += qktv_subblock_w;
                     }
                     if constexpr (!uniform_unpack_format) {
-                        reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
+                        reconfig_data_format(cb_v_in, out_cb, cb_qkt_im, out_cb);
                     }
                 }
 
@@ -933,31 +965,36 @@ static void sdpa_inner_loop_step(
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             cb_push_back(cur.sum, sbh);
-            cb_push_back(cur.out, sbh * vDHt);
+            cb_push_back(out_cb, sbh * vDHt);
             normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
-                cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, sbh);
+                cur.sum, out_cb, cb_col_identity, cb_recip_scratch, cb_normalized_out, sbh);
             pushed++;
         };
 
         // SALAD correction lambda — works for both full subblocks (sbh=qktv_h) and
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
+        // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+                // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
+                // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 if constexpr (has_qktv_remainder) {
                     if (sbh == qktv_remainder_h) {
                         salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
+                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                     } else {
                         salad_correct_fused<qktv_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
+                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                     }
                 } else {
                     salad_correct_fused<qktv_h, vDHt, dst_size>(
-                        prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
+                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
                 }
             }
+            cb_pop_front(cb_exp_max_diff, sbh);
+            cb_pop_front(prev.out, sbh * vDHt);
             PACK((llk_pack_reconfig_l1_acc(0)));
         };
 
@@ -996,7 +1033,7 @@ static void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
+                    reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
 #ifdef ARCH_BLACKHOLE
                 mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
@@ -1007,7 +1044,7 @@ static void sdpa_inner_loop_step(
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
-                        cur.out,
+                        out_cb,
                         qktv_in0_index_offset,
                         v_index_offset,
                         w_q,
@@ -1019,11 +1056,11 @@ static void sdpa_inner_loop_step(
                     v_index_offset += qktv_subblock_w;
                 }
                 if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
+                    reconfig_data_format(cb_v_in, out_cb, cb_qkt_im, out_cb);
                 }
             }
 
-            // SALAD corrections for previous group (always full, h=qktv_h)
+            // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
             if (!is_first_iter) {
                 // Last main-loop iteration: hoist drain's sub_exp so both salads
                 // (current row and drain row) chain back-to-back with one FPU init.
@@ -1040,6 +1077,10 @@ static void sdpa_inner_loop_step(
                     salad_correct_row(salad_row, w_salad, qktv_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
+                    } else {
+                        cb_push_back(cur.sum, qktv_h);
+                        cb_push_back(out_cb, qktv_h * vDHt);
+                        pushed_rows++;
                     }
 
                     const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
@@ -1047,15 +1088,27 @@ static void sdpa_inner_loop_step(
                     salad_correct_row(drain_salad_row, drain_w, drain_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
+                    } else {
+                        cb_push_back(cur.sum, drain_h);
+                        cb_push_back(out_cb, drain_h * vDHt);
+                        pushed_rows++;
                     }
                 } else {
                     salad_correct_row(salad_row, w_salad, qktv_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
+                    } else {
+                        cb_push_back(cur.sum, qktv_h);
+                        cb_push_back(out_cb, qktv_h * vDHt);
+                        pushed_rows++;
                     }
                 }
             } else if (is_last_iter) {
                 normalize_row(pushed_rows, qktv_h);
+            } else {
+                cb_push_back(cur.sum, qktv_h);
+                cb_push_back(out_cb, qktv_h * vDHt);
+                pushed_rows++;
             }
 
             qktv_in0_index_offset += cur_h * KT_stride;
@@ -1078,21 +1131,27 @@ static void sdpa_inner_loop_step(
                 }
                 if (is_last_iter) {
                     normalize_row(pushed_rows, drain_h);
+                } else {
+                    cb_push_back(cur.sum, drain_h);
+                    cb_push_back(out_cb, drain_h * vDHt);
+                    pushed_rows++;
                 }
             } else {
                 // Drain was hoisted into the last main-loop iteration above.
-                // Only first-K-chunk normalize remains.
-                if (is_first_iter && is_last_iter) {
-                    normalize_row(pushed_rows, drain_h);
+                // For is_first_iter (no SALAD), the drain row still needs push/normalize.
+                if (is_first_iter) {
+                    if (is_last_iter) {
+                        normalize_row(pushed_rows, drain_h);
+                    } else {
+                        cb_push_back(cur.sum, drain_h);
+                        cb_push_back(out_cb, drain_h * vDHt);
+                        pushed_rows++;
+                    }
                 }
             }
         }
 
-        // Bulk push — skip on last iteration when rows are consumed by normalization.
-        if (!is_last_iter) {
-            cb_push_back(cur.sum, Sq_chunk_t);
-            cb_push_back(cur.out, qktv_output_num_tiles);
-        }
+        // All rows pushed individually — no bulk push needed.
 
         cb_pop_front(cb_v_in, KT_stride * vDHt);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
@@ -1239,11 +1298,10 @@ void sdpa_standard_v2(
                 is_padded ? padded_sbw : full_sbw);
 
             // Post-iteration cleanup
+            // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
-                cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
                 cb_pop_front(prev.max, Sq_chunk_t);
                 cb_pop_front(prev.sum, Sq_chunk_t);
-                cb_pop_front(prev.out, Sq_chunk_t * vDHt);
             }
 
             if (is_last) {
@@ -1379,11 +1437,13 @@ void sdpa_ring_v2(
         // First ring iteration starts fresh; subsequent ones have prior accumulated state.
         const bool is_first_kv_for_this_q = (ring_iter == 0);
 
-        // Multi Q-chunk: restore accumulators from DRAM on non-first ring iterations.
-        if (q_per_core > 1 && ring_iter > 0) {
-            copy_block(cb_prev_out, q_prev.out, out_chunk_tiles);
-            copy_block(cb_max_in, q_prev.max, Sq_chunk_t);
-            copy_block(cb_sum_in, q_prev.sum, Sq_chunk_t);
+        // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
+        // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
+        // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
+        const AccumulatorHalf original_prev = q_prev;
+        const bool restore_from_staging = (q_per_core > 1 && ring_iter > 0);
+        if (restore_from_staging) {
+            q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
 
         uint32_t KV_chunks_processed = 0;
@@ -1400,9 +1460,17 @@ void sdpa_ring_v2(
             KV_chunks_processed_in_iter++;
 
             const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+            const bool is_last_k = (KV_chunks_processed == total_valid_kv);
 
             // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last = is_last_ring_iter && (KV_chunks_processed == total_valid_kv);
+            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+
+            // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
+            constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+            if (is_last_k && q_per_core > 1) {
+                cb_reserve_back(cb_signal, 1);
+                cb_push_back(cb_signal, 1);
+            }
 
             // Determine if this K chunk needs masking (partial tile within a tile boundary)
             const bool is_global_n_mask_chunk = ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id;
@@ -1438,6 +1506,16 @@ void sdpa_ring_v2(
                 chunk_sbw = joint_n_sbw;
             }
 
+            // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
+            // to writer-staging CBs, eliminating post-loop copy_block calls.
+            // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
+            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
+            const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
+            if (save_to_staging) {
+                q_cur.sum = cb_sum_out;
+            }
+
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -1467,27 +1545,32 @@ void sdpa_ring_v2(
                 cb_mask_in>(
                 q_prev,
                 q_cur,
-                is_last,
+                is_last_k_of_last_ring_iter,
                 is_first,
                 apply_mask,
                 lw_partial_tile_idx,
                 active_Sk_param,
                 can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_sbw);
+                chunk_sbw,
+                step_save_out_cb,
+                step_save_max_cb);
 
             // Post-iteration cleanup: pop previous values and swap aliases
+            // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
-                cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
                 cb_pop_front(q_prev.max, Sq_chunk_t);
                 cb_pop_front(q_prev.sum, Sq_chunk_t);
-                cb_pop_front(q_prev.out, Sq_chunk_t * vDHt);
             }
 
-            if (is_last) {
+            if (is_last_k_of_last_ring_iter) {
                 // Normalization consumed cur.sum and cur.out; pop cur.max.
                 cb_pop_front(q_cur.max, Sq_chunk_t);
             } else {
                 std::swap(q_prev, q_cur);
+                // After K0's swap, q_cur holds staging buffers. Reset to original accumulator CBs.
+                if (restore_from_staging && KV_chunks_processed == 1) {
+                    q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                }
             }
         }
 
@@ -1505,13 +1588,13 @@ void sdpa_ring_v2(
             acc_state.cur = q_cur;
         } else if (!is_last_ring_iter) {
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
-            // q_prev holds final accumulators after the last swap.
-            if constexpr (!uniform_format) {
-                pack_reconfig_data_format(cb_out);
-            }
-            copy_block(q_prev.out, cb_out, out_chunk_tiles);
-            copy_block(q_prev.max, cb_max_out, Sq_chunk_t);
-            copy_block(q_prev.sum, cb_sum_out, Sq_chunk_t);
+            // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
+            // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).
+            // Max already in cb_max_out (dual-write from DST during reduce on last K-chunk).
+            // Pop the accumulator CB for max — dual-write doesn't replace the alias,
+            // so the accumulator CB still has tiles from the last K-chunk's reduce.
+            // (Sum doesn't need this because planting replaced the alias entirely.)
+            cb_pop_front(q_prev.max, Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }
