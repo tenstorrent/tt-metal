@@ -9,6 +9,7 @@ TT-NN provides a mechanism for tracing operations and memory activities during n
 - [Basic Usage](#basic-usage)
 - [Saving Reports](#saving-reports)
 - [Advanced Features](#advanced-features)
+  - [Full Capture (all features)](#save-to-file-for-ttnn-visualizer)
   - [Reducing Capture Overhead](#reducing-capture-overhead)
 - [Levelized Graph](#levelized-graph)
 - [Testing & Validation](#testing--validation)
@@ -42,17 +43,22 @@ auto graph = ttnn::graph::GraphProcessor::end_graph_capture();
 
 ### Save to File (for ttnn-visualizer)
 
-For a complete capture with all data (per-op sub-graphs, buffer pages, stack traces):
+For a complete capture with all data (per-op sub-graphs, buffer pages, stack traces), use `full_graph_capture`:
 
 ```python
 import ttnn
 
-with ttnn.manage_config("enable_fast_runtime_mode", False):
-    ttnn.graph.enable_detailed_buffer_tracing()
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+with ttnn.graph.full_graph_capture("my_report.json"):
     # ... your operations ...
-    ttnn.graph.end_graph_capture_to_file("my_report.json")
-    ttnn.graph.disable_detailed_buffer_tracing()
+```
+
+This single context manager enables Python stack traces, detailed buffer tracing, and slow dispatch (per-op captured sub-graphs), then restores all settings on exit.
+
+To keep fast dispatch (no per-operation sub-graphs) while still capturing everything else:
+
+```python
+with ttnn.graph.full_graph_capture("my_report.json", slow_dispatch=False):
+    # ... your operations ...
 ```
 
 Then import into the visualizer database:
@@ -61,7 +67,7 @@ Then import into the visualizer database:
 python -m ttnn.graph_report my_report.json ./visualizer_db/
 ```
 
-> **Note**: `enable_fast_runtime_mode=False` uses `Operation` (slow dispatch) which produces per-operation captured sub-graphs. The default `FastOperation` (fast dispatch) records arguments and tensor IDs but reconstructs sub-graphs synthetically. See [FastOperation vs Operation](#fastoperation-vs-operation) for details. Stack traces are enabled by default. To reduce overhead, see [Reducing Capture Overhead](#reducing-capture-overhead).
+> **Note**: `slow_dispatch=True` (default) temporarily sets `enable_fast_runtime_mode=False`, which uses the `Operation` decorator to produce per-operation captured sub-graphs. With `slow_dispatch=False`, the default `FastOperation` records arguments and tensor IDs but sub-graphs are reconstructed synthetically by the importer. See [FastOperation vs Operation](#fastoperation-vs-operation) for details. To reduce overhead further, see [Reducing Capture Overhead](#reducing-capture-overhead).
 
 ---
 
@@ -77,13 +83,13 @@ The trace records:
 - **Call hierarchy**: Nested operations (e.g., `ttnn::add` → `ttnn::prim::binary`)
 - **Stack traces**: C++ call stacks for each operation (enabled by default); Python call stacks (opt-in via `enable_python_stack_traces()`)
 - **Deallocations**: `Tensor::deallocate` is tracked at the C++ level when a device buffer is actually freed (both explicit via `ttnn.deallocate()` and implicit via destructor)
-- **Python I/O**: Function arguments, input tensor IDs, and output tensor IDs recorded by the Python decorators
+- **Python I/O**: Function arguments, input tensor IDs, and output tensor IDs recorded by the Python decorators (only when Python I/O recording is enabled — see [Capture Overhead](#reducing-capture-overhead))
 
 ### Two-Phase Architecture
 
 Graph capture is split into two phases:
 
-1. **C++ runtime capture** — During model execution, the C++ `GraphProcessor` records an in-memory graph of operations, tensors, buffers, and timing. The Python decorators (`FastOperation`, `Operation`) additionally record Python-level arguments and tensor IDs into a `python_io` list. At the end, both are serialized to a JSON report file.
+1. **C++ runtime capture** — During model execution, the C++ `GraphProcessor` records an in-memory graph of operations, tensors, buffers, and timing. When graph capture is started from Python (via `ttnn.graph.begin_graph_capture()`), Python I/O recording is automatically enabled: the decorators (`FastOperation`, `Operation`) record Python-level arguments and tensor IDs into a `python_io` list. When capture is started from C++ (e.g., `MemoryUsageTracker`), Python I/O recording stays disabled and the decorators add zero overhead. At the end, both the C++ graph and (if present) the Python I/O data are serialized to a JSON report file.
 
 2. **Offline Python import** — A separate step reads the JSON report and imports it into a SQLite database that the ttnn-visualizer can consume. No database operations happen during model execution.
 
@@ -91,9 +97,9 @@ Graph capture is split into two phases:
 
 Operations are captured at two levels:
 
-1. **Python-level**: The `ttnn` decorators (`FastOperation`, `Operation`) automatically inject `function_start`/`function_end` graph nodes when capture is active. This produces high-level operation names like `ttnn.conv2d`, `ttnn.linear`, `ttnn.deallocate`. Both decorators also record Python-visible arguments and tensor IDs into `python_io` records that are embedded in the JSON report.
+1. **Python-level**: When Python I/O recording is enabled (automatically by `ttnn.graph.begin_graph_capture()`), the `ttnn` decorators (`FastOperation`, `Operation`) inject `function_start`/`function_end` graph nodes and record Python-visible arguments and tensor IDs into `python_io` records. This produces high-level operation names like `ttnn.conv2d`, `ttnn.linear`, `ttnn.deallocate`. When Python I/O recording is disabled (e.g., C++-initiated capture for memory tracking), the decorators are completely transparent.
 
-2. **C++ level**: Internal C++ operations emit their own `function_start`/`function_end` nodes (e.g., `ttnn::matmul`, `Tensor::to_device`). These appear nested inside the Python-level operation.
+2. **C++ level**: Internal C++ operations always emit their own `function_start`/`function_end` nodes (e.g., `ttnn::matmul`, `Tensor::to_device`). These appear nested inside the Python-level operation when Python I/O recording is active.
 
 The result is a hierarchical graph: `ttnn.conv2d` (Python) → `ttnn::conv2d` (C++) → `Device Operation` → `create_device_tensor`, etc.
 
@@ -211,9 +217,9 @@ The report file contains:
 - `graph`: Full graph trace (list of nodes)
 - `devices`: Device information (architecture, grid size, memory)
 - `metadata`: Capture timestamp
-- `python_io`: Python-level I/O records (arguments, input/output tensor IDs per operation)
-- `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`)
-- `buffer_pages_by_address`: Compact per-address page data (when buffer pages are enabled)
+- `python_io`: Python-level I/O records (arguments, input/output tensor IDs per operation); present only when Python I/O recording is enabled
+- `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`); present only when `enable_detailed_buffer_tracing()` is active
+- `buffer_pages_by_address`: Compact per-address page data; present only when `enable_detailed_buffer_tracing()` is active
 - `cluster_descriptor`: Cluster configuration YAML (if available)
 - `mesh_coordinate_mapping`: Physical chip mesh coordinate mapping YAML (if available, saved as `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`)
 
@@ -239,7 +245,7 @@ The importer creates these database tables:
 - `buffers`: Cumulative memory allocation snapshots per operation (prefers `per_operation_buffers`)
 - `buffer_pages`: Per-page buffer detail (when enabled)
 - `captured_graph`: Per-operation subgraph JSON for the visualizer
-- `stack_traces`: C++ call stacks (captured by default) and/or Python call stacks (opt-in)
+- `stack_traces`: C++ call stacks (captured by default) and/or Python call stacks (opt-in via `enable_python_stack_traces()`)
 - `edges`: Graph edges extracted from captured subgraphs
 - `errors`: Error information
 
@@ -306,21 +312,17 @@ db_path = import_report("my_report.json", "./output/")
 
 ### Stack Trace Capture
 
-Python stack traces are **enabled by default**. When enabled, each operation invoked through the Python decorators records the Python call stack at invocation time, filtered to exclude ttnn internals and test-runner noise:
+Python stack traces are **disabled by default** to minimize overhead. When enabled, each operation invoked through the Python decorators records the Python call stack at invocation time, filtered to exclude ttnn internals and test-runner noise:
 
 ```python
+ttnn.graph.enable_python_stack_traces()
 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 result = ttnn.add(tensor_a, tensor_b)
 ttnn.graph.end_graph_capture_to_file("report.json")
-```
-
-To disable Python stack traces for reduced overhead:
-
-```python
 ttnn.graph.disable_python_stack_traces()
-# ... capture ...
-ttnn.graph.enable_python_stack_traces()  # Restore default
 ```
+
+> **Note**: Stack trace capture requires Python I/O recording to be enabled (automatic when using `ttnn.graph.begin_graph_capture()`). Stack traces add significant per-operation overhead (`traceback.extract_stack()` + path resolution + filtering), so enable them only when needed for debugging.
 
 Python stack traces are stored in the `python_io` section of the JSON report and imported into the `stack_traces` table. Internal C++ operations (nested ops that don't go through the Python decorators) will not have stack traces.
 
@@ -336,7 +338,7 @@ Example `stack_traces` entry (innermost frame first):
 
 ```python
 # Check status
-print(ttnn.graph.is_python_stack_trace_enabled())  # True by default
+print(ttnn.graph.is_python_stack_trace_enabled())  # False by default
 ```
 
 Stack traces are imported into the `stack_traces` table in the visualizer database (one row per operation).
@@ -355,7 +357,7 @@ ttnn.graph.end_graph_capture_to_file("report.json")
 ttnn.graph.disable_detailed_buffer_tracing()
 ```
 
-The report includes `buffer_pages_by_address` (compact, per-address snapshots with versioned timelines for re-allocations) combined with `per_operation_buffers` to reconstruct per-operation page data. Fields per page:
+When enabled, the report includes `buffer_pages_by_address` (compact, per-address snapshots with versioned timelines for re-allocations) and `per_operation_buffers` (live buffer snapshots after each top-level operation) to reconstruct per-operation page data. Fields per page:
 - `device_id`, `address`: Buffer location
 - `core_x`, `core_y`, `bank_id`: Core and bank placement
 - `page_index`, `page_address`, `page_size`: Page details
@@ -363,26 +365,45 @@ The report includes `buffer_pages_by_address` (compact, per-address snapshots wi
 
 ### Reducing Capture Overhead
 
-By default, examples in this guide capture all available data (slow dispatch, buffer pages, stack traces). To reduce overhead or report size, disable individual features:
+Graph capture overhead has several independently controllable layers:
 
-| Feature | Disable With | Effect |
+| Layer | Default | Enable/Disable |
 |---|---|---|
-| Per-op captured sub-graphs | Keep `enable_fast_runtime_mode=True` (default) | Uses `FastOperation`; sub-graphs are reconstructed synthetically by the importer |
-| Buffer pages | Don't call `ttnn.graph.enable_detailed_buffer_tracing()` | Skips per-page L1 detail (~5.8M rows for ResNet-50) |
-| Python stack traces | `ttnn.graph.disable_python_stack_traces()` | Omits Python call stacks from `python_io` records |
+| **C++ graph processor** | Always on when capture is active | Inherent to `begin_graph_capture` |
+| **Python I/O recording** | Auto-enabled by Python `begin_graph_capture()`, off for C++-initiated capture | `enable_python_io_recording()` / `disable_python_io_recording()` |
+| **Python stack traces** | Off | `enable_python_stack_traces()` / `disable_python_stack_traces()` |
+| Per-op buffer snapshots | Off | `enable_detailed_buffer_tracing()` / `disable_detailed_buffer_tracing()` |
+| Per-op captured sub-graphs | Off (fast dispatch) | `enable_fast_runtime_mode=False` |
+
+**C++-initiated capture (zero Python overhead)**: When graph capture is started from C++ (e.g., `MemoryUsageTracker::begin_capture()`), Python I/O recording stays disabled. The Python decorators (`FastOperation`, `Operation`) add zero overhead — no `track_function_start/end`, no argument serialization, no tensor ID tracking. Only the C++ `GraphProcessor` runs.
+
+**Python-initiated capture**: When `ttnn.graph.begin_graph_capture()` is called from Python, Python I/O recording is automatically enabled (and disabled when `end_graph_capture()` / `end_graph_capture_to_file()` completes). This records operation arguments and tensor IDs needed for the JSON report and visualizer database.
 
 ```python
-# Minimal capture: fast dispatch, no buffer pages, no stack traces
-ttnn.graph.disable_python_stack_traces()
+# Minimal Python capture: fast dispatch, no buffer pages, no stack traces
 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 # ... your operations ...
 ttnn.graph.end_graph_capture_to_file("lightweight_report.json")
-ttnn.graph.enable_python_stack_traces()  # Restore default
+```
+
+```python
+# Full capture: slow dispatch, buffer pages, stack traces (all-in-one)
+with ttnn.graph.full_graph_capture("full_report.json"):
+    # ... your operations ...
+```
+
+```python
+# Memory-only capture from Python (explicitly disable Python I/O)
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+ttnn.graph.disable_python_io_recording()  # must be called after begin_graph_capture
+# ... your operations ...
+graph = ttnn.graph.end_graph_capture()
+# Use extract_peak_L1_memory_usage(), extract_resource_usage_per_core(), etc.
 ```
 
 ### Operation Arguments
 
-Python-level arguments are automatically captured by both `FastOperation` and `Operation` decorators when graph capture is active. They are embedded in the `python_io` section of the JSON report and imported into the `operation_arguments` table.
+Python-level arguments are captured by both `FastOperation` and `Operation` decorators when Python I/O recording is enabled (automatic for Python-initiated capture via `ttnn.graph.begin_graph_capture()`). They are embedded in the `python_io` section of the JSON report and imported into the `operation_arguments` table. When Python I/O is not recorded, the importer falls back to C++-serialized arguments.
 
 For C++ level arguments:
 
@@ -524,12 +545,9 @@ from ttnn import graph_report
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
 
 # Full capture: slow dispatch for per-op sub-graphs, buffer pages, python stacks
-with ttnn.manage_config("enable_fast_runtime_mode", False):
-    ttnn.graph.enable_detailed_buffer_tracing()
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+with ttnn.graph.full_graph_capture("my_report.json"):
     # ... run your model ...
-    ttnn.graph.end_graph_capture_to_file("my_report.json")
-    ttnn.graph.disable_detailed_buffer_tracing()
+    pass
 
 # Import to SQLite (creates db.sqlite, cluster_descriptor.yaml, etc.)
 graph_report.import_report("my_report.json", "./my_visualizer_db/")

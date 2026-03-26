@@ -890,6 +890,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
 
     auto report_path = std::filesystem::temp_directory_path() / "test_per_op_buffers_report.json";
     {
+        ttnn::graph::GraphProcessor::enable_detailed_buffer_tracing();
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
 
         const auto tensor_spec = ttnn::TensorSpec(
@@ -902,6 +903,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
         const auto output_tensor = ttnn::softmax(input_tensor, -1);
 
         capture.end_graph_capture_to_file(report_path);
+        ttnn::graph::GraphProcessor::disable_detailed_buffer_tracing();
     }
 
     std::ifstream file(report_path);
@@ -910,7 +912,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
     std::filesystem::remove(report_path);
 
     ASSERT_TRUE(report.contains("per_operation_buffers"))
-        << "Report should contain per_operation_buffers in NORMAL mode";
+        << "Report should contain per_operation_buffers when detailed tracing is enabled";
     const auto& per_op = report.at("per_operation_buffers");
     EXPECT_TRUE(per_op.is_object());
     EXPECT_GT(per_op.size(), 0u) << "Expected at least one operation's buffer snapshot";
