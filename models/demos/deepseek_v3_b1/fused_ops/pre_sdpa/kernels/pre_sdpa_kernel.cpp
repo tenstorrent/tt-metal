@@ -943,14 +943,19 @@ if constexpr (!Core::skip_ccl) {
                 constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
                 deepseek_b1_ops::CreateQHeads::
-                    Op<CreateQHeadsSenderCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
+                    Op<CreateQHeadsSenderCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, true, false, true>
                         create_q_heads_sender;
                 create_q_heads_sender(create_q_heads_sender_args);
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
-                deepseek_b1_ops::CreateQHeads::
-                    Op<CreateQHeadsReceiverCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
-                        create_q_heads_receiver;
+                deepseek_b1_ops::CreateQHeads::Op<
+                    CreateQHeadsReceiverCTArgs,
+                    is_create_q_heads_sender,
+                    Core::is_sdpa_input_core,
+                    true,
+                    false,
+                    true>
+                    create_q_heads_receiver;
                 create_q_heads_receiver(create_q_heads_receiver_args);
 #endif
             }

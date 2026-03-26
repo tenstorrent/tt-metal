@@ -117,14 +117,20 @@ struct CreateQHeads {
     //   setup_sharded_input: whether to setup the sharded input CB
     //   pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <typename CTArgs, bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src>
+    template <
+        typename CTArgs,
+        bool IsSenderCore,
+        bool IsReceiverCore,
+        bool shared_dm_risc,
+        bool setup_sharded_input,
+        bool pop_src>
     class Op {
     public:
         // Overload for sender args
         void operator()([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                sender_impl(args);
+                sender_impl<shared_dm_risc && IsReceiverCore>(args);
             }
 #endif
         }
@@ -133,7 +139,7 @@ struct CreateQHeads {
         void operator()([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             if constexpr (IsReceiverCore) {
-                receiver_impl(args);
+                receiver_impl<shared_dm_risc && IsSenderCore>(args);
             }
 #endif
         }
@@ -149,8 +155,10 @@ struct CreateQHeads {
 
     private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        static constexpr uint8_t WRITE_NOC = 0;
+
+        template <bool is_receiver_same_risc>
         FORCE_INLINE void sender_impl(const SenderArgs& args) {
-            constexpr uint8_t WRITE_NOC = 0;
             static_assert(
                 WRITE_NOC == noc_index || noc_mode == DM_DYNAMIC_NOC,
                 "WRITE_NOC differs from noc_index; must be in dynamic NOC mode");
@@ -206,7 +214,6 @@ struct CreateQHeads {
                 noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
                     src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes, WRITE_NOC);
                 noc_semaphore_inc(phase2_semaphore_noc_addr, 1, WRITE_NOC);
-                noc_async_atomic_barrier(WRITE_NOC);
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
                 // Memory layout: after all QNOPE data, QROPE is packed row-major [8, 64]
@@ -220,15 +227,21 @@ struct CreateQHeads {
                 noc_async_write<double_qrope_head_size_bytes, true, /*posted=*/true>(
                     src_addr, dst_data_noc_addr, double_qrope_head_size_bytes, WRITE_NOC);
                 noc_semaphore_inc(rope_semaphore_noc_addr, 1, WRITE_NOC);
-                noc_async_atomic_barrier();
             }
 
+            if constexpr (!is_receiver_same_risc) {
+                noc_async_atomic_barrier(WRITE_NOC);
+            }
             // Pop source CB after sending
             if constexpr (pop_src) {
+                if constexpr (is_receiver_same_risc) {
+                    noc_async_writes_flushed(WRITE_NOC);
+                }
                 cb_pop_front(src_cb, args.src_num_pages);
             }
         }
 
+        template <bool is_sender_same_risc>
         FORCE_INLINE void receiver_impl(const ReceiverArgs& args) {
             // Multi-phase receiver for tilization with 3 separate semaphores
             // Each phase has its own semaphore to prevent race conditions
@@ -261,6 +274,12 @@ struct CreateQHeads {
                 noc_semaphore_set(rope_semaphore_ptr, 0);
                 cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 cb_push_back(args.receiver_in_cb, args.rope_tiles);
+            }
+            if constexpr (is_sender_same_risc) {
+                static_assert(
+                    WRITE_NOC == noc_index || noc_mode == DM_DYNAMIC_NOC,
+                    "WRITE_NOC differs from noc_index; must be in dynamic NOC mode");
+                noc_async_atomic_barrier(WRITE_NOC);
             }
         }
 

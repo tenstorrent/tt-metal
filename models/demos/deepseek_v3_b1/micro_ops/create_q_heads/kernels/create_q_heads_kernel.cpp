@@ -86,13 +86,13 @@ void kernel_main() {
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     using CreateQHeadsSenderOp = deepseek_b1_ops::CreateQHeads::
-        Op<CreateQHeadsSenderCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
+        Op<CreateQHeadsSenderCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true, true>;
     CreateQHeadsSenderOp create_q_heads_sender;
     create_q_heads_sender(sender_args);
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
     using CreateQHeadsReceiverOp = deepseek_b1_ops::CreateQHeads::
-        Op<CreateQHeadsReceiverCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
+        Op<CreateQHeadsReceiverCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true, true>;
     CreateQHeadsReceiverOp create_q_heads_receiver;
     create_q_heads_receiver(receiver_args);
 #endif
