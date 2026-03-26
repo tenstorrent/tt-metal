@@ -5,7 +5,7 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
@@ -52,6 +52,24 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor,
+            pcc_threshold=0.998,
+            rtol=0.155391676,
+            atol=1175.040001,
+            frobenius_threshold=0.0495556606,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.0143821024,
+            atol=65.280001,
+            frobenius_threshold=0.00349549816,
+        )
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.998)
 
     # experimental intimg
@@ -60,4 +78,22 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor_2,
+            pcc_threshold=0.999886,
+            rtol=0.0388486588,
+            atol=130.560001,
+            frobenius_threshold=0.0109570348,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            ttnn_output_tensor_2,
+            pcc_threshold=0.999893,
+            rtol=0.0110825452,
+            atol=32.640001,
+            frobenius_threshold=0.00234933232,
+        )
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.998)

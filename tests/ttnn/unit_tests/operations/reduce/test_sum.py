@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
@@ -31,6 +31,14 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999891,
+        rtol=2.4703135,
+        atol=65.280001,
+        frobenius_threshold=0.00675476128,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -53,6 +61,33 @@ def test_sum_global(device, batch_size, h, w, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
 
+    if dtype == ttnn.float32:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.0115805908,
+            atol=32.640001,
+            frobenius_threshold=0.00887429068,
+        )
+    elif dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.00828102952,
+            atol=65.280001,
+            frobenius_threshold=0.00828003052,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.0617588176,
+            atol=228.480001,
+            frobenius_threshold=0.0618181822,
+        )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -71,6 +106,14 @@ def test_sum_4d(device, n, c, h, w, dim):
 
     output_tensor = ttnn.sum(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999895,
+        rtol=0.00499616746,
+        atol=472.499089,
+        frobenius_threshold=0.00499516846,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -101,6 +144,14 @@ def test_sum_nd_shard(device, shapes, keepdim):
     )
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.000812444578,
+        atol=0.193305484,
+        frobenius_threshold=0.000664564864,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -135,4 +186,22 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.0147556366,
+            atol=4177.920001,
+            frobenius_threshold=0.014782606,
+        )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

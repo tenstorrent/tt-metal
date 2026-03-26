@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, assert_equal
 from models.common.utility_functions import torch_random
 
 
@@ -32,6 +32,26 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    if dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+            check_ulp=True,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+            check_ulp=True,
+        )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -53,6 +73,15 @@ def test_min_global(device, batch_size, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 

@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -114,6 +114,14 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
+    assert_numeric_metrics(
+        torch_result,
+        ttnn_result,
+        pcc_threshold=0.99,
+        rtol=0.1,
+        atol=0.1,
+        frobenius_threshold=0.1,
+    )
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
     assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"

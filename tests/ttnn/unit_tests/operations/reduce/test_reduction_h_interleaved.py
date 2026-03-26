@@ -10,7 +10,7 @@ import torch
 from functools import partial
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -59,6 +59,14 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=8.160001,
+        atol=8.160001,
+        frobenius_threshold=0.000377427112,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -109,6 +117,14 @@ def test_2D_tensor_full_grid(
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1.36265776,
+        atol=8.160001,
+        frobenius_threshold=0.000400773076,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -155,4 +171,12 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999869,
+        rtol=1.020001,
+        atol=12.240001,
+        frobenius_threshold=0.00895955554,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)

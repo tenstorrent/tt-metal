@@ -8,7 +8,7 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
@@ -53,6 +53,15 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999739,
+        rtol=0.00796975,
+        atol=0.003985375,
+        frobenius_threshold=0.00261474754,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -89,6 +98,15 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999898,
+        rtol=0.510001,
+        atol=8.160001,
+        frobenius_threshold=0.00245910778,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -117,6 +135,15 @@ def test_sum_global_row_major(device, input_shape):
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -145,6 +172,15 @@ def test_max_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -175,6 +211,14 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.to_torch(output_tensor)
     print(torch.max(torch.abs(output_tensor - torch_output_tensor)))
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -203,6 +247,14 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=1,
+        atol=1,
+        frobenius_threshold=1,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -231,6 +283,14 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=1,
+        atol=1,
+        frobenius_threshold=1,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -260,6 +320,14 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.986833,
+        rtol=0.00796975,
+        atol=0.003985375,
+        frobenius_threshold=0.00196106014,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
 
 
@@ -288,4 +356,12 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
     output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999897,
+        rtol=0.761016676,
+        atol=32.640001,
+        frobenius_threshold=0.00255249082,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

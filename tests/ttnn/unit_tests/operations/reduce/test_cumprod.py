@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import comp_allclose_and_pcc
 
 
@@ -62,7 +62,26 @@ def test_cumprod_normal(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+            ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
+            if dtypes[0] == torch.float32:
+                assert_numeric_metrics(
+                    torch_result_tensor,
+                    ttnn_result_torch,
+                    pcc_threshold=0.999887,
+                    rtol=0.0864898192,
+                    atol=1.4417608,
+                    frobenius_threshold=0.00954523546,
+                )
+            else:
+                assert_numeric_metrics(
+                    torch_result_tensor,
+                    ttnn_result_torch,
+                    pcc_threshold=0.999895,
+                    rtol=0.0283896706,
+                    atol=1.020001,
+                    frobenius_threshold=0.00385904248,
+                )
+            # assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
         assert device.num_program_cache_entries() >= 1
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
@@ -109,6 +128,24 @@ def test_cumprod_backward(dim, shape, dtypes, device):
 
         # test for equivalance
         rtol = atol = 0.1
+        if torch_dtype == torch.float32:
+            assert_numeric_metrics(
+                torch_input_tensor.grad,
+                tt_input_grad_cpu,
+                pcc_threshold=0.9,
+                rtol=534772.740001,
+                atol=67089041.400001,
+                frobenius_threshold=1.158263041,
+            )
+        else:
+            assert_numeric_metrics(
+                torch_input_tensor.grad,
+                tt_input_grad_cpu,
+                pcc_threshold=0.9,
+                rtol=534773.760001,
+                atol=67114102.800001,
+                frobenius_threshold=1.158068221,
+            )
         assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     else:
@@ -154,8 +191,26 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
-            assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, 0.98)
+            ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
+            ttnn_preallocated_torch = ttnn.to_torch(ttnn_preallocated_tensor)
+            assert_numeric_metrics(
+                torch_result_tensor,
+                ttnn_result_torch,
+                pcc_threshold=0.999887,
+                rtol=0.0864898192,
+                atol=1.4417608,
+                frobenius_threshold=0.00954523546,
+            )
+            assert_numeric_metrics(
+                torch_preallocated_tensor,
+                ttnn_preallocated_torch,
+                pcc_threshold=0.99,
+                rtol=0.0864898192,
+                atol=1.4417608,
+                frobenius_threshold=0.00954523546,
+            )
+            assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
+            assert_with_pcc(ttnn_preallocated_torch, torch_preallocated_tensor, 0.98)
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

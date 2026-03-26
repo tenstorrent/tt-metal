@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, assert_allclose
 from models.common.utility_functions import torch_random, comp_allclose
 
 
@@ -29,6 +29,15 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999896,
+        rtol=0.117540088,
+        atol=0.0019931875,
+        frobenius_threshold=0.00504272596,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -49,6 +58,15 @@ def test_mean_scaling(device, shape, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.003985375,
+        atol=0.003985375,
+        frobenius_threshold=0.003984376,
+        check_ulp=True,
+    )
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
@@ -66,6 +84,15 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.003985375,
+        atol=0.00796975,
+        frobenius_threshold=0.003984376,
+        check_ulp=True,
+    )
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
@@ -98,4 +125,13 @@ def test_mean_shard(device, mem_config, keepdim):
     )
     tt_output_torch = ttnn.to_torch(output_tensor)
     torch_output = torch.mean(torch_input_tensor, -1, keepdim)
+    assert_numeric_metrics(
+        torch_output,
+        tt_output_torch,
+        pcc_threshold=0.999896,
+        rtol=0.609610324,
+        atol=0.0019931875,
+        frobenius_threshold=0.0048248305,
+        check_ulp=True,
+    )
     assert_with_pcc(torch_output, tt_output_torch)
