@@ -1,4 +1,5 @@
 Read the JSON file at __INPUT_JSON_PATH__.
+Also read the precomputed GitHub issue status map at __ISSUE_STATUS_PATH__.
 
 Produce a concise markdown report with:
 1) percentage of top-level messages that led to tests being disabled
@@ -7,12 +8,13 @@ Produce a concise markdown report with:
 4) average time between first top-level message and first clear "fixed/resolved" signal
 
 Requirements:
-- Use only evidence from message text and thread replies in this JSON.
+- Use only evidence from message text, thread replies, and the provided precomputed issue-status map.
 - State your classification heuristics explicitly in a "Methodology" section.
 - Do not use subagents (`task`) and do not run shell/edit commands; work directly from the provided JSON content.
+- Do not attempt network access, GitHub API calls, or `gh` commands. The issue-status map is the source of truth for issue open/closed state.
 - Minimize intermediate narration. Keep work output concise until the final report section.
 - Parse only from `messages[]`, each top-level item's `text`, and its `thread_replies[]` (plus useful text in `attachments[].text` / `attachments[].fallback` when present).
-- Primary decision gate: extract GitHub issue link(s) from each top-level message and check whether each referenced issue is currently open or closed.
+- Primary decision gate: extract GitHub issue link(s) from each top-level message and use the provided issue-status map to determine whether each referenced issue is open or closed.
 - Hard rule: if a referenced issue is closed, treat that top-level message as solved/fixed.
 - If a top-level message references multiple issues, and at least one referenced issue is still open, do not auto-mark as solved from closure alone; use thread evidence to decide conservatively.
 - Treat developer-posted PR links in the same thread as a strong signal and prioritize them over generic discussion text.

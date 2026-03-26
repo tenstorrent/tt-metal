@@ -107,6 +107,14 @@ jobs:
           path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
           retention-days: 7
 
+      - name: Upload issue status map artifact
+        if: ${{ inputs['data-gathering-mode'] }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C05GRJC4J4A-U08GTDV8MDH-issue-status-map
+          path: build_ci/raw_data/issue_status_map.json
+          retention-days: 7
+
       - name: Publish report to run summary
         if: ${{ inputs['data-gathering-mode'] }}
         run: |

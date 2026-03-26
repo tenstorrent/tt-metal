@@ -22,6 +22,7 @@ runs:
         report_path="${{ inputs.report-path }}"
         model="${{ inputs.model }}"
         prompt_file="${{ github.action_path }}/prompt.md"
+        issue_status_path="$(dirname "$report_path")/issue_status_map.json"
 
         if [ ! -f "$input_json" ]; then
           echo "Input JSON not found: $input_json"
@@ -29,8 +30,10 @@ runs:
         fi
 
         mkdir -p "$(dirname "$report_path")"
+        python "${{ github.action_path }}/build_issue_status_map.py" "$input_json" "$issue_status_path"
         prompt_text="$(cat "$prompt_file")"
         prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
+        prompt_text="${prompt_text//__ISSUE_STATUS_PATH__/$issue_status_path}"
         run_prompt="$prompt_text"
         run_prompt+=$'\n\nImportant output contract:\n'
         run_prompt+=$'- You may reason however you want while working.\n'

@@ -86,6 +86,16 @@ def main() -> int:
                 # Skip exact duplicate preview lines.
                 if preview == last_printed_preview:
                     continue
+                # Skip near-duplicates/corrections that only slightly modify
+                # the previous preview.
+                if last_printed_preview:
+                    if preview.startswith(last_printed_preview) and len(preview) - len(last_printed_preview) < 80:
+                        continue
+                    if last_printed_preview.startswith(preview):
+                        continue
+                    similarity = SequenceMatcher(None, last_printed_preview, preview).ratio()
+                    if similarity >= 0.97 and abs(len(preview) - len(last_printed_preview)) < 80:
+                        continue
                 print(f"[assistant] {preview}", flush=True)
                 last_printed_preview = preview
 
