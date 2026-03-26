@@ -8,7 +8,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
@@ -115,53 +114,12 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_addrgen = {
-        .bank_base_address = intermediate_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-
-#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
-#endif
+    auto intermediate_tensor_accessor = TensorAccessor(intermediate_tensor_args, intermediate_address);
 
-#ifdef OUTPUT_IS_SHARDED
-    using output_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
-
-    const auto [output_mapping_table, output_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<output_tensor_shard_info> output_addrgen = {
-        .bank_base_address = output_address, .shard_array = output_mapping_table};
-
-    arg_idx += output_rt_increment;
-#else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
-#endif
+    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address);
 
 #ifdef USE_WORKER_MUX
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -254,9 +212,10 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < ring_size; ++i) {
             const bool full_slice = false;                                               // TODO ...
+            const bool even_chunks = direction;  // TODO ... when sending half the slice, even or odd chunks
             const bool write_to_remote = (i < (ring_size - 1));                          // TODO ... which device
-            uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;  // TODO ...
             const bool write_to_interm = (i < (ring_size - 1));                          // TODO ... which tensor
+            uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;  // TODO ...
 
             // slice_idx = slice_idx % ring_size
             if (direction) {
@@ -304,16 +263,17 @@ void kernel_main() {
             };
             auto get_remote_tile_addr = [&](uint32_t tile_id) -> uint64_t {
                 if (write_to_interm) {
-                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(intermediate_addrgen, tile_id, 0);
+                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                        intermediate_tensor_accessor, tile_id, 0);
                 } else {
-                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
+                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, tile_id, 0);
                 }
             };
             auto get_local_tile_addr = [&](uint32_t tile_id) -> uint64_t {
                 if (write_to_interm) {
-                    return get_noc_addr(tile_id, intermediate_addrgen);
+                    return intermediate_tensor_accessor.get_noc_addr(tile_id);
                 } else {
-                    return get_noc_addr(tile_id, output_addrgen);
+                    return output_tensor_accessor.get_noc_addr(tile_id);
                 }
             };
 
@@ -326,10 +286,10 @@ void kernel_main() {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
 
-                if (!full_slice && !direction) {
-                    uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                    tiles_read += backwards_offset;
-                    for (uint32_t k = 0; k < backwards_offset; ++k) {
+                if (!full_slice && !even_chunks) {
+                    uint32_t first_even_chunk = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                    tiles_read += first_even_chunk;
+                    for (uint32_t k = 0; k < first_even_chunk; ++k) {
                         get_next_tile_id();
                     }
                 }
@@ -338,7 +298,7 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                     uint32_t tiles_to_read_in_current_direction = 0;
-                    if (full_slice || !direction) {
+                    if (full_slice || !even_chunks) {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     } else {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
@@ -411,7 +371,7 @@ void kernel_main() {
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
                     if (!full_slice && tiles_remaining_to_read > 0) {
                         uint32_t tiles_to_read_in_other_direction = 0;
-                        if (!direction) {
+                        if (!even_chunks) {
                             tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
                         } else {
                             tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);

@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
@@ -54,53 +53,12 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 16;
-
-#ifdef INPUT_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using input_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [input_mapping_table, input_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<input_tensor_shard_info> input_tensor_addrgen = {
-        .bank_base_address = input_tensor_address, .shard_array = input_mapping_table};
-
-    arg_idx += input_rt_increment;
-#else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
-#endif
+    auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_tensor_addrgen = {
-        .bank_base_address = intermediate_tensor_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
-#endif
+    auto intermediate_tensor_accessor = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
@@ -124,9 +82,10 @@ void kernel_main() {
         // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
         // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
         for (uint32_t i = 0; i < ring_size; ++i) {
+            const bool full_slice = false;       // TODO ...
+            const bool even_chunks = direction;  // TODO ...
             const bool do_reduce = i != 0;
             uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
-            const bool full_slice = false;
 
             // slice_idx = slice_idx % ring_size
             if (direction) {
@@ -157,16 +116,16 @@ void kernel_main() {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
 
-                if (!full_slice && !direction) {
-                    uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                    for (uint32_t k = 0; k < backwards_offset; ++k) {
+                if (!full_slice && !even_chunks) {
+                    uint32_t first_even_chunk = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                    for (uint32_t k = 0; k < first_even_chunk; ++k) {
                         input_pages_read_in_row++;
                         if (input_pages_read_in_row == slice_Wt) {
                             input_row_offset += input_tensor_Wt;
                             input_pages_read_in_row -= slice_Wt;
                         }
                     }
-                    tiles_read += backwards_offset;
+                    tiles_read += first_even_chunk;
                 }
 
                 /**
@@ -185,7 +144,7 @@ void kernel_main() {
                     chunk_count++;
 
                     uint32_t tiles_to_read_in_current_direction = 0;
-                    if (full_slice || !direction) {
+                    if (full_slice || !even_chunks) {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     } else {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
@@ -201,7 +160,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t input_tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
                         // DPRINT << "R: dir=" << direction << " i=" << i << " tile=" << input_tile_id << ENDL();
-                        uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                        uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(input_tile_id);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
 
@@ -209,7 +168,7 @@ void kernel_main() {
                             uint32_t intermediate_tile_id =
                                 intermediate_tile_id_start + input_row_offset + input_pages_read_in_row;
                             uint64_t intermediate_noc_read_addr =
-                                get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
+                                intermediate_tensor_accessor.get_noc_addr(intermediate_tile_id);
                             noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
                             intermediate_l1_write_addr += page_size;
                         }
@@ -231,7 +190,7 @@ void kernel_main() {
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
                     if (!full_slice && tiles_remaining_to_read > 0) {
                         uint32_t tiles_to_read_in_other_direction = 0;
-                        if (!direction) {
+                        if (!even_chunks) {
                             tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
                         } else {
                             tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
@@ -252,17 +211,11 @@ void kernel_main() {
             }
 
             // Next slice idx
-            if (direction) {
-                slice_idx--;
-            } else {
-                slice_idx++;
-            }
-
-            if (do_reduce && (i == (ring_size - 1))) {
-                // Reset the semaphore before the next batch
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-                sem_target = 0;
-            }
+            slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
+
+        // Reset the semaphore before the next batch
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+        sem_target = 0;
     }
 }
