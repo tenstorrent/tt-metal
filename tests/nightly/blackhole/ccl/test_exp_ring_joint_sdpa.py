@@ -188,7 +188,7 @@ def run_exp_ring_joint_sdpa_nightly(
     tp_axis = 0  # row axis for tensor parallel
 
     mesh_shape = ttnn.MeshShape(tp_size, sp_size)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, worker_l1_size=1344544)
 
     try:
         if tp_size > 1 and nh % tp_size != 0:
