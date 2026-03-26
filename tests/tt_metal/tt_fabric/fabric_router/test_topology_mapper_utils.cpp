@@ -4076,7 +4076,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // THere should be 12 indvidual meshes connected, verify that this is the case
+    // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 12u);
 
     // Each oft he mesh level graphs should have connections to other nodes
@@ -4141,7 +4141,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // THere should be 12 indvidual meshes connected, verify that this is the case
+    // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
 
     // Each oft he mesh level graphs should have connections to other nodes
@@ -4203,7 +4203,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // THere should be 12 indvidual meshes connected, verify that this is the case
+    // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 48u);
 
     // Each oft he mesh level graphs should have connections to other nodes

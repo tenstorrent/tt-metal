@@ -1180,9 +1180,9 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
             break;
         }
     }
-    ASSERT_TRUE(found) << "Expected to find 'halftray_2x2' grouping";
+    ASSERT_TRUE(found) << "Expected to find '2x2 Mesh' grouping";
 
-    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "halftray_2x2 should have 4 ASICs (1 halftray)";
+    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2 Mesh should have 4 ASICs (1 halftray)";
     EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2 Mesh should have 1 instance (halftray)";
 
     auto flattened_meshes = desc.build_flattened_adjacency_mesh(mesh_halftray);
