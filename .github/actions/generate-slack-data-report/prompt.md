@@ -1,5 +1,4 @@
 Read the JSON file at __INPUT_JSON_PATH__.
-Also read the precomputed GitHub issue status map at __ISSUE_STATUS_PATH__.
 
 Produce a concise markdown report with:
 1) percentage of top-level messages that led to tests being disabled
@@ -8,15 +7,16 @@ Produce a concise markdown report with:
 4) average time between first top-level message and first clear "fixed/resolved" signal
 
 Requirements:
-- Use only evidence from message text, thread replies, and the provided precomputed issue-status map.
+- Use only evidence from message text and thread replies in this JSON.
 - State your classification heuristics explicitly in a "Methodology" section.
 - Do not use subagents (`task`) and do not run shell/edit commands; work directly from the provided JSON content.
-- Do not attempt network access, GitHub API calls, or `gh` commands. The issue-status map is the source of truth for issue open/closed state.
+- Do not attempt network access, GitHub API calls, or `gh` commands.
 - Minimize intermediate narration. Keep work output concise until the final report section.
 - Parse only from `messages[]`, each top-level item's `text`, and its `thread_replies[]` (plus useful text in `attachments[].text` / `attachments[].fallback` when present).
-- Primary decision gate: extract GitHub issue link(s) from each top-level message and use the provided issue-status map to determine whether each referenced issue is open or closed.
-- Hard rule: if a referenced issue is closed, treat that top-level message as solved/fixed.
-- If a top-level message references multiple issues, and at least one referenced issue is still open, do not auto-mark as solved from closure alone; use thread evidence to decide conservatively.
+- Primary decision gate: use the boolean `issue_closed` that is already attached to each top-level message.
+- Hard rule: if `issue_closed` is `true`, treat that top-level message as solved/fixed without further debate.
+- Only analyze thread text deeply when `issue_closed` is `false`.
+- If a top-level message has multiple issues, use `issue_closed` and `all_referenced_issues_closed` exactly as provided in the JSON.
 - Treat developer-posted PR links in the same thread as a strong signal and prioritize them over generic discussion text.
 - Recognize GitHub links in Slack format, including:
   - `<https://github.com/tenstorrent/tt-metal/issues/12345|...>`
@@ -32,7 +32,7 @@ Requirements:
 - If no issue link is present in a top-level message, fall back entirely to thread evidence.
 - For average time-to-fix, use the timestamp delta between top-level `ts` and the earliest reply that provides a clear fixed/resolved signal.
 - In the final report, include a short "High-confidence evidence examples" section with 3-5 concrete thread snippets (message ts + key phrase) that drove classifications.
-- In the methodology, explicitly report how many messages were classified via closed-ticket signal vs thread-evidence signal.
+- In the methodology, explicitly report how many messages were classified via `issue_closed` signal vs thread-evidence signal.
 - In the final report, include a section named "Unresolved Messages (Links)" that lists **every** unresolved top-level message with:
   - message `ts`
   - a one-line reason it is unresolved

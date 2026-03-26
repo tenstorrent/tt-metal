@@ -22,7 +22,6 @@ runs:
         report_path="${{ inputs.report-path }}"
         model="${{ inputs.model }}"
         prompt_file="${{ github.action_path }}/prompt.md"
-        issue_status_path="$(dirname "$report_path")/issue_status_map.json"
 
         if [ ! -f "$input_json" ]; then
           echo "Input JSON not found: $input_json"
@@ -30,10 +29,8 @@ runs:
         fi
 
         mkdir -p "$(dirname "$report_path")"
-        python "${{ github.action_path }}/issue_status_map_builder.py" "$input_json" "$issue_status_path"
         prompt_text="$(cat "$prompt_file")"
         prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
-        prompt_text="${prompt_text//__ISSUE_STATUS_PATH__/$issue_status_path}"
         run_prompt="$prompt_text"
         run_prompt+=$'\n\nImportant output contract:\n'
         run_prompt+=$'- You may reason however you want while working.\n'
@@ -44,10 +41,17 @@ runs:
         echo "Running Cursor agent with model: $model"
         echo "Writing report to: $report_path"
         echo "Streaming readable Cursor output to job logs..."
-        agent --trust --model "$model" \
-          --output-format stream-json \
-          --stream-partial-output \
-          -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        if [ "$model" = "auto" ]; then
+          agent --trust \
+            --output-format stream-json \
+            --stream-partial-output \
+            -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        else
+          agent --trust --model "$model" \
+            --output-format stream-json \
+            --stream-partial-output \
+            -p "$run_prompt" | python -u "${{ github.action_path }}/stream_json_pretty.py" "$raw_output_path"
+        fi
         python "${{ github.action_path }}/extract_final_report.py" "$raw_output_path" "$report_path"
         if [ ! -s "$report_path" ]; then
           echo "Failed to extract final markdown report from agent output."
