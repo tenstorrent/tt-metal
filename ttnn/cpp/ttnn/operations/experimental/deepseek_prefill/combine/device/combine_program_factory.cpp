@@ -428,7 +428,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     if (init_zeros) {
         for (uint32_t idle_idx = 0; idle_idx < num_zero_init_cores; idle_idx++) {
             uint32_t row_idx = num_cores + idle_idx;
-            uint32_t page_start = row_idx * pages_per_core + std::min(row_idx, remainder_pages);
+            uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
             uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
 
             std::vector<uint32_t> zi_runtime_args = {
