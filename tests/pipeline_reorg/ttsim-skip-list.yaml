@@ -142,11 +142,13 @@ blackhole:
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
   - tests/ttnn/unit_tests/operations/eltwise/test_where.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
 
