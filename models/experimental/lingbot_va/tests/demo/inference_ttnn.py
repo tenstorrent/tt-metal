@@ -271,6 +271,30 @@ def load_message_from_files(
 # -----------------------------------------------------------------------------
 
 
+def _open_lingbot_mesh_device():
+    """
+    Open a (1,1) mesh device. Optional env (used by perf tests, e.g. 2 CQ, no trace buffer):
+
+    - LINGBOT_VA_NUM_COMMAND_QUEUES: default 1 if unset (ttnn default).
+    - LINGBOT_VA_TRACE_REGION_SIZE: if set (e.g. 0 for no trace region), passed to open_mesh_device.
+    - LINGBOT_VA_L1_SMALL_SIZE, LINGBOT_VA_WORKER_L1_SIZE: optional overrides.
+    """
+    kwargs: dict = {"mesh_shape": ttnn.MeshShape(1, 1)}
+    n_cq = os.environ.get("LINGBOT_VA_NUM_COMMAND_QUEUES")
+    if n_cq is not None and str(n_cq).strip() != "":
+        kwargs["num_command_queues"] = int(n_cq)
+    tr = os.environ.get("LINGBOT_VA_TRACE_REGION_SIZE")
+    if tr is not None and str(tr).strip() != "":
+        kwargs["trace_region_size"] = int(tr)
+    l1 = os.environ.get("LINGBOT_VA_L1_SMALL_SIZE")
+    if l1 is not None and str(l1).strip() != "":
+        kwargs["l1_small_size"] = int(l1)
+    wl1 = os.environ.get("LINGBOT_VA_WORKER_L1_SIZE")
+    if wl1 is not None and str(wl1).strip() != "":
+        kwargs["worker_l1_size"] = int(wl1)
+    return ttnn.open_mesh_device(**kwargs)
+
+
 def _load_models_phase1(config, load_text_encoder=True):
     """
     Load VAE (PyTorch, once; reused for streaming_vae_half when robotwin_tshape), tokenizer, and open mesh device.
@@ -284,7 +308,7 @@ def _load_models_phase1(config, load_text_encoder=True):
     enable_offload = getattr(config, "enable_offload", True)
     ckpt = config.wan22_pretrained_model_name_or_path
 
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    mesh_device = _open_lingbot_mesh_device()
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
     dit_parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=1, factor=1),
@@ -1101,6 +1125,14 @@ def run_inference(
     config.local_rank = 0
     config.rank = 0
     config.world_size = 1
+    # Optional perf/debug overrides without changing caller signatures.
+    # Useful for single-pass perf profiling (e.g. steps=1, frame_chunk_size=1).
+    if os.environ.get("LINGBOT_VA_NUM_INFERENCE_STEPS"):
+        config.num_inference_steps = int(os.environ["LINGBOT_VA_NUM_INFERENCE_STEPS"])
+    if os.environ.get("LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"):
+        config.action_num_inference_steps = int(os.environ["LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"])
+    if os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE"):
+        config.frame_chunk_size = int(os.environ["LINGBOT_VA_FRAME_CHUNK_SIZE"])
     if save_dir is None:
         save_dir = _SCRIPT_DIR
     config.save_root = str(save_dir)
@@ -1263,7 +1295,7 @@ def run_generate(
     ttnn.synchronize_device(mesh_device)
     ttnn.close_mesh_device(mesh_device)
     # Reopen a fresh mesh device so the TT decoder is the only user and has full DRAM.
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    mesh_device = _open_lingbot_mesh_device()
     models["mesh_device"] = mesh_device
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
