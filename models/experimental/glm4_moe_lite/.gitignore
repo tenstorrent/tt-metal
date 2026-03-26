@@ -1,0 +1,26 @@
+# Local research docs and presentations (not for upstream PRs)
+deep_dive_galaxy_v1.md
+deep_dive_v1.md
+t3k_vs_galaxy_comparison.md
+t3k_vs_galaxy_executive_summary.md
+t3k_vs_galaxy_slides.html
+t3k_vs_galaxy_slides.pptx
+
+# One-off deck generation
+generate_pptx.py
+
+# Ad-hoc experiment / grid scripts
+scripts/exp_dispatch_modes.py
+scripts/exp_grid_check.py
+scripts/exp_grid_override.py
+
+# Profiler helpers and plotting (local workflow)
+experiments/analyze_ops_perf.py
+experiments/analyze_profiler.py
+experiments/plot_consolidated_isl_sweep.py
+
+# Sweep outputs and consolidated plots (regenerate locally)
+experiments/consolidated_plots/
+experiments/g1_multilink_4_ring_isl_sweep/
+experiments/g1_multilink_4_ring_isl_sweep_128k/
+experiments/g1_multilink_4_ring_isl_sweep_64k_128k/
