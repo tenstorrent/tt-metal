@@ -154,8 +154,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
+    bool column_wise_senders = operation_attributes.column_sender_layout;
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
+        subdevice_cores.at(0), num_cores, worker_core_range_set, !column_wise_senders);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     log_debug(
@@ -444,13 +445,22 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
         reader_defines["INLINE_ZI_CB_ID"] = std::to_string(static_cast<uint32_t>(tt::CBIndex::c_7));
 
-        // Find idle worker cores in the same row as sender cores
-        uint32_t sender_row_y = sender_cores[0].y;
+        // Find idle worker cores in the same row/column as sender cores
         std::set<CoreCoord> sender_core_set(sender_cores.begin(), sender_cores.end());
         std::vector<CoreCoord> idle_column_cores;
-        for (const auto& core : subdevice_cores) {
-            if (core.y == sender_row_y && sender_core_set.find(core) == sender_core_set.end()) {
-                idle_column_cores.push_back(core);
+        if (column_wise_senders) {
+            uint32_t sender_col_x = sender_cores[0].x;
+            for (const auto& core : subdevice_cores) {
+                if (core.x == sender_col_x && sender_core_set.find(core) == sender_core_set.end()) {
+                    idle_column_cores.push_back(core);
+                }
+            }
+        } else {
+            uint32_t sender_row_y = sender_cores[0].y;
+            for (const auto& core : subdevice_cores) {
+                if (core.y == sender_row_y && sender_core_set.find(core) == sender_core_set.end()) {
+                    idle_column_cores.push_back(core);
+                }
             }
         }
 

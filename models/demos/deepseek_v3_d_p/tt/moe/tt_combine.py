@@ -33,6 +33,7 @@ class TtCombineModule(LightweightModule):
         init_zeros: bool = True,
         distributed_zero_init: bool = True,
         inline_zero_init: bool = False,
+        column_sender_layout: bool = False,
     ):
         """
         Initialize combine module wrapper.
@@ -47,6 +48,7 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration (L1 or DRAM interleaved)
             init_zeros: Whether to zero-initialize the output buffer
             distributed_zero_init: Use distributed multi-core DRAM zero init (True) or legacy single-core (False)
+            column_sender_layout: Use column-wise sender core placement (True) or row-wise (False)
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -62,6 +64,7 @@ class TtCombineModule(LightweightModule):
         self.init_zeros = init_zeros
         self.distributed_zero_init = distributed_zero_init
         self.inline_zero_init = inline_zero_init
+        self.column_sender_layout = column_sender_layout
 
     def forward(
         self,
@@ -95,5 +98,6 @@ class TtCombineModule(LightweightModule):
             init_zeros=self.init_zeros,
             distributed_zero_init=self.distributed_zero_init,
             inline_zero_init=self.inline_zero_init,
+            column_sender_layout=self.column_sender_layout,
         )
         return output

@@ -50,31 +50,36 @@ _all_results: list["BenchResult"] = []
 @dataclass
 class BenchResult:
     config_label: str
-    no_init_ns: int
+    no_init_row_ns: int
+    no_init_col_ns: int
     legacy_ns: int
     dist_ns: int
-    inline_ns: int
-    source: str
+    inline_row_ns: int
+    inline_col_ns: int
 
     @property
-    def speedup_dist(self) -> float:
-        return self.legacy_ns / self.dist_ns if self.dist_ns > 0 else float("inf")
+    def comm_row_us(self) -> float:
+        return self.no_init_row_ns / 1e3
 
     @property
-    def speedup_inline(self) -> float:
-        return self.legacy_ns / self.inline_ns if self.inline_ns > 0 else float("inf")
+    def comm_col_us(self) -> float:
+        return self.no_init_col_ns / 1e3
+
+    @property
+    def zi_row_us(self) -> float:
+        return (self.inline_row_ns - self.no_init_row_ns) / 1e3
+
+    @property
+    def zi_col_us(self) -> float:
+        return (self.inline_col_ns - self.no_init_col_ns) / 1e3
 
     @property
     def legacy_overhead_us(self) -> float:
-        return (self.legacy_ns - self.no_init_ns) / 1e3
+        return (self.legacy_ns - self.no_init_row_ns) / 1e3
 
     @property
     def dist_overhead_us(self) -> float:
-        return (self.dist_ns - self.no_init_ns) / 1e3
-
-    @property
-    def inline_overhead_us(self) -> float:
-        return (self.inline_ns - self.no_init_ns) / 1e3
+        return (self.dist_ns - self.no_init_row_ns) / 1e3
 
 
 def _get_tracy_duration_ns(device_id: int) -> int | None:
@@ -115,6 +120,7 @@ def _run_combine_variant(
     distributed_zero_init: bool,
     init_zeros: bool = True,
     inline_zero_init: bool = False,
+    column_sender_layout: bool = False,
 ) -> tuple[int, str, ttnn.Tensor]:
     """Run one variant, return (avg_duration_ns, source_label, last_output_tensor)."""
     tt_combine = TtCombineModule(
@@ -131,6 +137,7 @@ def _run_combine_variant(
         init_zeros=init_zeros,
         distributed_zero_init=distributed_zero_init,
         inline_zero_init=inline_zero_init,
+        column_sender_layout=column_sender_layout,
     )
 
     # Warmup
@@ -326,9 +333,15 @@ def test_combine_zero_init_perf(
     )
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
 
-    # Run no-init baseline (init_zeros=False)
-    logger.info(f"[{config_label}] Running no-init baseline...")
-    no_init_ns, no_init_src, _ = _run_combine_variant(**common_args, distributed_zero_init=False, init_zeros=False)
+    # Run no-init baseline (row layout)
+    logger.info(f"[{config_label}] Running no-init baseline (row layout)...")
+    no_init_row_ns, no_init_src, _ = _run_combine_variant(**common_args, distributed_zero_init=False, init_zeros=False)
+
+    # Run no-init baseline (column layout)
+    logger.info(f"[{config_label}] Running no-init baseline (column layout)...")
+    no_init_col_ns, _, _ = _run_combine_variant(
+        **common_args, distributed_zero_init=False, init_zeros=False, column_sender_layout=True
+    )
 
     # Run legacy (single-core) variant
     logger.info(f"[{config_label}] Running legacy (single-core) zero-init...")
@@ -338,10 +351,16 @@ def test_combine_zero_init_perf(
     logger.info(f"[{config_label}] Running distributed (multi-core) zero-init...")
     dist_ns, dist_src, dist_output = _run_combine_variant(**common_args, distributed_zero_init=True)
 
-    # Run inline (sender-core CB reuse) variant
-    logger.info(f"[{config_label}] Running inline (sender-core) zero-init...")
-    inline_ns, inline_src, inline_output = _run_combine_variant(
-        **common_args, distributed_zero_init=False, inline_zero_init=True
+    # Run inline row variant
+    logger.info(f"[{config_label}] Running inline zero-init (row layout)...")
+    inline_row_ns, inline_src, inline_row_output = _run_combine_variant(
+        **common_args, distributed_zero_init=False, inline_zero_init=True, column_sender_layout=False
+    )
+
+    # Run inline column variant
+    logger.info(f"[{config_label}] Running inline zero-init (column layout)...")
+    inline_col_ns, _, inline_col_output = _run_combine_variant(
+        **common_args, distributed_zero_init=False, inline_zero_init=True, column_sender_layout=True
     )
 
     # PCC validation for all zero-init variants
@@ -351,7 +370,8 @@ def test_combine_zero_init_perf(
     for variant_name, tt_output in [
         ("legacy", legacy_output),
         ("distributed", dist_output),
-        ("inline", inline_output),
+        ("inline-row", inline_row_output),
+        ("inline-col", inline_col_output),
     ]:
         tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
         assert_output_shape(tt_output_torch, num_dispatch_groups, dispatch_group_size, f"{variant_name} combine output")
@@ -373,14 +393,14 @@ def test_combine_zero_init_perf(
             logger.error(f"[{config_label}] {variant_name} PCC: FAILED")
             pcc_errors.append(variant_name)
 
-    source = legacy_src if legacy_src == "Tracy" else dist_src
     result = BenchResult(
         config_label=config_label,
-        no_init_ns=no_init_ns,
+        no_init_row_ns=no_init_row_ns,
+        no_init_col_ns=no_init_col_ns,
         legacy_ns=legacy_ns,
         dist_ns=dist_ns,
-        inline_ns=inline_ns,
-        source=source,
+        inline_row_ns=inline_row_ns,
+        inline_col_ns=inline_col_ns,
     )
     _all_results.append(result)
 
@@ -389,18 +409,23 @@ def test_combine_zero_init_perf(
     logger.info(f"{'=' * 90}")
     logger.info(f"  COMBINE ZERO-INIT  {config_label}  (seq=3200 experts=64 topk=2)")
     logger.info(f"{'=' * 90}")
-    logger.info(f"  No-init ({no_init_src}):        {no_init_ns:>10} ns  ({no_init_ns/1e3:>10.2f} us)")
+    logger.info(f"  No-init row:       {no_init_row_ns:>10} ns  ({no_init_row_ns/1e3:>10.2f} us)")
+    logger.info(f"  No-init col:       {no_init_col_ns:>10} ns  ({no_init_col_ns/1e3:>10.2f} us)")
     logger.info(
-        f"  Legacy  ({legacy_src}):        {legacy_ns:>10} ns  ({legacy_ns/1e3:>10.2f} us)  overhead: {result.legacy_overhead_us:+.2f} us"
+        f"  Legacy:            {legacy_ns:>10} ns  ({legacy_ns/1e3:>10.2f} us)  overhead: {result.legacy_overhead_us:+.2f} us"
     )
     logger.info(
-        f"  Distributed ({dist_src}):    {dist_ns:>10} ns  ({dist_ns/1e3:>10.2f} us)  overhead: {result.dist_overhead_us:+.2f} us"
+        f"  Distributed:       {dist_ns:>10} ns  ({dist_ns/1e3:>10.2f} us)  overhead: {result.dist_overhead_us:+.2f} us"
     )
-    logger.info(
-        f"  Inline ({inline_src}):         {inline_ns:>10} ns  ({inline_ns/1e3:>10.2f} us)  overhead: {result.inline_overhead_us:+.2f} us"
-    )
-    logger.info(f"  Speedup legacy/dist:           {result.speedup_dist:.2f}x")
-    logger.info(f"  Speedup legacy/inline:         {result.speedup_inline:.2f}x")
+    logger.info(f"  Inline row:        {inline_row_ns:>10} ns  ({inline_row_ns/1e3:>10.2f} us)")
+    logger.info(f"  Inline col:        {inline_col_ns:>10} ns  ({inline_col_ns/1e3:>10.2f} us)")
+    logger.info(f"  --- BREAKDOWN ---")
+    logger.info(f"  Communication (row):     {result.comm_row_us:>10.2f} us")
+    logger.info(f"  Communication (col):     {result.comm_col_us:>10.2f} us")
+    logger.info(f"  Comm diff (col-row):     {result.comm_col_us - result.comm_row_us:>+10.2f} us")
+    logger.info(f"  Zero-init (row):         {result.zi_row_us:>10.2f} us")
+    logger.info(f"  Zero-init (col):         {result.zi_col_us:>10.2f} us")
+    logger.info(f"  ZI diff (col-row):       {result.zi_col_us - result.zi_row_us:>+10.2f} us")
     logger.info(f"{'=' * 90}")
 
     assert not pcc_errors, f"PCC validation failed for: {', '.join(pcc_errors)}"
@@ -412,24 +437,22 @@ def _print_summary():
         return
 
     logger.info(f"")
-    logger.info(f"{'=' * 140}")
+    logger.info(f"{'=' * 160}")
     logger.info(f"  COMBINE ZERO-INIT BENCHMARK SUMMARY  (seq=3200, experts=64, topk=2, {NUM_ITERATIONS} iters)")
-    logger.info(f"{'=' * 140}")
+    logger.info(f"{'=' * 160}")
     logger.info(
-        f"  {'Config':<16} {'Source':<10} {'No-init(us)':>12} {'Legacy(us)':>11} {'Dist(us)':>11} {'Inline(us)':>11}"
-        f" {'Lgcy OH(us)':>12} {'Dist OH(us)':>12} {'Inln OH(us)':>12} {'Dist spd':>9} {'Inln spd':>9}"
+        f"  {'Config':<16} {'InlRow(us)':>11} {'InlCol(us)':>11}"
+        f" {'CommRow':>11} {'CommCol':>11} {'CommDiff':>11}"
+        f" {'ZI-row':>11} {'ZI-col':>11} {'ZI-diff':>11}"
     )
-    logger.info(
-        f"  {'-'*16} {'-'*10} {'-'*12} {'-'*11} {'-'*11} {'-'*11}" f" {'-'*12} {'-'*12} {'-'*12} {'-'*9} {'-'*9}"
-    )
+    logger.info(f"  {'-'*16} {'-'*11} {'-'*11}" f" {'-'*11} {'-'*11} {'-'*11}" f" {'-'*11} {'-'*11} {'-'*11}")
     for r in _all_results:
         logger.info(
-            f"  {r.config_label:<16} {r.source:<10} {r.no_init_ns/1e3:>12.2f} {r.legacy_ns/1e3:>11.2f}"
-            f" {r.dist_ns/1e3:>11.2f} {r.inline_ns/1e3:>11.2f}"
-            f" {r.legacy_overhead_us:>+12.2f} {r.dist_overhead_us:>+12.2f} {r.inline_overhead_us:>+12.2f}"
-            f" {r.speedup_dist:>8.2f}x {r.speedup_inline:>8.2f}x"
+            f"  {r.config_label:<16} {r.inline_row_ns/1e3:>11.2f} {r.inline_col_ns/1e3:>11.2f}"
+            f" {r.comm_row_us:>11.2f} {r.comm_col_us:>11.2f} {r.comm_col_us - r.comm_row_us:>+11.2f}"
+            f" {r.zi_row_us:>11.2f} {r.zi_col_us:>11.2f} {r.zi_col_us - r.zi_row_us:>+11.2f}"
         )
-    logger.info(f"{'=' * 140}")
+    logger.info(f"{'=' * 160}")
 
 
 atexit.register(_print_summary)

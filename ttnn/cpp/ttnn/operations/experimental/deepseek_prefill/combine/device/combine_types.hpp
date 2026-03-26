@@ -25,6 +25,7 @@ struct CombineParams {
     bool init_zeros;
     bool distributed_zero_init;
     bool inline_zero_init;
+    bool column_sender_layout;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -38,7 +39,8 @@ struct CombineParams {
         "worker_core_range_set",
         "init_zeros",
         "distributed_zero_init",
-        "inline_zero_init");
+        "inline_zero_init",
+        "column_sender_layout");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -53,7 +55,8 @@ struct CombineParams {
             worker_core_range_set,
             init_zeros,
             distributed_zero_init,
-            inline_zero_init);
+            inline_zero_init,
+            column_sender_layout);
     };
 };
 
