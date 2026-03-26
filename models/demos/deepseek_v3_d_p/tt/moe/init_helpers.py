@@ -43,14 +43,9 @@ def extract_mesh_config(mesh_device) -> MeshConfig:
       - num_dispatch_groups = 1
       - sp_axis = whichever dimension has size > 1
     """
-    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
-        sp_axis = 0
-        dispatch_group_size = mesh_device.shape[sp_axis]
-        num_dispatch_groups = mesh_device.shape[1]
-    else:
-        dispatch_group_size = mesh_device.get_num_devices()
-        num_dispatch_groups = 1
-        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
+    sp_axis = 0
+    dispatch_group_size = mesh_device.shape[sp_axis]
+    num_dispatch_groups = mesh_device.shape[1]
 
     return MeshConfig(
         sp_axis=sp_axis,
