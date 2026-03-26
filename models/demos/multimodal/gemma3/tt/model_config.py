@@ -18,6 +18,43 @@ from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
+_WEIGHT_FILENAMES = (
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+)
+
+
+def _resolve_pretrained_checkpoint_dir(path: str) -> str:
+    """
+    If `path` looks like a Hub repo id (org/model) and a *local* directory with that name exists
+    but has no weight files, ``transformers`` would load from that directory instead of the Hub.
+    Use ``snapshot_download`` so the real cache path is used (common when an empty
+    ``google/gemma-3-4b-it`` folder exists under the cwd).
+    """
+    from huggingface_hub import snapshot_download
+
+    if not path or not os.path.isdir(path):
+        return path
+    if any(os.path.isfile(os.path.join(path, f)) for f in _WEIGHT_FILENAMES):
+        return path
+
+    # org/model relative path (not an absolute filesystem path)
+    normalized = path.replace("\\", "/").strip("/")
+    parts = normalized.split("/")
+    if len(parts) == 2 and all(parts) and not os.path.isabs(path):
+        logger.warning(
+            f"Directory {path!r} exists but has no model weight files; "
+            f"using Hugging Face Hub snapshot for repo {normalized!r}."
+        )
+        return snapshot_download(
+            repo_id=normalized,
+            repo_type="model",
+            local_files_only=os.getenv("CI") == "true",
+        )
+    return path
+
 
 class ModelArgs(TTModelArgs):
     OP_KEYS = (
@@ -57,6 +94,13 @@ class ModelArgs(TTModelArgs):
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
+        hf_model = os.getenv("HF_MODEL")
+        if hf_model:
+            resolved = _resolve_pretrained_checkpoint_dir(hf_model)
+            if resolved != hf_model:
+                logger.info(f"HF_MODEL resolved: {hf_model!r} -> {resolved!r}")
+                os.environ["HF_MODEL"] = resolved
+
         super().__init__(
             mesh_device,
             instruct=instruct,
@@ -233,19 +277,25 @@ class ModelArgs(TTModelArgs):
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            from transformers import AutoModelForCausalLM
-
             raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:
-            from transformers import AutoModelForCausalLM
+            local_only = os.getenv("CI") == "true"
+            if self.is_multimodal:
+                from transformers import Gemma3ForConditionalGeneration
 
-            model = AutoModelForCausalLM.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
+                model = Gemma3ForConditionalGeneration.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    local_files_only=local_only,
+                )
+            else:
+                from transformers import AutoModelForCausalLM
+
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    local_files_only=local_only,
+                )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
             state_dict = model.state_dict()
@@ -267,37 +317,72 @@ class ModelArgs(TTModelArgs):
     def create_tokenizer(self):
         from transformers import AutoTokenizer
 
-        # Mapping of base model names to their known tokenizer paths
-        # These are the original models that have proper tokenizers
+        # Keys must match get_base_model_name() (e.g. gemma-3-4b-it -> gemma-3-4b).
         base_model_tokenizer_mapping = {
-            "gemma-3-4b-it": "google/gemma-3-4b-it",
+            "gemma-3-4b": "google/gemma-3-4b-it",
+            "gemma-3-27b": "google/gemma-3-27b-it",
         }
+
+        def _infer_hub_tokenizer_fallback():
+            """When HF_MODEL is a local or partial snapshot, map by name to the official Hub repo."""
+            path = base_model_tokenizer_mapping.get(self.base_model_name)
+            if path:
+                return path
+            name = f"{self.model_name} {self.base_model_name}".lower()
+            if "gemma-3-4b" in name:
+                return "google/gemma-3-4b-it"
+            if "gemma-3-27b" in name:
+                return "google/gemma-3-27b-it"
+            return None
+
+        def _load_hub_tokenizer(repo_id: str, local_only: bool):
+            """
+            Load tokenizer from Hub id. Incomplete HF caches (missing tokenizer.json / tokenizer.model)
+            can make AutoTokenizer fail with vocab_file=None; retry with network and snapshot_download.
+            """
+            from huggingface_hub import snapshot_download
+
+            first_error = None
+            try:
+                return AutoTokenizer.from_pretrained(repo_id, local_files_only=local_only)
+            except Exception as e:
+                first_error = e
+                logger.warning(f"Tokenizer load failed ({repo_id}, local_files_only={local_only}): {e}")
+
+            if local_only:
+                try:
+                    return AutoTokenizer.from_pretrained(repo_id, local_files_only=False)
+                except Exception as e:
+                    logger.warning(f"Tokenizer load with network failed ({repo_id}): {e}")
+                    first_error = e
+
+            try:
+                local_dir = snapshot_download(repo_id=repo_id, repo_type="model", local_files_only=False)
+                return AutoTokenizer.from_pretrained(local_dir, local_files_only=True)
+            except Exception as e:
+                logger.error(f"Tokenizer snapshot_download failed for {repo_id}: {e}")
+                raise first_error from e
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
 
+        local_only = os.getenv("CI") == "true"
+
         try:
             # Try to load tokenizer from the original model path
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=local_only)
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
 
-            # Try to use base model tokenizer as fallback
-            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+            fallback_tokenizer_path = _infer_hub_tokenizer_fallback()
 
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
-                    )
-                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                except Exception as fallback_e:
-                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                    raise fallback_e
+                tokenizer = _load_hub_tokenizer(fallback_tokenizer_path, local_only)
+                logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
             else:
                 logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
                 raise e
