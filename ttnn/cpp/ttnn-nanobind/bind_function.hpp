@@ -16,7 +16,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
-#include <nanobind/stl/variant.h>
+// Added for the nanobind includes and types -- see the comments in the decorators.hpp
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 
