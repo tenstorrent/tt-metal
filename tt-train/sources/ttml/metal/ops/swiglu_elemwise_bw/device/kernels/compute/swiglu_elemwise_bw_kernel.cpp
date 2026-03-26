@@ -47,8 +47,8 @@ inline void compute_dL_dgate() {
     cb_wait_front(cb_sigmoid, block_size);
 
     tile_regs_acquire();
+    mul_tiles_init(cb_linear1, cb_sigmoid);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_linear1, cb_sigmoid);
         mul_tiles(cb_linear1, cb_sigmoid, i, i, i);
     }
     tile_regs_commit();
@@ -56,8 +56,8 @@ inline void compute_dL_dgate() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
+    mul_tiles_init(cb_scratch, cb_dL_dprod);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_scratch, cb_dL_dprod);
         mul_tiles(cb_scratch, cb_dL_dprod, i, i, i);
     }
     tile_regs_commit();
@@ -83,8 +83,8 @@ inline void compute_silu_grad() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
+    mul_tiles_init(cb_linear1, cb_scratch);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_linear1, cb_scratch);
         mul_tiles(cb_linear1, cb_scratch, i, i, i);
         binop_with_scalar_tile_init();
         add_unary_tile(i, one);
@@ -95,8 +95,8 @@ inline void compute_silu_grad() {
 
     cb_wait_front(cb_silu_grad, block_size);
     tile_regs_acquire();
+    mul_tiles_init(cb_sigmoid, cb_silu_grad);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_sigmoid, cb_silu_grad);
         mul_tiles(cb_sigmoid, cb_silu_grad, i, i, i);
     }
     tile_regs_commit();
@@ -110,8 +110,8 @@ inline void compute_dL_dlinear1() {
     cb_wait_front(cb_silu_grad, block_size);
 
     tile_regs_acquire();
+    mul_tiles_init(cb_gate, cb_dL_dprod);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_gate, cb_dL_dprod);
         mul_tiles(cb_gate, cb_dL_dprod, i, i, i);
     }
     tile_regs_commit();
@@ -119,8 +119,8 @@ inline void compute_dL_dlinear1() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
+    mul_tiles_init(cb_scratch, cb_silu_grad);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles_init(cb_scratch, cb_silu_grad);
         mul_tiles(cb_scratch, cb_silu_grad, i, i, i);
     }
     tile_regs_commit();
