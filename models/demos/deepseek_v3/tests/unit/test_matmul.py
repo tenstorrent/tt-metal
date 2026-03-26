@@ -256,7 +256,15 @@ def test_matmul_dram_sharded_single_device(
 )
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "trace_region_size": 90112,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 def test_matmul_dram_sharded_mesh_device(
     mesh_device,
