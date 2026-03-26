@@ -67,7 +67,7 @@ Tensor argmax(
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config, optional_output_tensor);
     }
 
-    auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.size();
     if (rank == 0) [[unlikely]] {
         if (!optional_output_tensor.has_value()) {

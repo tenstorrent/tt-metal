@@ -389,7 +389,7 @@ ttnn::Tensor all_reduce_async(
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             topology_,
             worker_subdevice_id_opt,
-            cluster_axis.value(),
+            cluster_axis,
             /*use_optimal_ccl_for_llama*/ false,
             use_llama_sharded,
             /*use_all_gather_async_via_broadcast*/ false,

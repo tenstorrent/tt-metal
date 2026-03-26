@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <tuple>
+#include <vector>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -55,19 +57,31 @@ struct MorehFoldOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::optional<Tensor>& output,
-        const std::vector<uint32_t>& output_size,
-        const std::vector<uint32_t>& kernel_size,
-        const std::vector<uint32_t>& dilation,
-        const std::vector<uint32_t>& padding,
-        const std::vector<uint32_t>& stride,
-        const std::optional<MemoryConfig>& memory_config);
 };
+
+std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t>
+moreh_fold_build_operation_args(
+    const Tensor& input,
+    const std::optional<Tensor>& output,
+    const std::vector<uint32_t>& output_size,
+    const std::vector<uint32_t>& kernel_size,
+    const std::vector<uint32_t>& dilation,
+    const std::vector<uint32_t>& padding,
+    const std::vector<uint32_t>& stride,
+    const std::optional<MemoryConfig>& memory_config);
+
 }  // namespace ttnn::operations::moreh::moreh_fold
 
 namespace ttnn::prim {
-constexpr auto moreh_fold =
-    ttnn::register_operation<"ttnn::prim::fold", ttnn::operations::moreh::moreh_fold::MorehFoldOperation>();
-}
+
+Tensor moreh_fold(
+    const Tensor& input,
+    const std::optional<Tensor>& output,
+    const std::vector<uint32_t>& output_size,
+    const std::vector<uint32_t>& kernel_size,
+    const std::vector<uint32_t>& dilation,
+    const std::vector<uint32_t>& padding,
+    const std::vector<uint32_t>& stride,
+    const std::optional<MemoryConfig>& memory_config);
+
+}  // namespace ttnn::prim
