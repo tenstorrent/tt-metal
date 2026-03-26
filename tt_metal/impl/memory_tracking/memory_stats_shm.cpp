@@ -570,8 +570,8 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
 
             // Get process name
             std::string proc_name = get_process_name(pid);
-            strncpy(region_->processes[i].process_name, proc_name.c_str(), 63);
-            region_->processes[i].process_name[63] = '\0';
+            strncpy(processe.process_name, proc_name.c_str(), 63);
+            processe.process_name[63] = '\0';
 
             region_->num_active_processes++;
             return &region_->processes[i];
