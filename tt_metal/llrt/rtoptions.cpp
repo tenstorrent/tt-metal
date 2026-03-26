@@ -1211,12 +1211,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS
         // Controls whether tensor specs are captured on every op dispatch.
-        // Default: false (disabled). Set to 1 to enable.
+        // Default: true (enabled). Set to 0 to disable.
         // Usage: export TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS=1
         case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS:
-            this->inspector_settings.capture_tensor_specs = false;
-            if (strcmp(value, "1") == 0) {
-                this->inspector_settings.capture_tensor_specs = true;
+            this->inspector_settings.capture_tensor_specs = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.capture_tensor_specs = false;
             }
             break;
 
