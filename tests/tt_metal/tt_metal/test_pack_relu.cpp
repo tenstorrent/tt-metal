@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // ReluType encoding (matches ckernel::ReluType)
-enum PackReluMode : uint32_t {
+enum class PackReluMode : uint32_t {
     NO_RELU = 0,
     ZERO_RELU = 1,
     MIN_THRESHOLD_RELU = 2,
@@ -29,7 +29,7 @@ enum PackReluMode : uint32_t {
 };
 
 // Pack relu config: mode in bits [1:0], bfloat16 threshold in bits [31:16]
-static uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
+uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
     uint16_t thresh_bf16 = std::bit_cast<uint16_t>(bfloat16(threshold));
     return (static_cast<uint32_t>(thresh_bf16) << 16) | static_cast<uint32_t>(mode);
 }
@@ -141,14 +141,14 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
 // ZERO_RELU: max(0, x)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZero) {
     IDevice* dev = devices_[0]->get_devices()[0];
-    run_pack_relu_test(dev, make_relu_config(ZERO_RELU), [](float x) { return std::max(0.0f, x); });
+    run_pack_relu_test(dev, make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
 // MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
     IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.25f;
-    run_pack_relu_test(dev, make_relu_config(MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
+    run_pack_relu_test(dev, make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
         return x <= threshold ? 0.0f : x;
     });
 }
@@ -157,7 +157,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
     IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.5f;
-    run_pack_relu_test(dev, make_relu_config(MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
+    run_pack_relu_test(dev, make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
         return x < 0.0f ? 0.0f : std::min(x, threshold);
     });
 }

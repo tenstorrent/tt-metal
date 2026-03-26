@@ -171,13 +171,6 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
 }
 
-/**
- * @brief Configure packer ReLU at runtime from a ReluType enum.
- *
- * Quasar's ReluType is a scoped enum class (no implicit conversion to uint32_t),
- * so this overload is needed for compute kernels that call
- * llk_pack_relu_config(ReluType::ZERO_RELU).
- */
-TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluType mode) {
-    llk_pack_relu_config(static_cast<std::uint32_t>(mode));
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
 }

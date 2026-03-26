@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #ifdef ARCH_QUASAR
@@ -27,7 +28,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(get_arg_val<uint32_t>(0))));
+    pack_relu_config(get_arg_val<uint32_t>(0));
 #endif
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
