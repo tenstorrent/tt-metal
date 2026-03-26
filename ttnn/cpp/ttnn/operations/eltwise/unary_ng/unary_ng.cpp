@@ -8,9 +8,7 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
-namespace ttnn::operations::unary_ng {
-
-namespace detail {
+namespace ttnn::operations::unary_ng::detail {
 
 Tensor unary_ng_impl(
     const Tensor& input_tensor,
@@ -49,9 +47,7 @@ Tensor unary_ng_impl(
         sub_core_grids);
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary_ng::detail
 
 namespace ttnn {
 

@@ -26,7 +26,7 @@ bool is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
-bool is_native_L1_sharding(const TensorSpec& input_spec, const MemoryConfig& output_memory_config) {
+bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config) {
     if (!output_memory_config.is_sharded()) {
         return false;
     }
@@ -103,9 +103,9 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const MemoryConfig& memory_config_actual) {
+    const tt::tt_metal::MemoryConfig& memory_config_actual) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "UnaryNg: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();

@@ -241,9 +241,8 @@ void set_or_update_runtime_arguments(
             }
             uint32_t in_tiles = in_shard_pages(core);
             uint32_t o_tiles = out_shard_pages(core);
-            uint32_t out_start_id =
-                (i / num_shards_per_width) * (out_shard_height * oWt) + (i % num_shards_per_width) * out_shard_width;
-
+            uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
+                                    ((i % num_shards_per_width) * out_shard_width);
             std::array reader_runtime_args = {input.buffer()->address(), in_tiles, out_start_id};
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
@@ -350,6 +349,16 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     const bool rm_interleaved = is_row_major && !has_sharding;
     const uint32_t input_cb_page_size = rm_interleaved ? src_buffer->page_size() : single_tile_size;
     const uint32_t output_cb_page_size = rm_interleaved ? dst_buffer->page_size() : single_tile_size_output;
+
+    // TODO: Support wide ROW_MAJOR interleaved tensors (#40894)
+    if (rm_interleaved) {
+        TT_FATAL(
+            input_cb_page_size <= single_tile_size,
+            "UnaryNg: ROW_MAJOR interleaved page size ({} bytes) exceeds tile size ({} bytes). "
+            "Input tensor row is too wide for the current circular buffer allocation.",
+            input_cb_page_size,
+            single_tile_size);
+    }
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {

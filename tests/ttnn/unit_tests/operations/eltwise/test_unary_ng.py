@@ -69,8 +69,22 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "ttnn_op, torch_dtype, ttnn_dtype",
     [
         (ttnn.relu, torch.bfloat16, ttnn.bfloat16),
-        (ttnn.square, torch.float32, ttnn.float32),
-        (ttnn.abs, torch.int32, ttnn.int32),
+        pytest.param(
+            ttnn.square,
+            torch.float32,
+            ttnn.float32,
+            marks=pytest.mark.skipif(
+                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
+            ),
+        ),
+        pytest.param(
+            ttnn.abs,
+            torch.int32,
+            ttnn.int32,
+            marks=pytest.mark.skipif(
+                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
+            ),
+        ),
     ],
 )
 def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_op, torch_dtype, ttnn_dtype, device):
@@ -165,7 +179,7 @@ def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     assert_with_ulp(ttnn_output, golden_tensor, ulp_threshold=1.0)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.square])
+@pytest.mark.parametrize("ttnn_op", [ttnn.abs])
 def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     """Test that uneven sharding falls back to interleaved path gracefully.
 
@@ -175,7 +189,7 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     """
     torch.manual_seed(42)
     input_shape = torch.Size([1, 1, 160, 96])
-    torch_input = torch.randint(0, 255, input_shape, dtype=torch.int32)
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(torch_input, device=device)
 
@@ -189,15 +203,14 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
 
     ttnn_input = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.uint16,
+        dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=uneven_shard_config,
     )
 
     ttnn_output = ttnn_op(ttnn_input, memory_config=uneven_shard_config)
-    ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.uint32)
-    ttnn_output = ttnn.to_torch(ttnn_output, dtype=torch.int32)
+    ttnn_output = ttnn.to_torch(ttnn_output)
     assert torch.equal(ttnn_output, golden_tensor)
 
 

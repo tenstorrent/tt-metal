@@ -29,8 +29,9 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_dst.wait_front(onepage);
         noc.async_write(cb_dst, dst, page_bytes, {}, {.page_id = i});
-        noc.async_write_barrier();
+        noc.async_writes_flushed();
         cb_dst.pop_front(onepage);
     }
+    noc.async_write_barrier();
 #endif
 }

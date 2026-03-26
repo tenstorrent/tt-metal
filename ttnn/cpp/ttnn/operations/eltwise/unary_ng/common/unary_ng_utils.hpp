@@ -11,7 +11,7 @@
 namespace ttnn::operations::unary_ng {
 
 /** True if native L1 sharding path can be used (input and output both L1, even sharding). */
-bool is_native_L1_sharding(const TensorSpec& input_spec, const MemoryConfig& output_memory_config);
+bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config);
 
 /** Shard spec for output when using native sharded path; nullopt if interleaved/fallback path. */
 struct UnaryShardSpecs {
@@ -28,9 +28,9 @@ bool is_uneven(const TensorSpec& t);
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const MemoryConfig& memory_config_actual);
+    const tt::tt_metal::MemoryConfig& memory_config_actual);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);

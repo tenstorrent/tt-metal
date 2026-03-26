@@ -10,12 +10,12 @@
 
 namespace ttnn::operations::unary_ng {
 
+using tt::tt_metal::DataType;
 using unary::EltwiseUnaryWithParam;
 using unary::UnaryOpType;
 
 namespace {
 
-// Macro define name for kernel includes. Only migrated ops are defined here; add others when migrating.
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::ASINH:
@@ -176,7 +176,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::TRUNC: return {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
         case UnaryOpType::FRAC: return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
-        case UnaryOpType::HARDSWISH: return {};
+        case UnaryOpType::HARDSWISH:
         case UnaryOpType::LGAMMA: return {};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};

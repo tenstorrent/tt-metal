@@ -1,7 +1,7 @@
 add_library(ttnn_op_eltwise_unary_ng ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::UnaryNG ALIAS ttnn_op_eltwise_unary_ng)
 
-target_precompile_headers(ttnn_op_eltwise_unary_ng REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_unary_ng TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary_ng)
 set_target_properties(
     ttnn_op_eltwise_unary_ng
@@ -17,8 +17,8 @@ target_sources(
     PUBLIC
         FILE_SET api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES device/unary_ng_device_operation.hpp common/unary_ng_utils.hpp common/unary_ng_op_utils.hpp unary_ng.hpp
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -43,9 +43,6 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_eltwise_unary_ng
-    FILE_SET
-    api
-        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/unary_ng
