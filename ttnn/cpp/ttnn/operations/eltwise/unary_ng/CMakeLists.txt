@@ -10,7 +10,6 @@ set_target_properties(
             api
 )
 
-# Unary NG compute kernels (runtime block count; single kernel like binary_ng)
 file(GLOB_RECURSE unary_ng_kernels device/kernels/*)
 
 target_sources(

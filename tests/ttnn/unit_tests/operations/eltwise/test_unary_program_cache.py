@@ -31,7 +31,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import is_wormhole_b0
 
 
@@ -236,6 +236,31 @@ def test_unary_cache_correctness_same_volume_different_shapes(device, isolate_pr
         assert_with_pcc(torch_ref, tt_out, 0.9999)
 
     assert device.num_program_cache_entries() == 1
+
+
+# =============================================================================
+# ROW_MAJOR cache tests
+# =============================================================================
+
+
+@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
+def test_unary_cache_rm_different_widths_need_separate_entries(device, isolate_program_cache):
+    """ROW_MAJOR interleaved tensors with different widths have different page sizes,
+    so compute_program_hash must produce distinct keys for each shape."""
+    torch.manual_seed(0)
+    torch_a = torch.empty([1, 1, 1024, 512], dtype=torch.bfloat16).uniform_(1, 100)
+    torch_b = torch.empty([1, 1, 512, 1024], dtype=torch.bfloat16).uniform_(1, 100)
+    torch_result1 = torch.abs(torch_a)
+    torch_result2 = torch.abs(torch_b)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_result1 = ttnn.abs(tt_a)
+    tt_result2 = ttnn.abs(tt_b)
+    result1 = ttnn.to_torch(tt_result1)
+    result2 = ttnn.to_torch(tt_result2)
+    assert torch.equal(result1, torch_result1)
+    assert torch.equal(result2, torch_result2)
+    assert device.num_program_cache_entries() == 2
 
 
 # =============================================================================

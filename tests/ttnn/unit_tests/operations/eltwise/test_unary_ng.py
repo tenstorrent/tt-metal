@@ -2,10 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp
+from models.common.utility_functions import is_wormhole_b0
+
+
+def is_simulator():
+    return os.environ.get("TT_METAL_SIMULATOR") is not None
+
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
     [128, 160],
@@ -221,7 +228,13 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.bfloat16, ttnn.bfloat16),
-        pytest.param(torch.float32, ttnn.float32, marks=pytest.mark.skip(reason="tt-smi failure #39185")),
+        pytest.param(
+            torch.float32,
+            ttnn.float32,
+            marks=pytest.mark.skipif(
+                is_simulator() and is_wormhole_b0(), reason="tt-sim + Wormhole float32 failure #39185"
+            ),
+        ),
     ],
 )
 def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strategy, device, torch_dtype, ttnn_dtype):

@@ -164,6 +164,20 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
+    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+    // different widths get separate cache entries. Consider hashing only the last
+    // dimension to allow cache reuse when only height differs
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return operation::hash_operation<UnaryNgDeviceOperation>(
+            attributes,
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            input_tensor.memory_config(),
+            input_tensor.padded_shape(),
+            src_shard_vol,
+            dst_shard_vol);
+    }
+
     return operation::hash_operation<UnaryNgDeviceOperation>(
         attributes,
         input_tensor.dtype(),

@@ -171,7 +171,7 @@ void set_or_update_runtime_arguments(
                 auto df = datatype_to_dataformat_converter(tensor.dtype());
                 uint32_t ts = tile_size(df);
                 uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
-                uint32_t pages = (shard_bytes + ts - 1) / ts;
+                uint32_t pages = shard_bytes / ts;
                 return [pages](CoreCoord) -> uint32_t { return pages; };
             }
             auto end_core = spec.grid.ranges().rbegin()->end_coord;
@@ -345,8 +345,8 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
 
-    // For sharded ROW_MAJOR: use tile-sized CB pages and pack shard bytes into tile-sized chunks
-    // (matches old UnaryShardedProgramFactory behavior). For interleaved ROW_MAJOR: use row-sized pages.
+    // For sharded ROW_MAJOR: use tile-sized CB pages and pack shard bytes into tile-sized chunks.
+    // For interleaved ROW_MAJOR: use row-sized pages.
     const bool rm_interleaved = is_row_major && !has_sharding;
     const uint32_t input_cb_page_size = rm_interleaved ? src_buffer->page_size() : single_tile_size;
     const uint32_t output_cb_page_size = rm_interleaved ? dst_buffer->page_size() : single_tile_size_output;
@@ -356,7 +356,13 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
             auto df = datatype_to_dataformat_converter(t.dtype());
             uint32_t ts = tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
-            return (shard_bytes + ts - 1) / ts;
+            // TODO: Support non-tile-aligned shard sizes for ROW_MAJOR (#39785)
+            TT_FATAL(
+                shard_bytes % ts == 0,
+                "Shard size in bytes ({}) must be a multiple of tile size ({})",
+                shard_bytes,
+                ts);
+            return shard_bytes / ts;
         }
         return spec.numel() / t.tensor_spec().tile().get_tile_hw();
     };
