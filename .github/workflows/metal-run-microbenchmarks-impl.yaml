@@ -75,7 +75,7 @@ jobs:
             arch: blackhole,
             # Run on LLMBox to ensure at least 4 devices
             runs-on: ["BH-LLMBox", "pipeline-perf", "in-service"],
-            name: "BH ubench - Fabric BW & Latency",
+            name: "BH Quietbox ubench - Fabric BW & Latency",
             cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
           }, # Nolen Zhao
         ]
