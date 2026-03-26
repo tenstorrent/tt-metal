@@ -80,6 +80,12 @@ void kernel_main() {
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
 
+#if INIT_ZEROS
+    // Zero-init args follow immediately after the TensorAccessorArgs block
+    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+#endif
+
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_args++);
@@ -107,7 +113,6 @@ void kernel_main() {
         uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
 
-        constexpr uint32_t zi_cb_id = INLINE_ZI_CB_ID;
         cb_reserve_back(zi_cb_id, 1);
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
         uint64_t zeros_noc = get_noc_addr(NOC_X(my_x[0]), NOC_Y(my_y[0]), MEM_ZEROS_BASE);
@@ -129,12 +134,10 @@ void kernel_main() {
             }
         }
 
-#if INLINE_ZI_NUM_IDLE_CORES > 0
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, INLINE_ZI_NUM_IDLE_CORES);
+        noc_semaphore_wait(zi_done_sem_ptr, num_idle_cores);
         noc_semaphore_set(zi_done_sem_ptr, 0);
-#endif
     }
 #endif
 

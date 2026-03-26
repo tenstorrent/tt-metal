@@ -334,8 +334,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 .set_page_size(tt::CBIndex::c_7, noc_max_burst_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, zi_inline_cb_config);
 
-        reader_defines["INLINE_ZI_CB_ID"] = std::to_string(static_cast<uint32_t>(tt::CBIndex::c_7));
-
         // Find idle worker cores in the same row as sender cores
         uint32_t sender_row_y = sender_cores[0].y;
         std::set<CoreCoord> sender_core_set(sender_cores.begin(), sender_cores.end());
@@ -347,48 +345,56 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         }
 
         num_zero_init_cores = idle_row_cores.size();
+        TT_FATAL(
+            num_zero_init_cores > 0,
+            "No idle cores found in sender row {} for zero-init; subdevice must have more than {} cores per row",
+            sender_row_y,
+            num_cores);
         total_zero_init_cores = num_cores + num_zero_init_cores;
 
         uint32_t total_output_pages = detail::get_num_pages(output_tensor);
         pages_per_core = total_output_pages / total_zero_init_cores;
         remainder_pages = total_output_pages % total_zero_init_cores;
 
-        reader_defines["INLINE_ZI_NUM_IDLE_CORES"] = std::to_string(num_zero_init_cores);
-
-        if (num_zero_init_cores > 0) {
-            std::set<CoreRange> idle_ranges;
-            for (const auto& core : idle_row_cores) {
-                idle_ranges.insert(CoreRange(core));
-            }
-            CoreRangeSet idle_core_grid(idle_ranges);
-
-            tt::tt_metal::CircularBufferConfig zi_idle_cb_config =
-                tt::tt_metal::CircularBufferConfig(noc_max_burst_size, {{tt::CBIndex::c_6, tt::DataFormat::UInt8}})
-                    .set_page_size(tt::CBIndex::c_6, noc_max_burst_size);
-            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, zi_idle_cb_config);
-
-            zi_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
-
-            uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
-            std::vector<uint32_t> zi_compile_time_args = {
-                output_aligned_page_size,
-                num_cores,
-                static_cast<uint32_t>(tt::CBIndex::c_6),
-            };
-            tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
-
-            zero_init_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
-                "zero_init_writer.cpp",
-                idle_core_grid,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-                    .compile_args = zi_compile_time_args});
-
-            zero_init_cores_vec = idle_row_cores;
+        std::set<CoreRange> idle_ranges;
+        for (const auto& core : idle_row_cores) {
+            idle_ranges.insert(CoreRange(core));
         }
+        CoreRangeSet idle_core_grid(idle_ranges);
+
+        tt::tt_metal::CircularBufferConfig zi_idle_cb_config =
+            tt::tt_metal::CircularBufferConfig(noc_max_burst_size, {{tt::CBIndex::c_6, tt::DataFormat::UInt8}})
+                .set_page_size(tt::CBIndex::c_6, noc_max_burst_size);
+        tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, zi_idle_cb_config);
+
+        zi_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
+
+        uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
+        std::vector<uint32_t> zi_compile_time_args = {
+            output_aligned_page_size,
+            num_cores,
+            static_cast<uint32_t>(tt::CBIndex::c_6),
+        };
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
+
+        zero_init_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
+            "zero_init_writer.cpp",
+            idle_core_grid,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
+                .compile_args = zi_compile_time_args});
+
+        zero_init_cores_vec = idle_row_cores;
+    }
+
+    // Reader gets its own compile-time args: shared base + zero-init args appended at the end
+    std::vector<uint32_t> reader_compile_time_args = compile_time_args;
+    if (init_zeros) {
+        reader_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_7));  // zi_cb_id
+        reader_compile_time_args.push_back(num_zero_init_cores);                      // num_idle_cores
     }
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -398,7 +404,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-            .compile_args = compile_time_args,
+            .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -419,7 +425,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
 
     // Set runtime args for hybrid idle row cores
-    if (init_zeros && num_zero_init_cores > 0) {
+    if (init_zeros) {
         for (uint32_t idle_idx = 0; idle_idx < num_zero_init_cores; idle_idx++) {
             uint32_t row_idx = num_cores + idle_idx;
             uint32_t page_start = row_idx * pages_per_core + std::min(row_idx, remainder_pages);
