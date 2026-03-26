@@ -24,6 +24,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -166,6 +167,10 @@ ttnn::Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    auto* mesh_device_ptr = input_tensor.device();
+    TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
+    uint32_t resolved_num_links =
+        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt));
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
@@ -205,7 +210,7 @@ ttnn::Tensor all_reduce_async(
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
-            num_preferred_links.value_or(1),
+            resolved_num_links,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
@@ -231,7 +236,7 @@ ttnn::Tensor all_reduce_async(
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
-        num_preferred_links.value_or(1),
+        resolved_num_links,
         change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
@@ -242,7 +247,7 @@ ttnn::Tensor all_reduce_async(
         /*persistent_output_buffer*/ std::nullopt,
         dim,
         ag_global_semaphores,
-        num_preferred_links.value_or(1),
+        resolved_num_links,
         change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
         topology,
         worker_subdevice_id_opt,
@@ -277,6 +282,8 @@ ttnn::Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    uint32_t resolved_num_links =
+        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -318,7 +325,7 @@ ttnn::Tensor all_reduce_async(
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
-            num_preferred_links.value_or(1),
+            resolved_num_links,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);
@@ -347,7 +354,7 @@ ttnn::Tensor all_reduce_async(
             dim,
             rs_global_semaphores.value(),
             barrier_semaphores.value()[0],
-            num_preferred_links.value_or(1),
+            resolved_num_links,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             std::nullopt,
             topology_,
@@ -378,11 +385,11 @@ ttnn::Tensor all_reduce_async(
             /*persistent_output_buffer*/ std::nullopt,
             dim,
             ag_global_semaphores.value(),
-            num_preferred_links.value_or(1),
+            resolved_num_links,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             topology_,
             worker_subdevice_id_opt,
-            cluster_axis.value(),
+            cluster_axis,
             /*use_optimal_ccl_for_llama*/ false,
             use_llama_sharded,
             /*use_all_gather_async_via_broadcast*/ false,

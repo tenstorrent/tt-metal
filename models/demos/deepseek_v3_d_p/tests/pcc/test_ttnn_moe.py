@@ -396,7 +396,6 @@ def test_ttnn_moe(
         shared_expert_weights=shared_expert_weights,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        combine_output_buffer_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
