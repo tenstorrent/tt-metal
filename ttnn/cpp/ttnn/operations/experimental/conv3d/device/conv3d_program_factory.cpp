@@ -122,15 +122,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
-    // Compute tilizes TILE_HEIGHT rows at a time, so vol2col_rm only needs to double-buffer
-    // that many patches. The reader pushes in matching chunks.
+    // Fused tilize+matmul: compute processes one M tile-row at a time, so
+    // vol2col_tiled only needs K_t tiles (one tile-row) instead of M_t*K_t.
+    // vol2col_rm still double-buffers TILE_HEIGHT chunks for reader/compute overlap.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     tt::tt_metal::create_cb(
         cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
+    tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_K_t, data_format);
 
     uint32_t cb_weight_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
@@ -210,7 +211,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
     uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
-                               (tile_size * matmul_M_t * matmul_K_t) +          // vol2col_tiled
+                               (tile_size * matmul_K_t) +                       // vol2col_tiled (1 tile-row)
                                (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
                                (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
                                (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
@@ -369,12 +370,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
     TT_FATAL(matmul_N_t % out_subblock_w == 0, "matmul_N_t must be divisible by out_subblock_w");
-    // If out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    const uint32_t out_subblock_h =
-        (out_subblock_w == matmul_N_t) ? (std::min(matmul_M_t, dst_size / out_subblock_w)) : 1;
-
-    const uint32_t in0_num_subblocks = matmul_M_t / out_subblock_h;
+    // Fused tilize+matmul: each matmul call processes one M tile-row (M=1),
+    // so subblock_h=1 and in0_num_subblocks=1.
+    const uint32_t out_subblock_h = 1;
+    const uint32_t in0_num_subblocks = 1;
     const uint32_t in1_num_subblocks = matmul_N_t / out_subblock_w;
 
     log_debug(tt::LogOp, "Matmul parameters:");
