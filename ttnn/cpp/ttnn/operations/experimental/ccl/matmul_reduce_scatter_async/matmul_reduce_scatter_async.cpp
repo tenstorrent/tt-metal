@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {
 
@@ -18,7 +19,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<const Tensor>& bias,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
     const ttnn::ccl::Topology topology,
@@ -31,6 +32,10 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required for matmul_reduce_scatter_async operation");
+    uint32_t resolved_num_links =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt));
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto output_tensors = ttnn::prim::matmul_reduce_scatter_async(
         input_tensor,
@@ -42,7 +47,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         reduce_scatter_core_grid_offset,
         barrier_semaphore,
         bias,
-        num_links,
+        resolved_num_links,
         memory_config_rs,
         intermediate_memory_config_rs,
         usable_topology,
