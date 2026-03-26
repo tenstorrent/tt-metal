@@ -340,8 +340,8 @@ def _skip_single_device_ccl():
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
-    ids=["mesh_4x8"],
+    [(1, 1), (4, 8)],
+    ids=["mesh_1x1", "mesh_4x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -422,8 +422,8 @@ def test_gpt_oss_moe(
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
-    ids=["mesh_4x8"],
+    [(1, 1), (4, 8)],
+    ids=["mesh_1x1", "mesh_4x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from types import SimpleNamespace
 from typing import Dict
 
 import pytest
@@ -13,6 +14,24 @@ import ttnn
 from ..config import MeshConfig
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
+
+
+def _get_dummy_config() -> SimpleNamespace:
+    """Minimal config for tests that use dummy weights (no model path required).
+    Values match GPT-OSS 20B defaults used by _generate_dummy_state_dict and fused op tests.
+    """
+    return SimpleNamespace(
+        hidden_size=2048,
+        num_local_experts=128,
+        num_experts_per_tok=4,
+        intermediate_size=5632,
+        num_attention_heads=32,
+        num_key_value_heads=32,
+        head_dim=64,
+        vocab_size=201088,
+        alpha=1.702,
+        swiglu_limit=7.0,
+    )
 
 
 class TestFactory:
@@ -43,7 +62,15 @@ class TestFactory:
         # Setup CCL
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
-        config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+        if use_real_weights:
+            try:
+                config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+            except OSError:
+                # Model path missing or invalid (e.g. p150 without mount); fall back to dummy config
+                config = _get_dummy_config()
+        else:
+            # Dummy weights mode: use minimal config so tests don't require model path to exist
+            config = _get_dummy_config()
         # state_dict = TestFactory._generate_dummy_state_dict(config)
 
         return {
@@ -112,7 +139,9 @@ def parametrize_mesh_with_fabric():
     """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
     num_devices = ttnn.get_num_devices()
-    if num_devices == 8:
+    if num_devices == 1:
+        mesh_params = [pytest.param((1, 1))]
+    elif num_devices == 8:
         mesh_params = [pytest.param((1, 8))]
     elif num_devices == 32:
         mesh_params = [pytest.param((4, 8))]

@@ -8,6 +8,8 @@ This module compares our rope setup (sin/cos embedding matrices) with the
 HuggingFace transformers reference implementation.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -20,6 +22,20 @@ from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import rotary_embedding_factory
 
 from ..test_factory import parametrize_mesh_with_fabric
+
+
+def get_gpt_oss_hf_config_or_skip():
+    """Load GPT-OSS HuggingFace config from HF_MODEL. Skip if unset or path invalid."""
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("HF_MODEL environment variable not set")
+    try:
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    except OSError as e:
+        pytest.skip(
+            f"Cannot load config from HF_MODEL={model_path}: {e}. "
+            "Ensure HF_MODEL points to a directory containing config.json (e.g. GPT-OSS model checkout)."
+        )
 
 
 def get_rope_cos_sin_from_tt_setup(rope_setup, mesh_device, seq_len):
@@ -185,17 +201,10 @@ def test_rope_vs_hf_reference(mesh_device, device_params, seq_len, max_local_bat
         max_local_batch_size: Local batch size per device (1 or 32)
         reset_seeds: Reset random seeds fixture
     """
-    import os
-
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Load config from HF model
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     logger.info(f"Testing rope setup with seq_len={seq_len}, max_local_batch_size={max_local_batch_size}")
-    logger.info(f"Model: {model_path}")
+    logger.info(f"Model: {os.getenv('HF_MODEL')}")
     logger.info(f"Rope scaling config: {hf_config.rope_scaling}")
     logger.info(f"Rope theta: {getattr(hf_config, 'rope_theta', 'not set')}")
     logger.info(f"Head dim: {hf_config.head_dim}")
@@ -281,14 +290,7 @@ def test_rope_pytorch_vs_hf_reference(mesh_device, device_params, seq_len, reset
         seq_len: Sequence length to test
         reset_seeds: Reset random seeds fixture
     """
-    import os
-
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Load config from HF model
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     logger.info(f"Testing PyTorch rope implementation with seq_len={seq_len}")
     logger.info(f"Rope scaling config: {hf_config.rope_scaling}")
@@ -356,14 +358,7 @@ def test_rope_scaling_parameters(mesh_device, device_params, reset_seeds):
         device_params: Device parameters fixture
         reset_seeds: Reset random seeds fixture
     """
-    import os
-
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Load config from HF model
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     logger.info(f"Rope scaling config from HF: {hf_config.rope_scaling}")
 
@@ -434,14 +429,8 @@ def test_rope_embedding_lookup_multi_user(mesh_device, device_params, batch_size
         batch_size: Number of users (1 or 32)
         reset_seeds: Reset random seeds fixture
     """
-    import os
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Load config from HF model
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     # Use a reasonable max sequence length for the test
     max_seq_len = 8192
@@ -551,14 +540,8 @@ def test_rope_embedding_lookup_users_row_sharded(mesh_device, device_params, max
         max_local_batch_size: Local batch size per mesh row
         reset_seeds: Reset random seeds fixture
     """
-    import os
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Load config from HF model
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     # Use a reasonable max sequence length for the test
     max_seq_len = 8192
@@ -883,18 +866,12 @@ def test_rope_yarn_values_match_hf(mesh_device, device_params, reset_seeds):
     """
     Verify that our YARN rope implementation produces cos/sin values that match HuggingFace.
     """
-    import os
-
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
     from models.tt_transformers.tt.common import rope_scaling_model_factory
     from models.tt_transformers.tt.rope import rotary_embedding_factory
 
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     # Get HF cos/sin
     rope_hf = GptOssRotaryEmbedding(hf_config)
@@ -936,17 +913,7 @@ def test_trace_rope_ops_for_corruption(mesh_device, device_params, reset_seeds):
     - Tests full 128 batch across all 4 mesh rows
     - Compares results on ALL devices, not just device[0]
     """
-    import os
-
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     global_batch_size = 128  # Same as demo
     batch_per_row = global_batch_size // mesh_device.shape[0]  # 32 per row
@@ -1171,17 +1138,8 @@ def test_rope_multiple_iterations(mesh_device, device_params, reset_seeds):
     This test simulates the decode loop where rope is applied repeatedly
     with incrementing positions, checking if errors accumulate.
     """
-    import os
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     global_batch_size = 128
     batch_per_row = global_batch_size // mesh_device.shape[0]  # 32
@@ -1307,17 +1265,8 @@ def test_paged_update_cache_with_large_values(mesh_device, device_params, reset_
     This test verifies that paged_update_cache correctly stores and retrieves
     K values when they have larger magnitudes (like after YARN-scaled rope).
     """
-    import os
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     batch_per_row = 32
     num_kv_heads = hf_config.num_key_value_heads // mesh_device.shape[1]  # Local KV heads
@@ -1505,17 +1454,8 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     This test verifies that paged_scaled_dot_product_attention_decode
     produces correct results when Q has larger magnitudes.
     """
-    import os
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     batch_size = 32
     num_heads = 32  # Local heads
@@ -1749,20 +1689,11 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
     the bug manifests when operations are composed together (as in the demo)
     even though they pass individually.
     """
-    import os
     import random
 
     from models.demos.gpt_oss.tt.model import create_rope_setup
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     # Use same parameters as demo batch128
     batch_size = 128  # Total across mesh
@@ -2015,20 +1946,11 @@ def test_single_layer_with_yarn(mesh_device, device_params, reset_seeds, use_yar
     This test compares the output of a single decoder layer when using YARN
     scaling vs. not, to identify where values start diverging.
     """
-    import os
     import random
 
     from models.demos.gpt_oss.tt.model import create_rope_setup
 
-    model_path = os.getenv("HF_MODEL")
-    if model_path is None:
-        pytest.skip("HF_MODEL environment variable not set")
-
-    # Require 4x8 mesh like the demo
-    if mesh_device.shape[0] != 4 or mesh_device.shape[1] != 8:
-        pytest.skip(f"Test requires 4x8 mesh, got {mesh_device.shape}")
-
-    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    hf_config = get_gpt_oss_hf_config_or_skip()
 
     # Test parameters
     batch_size = 128

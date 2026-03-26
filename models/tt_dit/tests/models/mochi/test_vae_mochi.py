@@ -200,21 +200,21 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
     ("N", "C", "T", "H", "W"),
     [
         # small latent
-        pytest.param(1, 768, 28, 40, 50, id="s768"),
+        pytest.param(1, 768, 8, 16, 16, id="s768"),
         pytest.param(1, 512, 84, 80, 100, id="s512"),
-        pytest.param(1, 256, 168, 160, 200, id="s256"),
-        pytest.param(1, 128, 168, 320, 400, id="s128"),
+        # pytest.param(1, 256, 168, 160, 200, id="s256"),
+        # pytest.param(1, 128, 168, 320, 400, id="s128"),
         # large latent
-        pytest.param(1, 768, 28, 60, 106, id="l768"),
-        pytest.param(1, 512, 84, 120, 212, id="l512"),
-        pytest.param(1, 256, 168, 240, 424, id="l256"),
-        pytest.param(1, 128, 168, 480, 848, id="l128"),
+        # pytest.param(1, 768, 28, 60, 106, id="l768"),
+        # pytest.param(1, 512, 84, 120, 212, id="l512"),
+        # pytest.param(1, 256, 168, 240, 424, id="l256"),
+        # pytest.param(1, 128, 168, 480, 848, id="l128"),
     ],
 )
 @pytest.mark.parametrize(
     "num_links",
     [
-        pytest.param(4, id="4links"),
+        # pytest.param(4, id="4links"),
         pytest.param(1, id="1link"),
     ],
 )

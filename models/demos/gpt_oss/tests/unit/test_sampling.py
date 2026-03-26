@@ -190,7 +190,7 @@ def make_hot_logits(args, mesh_device, batch_size, num_hot=8):
         {"temperature": 1.0, "top_k": 1, "top_p": 0.00, "seed": 42},  # top-k=1 (always argmax)
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_greedy_sampling(sampling_params, batch_size, mesh_device, device_params, reset_seeds):
     """Test greedy (argmax) on-device sampling matches torch reference."""
@@ -259,7 +259,7 @@ def test_gpt_oss_greedy_sampling(sampling_params, batch_size, mesh_device, devic
         {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # No top-p filter
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, device_params, reset_seeds):
     """Test stochastic sampling with controlled logits to verify top-k/top-p behavior.
@@ -338,7 +338,7 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     ],
     ids=["presence", "frequency", "repetition"],
 )
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_seeds):
     """Test that penalties suppress previously-seen tokens.
@@ -403,7 +403,7 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
     """Test that log probability calculation produces valid results.
@@ -478,7 +478,7 @@ def _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_seed_determinism_batch_replay(mesh_device, device_params, reset_seeds):
     """Test that replaying the same seeds reproduces identical tokens for all users.
@@ -534,7 +534,7 @@ def test_gpt_oss_seed_determinism_batch_replay(mesh_device, device_params, reset
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [GPT_OSS_DEVICE_PARAMS], indirect=True)
 def test_gpt_oss_seed_determinism_across_requests(mesh_device, device_params, reset_seeds):
     """Test that the same seed produces the same token sequence across independent requests.

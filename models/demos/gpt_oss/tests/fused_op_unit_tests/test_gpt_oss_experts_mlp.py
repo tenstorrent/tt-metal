@@ -631,8 +631,8 @@ def _run_experts_mlp_test(
 @pytest.mark.parametrize("trace_mode", [False], ids=["eager"])  # Trace mode disabled for MLP
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
-    ids=["mesh_4x8"],
+    [(1, 1), (4, 8)],
+    ids=["mesh_1x1", "mesh_4x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -712,8 +712,8 @@ def test_gpt_oss_experts_mlp(
 @pytest.mark.parametrize("trace_mode", [False], ids=["eager"])
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
-    ids=["mesh_4x8"],
+    [(1, 1), (4, 8)],
+    ids=["mesh_1x1", "mesh_4x8"],
     indirect=True,
 )
 @pytest.mark.parametrize(
