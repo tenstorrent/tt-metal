@@ -230,8 +230,8 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
         {256, 8192, "8192x8192"},
     };
 
-    constexpr int warmup = 2;
-    constexpr int iters = 5;
+    constexpr int warmup = 3;
+    constexpr int iters = 10;
 
     auto bench = [&](auto fn, const char* name) {
         for (int i = 0; i < warmup; i++) {
@@ -264,6 +264,21 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
             },
             "gram_matmul");
 
+        double t_minimal = bench(
+            [&]() {
+                auto out = ttnn::experimental::minimal_matmul(
+                    input,
+                    input_t,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    compute_kernel_config);
+                out.deallocate();
+            },
+            "minimal_matmul");
+
         double t_ttnn = bench(
             [&]() {
                 auto out = ttnn::matmul(
@@ -283,11 +298,14 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
             "ttnn::matmul");
 
         std::cout << "\n  " << s.label << ":\n" << std::flush;
-        std::cout << "    gram_matmul:    " << std::fixed << std::setprecision(1) << t_gram << " us  ("
+        std::cout << "    gram_matmul:      " << std::fixed << std::setprecision(1) << t_gram << " us  ("
                   << std::setprecision(2) << tflops(t_gram) << " TF)\n";
-        std::cout << "    ttnn::matmul:   " << std::setprecision(1) << t_ttnn << " us  (" << std::setprecision(2)
+        std::cout << "    minimal_matmul:   " << std::setprecision(1) << t_minimal << " us  (" << std::setprecision(2)
+                  << tflops(t_minimal) << " TF)\n";
+        std::cout << "    ttnn::matmul:     " << std::setprecision(1) << t_ttnn << " us  (" << std::setprecision(2)
                   << tflops(t_ttnn) << " TF)\n";
-        std::cout << "    speedup:        " << std::setprecision(2) << t_ttnn / t_gram << "x\n" << std::flush;
+        std::cout << "    vs minimal:       " << std::setprecision(2) << t_minimal / t_gram << "x\n";
+        std::cout << "    vs ttnn:          " << std::setprecision(2) << t_ttnn / t_gram << "x\n" << std::flush;
 
         input.deallocate();
         input_t.deallocate();

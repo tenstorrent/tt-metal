@@ -203,28 +203,30 @@ void kernel_main() {
                         upper_recv_offset = 0;
                 }
             }
-        }
 
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
+            noc_async_write_barrier();
+            noc_async_atomic_barrier();
 
 #ifdef SENDER_REDUCE_SEND
-        {
-            uint32_t M_start = m_sub * rows_per_block;
-            uint32_t current_M_block = (rows_per_block < Mpc - M_start) ? rows_per_block : (Mpc - M_start);
-            uint32_t m_sub_tiles = current_M_block * Mpc;
+            {
+                uint32_t M_start = m_sub * rows_per_block;
+                uint32_t current_M_block = (rows_per_block < Mpc - M_start) ? rows_per_block : (Mpc - M_start);
+                uint32_t N_start = n_sub * rows_per_block;
+                uint32_t current_N = (rows_per_block < Mpc - N_start) ? rows_per_block : (Mpc - N_start);
+                uint32_t block_tiles = current_M_block * current_N;
 
-            uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
-            uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
+                uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
+                uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
 
-            cb_wait_front(cb_out, m_sub_tiles);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
-            noc_async_write(l1_read_addr, partner_noc_addr, m_sub_tiles * out_tile_size);
-            noc_async_write_barrier();
-            noc_semaphore_inc(partner_sem_noc, 1);
-            cb_pop_front(cb_out, m_sub_tiles);
-        }
+                cb_wait_front(cb_out, block_tiles);
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
+                noc_async_write(l1_read_addr, partner_noc_addr, block_tiles * out_tile_size);
+                noc_async_write_barrier();
+                noc_semaphore_inc(partner_sem_noc, 1);
+                cb_pop_front(cb_out, block_tiles);
+            }
 #endif
+        }
     }
 }

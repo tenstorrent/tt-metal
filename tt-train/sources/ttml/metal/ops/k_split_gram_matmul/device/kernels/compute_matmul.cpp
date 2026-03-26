@@ -5,7 +5,7 @@
 // Matmul compute kernel with M_block x N_block streaming for Mpc×Mpc gram matmul.
 // in0: M_block rows per K-block, in1: N_block rows per K-block.
 //
-// BLOCK_STREAMING path (subs=1):
+// Block streaming output:
 //   Non-accumulator: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5
 //   REDUCE_ACCUMULATOR: matmul → c_2, add c_2(FP32) + c_5(BF16) → c_6
 //
@@ -78,57 +78,7 @@ void matmul_blocks(
     }
 }
 
-#ifndef BLOCK_STREAMING
-// Copy M_block×N_block intermediate into c_3 at N-offset (per-msb path only).
-// REDUCE_SENDER_TRANSPOSE: transpose_wh_tile + column-major Mpc×M_block indexing.
-// Others: copy_tile + column-major Mpc×M_block indexing.
-void copy_subblock_to_output(
-    uint32_t in_cb,
-    uint32_t out_cb,
-    uint32_t current_M,
-    uint32_t current_N,
-    uint32_t N_start,
-    uint32_t current_M_block) {
-#ifdef REDUCE_SENDER_TRANSPOSE
-    transpose_wh_init(in_cb, out_cb);
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-
-    // For TRANSPOSE: lower's m (in0) maps to upper's N (column), lower's n (in1) maps to upper's M (row).
-    // Swap indexing: out_tile = (N_start + m) * current_M_block + n
-    // Only iterate n up to min(current_N, current_M_block) to avoid out-of-bounds for edge subblocks.
-    uint32_t effective_N = (current_N < current_M_block) ? current_N : current_M_block;
-    for (uint32_t m = 0; m < current_M; m++) {
-        for (uint32_t n = 0; n < effective_N; n++) {
-            uint32_t in_tile = m * current_N + n;
-            uint32_t out_tile = (N_start + m) * current_M_block + n;
-            acquire_dst();
-            transpose_wh_tile(in_cb, in_tile, 0);
-            pack_tile<true>(0, out_cb, out_tile);
-            release_dst();
-        }
-    }
-#else
-    copy_tile_to_dst_init_short(in_cb);
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-
-    for (uint32_t m = 0; m < current_M; m++) {
-        for (uint32_t n = 0; n < current_N; n++) {
-            uint32_t in_tile = m * current_N + n;
-            // Column-major Mpc × M_block: tile[col * M_block + row]
-            uint32_t out_tile = (N_start + n) * current_M_block + m;
-            acquire_dst();
-            copy_tile(in_cb, in_tile, 0);
-            pack_tile<true>(0, out_cb, out_tile);
-            release_dst();
-        }
-    }
-#endif
-}
-#endif  // !BLOCK_STREAMING
-
-#ifdef BLOCK_STREAMING
+// Block streaming helpers:
 // Per-nsb: pack c_2 → c_5 in row-major order matching receiver's c_2 layout.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
@@ -164,8 +114,6 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
     }
 #endif
 }
-#endif  // BLOCK_STREAMING
-
 // Copy block → output, pushing N_cols tiles at a time.
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols) {
     copy_tile_to_dst_init_short(in_cb);
@@ -265,11 +213,7 @@ void kernel_main() {
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t intermed_cb = tt::CBIndex::c_2;
-#ifdef BLOCK_STREAMING
     constexpr uint32_t out_cb = tt::CBIndex::c_5;
-#else
-    constexpr uint32_t out_cb = tt::CBIndex::c_3;
-#endif
 
 #if defined(REDUCE_ACCUMULATOR) || defined(REDUCE_ACCUMULATOR_OWN_ONLY) || defined(REDUCE_ACCUMULATOR_RECV_ONLY)
     constexpr uint32_t reduce_cb = tt::CBIndex::c_5;
@@ -283,12 +227,6 @@ void kernel_main() {
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
-
-#ifndef BLOCK_STREAMING
-        uint32_t out_block_num_tiles = current_M_block * Mpc;
-        // Reserve c_3 for full m_sub output (Mpc × current_M_block, accumulated across n_sub)
-        cb_reserve_back(out_cb, out_block_num_tiles);
-#endif
 
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             uint32_t N_start = n_sub * N_block;
@@ -324,8 +262,7 @@ void kernel_main() {
             cb_push_back(intermed_cb, intermed_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-#ifdef BLOCK_STREAMING
-            // Per-nsb: pack or reduce immediately after each n_sub
+            // Pack or reduce immediately after each (m_sub, n_sub) block
 #if !defined(REDUCE_ACCUMULATOR) && !defined(REDUCE_ACCUMULATOR_OWN_ONLY) && !defined(REDUCE_ACCUMULATOR_RECV_ONLY)
             // Non-accumulator: pack c_2 → c_5 in row-major order
             cb_reserve_back(out_cb, intermed_tiles);
@@ -350,18 +287,11 @@ void kernel_main() {
             cb_wait_front(reduce_cb, intermed_tiles);
             add_reduce_block(intermed_cb, reduce_cb, combined_cb, current_M_block, current_N);
 #ifdef MIRROR_OUTPUT
-            // Per-nsb: M_rows=current_M_block, N_cols=current_N, src_stride=current_M_block (row-major c_2)
             add_transpose_block(intermed_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, current_N, current_M_block);
 #endif
             cb_pop_front(intermed_cb, intermed_tiles);
             cb_pop_front(reduce_cb, intermed_tiles);
 #endif
-#endif
-#else
-            // Per-msb: copy subblock to c_3 at N-offset
-            cb_wait_front(intermed_cb, intermed_tiles);
-            copy_subblock_to_output(intermed_cb, out_cb, current_M_block, current_N, N_start, current_M_block);
-            cb_pop_front(intermed_cb, intermed_tiles);
 #endif
 
             // Re-init matmul pipeline after copy/pack changed data formats
@@ -372,43 +302,6 @@ void kernel_main() {
                 pack_reconfig_data_format(intermed_cb);
             }
         }
-
-#ifndef BLOCK_STREAMING
-        cb_push_back(out_cb, out_block_num_tiles);
-
-        // --- Post-m_sub reduction ---
-        // For REDUCE_SENDER_TRANSPOSE, REDUCE_SENDER, and no-reduction:
-        //   DM reads c_3 and pops it — compute must NOT pop c_3.
-        // For REDUCE_ACCUMULATOR variants:
-        //   Compute reads c_3 + c_5 → c_6, pops both. DM reads c_6.
-#if defined(REDUCE_ACCUMULATOR) || defined(REDUCE_ACCUMULATOR_OWN_ONLY) || defined(REDUCE_ACCUMULATOR_RECV_ONLY)
-        cb_wait_front(out_cb, out_block_num_tiles);
-
-#ifdef REDUCE_ACCUMULATOR_OWN_ONLY
-        copy_block(out_cb, combined_cb, Mpc, current_M_block);
-        cb_pop_front(out_cb, out_block_num_tiles);
-        cb_wait_front(reduce_cb, out_block_num_tiles);
-        cb_pop_front(reduce_cb, out_block_num_tiles);
-#elif defined(REDUCE_ACCUMULATOR_RECV_ONLY)
-        cb_pop_front(out_cb, out_block_num_tiles);
-        cb_wait_front(reduce_cb, out_block_num_tiles);
-        copy_block(reduce_cb, combined_cb, Mpc, current_M_block);
-        cb_pop_front(reduce_cb, out_block_num_tiles);
-#else
-        cb_wait_front(reduce_cb, out_block_num_tiles);
-        add_reduce_block(out_cb, reduce_cb, combined_cb, Mpc, current_M_block);
-#ifdef MIRROR_OUTPUT
-        // Produce mirror tiles: re-add from c_3+c_5 (still alive), transpose → c_4
-        // This overlaps with DM writing c_6 direct
-        // Per-msb: M_rows=current_M_block, N_cols=Mpc, src_stride=Mpc (column-major c_3)
-        add_transpose_block(out_cb, reduce_cb, tt::CBIndex::c_4, current_M_block, Mpc, Mpc);
-#endif
-        cb_pop_front(out_cb, out_block_num_tiles);
-        cb_pop_front(reduce_cb, out_block_num_tiles);
-#endif
-
-#endif
-#endif
 
         // Re-init matmul pipeline for next m_sub
         if (m_sub + 1 < num_m_blocks) {

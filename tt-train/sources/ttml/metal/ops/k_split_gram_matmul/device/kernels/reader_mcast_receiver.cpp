@@ -5,7 +5,7 @@
 // Multicast receiver kernel with M_block x N_block streaming.
 // Receives block_size tiles per handshake from the injector.
 // Loop: for m_sub: for n_sub: for blk: receive.
-// When REDUCE_RECV is defined, also waits for partner's partial and pushes to reduce CB.
+// When REDUCE_RECV is defined, also waits for partner's partial per (m_sub, n_sub) block.
 
 #include <stdint.h>
 
@@ -26,6 +26,7 @@ void kernel_main() {
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t M_block = get_compile_time_arg_val(10);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(11);
+    constexpr uint32_t N_block = M_block;
 #else
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
@@ -54,19 +55,23 @@ void kernel_main() {
 
                 cb_push_back(cb_id, block_size);
             }
-        }
 
 #ifdef REDUCE_RECV
-        // Wait for partner's partial to arrive in reduce CB via NOC write
-        volatile tt_l1_ptr uint32_t* reduce_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
-        uint32_t M_start = m_sub * M_block;
-        uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
-        uint32_t m_sub_tiles = current_M_block * Mpc;
-        cb_reserve_back(reduce_cb, m_sub_tiles);
-        noc_semaphore_wait(reduce_sem_ptr, 1);
-        noc_semaphore_set(reduce_sem_ptr, 0);
-        cb_push_back(reduce_cb, m_sub_tiles);
+            {
+                volatile tt_l1_ptr uint32_t* reduce_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
+                uint32_t M_start = m_sub * M_block;
+                uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
+                uint32_t N_start = n_sub * N_block;
+                uint32_t current_N = (N_block < Mpc - N_start) ? N_block : (Mpc - N_start);
+                uint32_t block_tiles = current_M_block * current_N;
+                cb_reserve_back(reduce_cb, block_tiles);
+                noc_semaphore_wait(reduce_sem_ptr, 1);
+                noc_semaphore_set(reduce_sem_ptr, 0);
+                cb_push_back(reduce_cb, block_tiles);
+            }
 #endif
+        }
     }
 
     noc_async_atomic_barrier();
