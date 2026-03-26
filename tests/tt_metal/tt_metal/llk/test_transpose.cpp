@@ -179,6 +179,8 @@ void run_single_core_transpose(
     }
 
     std::vector<uint32_t> reader_cta;
+    reader_cta.push_back(
+        MetalContext::instance().get_cluster().arch() == ARCH::QUASAR ? dfb_src0 : static_cast<uint32_t>(tt::CBIndex::c_0));
     tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_cta);
     std::vector<uint32_t> writer_cta;
     writer_cta.push_back(
@@ -198,7 +200,6 @@ void run_single_core_transpose(
     KernelHandle unary_writer_kernel;
     KernelHandle compute_kernel;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        reader_cta.push_back(dfb_src0);
         unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
@@ -267,7 +268,7 @@ void run_single_core_transpose(
             Ht,
             Wt,
             Ht * Wt,
-            0 /* no scaler */
+            (uint32_t)0  // unused scaler slot kept for compat
         });
 
     tt_metal::SetRuntimeArgs(
