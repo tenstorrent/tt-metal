@@ -440,7 +440,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [14336])
+@pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict

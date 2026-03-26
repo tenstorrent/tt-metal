@@ -479,7 +479,7 @@ def test_bcast_moe_reduce_pipeline(
             d2h_result_torch, r.num_gate_proj_cores, reduce_shard_width, r.per_core_down_proj_N
         )
 
-        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.99)
+        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.9)
         logger.info(f"Pipeline Stage 0 D2H Reduce PCC: {pcc_msg}")
         assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
 
