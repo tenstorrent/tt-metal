@@ -2,6 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
 import pytest
 from loguru import logger
 import torch
@@ -20,6 +27,71 @@ from models.tt_transformers.tt.rope import RotarySetup
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
+
+# region agent log — rotary BWR instrumentation (same branch / same commit)
+# This test already exercises different rotary_embedding_llama kernels in one run (interleaved prefill
+# baseline vs height-sharded cos/sin/trans_mat vs decode-shaped path). NDJSON logs record fingerprints
+# and per-path equality on the current tree only—no checkout A/B required.
+# Enable: ROTARY_BWR_INSTRUMENT_LOG=/path/to/bwr.ndjson
+# Optional: ROTARY_BWR_RUN_ID=my_label (default "default"); git_head is metadata only.
+
+
+def _rotary_bwr_find_git_root() -> Path | None:
+    p = Path(__file__).resolve().parent
+    for _ in range(24):
+        if (p / ".git").is_dir():
+            return p
+        if p == p.parent:
+            break
+        p = p.parent
+    return None
+
+
+def _rotary_bwr_git_head() -> str | None:
+    root = _rotary_bwr_find_git_root()
+    if root is None:
+        return None
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+
+
+def _rotary_bwr_tensor_fp(t: torch.Tensor) -> dict:
+    """Stable fingerprint for bitwise comparison (SHA-256 of raw tensor bytes)."""
+    tc = t.detach().cpu().contiguous()
+    raw = tc.view(torch.uint8).numpy().tobytes()
+    return {
+        "shape": list(tc.shape),
+        "dtype": str(tc.dtype),
+        "numel": tc.numel(),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "head_hex16": raw[:16].hex() if len(raw) >= 16 else raw.hex(),
+        "tail_hex16": raw[-16:].hex() if len(raw) >= 16 else "",
+    }
+
+
+def _rotary_bwr_instrument_log(event: str, data: dict) -> None:
+    path = os.environ.get("ROTARY_BWR_INSTRUMENT_LOG", "").strip()
+    if not path:
+        return
+    payload = {
+        "ts": time.time(),
+        "event": event,
+        "run_id": os.environ.get("ROTARY_BWR_RUN_ID", "default"),
+        "git_head": _rotary_bwr_git_head(),
+        **data,
+    }
+    line = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+# endregion
 
 
 class TtLlamaRotary(torch.nn.Module):
@@ -946,6 +1018,21 @@ def run_test_rotary_embedding_llama_bwr(
     device_num_cores = compute_grid_size.x * compute_grid_size.y
     head_dim_padded = nearest_32(head_dim)
 
+    _rotary_bwr_instrument_log(
+        "bwr_run_start",
+        {
+            "comparison_scope": "same_commit_multi_kernel_path",
+            "num_positions": num_positions,
+            "num_heads": num_heads,
+            "head_dim": head_dim,
+            "datatype": str(datatype),
+            "use_compute_config": use_compute_config,
+            "shard_num_cores": shard_num_cores,
+            "device_grid": [compute_grid_size.x, compute_grid_size.y],
+            "device_num_cores": device_num_cores,
+        },
+    )
+
     compute_kernel_config = (
         ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -990,12 +1077,37 @@ def run_test_rotary_embedding_llama_bwr(
     logger.info(f"Baseline PCC vs PyTorch golden: {pcc_val}")
     assert passing, f"Baseline PCC {pcc_val} below 0.9997"
 
+    _rotary_bwr_instrument_log(
+        "bwr_tensors_after_baseline",
+        {
+            "x_prefill": _rotary_bwr_tensor_fp(x_prefill),
+            "cos": _rotary_bwr_tensor_fp(cos),
+            "sin": _rotary_bwr_tensor_fp(sin),
+            "trans_mat": _rotary_bwr_tensor_fp(trans_mat),
+            "golden_torch": _rotary_bwr_tensor_fp(golden),
+            "baseline_ttnn": _rotary_bwr_tensor_fp(baseline),
+        },
+    )
+
     mae = torch.mean(torch.abs(golden - baseline)).item()
     max_abs_err = torch.max(torch.abs(golden - baseline)).item()
     max_golden = torch.max(torch.abs(golden)).item()
     logger.info(f"Golden vs baseline: MAE={mae:.6e}, MaxAE={max_abs_err:.6e}, MaxGolden={max_golden:.6e}")
     assert mae < 0.01, f"MAE {mae} too large (golden vs baseline)"
     assert max_abs_err < 0.1, f"Max absolute error {max_abs_err} too large (golden vs baseline)"
+
+    def _bwr_check_case(name: str, out: torch.Tensor, msg: str) -> None:
+        eq = torch.equal(baseline, out)
+        entry: dict = {
+            "case": name,
+            "torch_equal": eq,
+            "out": _rotary_bwr_tensor_fp(out),
+        }
+        if not eq:
+            entry["mismatch_count"] = int((baseline != out).sum().item())
+            entry["mismatch_fraction"] = float(entry["mismatch_count"]) / max(baseline.numel(), 1)
+        _rotary_bwr_instrument_log("bwr_case_compare", entry)
+        assert eq, msg
 
     # ── Shared sharding configs ─────────────────────────────────────────
     # shard_cores: how many cores to spread sharded tensors across
@@ -1063,27 +1175,35 @@ def run_test_rotary_embedding_llama_bwr(
     # ── Case 2a: sharded cos/sin, interleaved trans_mat ─────────────────
     logger.info("BWR Case 2a: sharded cos/sin, interleaved trans_mat")
     out = run_prefill(cos_sharded=True, tm_sharded=False)
-    assert torch.equal(baseline, out), "BWR FAILED Case 2a: sharded cos/sin != baseline"
+    _bwr_check_case("2a_cs_sharded_tm_interleaved", out, "BWR FAILED Case 2a: sharded cos/sin != baseline")
     logger.info("BWR Case 2a PASSED")
 
     # ── Case 2b: interleaved cos/sin, sharded trans_mat ─────────────────
     logger.info("BWR Case 2b: interleaved cos/sin, sharded trans_mat")
     out = run_prefill(cos_sharded=False, tm_sharded=True)
-    assert torch.equal(baseline, out), "BWR FAILED Case 2b: sharded trans_mat != baseline"
+    _bwr_check_case("2b_cs_interleaved_tm_sharded", out, "BWR FAILED Case 2b: sharded trans_mat != baseline")
     logger.info("BWR Case 2b PASSED")
 
     # ── Case 2c: sharded cos/sin AND trans_mat ──────────────────────────
     logger.info("BWR Case 2c: sharded cos/sin AND trans_mat")
     out = run_prefill(cos_sharded=True, tm_sharded=True)
-    assert torch.equal(baseline, out), "BWR FAILED Case 2c: both sharded != baseline"
+    _bwr_check_case("2c_both_sharded", out, "BWR FAILED Case 2c: both sharded != baseline")
     logger.info("BWR Case 2c PASSED")
 
     # ── Case 3: height-sharded decode ───────────────────────────────────
     logger.info("BWR Case 3: height-sharded decode")
     if num_positions > device_num_cores:
         logger.info("Skipping BWR Case 3: num_positions > device_num_cores not supported in decode mode sharding")
+        _rotary_bwr_instrument_log(
+            "bwr_case_skipped",
+            {"case": "3_decode_height_sharded", "reason": "num_positions_gt_device_cores"},
+        )
     elif num_heads > ttnn.TILE_SIZE:
         logger.info("Skipping BWR Case 3: num_heads > TILE_SIZE not supported in decode mode sharding")
+        _rotary_bwr_instrument_log(
+            "bwr_case_skipped",
+            {"case": "3_decode_height_sharded", "reason": "num_heads_gt_tile_size"},
+        )
     else:
         # Interchange batch <-> seq_len:
         #   prefill [1, NH, NP, HD] -> decode [1, NP, NH, HD]
@@ -1149,9 +1269,10 @@ def run_test_rotary_embedding_llama_bwr(
 
         # Transpose decode output back to prefill layout for comparison
         decode_as_prefill = decode_out.transpose(1, 2)
-        assert torch.equal(baseline, decode_as_prefill), "BWR FAILED Case 3: decode != baseline"
+        _bwr_check_case("3_decode_height_sharded", decode_as_prefill, "BWR FAILED Case 3: decode != baseline")
         logger.info("BWR Case 3 PASSED")
 
+    _rotary_bwr_instrument_log("bwr_run_complete", {"status": "ok"})
     logger.info("All BWR cases PASSED!")
 
 
@@ -1199,6 +1320,10 @@ def test_rotary_embedding_llama_bwr(
     Bitwise reproducibility: all calling combinations of rotary_embedding_llama
     (interleaved prefill, sharded prefill, sharded decode) must produce
     identical results.
+
+    Optional NDJSON instrumentation (same branch/commit): set ``ROTARY_BWR_INSTRUMENT_LOG`` to
+    append one line per event (tensor SHA-256s, ``torch_equal`` per path). ``git_head`` is only
+    provenance. Use ``ROTARY_BWR_RUN_ID`` if you need to separate multiple invocations in one log file.
     """
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:

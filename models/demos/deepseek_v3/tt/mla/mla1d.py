@@ -52,6 +52,14 @@ from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
+def _mla_kv_rope_bwr_enabled() -> bool:
+    """Bitwise-repro checks vs ``test_rotary_embedding_llama_bwr`` (set ``MLA_KV_ROPE_BWR_INSTRUMENT=1``).
+
+    Example: ``MESH_DEVICE=TG MLA_KV_ROPE_BWR_INSTRUMENT=1 pytest ... test_mla.py::test_forward_pass[...]``.
+    """
+    return os.environ.get("MLA_KV_ROPE_BWR_INSTRUMENT", "").strip() in ("1", "true", "True", "yes", "YES")
+
+
 def pad_n_to_dram_banks(n, tile_size=32, num_dram_banks=12):
     """Pad n dimension to be divisible by tile_size * num_dram_banks (default 32 and 12 respectively)."""
     lcm = tile_size * num_dram_banks
@@ -2043,14 +2051,113 @@ class MLA1D(AbstractModule):
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
+        # Production: height-sharded prefill cos/sin + height-sharded trans_mat (see rope.py).
+        tt_kv_rope_in = tt_kv_rope
+        tt_kv_rope_saved_for_bwr = ttnn.clone(tt_kv_rope_in) if _mla_kv_rope_bwr_enabled() else None
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_kv_rope,
+            tt_kv_rope_in,
             rope_tensors["cos_matrix_prefill_shape"],
             rope_tensors["sin_matrix_prefill_shape"],
             rope_tensors["trans_matrix"],
             is_decode_mode=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+        if _mla_kv_rope_bwr_enabled():
+            if tt_kv_rope_saved_for_bwr is None:
+                raise RuntimeError("MLA_KV_ROPE_BWR_INSTRUMENT: internal error (missing saved tensor)")
+            mesh_dev = tt_kv_rope_saved_for_bwr.device()
+            if mesh_dev is None:
+                raise RuntimeError("MLA_KV_ROPE_BWR_INSTRUMENT: tensor has no device")
+
+            def _kv_rope_bwr_tt_to_torch(tt: ttnn.Tensor) -> torch.Tensor:
+                return ttnn.to_torch(tt, mesh_composer=ttnn.concat_mesh_to_tensor_composer(mesh_dev, dim=0))
+
+            tt_kv_rope_baseline_torch = _kv_rope_bwr_tt_to_torch(tt_kv_rope)
+
+            # Case 2a (unit test): height-sharded cos/sin + interleaved trans_mat (single prefill tile)
+            tt_x_bwr_2a = ttnn.clone(tt_kv_rope_saved_for_bwr)
+            tt_kv_rope_bwr_2a = ttnn.experimental.rotary_embedding_llama(
+                tt_x_bwr_2a,
+                rope_tensors["cos_matrix_prefill_shape"],
+                rope_tensors["sin_matrix_prefill_shape"],
+                rope_tensors["trans_matrix_prefill_shape"],
+                is_decode_mode=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            assert torch.equal(
+                tt_kv_rope_baseline_torch, _kv_rope_bwr_tt_to_torch(tt_kv_rope_bwr_2a)
+            ), "KV RoPE BWR failed: case 2a (sharded cos/sin + interleaved trans_mat) != production"
+            ttnn.deallocate(tt_kv_rope_bwr_2a)
+
+            # Case 2b (unit test): interleaved cos/sin + sharded trans_mat
+            tt_cos_bwr_2b_interleaved = ttnn.sharded_to_interleaved(
+                rope_tensors["cos_matrix_prefill_shape"], ttnn.L1_MEMORY_CONFIG
+            )
+            tt_sin_bwr_2b_interleaved = ttnn.sharded_to_interleaved(
+                rope_tensors["sin_matrix_prefill_shape"], ttnn.L1_MEMORY_CONFIG
+            )
+            tt_x_bwr_2b = ttnn.clone(tt_kv_rope_saved_for_bwr)
+            tt_kv_rope_bwr_2b = ttnn.experimental.rotary_embedding_llama(
+                tt_x_bwr_2b,
+                tt_cos_bwr_2b_interleaved,
+                tt_sin_bwr_2b_interleaved,
+                rope_tensors["trans_matrix"],
+                is_decode_mode=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            assert torch.equal(
+                tt_kv_rope_baseline_torch, _kv_rope_bwr_tt_to_torch(tt_kv_rope_bwr_2b)
+            ), "KV RoPE BWR failed: case 2b (interleaved cos/sin + sharded trans_mat) != production"
+            ttnn.deallocate(tt_kv_rope_bwr_2b)
+            ttnn.deallocate(tt_cos_bwr_2b_interleaved)
+            ttnn.deallocate(tt_sin_bwr_2b_interleaved)
+
+            # Case 2c (unit test): height-sharded cos/sin + height-sharded trans_mat (explicit duplicate of production)
+            tt_x_bwr_2c = ttnn.clone(tt_kv_rope_saved_for_bwr)
+            tt_kv_rope_bwr_2c = ttnn.experimental.rotary_embedding_llama(
+                tt_x_bwr_2c,
+                rope_tensors["cos_matrix_prefill_shape"],
+                rope_tensors["sin_matrix_prefill_shape"],
+                rope_tensors["trans_matrix"],
+                is_decode_mode=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            assert torch.equal(
+                tt_kv_rope_baseline_torch, _kv_rope_bwr_tt_to_torch(tt_kv_rope_bwr_2c)
+            ), "KV RoPE BWR failed: case 2c (both sharded) != production"
+            ttnn.deallocate(tt_kv_rope_bwr_2c)
+
+            # Case 3 (unit test): decode kernel — transpose(1,2), decode cos/sin, is_decode_mode=True, transpose back
+            compute_grid_size = mesh_dev.compute_with_storage_grid_size()
+            device_num_cores = compute_grid_size.x * compute_grid_size.y
+            bsz = int(tt_kv_rope_saved_for_bwr.shape[2])
+            if bsz > device_num_cores:
+                logger.warning(
+                    "KV RoPE BWR: skipping case 3 (batch %s > device_num_cores %s)",
+                    bsz,
+                    device_num_cores,
+                )
+            else:
+                # Mirrors the main-branch _fwd_decode_norm_and_rope pattern:
+                #   transpose(1,2, memory_config=cfg["kv_rope_reshard"]) → decode RoPE → transpose back
+                tt_x_bwr_3 = ttnn.clone(tt_kv_rope_saved_for_bwr)
+                tt_x_bwr_3_dec_layout = ttnn.transpose(tt_x_bwr_3, 1, 2, memory_config=cfg["kv_rope_reshard"])
+                tt_kv_rope_bwr_3_dec = ttnn.experimental.rotary_embedding_llama(
+                    tt_x_bwr_3_dec_layout,
+                    rope_tensors["cos_matrix"],
+                    rope_tensors["sin_matrix"],
+                    rope_tensors["trans_matrix"],
+                    is_decode_mode=True,
+                )
+                tt_kv_rope_bwr_3 = ttnn.transpose(tt_kv_rope_bwr_3_dec, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+                assert torch.equal(
+                    tt_kv_rope_baseline_torch, _kv_rope_bwr_tt_to_torch(tt_kv_rope_bwr_3)
+                ), "KV RoPE BWR failed: case 3 (decode transpose path) != production"
+                ttnn.deallocate(tt_kv_rope_bwr_3)
+
+            ttnn.deallocate(tt_kv_rope_saved_for_bwr)
+            logger.info("KV RoPE BWR: all cases (2a, 2b, 2c, 3 when applicable) matched production output.")
         # 1,1,32,64 L1 interleaved
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 

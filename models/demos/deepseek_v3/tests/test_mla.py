@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import (
     expand_test_cases_with_position_ids_ranges,
 )
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -379,7 +380,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     "device_params",
     [
         {
-            #"fabric_config": get_fabric_config(),
+            # "fabric_config": get_fabric_config(),
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
             if (os.getenv("USE_TORUS_MODE") is not None)
             else ttnn.FabricConfig.FABRIC_1D
