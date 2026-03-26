@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,13 +89,10 @@ class LazyOutputList:
 
 
 class OpDescriptor(NamedTuple):
-    """
-    Eager op: ``ProgramDescriptor`` is already materialized.
+    """Eager op: ``ProgramDescriptor`` is already materialized.
 
-    Contains:
-    - descriptor: The ProgramDescriptor for the operation
-    - input_tensors: All input tensors for the op
-    - output_tensors: All output tensors for the op
+    Fields: ``descriptor`` (ProgramDescriptor), ``input_tensors``,
+    ``output_tensors``, and optional ``name``.
     """
 
     descriptor: "ttnn.ProgramDescriptor"
