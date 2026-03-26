@@ -210,13 +210,43 @@ def gated_attention_forward_ttnn(
 
     # KV cache handling
     _use_sdpa_decode = False
-    if trace_new_k_buf is not None and trace_attn_mask is not None:
-        # Trace-compatible mode: save new K/V to buffers AND write to staging position in cache.
-        # The staging position (always unmasked) ensures SDPA sees the current token's K/V.
-        # Between replays, host code copies staging data to the actual position.
+    if cur_pos_tensor is not None and kv_cache_key is not None and T == 1:
+        # Trace-compatible SDPA decode: write K/V at dynamic position, attend up to cur_pos.
+        # Uses paged_update_cache (takes device tensor for index, trace-compatible) +
+        # sdpa_decode (reads cache[:, :, :cur_pos+1, :], no mask needed).
+        # Eliminates staging position, mask updates, and post-trace cache copies.
+        #
+        # paged_update_cache expects: input [1, N, seq, D], cache [N, 1, max_seq, D]
+        # where N = batch * num_kv_heads. Reshape cache view for the write, SDPA reads
+        # from the original [B, H_kv, max_seq, D] layout (same underlying data).
+        N = B * num_key_value_heads
+        max_seq = kv_cache_key.shape[2]
+        k_for_cache = ttnn.reshape(key_states, [1, N, T, head_dim])
+        v_for_cache = ttnn.reshape(value_states, [1, N, T, head_dim])
+        # paged_update_cache requires HEIGHT_SHARDED input.
+        # [1, N, 1, head_dim] in TILE_LAYOUT → 2D: height=N*32, width=head_dim.
+        # Need N cores with shard [32, head_dim] each (one tile-row per core).
+        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))})
+        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
+        k_for_cache = ttnn.to_memory_config(k_for_cache, _sharded_mc)
+        v_for_cache = ttnn.to_memory_config(v_for_cache, _sharded_mc)
+        kv_cache_key_reshaped = ttnn.reshape(kv_cache_key, [N, 1, max_seq, head_dim])
+        kv_cache_value_reshaped = ttnn.reshape(kv_cache_value, [N, 1, max_seq, head_dim])
+        # paged_update_cache expects one index per "batch" element (N = B * H_kv).
+        # cur_pos_tensor must have N elements — all the same position, pre-allocated by caller.
+        ttnn.experimental.paged_update_cache(kv_cache_key_reshaped, k_for_cache, update_idxs_tensor=cur_pos_tensor)
+        ttnn.experimental.paged_update_cache(kv_cache_value_reshaped, v_for_cache, update_idxs_tensor=cur_pos_tensor)
+        new_key = kv_cache_key
+        new_value = kv_cache_value
+        _use_sdpa_decode = True
+        S_total = kv_cache_key.shape[2]
+        is_causal = False
+        segmented_attn_mask = None
+    elif trace_new_k_buf is not None and trace_attn_mask is not None:
+        # Legacy trace mode: staging position + mask (fallback when cur_pos_tensor not available)
         ttnn.copy(key_states, trace_new_k_buf)
         ttnn.copy(value_states, trace_new_v_buf)
-        # Write current K/V to staging position in cache (baked in trace at fixed position)
         if trace_kv_pad_zeros is not None and trace_staging_pos is not None:
             k_padded = ttnn.concat([key_states, trace_kv_pad_zeros], dim=2)
             v_padded = ttnn.concat([value_states, trace_kv_pad_zeros], dim=2)
@@ -224,7 +254,6 @@ def gated_attention_forward_ttnn(
             ttnn.update_cache(kv_cache_value, v_padded, update_idx=trace_staging_pos)
             ttnn.deallocate(k_padded)
             ttnn.deallocate(v_padded)
-        # Attend to full pre-allocated cache using mask to hide invalid positions
         key_states = kv_cache_key
         value_states = kv_cache_value
         new_key = kv_cache_key
@@ -310,16 +339,23 @@ def gated_attention_forward_ttnn(
 
     # Fused scaled dot-product attention
     if _use_sdpa_decode:
-        # Decode-optimized SDPA: reads cache[:, :, :cur_pos+1, :] internally
+        # Decode-optimized SDPA: reads cache[:, :, :cur_pos+1, :] internally.
+        # sdpa_decode expects Q as [1, B, H, D] (not [B, H, 1, D] like regular SDPA).
+        # Transpose from [B=1, H, T=1, D] → [T=1, B=1, H, D].
+        q_decode = ttnn.transpose(query_states, 1, 2)  # [1, 1, 16, 256]
+        # cur_pos_tensor has B*H_kv elements; sdpa_decode needs B elements.
+        sdpa_pos = cur_pos_tensor[:B] if cur_pos_tensor.shape[0] > B else cur_pos_tensor
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
-            query_states,
+            q_decode,
             kv_cache_key,
             kv_cache_value,
-            cur_pos_tensor=cur_pos_tensor,
+            cur_pos_tensor=sdpa_pos,
             scale=scaling,
             program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
             compute_kernel_config=_get_sdpa_compute_kernel_config(),
         )
+        # Transpose back to [B, H, T, D] for head concatenation
+        attn_output = ttnn.transpose(attn_output, 1, 2)
     else:
         if trace_new_k_buf is not None:
             _attn_mask = trace_attn_mask
