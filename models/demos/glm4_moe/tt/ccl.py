@@ -16,7 +16,38 @@ Usage:
     # After each decode:     ccl.reset_sem_counters()
 """
 
+import os
+
 import ttnn
+
+
+def glm4_moe_ccl_num_links_for_axis(axis: int) -> int:
+    """Number of fabric links for async CCL ops (reduce_scatter / all_gather).
+
+    Env (in order of precedence):
+      - ``GLM4_MOE_CCL_NUM_LINKS_AXIS{axis}`` (0 or 1 for TG mesh axes)
+      - ``GLM4_MOE_CCL_NUM_LINKS`` (applies to all axes if per-axis unset)
+
+    Default ``1`` matches prior behavior (multi-link was disabled due to PCC risk).
+    """
+    ax_raw = os.environ.get(f"GLM4_MOE_CCL_NUM_LINKS_AXIS{int(axis)}", "").strip()
+    if ax_raw:
+        return max(1, int(ax_raw))
+    glob = os.environ.get("GLM4_MOE_CCL_NUM_LINKS", "").strip()
+    if glob:
+        return max(1, int(glob))
+    return 1
+
+
+def glm4_moe_ccl_topology_for_collectives() -> ttnn.Topology:
+    """Topology for experimental async gather/scatter and simple all_gather helpers.
+
+    Env: ``GLM4_MOE_CCL_TOPOLOGY`` = ``linear`` (default) or ``ring`` / ``1d_ring``.
+    """
+    t = os.environ.get("GLM4_MOE_CCL_TOPOLOGY", "linear").strip().lower()
+    if t in ("ring", "1d_ring"):
+        return ttnn.Topology.Ring
+    return ttnn.Topology.Linear
 
 
 class CCL:
@@ -65,18 +96,8 @@ class CCL:
         self.barrier_sem_cnt = [0 for _ in range(self.num_axes)]
 
     def get_max_links(self, axis):
-        """
-        Get the maximum number of links for the given axis.
-        """
-
-        return 1  # Multi-link has PCC issues
-
-        if axis == 0:
-            return 4
-        elif axis == 1:
-            return 3
-        else:
-            raise ValueError("Axis must be 0 or 1.")
+        """Return num_links for CCL async ops; see ``glm4_moe_ccl_num_links_for_axis``."""
+        return glm4_moe_ccl_num_links_for_axis(int(axis))
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """

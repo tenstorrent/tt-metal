@@ -22,13 +22,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
-from torch import nn
 from loguru import logger
+from torch import nn
 
 import ttnn
-
 from models.demos.glm4_moe.tt.model_tt import Glm4MoeTT, _torch_dtype_to_ttnn
-from models.demos.glm4_moe.tt.weights import resolve_best_effort_snapshot_dir, find_missing_shards
+from models.demos.glm4_moe.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 
 class Glm4MoeForCausalLM(nn.Module):
@@ -55,6 +54,7 @@ class Glm4MoeForCausalLM(nn.Module):
         self.hf_config = hf_config
 
         from models.demos.glm4_moe.tt.config import Glm4MoeHParams
+
         self.hparams = Glm4MoeHParams.from_hf_config(hf_config)
         self.hparams.validate()
 
@@ -88,7 +88,9 @@ class Glm4MoeForCausalLM(nn.Module):
                 "HuggingFace repo id (e.g. 'cerebras/GLM-4.7-REAP-218B-A32B')."
             )
 
-        snapshot_dir = resolve_best_effort_snapshot_dir(model_id)
+        snapshot_hint = os.environ.get("GLM4_MOE_SNAPSHOT_DIR", "").strip()
+        hint_path = Path(snapshot_hint) if snapshot_hint else None
+        snapshot_dir = resolve_best_effort_snapshot_dir(model_id, hint_dir=hint_path)
 
         default_cache_root = Path(os.path.expanduser("~/.cache/ttnn/models"))
         cache_dir_env = os.environ.get("GLM4_MOE_CACHE_DIR", "").strip()
@@ -98,8 +100,13 @@ class Glm4MoeForCausalLM(nn.Module):
         logger.info(
             "Initializing GLM-4.7-REAP TT model: model_id={} snapshot_dir={} cache_dir={} "
             "max_batch={} max_seq_len={} dp={} opt={}",
-            model_id, str(snapshot_dir), str(cache_dir),
-            max_batch_size, max_seq_len, tt_data_parallel, optimizations,
+            model_id,
+            str(snapshot_dir),
+            str(cache_dir),
+            max_batch_size,
+            max_seq_len,
+            tt_data_parallel,
+            optimizations,
         )
 
         try:
@@ -108,7 +115,8 @@ class Glm4MoeForCausalLM(nn.Module):
                 logger.warning(
                     "GLM snapshot is missing {} safetensors shards (example: {}). "
                     "Inference will fail until weights are fully downloaded.",
-                    len(missing), missing[0],
+                    len(missing),
+                    missing[0],
                 )
         except Exception as e:
             logger.warning("GLM snapshot completeness check failed: {}", e)
@@ -157,7 +165,8 @@ class Glm4MoeForCausalLM(nn.Module):
         if num_layers_to_alloc != num_layers:
             logger.warning(
                 "GLM4_MOE_NUM_LAYERS: allocating KV cache for {} layers (vLLM requested {})",
-                num_layers_to_alloc, num_layers,
+                num_layers_to_alloc,
+                num_layers,
             )
 
         # Override KV cache dtype from env (default: use vLLM's dtype)
@@ -174,9 +183,7 @@ class Glm4MoeForCausalLM(nn.Module):
         num_blocks = int(self._kv_cache_shape[0])
         block_size = int(self._kv_cache_shape[2])
         head_dim = int(self.hparams.head_dim)  # 128
-        n_local_kv_heads = int(self.hparams.num_key_value_heads) // max(
-            1, self._get_tp_size()
-        )  # 8 / 8 = 1
+        n_local_kv_heads = int(self.hparams.num_key_value_heads) // max(1, self._get_tp_size())  # 8 / 8 = 1
 
         # Standard GQA: separate K and V caches.
         cache_k = torch.zeros((num_blocks, n_local_kv_heads, block_size, head_dim), dtype=torch.bfloat16, device="cpu")
@@ -328,7 +335,11 @@ class Glm4MoeForCausalLM(nn.Module):
         # start_pos[i] = number of tokens already in KV cache for request i.
         # We only need to prefill tokens[i, start_pos[i]:prompt_lens[i]].
         if start_pos is not None:
-            start_pos_t = torch.as_tensor(start_pos, dtype=torch.int32) if not isinstance(start_pos, torch.Tensor) else start_pos.to(torch.int32)
+            start_pos_t = (
+                torch.as_tensor(start_pos, dtype=torch.int32)
+                if not isinstance(start_pos, torch.Tensor)
+                else start_pos.to(torch.int32)
+            )
             if (start_pos_t != 0).any():
                 prompt_lens = list(prompt_lens)
                 # Clone to avoid overlapping tensor writes (sp:pl → :new_len overlap)
@@ -398,9 +409,9 @@ class Glm4MoeForCausalLM(nn.Module):
 
         # Extract MTP draft tokens from the runner
         self._last_draft_token_ids = None
-        if hasattr(self._tt_runner, '_last_draft_token_ids'):
+        if hasattr(self._tt_runner, "_last_draft_token_ids"):
             self._last_draft_token_ids = self._tt_runner._last_draft_token_ids
-            object.__setattr__(self._tt_runner, '_last_draft_token_ids', None)
+            object.__setattr__(self._tt_runner, "_last_draft_token_ids", None)
 
         if read_from_device:
             tt_host = self.read_decode_output(tt_out, async_read=False)

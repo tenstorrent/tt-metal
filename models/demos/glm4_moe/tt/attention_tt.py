@@ -12,21 +12,17 @@ NOT derived from glm4_moe_lite (which uses MLA).
 
 from __future__ import annotations
 
-import math
-from typing import Any, Optional
+import logging
+import os
+from typing import Any
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-
+from models.demos.glm4_moe.tt.ccl import glm4_moe_ccl_num_links_for_axis, glm4_moe_ccl_topology_for_collectives
 from models.demos.glm4_moe.tt.config import Glm4MoeHParams
 from models.demos.glm4_moe.tt.layer_weights import DecoderLayerTTWeights
-
-
-import os
-import logging
 
 _REDUCE_IMPL = os.environ.get("GLM4_MOE_REDUCE_IMPL", "host").strip().lower()
 _REDUCE_IMPL_AXIS1 = os.environ.get("GLM4_MOE_REDUCE_IMPL_AXIS1", "").strip().lower()
@@ -172,13 +168,14 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             result = ttnn.all_gather(scattered, dim=3, cluster_axis=cluster_axis, memory_config=mc, **_sd_kw)
             ttnn.deallocate(scattered, force=False)
         else:
+            _topo_async = glm4_moe_ccl_topology_for_collectives()
             rs_params = ccl.get_ccl_params_for_reduce_scatter(axis=cluster_axis)
             scattered = ttnn.experimental.reduce_scatter_minimal_async(
                 tensor,
                 dim=3,
                 cluster_axis=cluster_axis,
                 memory_config=mc,
-                topology=ttnn.Topology.Linear,
+                topology=_topo_async,
                 **{**rs_params, **_sd_kw},
             )
             ttnn.deallocate(tensor, force=False)
@@ -189,7 +186,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
                 dim=3,
                 cluster_axis=cluster_axis,
                 memory_config=mc,
-                topology=ttnn.Topology.Linear,
+                topology=_topo_async,
                 **{**ag_params, **_sd_kw},
             )
             ttnn.deallocate(scattered, force=False)
@@ -239,12 +236,14 @@ def _simple_all_gather(tensor, mesh_device, cluster_axis, dim, memory_config=Non
         return tensor
     mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
     _sd_kw = {"subdevice_id": subdevice_id} if subdevice_id is not None else {}
+    _nl = glm4_moe_ccl_num_links_for_axis(int(cluster_axis))
+    _topo = glm4_moe_ccl_topology_for_collectives()
     return ttnn.all_gather(
         tensor,
         dim=dim,
-        num_links=1,
+        num_links=_nl,
         cluster_axis=cluster_axis,
-        topology=ttnn.Topology.Linear,
+        topology=_topo,
         memory_config=mc,
         **_sd_kw,
     )
@@ -331,9 +330,14 @@ class Glm4MoeAttention(LightweightModule):
 
         # Compute kernel config — HiFi2 for attention precision through 92 layers
         import os
+
         _attn_fidelity_raw = os.environ.get("GLM4_MOE_ATTN_FIDELITY", "hifi2").strip().lower()
-        _fidelity_map = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2,
-                         "hifi3": ttnn.MathFidelity.HiFi3, "hifi4": ttnn.MathFidelity.HiFi4}
+        _fidelity_map = {
+            "lofi": ttnn.MathFidelity.LoFi,
+            "hifi2": ttnn.MathFidelity.HiFi2,
+            "hifi3": ttnn.MathFidelity.HiFi3,
+            "hifi4": ttnn.MathFidelity.HiFi4,
+        }
         _attn_fidelity = _fidelity_map.get(_attn_fidelity_raw, ttnn.MathFidelity.HiFi2)
         _attn_approx = os.environ.get("GLM4_MOE_ATTN_APPROX", "0").strip() != "0"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -421,15 +425,16 @@ class Glm4MoeAttention(LightweightModule):
         if self._prefetch_sdpa_config is not None:
             return self._prefetch_sdpa_config
         # Worker grid: cols 0-5, rows 0-8 = 6x9 = 54 cores
-        worker_core_range_set = ttnn.CoreRangeSet([
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
-        ])
+        worker_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
         start_core = ttnn.CoreCoord(0, 0)
         num_sdpa_cores = 54  # all worker cores
         self._prefetch_sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(6, 9),
             sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                start_core, num_sdpa_cores, worker_core_range_set, row_wise=True,
+                start_core,
+                num_sdpa_cores,
+                worker_core_range_set,
+                row_wise=True,
             ),
             exp_approx_mode=False,
             q_chunk_size=0,
@@ -451,6 +456,7 @@ class Glm4MoeAttention(LightweightModule):
             label: cache key label (e.g. "qkv", "o_proj")
         """
         import math
+
         cache_key = f"{label}_{seq_len}_{K}_{N}"
         if cache_key in self._prefill_prog_cfg_cache:
             return self._prefill_prog_cfg_cache[cache_key]
@@ -493,12 +499,13 @@ class Glm4MoeAttention(LightweightModule):
         b = max(batch, 1)
         if prefetch:
             # Map b cores within worker grid (cols 0-5, rows 0-8)
-            worker_crs = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
-            ])
+            worker_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
             start_core = ttnn.CoreCoord(0, 0)
             user_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                start_core, b, worker_crs, row_wise=True,
+                start_core,
+                b,
+                worker_crs,
+                row_wise=True,
             )
         else:
             user_grid = ttnn.num_cores_to_corerangeset(b, self._grid_size, row_wise=True)
@@ -542,7 +549,9 @@ class Glm4MoeAttention(LightweightModule):
             return ttnn.create_sharded_memory_config_(
                 shape=(_DS_BATCH, width // cores),
                 core_grid=ttnn.num_cores_to_corerangeset(
-                    cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True,
+                    cores,
+                    ttnn.CoreCoord(grid.x, grid.y),
+                    row_wise=True,
                 ),
                 strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -565,8 +574,11 @@ class Glm4MoeAttention(LightweightModule):
         qkv_out = max(get_activation_sharding_core_counts_for_dram_matmul(N_qkv, max_cores))
         self._ds_qkv_act_mc = _ds_act_mc(K_qkv)
         self._ds_qkv_prog_cfg = get_dram_sharded_matmul_config(
-            m=_DS_BATCH, k=K_qkv, n=N_qkv,
-            input_num_shards=qkv_in, output_num_shards=qkv_out,
+            m=_DS_BATCH,
+            k=K_qkv,
+            n=N_qkv,
+            input_num_shards=qkv_in,
+            output_num_shards=qkv_out,
         )
         self._ds_wqkv = _shard_weight(self.wqkv)
 
@@ -577,14 +589,24 @@ class Glm4MoeAttention(LightweightModule):
         o_out = max(get_activation_sharding_core_counts_for_dram_matmul(N_o, max_cores))
         self._ds_o_act_mc = _ds_act_mc(K_o)
         self._ds_o_prog_cfg = get_dram_sharded_matmul_config(
-            m=_DS_BATCH, k=K_o, n=N_o,
-            input_num_shards=o_in, output_num_shards=o_out,
+            m=_DS_BATCH,
+            k=K_o,
+            n=N_o,
+            input_num_shards=o_in,
+            output_num_shards=o_out,
         )
         self._ds_wo = _shard_weight(self.wo)
 
         logger.info(
             "DRAM-sharded attention configs: QKV K=%d N=%d in=%d out=%d, O K=%d N=%d in=%d out=%d",
-            K_qkv, N_qkv, qkv_in, qkv_out, K_o, N_o, o_in, o_out,
+            K_qkv,
+            N_qkv,
+            qkv_in,
+            qkv_out,
+            K_o,
+            N_o,
+            o_in,
+            o_out,
         )
 
     def _apply_partial_rope_decode(self, x, cos, sin, trans_mat, sin_neg=None, worker_scg=None):
@@ -609,7 +631,9 @@ class Glm4MoeAttention(LightweightModule):
 
         # Slice rotary and pass-through portions
         x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, batch, n_heads, self.rotary_dim], sub_core_grids=worker_scg)
-        x_pass = ttnn.slice(x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim], sub_core_grids=worker_scg)
+        x_pass = ttnn.slice(
+            x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim], sub_core_grids=worker_scg
+        )
 
         # NeoX-style rotate_half
         half = self.rotary_dim // 2
@@ -629,7 +653,12 @@ class Glm4MoeAttention(LightweightModule):
             ttnn.deallocate(rearranged)
         else:
             # Original path: rotated = [-x2, x1], then x_rot*cos + rotated*sin
-            rotated = ttnn.concat([ttnn.neg(x2, sub_core_grids=worker_scg), x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
+            rotated = ttnn.concat(
+                [ttnn.neg(x2, sub_core_grids=worker_scg), x1],
+                dim=-1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                sub_core_grids=worker_scg,
+            )
             x_rot = ttnn.add(
                 ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
                 ttnn.multiply(rotated, sin, sub_core_grids=worker_scg),
@@ -834,11 +863,13 @@ class Glm4MoeAttention(LightweightModule):
         # When prefetcher SubDevice is active, restrict eltwise ops to worker cores (cols 0-5)
         _worker_scg = None
         if sub_device_id is not None:
-            _worker_scg = ttnn.CoreRangeSet([
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))
-            ])
-        q = self._apply_partial_rope_decode(q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg)
-        k = self._apply_partial_rope_decode(k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg)
+            _worker_scg = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
+        q = self._apply_partial_rope_decode(
+            q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg
+        )
+        k = self._apply_partial_rope_decode(
+            k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg
+        )
 
         # Convert back to HEIGHT_SHARDED for paged_update_cache and SDPA
         # (partial RoPE returns DRAM interleaved after concat)
@@ -857,9 +888,7 @@ class Glm4MoeAttention(LightweightModule):
         if self.mesh_device.__class__.__name__ == "MeshDevice":
             try:
                 _mr, _mc = int(self.mesh_device.shape[0]), int(self.mesh_device.shape[1])
-                _puc_kw["mesh_coords"] = {
-                    ttnn.MeshCoordinate(r, c) for r in range(_mr) for c in range(_mc)
-                }
+                _puc_kw["mesh_coords"] = {ttnn.MeshCoordinate(r, c) for r in range(_mr) for c in range(_mc)}
             except Exception:
                 pass
         ttnn.experimental.paged_update_cache(keys, k, **_puc_kw)
@@ -905,7 +934,10 @@ class Glm4MoeAttention(LightweightModule):
 
             # Gather across DP groups (cluster_axis=1) on batch dim
             attn_output = _simple_all_gather(
-                attn_output, self.mesh_device, cluster_axis=1, dim=2,
+                attn_output,
+                self.mesh_device,
+                cluster_axis=1,
+                dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 subdevice_id=sub_device_id,
             )
@@ -926,7 +958,9 @@ class Glm4MoeAttention(LightweightModule):
                 **_usel_kw,
             )
             B_phys_out = ((active_batch + 31) // 32) * 32
-            attn_output = ttnn.reshape(attn_output, (1, 1, active_batch, attn_shape[-1]), (1, 1, B_phys_out, attn_shape[-1]))
+            attn_output = ttnn.reshape(
+                attn_output, (1, 1, active_batch, attn_shape[-1]), (1, 1, B_phys_out, attn_shape[-1])
+            )
 
         # 10. Output projection (BF16 output for precision through 92 layers)
         if self._use_dram_shard:
@@ -972,6 +1006,7 @@ class Glm4MoeAttention(LightweightModule):
 
         # DEBUG: force synchronize to isolate if compute pipeline or reduce hangs
         import os as _os
+
         if _os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0":
             logger.info("  [DEBUG] synchronizing before all_reduce, dense_out.shape=%s", list(dense_out.shape))
             ttnn.synchronize_device(self.mesh_device)
@@ -1018,8 +1053,10 @@ class Glm4MoeAttention(LightweightModule):
 
         import os as _os
         import sys
+
         _dbg = _os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
         _dbg_prefill = _os.environ.get("GLM4_MOE_DEBUG_PREFILL", "0") != "0"
+
         def _sync(label):
             if _dbg:
                 print(f"  [DEBUG PREFILL] {label} ...", flush=True, file=sys.stderr)
@@ -1027,12 +1064,15 @@ class Glm4MoeAttention(LightweightModule):
                 print(f"  [DEBUG PREFILL] {label} OK", flush=True, file=sys.stderr)
 
         if _dbg_prefill:
-            print(f"      [ATTN PREFILL] seq_len={seq_len}, user_id={user_id}, "
-                  f"chunk_start_idx={chunk_start_idx}, "
-                  f"page_table={'None' if page_table is None else list(page_table.shape)}, "
-                  f"chunk_page_table={'None' if chunk_page_table is None else list(chunk_page_table.shape)}, "
-                  f"kv_cache={'None' if kv_cache is None else f'[{list(kv_cache[0].shape)}, {list(kv_cache[1].shape)}]'}",
-                  flush=True, file=sys.stderr)
+            print(
+                f"      [ATTN PREFILL] seq_len={seq_len}, user_id={user_id}, "
+                f"chunk_start_idx={chunk_start_idx}, "
+                f"page_table={'None' if page_table is None else list(page_table.shape)}, "
+                f"chunk_page_table={'None' if chunk_page_table is None else list(chunk_page_table.shape)}, "
+                f"kv_cache={'None' if kv_cache is None else f'[{list(kv_cache[0].shape)}, {list(kv_cache[1].shape)}]'}",
+                flush=True,
+                file=sys.stderr,
+            )
 
         _sync("before QKV linear")
 
@@ -1045,18 +1085,23 @@ class Glm4MoeAttention(LightweightModule):
         _wqkv = self.wqkv_interleaved if self.wqkv_interleaved is not None else self.wqkv
         # Explicit program_config prevents TG mesh auto-config hang
         _mm_seq = min(seq_len, self.MAX_QKV_MM_SEQ_LEN)
-        _qkv_pc = self._get_prefill_program_config(
-            _mm_seq, int(_wqkv.shape[2]), int(_wqkv.shape[3]), label="qkv"
-        ) if self.TG else None
+        _qkv_pc = (
+            self._get_prefill_program_config(_mm_seq, int(_wqkv.shape[2]), int(_wqkv.shape[3]), label="qkv")
+            if self.TG
+            else None
+        )
         _qkv_kwargs = {}
         if _qkv_pc is not None:
             _qkv_kwargs["program_config"] = _qkv_pc
 
         # Debug: print weight info to verify correct tensor is used
-        print(f"      [ATTN PREFILL] QKV matmul: x.shape={list(x.shape)}, w.shape={list(_wqkv.shape)}, "
-              f"w.memory_config={_wqkv.memory_config()}, using_interleaved={self.wqkv_interleaved is not None}, "
-              f"pc={'explicit' if _qkv_pc else 'auto'}, dtype={self.ccl_dtype if self.TG else 'bf16'}",
-              flush=True, file=sys.stderr)
+        print(
+            f"      [ATTN PREFILL] QKV matmul: x.shape={list(x.shape)}, w.shape={list(_wqkv.shape)}, "
+            f"w.memory_config={_wqkv.memory_config()}, using_interleaved={self.wqkv_interleaved is not None}, "
+            f"pc={'explicit' if _qkv_pc else 'auto'}, dtype={self.ccl_dtype if self.TG else 'bf16'}",
+            flush=True,
+            file=sys.stderr,
+        )
         xqkv = ttnn.linear(
             x,
             _wqkv,
@@ -1100,11 +1145,14 @@ class Glm4MoeAttention(LightweightModule):
 
         # 5. Partial RoPE (prefill mode)
         if _dbg_prefill:
-            print(f"      [ATTN PREFILL] RoPE: cos.shape={list(rot_mats[0].shape)}, "
-                  f"sin.shape={list(rot_mats[1].shape)}, q.shape={list(q.shape)}, "
-                  f"k.shape={list(k.shape)} — NOTE: cos/sin always sliced from [0:seq_len], "
-                  f"not from chunk_start_idx (Bug 2: wrong positions for chunks > 0)",
-                  flush=True, file=sys.stderr)
+            print(
+                f"      [ATTN PREFILL] RoPE: cos.shape={list(rot_mats[0].shape)}, "
+                f"sin.shape={list(rot_mats[1].shape)}, q.shape={list(q.shape)}, "
+                f"k.shape={list(k.shape)} — NOTE: cos/sin always sliced from [0:seq_len], "
+                f"not from chunk_start_idx (Bug 2: wrong positions for chunks > 0)",
+                flush=True,
+                file=sys.stderr,
+            )
         q = self._apply_partial_rope_prefill(q, rot_mats[0], rot_mats[1], rot_mats[2])
         k = self._apply_partial_rope_prefill(k, rot_mats[0], rot_mats[1], rot_mats[2])
         _sync("after RoPE")
@@ -1134,19 +1182,25 @@ class Glm4MoeAttention(LightweightModule):
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
             if _dbg_prefill:
-                print(f"      [ATTN PREFILL] KV cache fill: paged_fill_cache, "
-                      f"fill_page_table.shape={list(fill_page_table.shape)}, "
-                      f"block_size={block_size}, page_len={page_len}, "
-                      f"k_fill.shape={list(k_fill.shape)}, v_fill.shape={list(v_fill.shape)}, "
-                      f"keys.shape={list(keys.shape)}, user_id={user_id}",
-                      flush=True, file=sys.stderr)
+                print(
+                    f"      [ATTN PREFILL] KV cache fill: paged_fill_cache, "
+                    f"fill_page_table.shape={list(fill_page_table.shape)}, "
+                    f"block_size={block_size}, page_len={page_len}, "
+                    f"k_fill.shape={list(k_fill.shape)}, v_fill.shape={list(v_fill.shape)}, "
+                    f"keys.shape={list(keys.shape)}, user_id={user_id}",
+                    flush=True,
+                    file=sys.stderr,
+                )
             ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
             if _dbg_prefill:
-                print(f"      [ATTN PREFILL] KV cache fill: fill_cache (non-paged), "
-                      f"user_id={user_id}, batch_idx={user_id % self.batch_size_per_device_group}",
-                      flush=True, file=sys.stderr)
+                print(
+                    f"      [ATTN PREFILL] KV cache fill: fill_cache (non-paged), "
+                    f"user_id={user_id}, batch_idx={user_id % self.batch_size_per_device_group}",
+                    flush=True,
+                    file=sys.stderr,
+                )
             ttnn.fill_cache(keys, k_fill, user_id % self.batch_size_per_device_group)
             ttnn.fill_cache(values, v_fill, user_id % self.batch_size_per_device_group)
 
@@ -1158,9 +1212,12 @@ class Glm4MoeAttention(LightweightModule):
 
         if chunk_start_idx is not None:
             if _dbg_prefill:
-                print(f"      [ATTN PREFILL] SDPA: chunked mode, chunk_start_idx={chunk_start_idx}, "
-                      f"q.shape={list(q_8b.shape)}, keys.shape={list(keys.shape)}",
-                      flush=True, file=sys.stderr)
+                print(
+                    f"      [ATTN PREFILL] SDPA: chunked mode, chunk_start_idx={chunk_start_idx}, "
+                    f"q.shape={list(q_8b.shape)}, keys.shape={list(keys.shape)}",
+                    flush=True,
+                    file=sys.stderr,
+                )
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q_8b,
                 input_tensor_k=keys,
@@ -1170,9 +1227,12 @@ class Glm4MoeAttention(LightweightModule):
             )
         else:
             if _dbg_prefill:
-                print(f"      [ATTN PREFILL] SDPA: local mode (NO cross-chunk attention), "
-                      f"q.shape={list(q_8b.shape)}, k.shape={list(k_8b.shape)}, v.shape={list(v_8b.shape)}",
-                      flush=True, file=sys.stderr)
+                print(
+                    f"      [ATTN PREFILL] SDPA: local mode (NO cross-chunk attention), "
+                    f"q.shape={list(q_8b.shape)}, k.shape={list(k_8b.shape)}, v.shape={list(v_8b.shape)}",
+                    flush=True,
+                    file=sys.stderr,
+                )
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_8b,
                 k_8b,
@@ -1207,9 +1267,11 @@ class Glm4MoeAttention(LightweightModule):
         # 9. Output projection (BF16 output for precision through 92 layers)
         _wo = self.wo_interleaved if self.wo_interleaved is not None else self.wo
         _o_mm_seq = min(seq_len, _oproj_thresh)
-        _o_pc = self._get_prefill_program_config(
-            _o_mm_seq, int(_wo.shape[2]), int(_wo.shape[3]), label="o_proj"
-        ) if self.TG else None
+        _o_pc = (
+            self._get_prefill_program_config(_o_mm_seq, int(_wo.shape[2]), int(_wo.shape[3]), label="o_proj")
+            if self.TG
+            else None
+        )
         _o_kwargs = {}
         if _o_pc is not None:
             _o_kwargs["program_config"] = _o_pc
