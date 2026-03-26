@@ -59,7 +59,6 @@ def test_sum_global(device, batch_size, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor
 
     if dtype == ttnn.float32:
         assert_numeric_metrics(

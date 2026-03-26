@@ -58,7 +58,6 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         prev_value = golden_output_tensor[0, :, :, t]
 
     # Compare with golden output
-    # assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)
     assert_numeric_metrics(
         golden_output_tensor,
         torch_output_tensor,

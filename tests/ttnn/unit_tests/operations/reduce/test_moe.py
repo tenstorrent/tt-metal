@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
@@ -56,7 +56,6 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
             check_ulp=True,
             ulp_threshold=8,
         )
-        # assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 
 
 @pytest.mark.parametrize(

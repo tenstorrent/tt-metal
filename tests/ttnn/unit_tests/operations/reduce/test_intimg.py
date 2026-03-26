@@ -5,7 +5,7 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
@@ -70,7 +70,6 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
             atol=65.280,
             frobenius_threshold=0.004,
         )
-    # assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.998)
 
     # experimental intimg
     input_tensor = ttnn.from_torch(
@@ -96,4 +95,3 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
             atol=32.640,
             frobenius_threshold=0.003,
         )
-    # assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.998)

@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32

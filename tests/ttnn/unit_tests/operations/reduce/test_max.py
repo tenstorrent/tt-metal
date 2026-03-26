@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
@@ -41,7 +41,6 @@ def test_max(device, batch_size, h, w, dim, dtype):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size1", [2])
@@ -72,7 +71,6 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -101,7 +99,6 @@ def test_max_2d(device, h, w, dim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -117,7 +114,6 @@ def test_max_global(device, batch_size, h, w):
 
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor
 
     assert_numeric_metrics(
         torch_output_tensor,
@@ -128,7 +124,6 @@ def test_max_global(device, batch_size, h, w):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -174,4 +169,3 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)

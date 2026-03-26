@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize(

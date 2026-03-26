@@ -102,15 +102,6 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
 
     # test for equivalance
     # rtol = atol = 0.12
-    # if dataformat == ttnn.bfloat8_b:
-    #     passing, output_pcc = comp_pcc(torch_output, tt_output_cpu, pcc=0.999)
-    # else:
-    #     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-
-    # logger.debug(f"Out passing={passing}")
-    # logger.debug(f"Output pcc={output_pcc}")
-
-    # assert passing
 
 
 # Program caching test
@@ -175,7 +166,6 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         # Collect numeric metrics and dump to CSV using reusable function
         # Collect numeric metrics and dump to CSV using reusable function
         # test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_1},iteration={_}]"
-        # collect_and_dump_numeric_metrics(
         #     torch_output,
         #     tt_output_cpu,
         #     test_name=test_name,
@@ -196,10 +186,6 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         # rtol = atol = 0.12
         # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-        # logger.debug(f"Out passing={passing}")
-        # logger.debug(f"Output pcc={output_pcc}")
-
-        # assert passing
         assert device.num_program_cache_entries() == len(dims) + 1
 
     input_shape_2 = [1, 8, 32, 32]
@@ -218,7 +204,6 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
         # test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_2},iteration={_}]"
-        # collect_and_dump_numeric_metrics(
         #     torch_output,
         #     tt_output_cpu,
         #     test_name=test_name,
@@ -239,8 +224,4 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         # rtol = atol = 0.12
         # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-        # logger.debug(f"Out passing={passing}")
-        # logger.debug(f"Output pcc={output_pcc}")
-
-        # assert passing
         assert device.num_program_cache_entries() == 2 * len(dims) + 1

@@ -62,7 +62,6 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
         frobenius_threshold=0.003,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -145,7 +144,6 @@ def test_sum_global_row_major(device, input_shape):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -182,7 +180,6 @@ def test_max_row_major(device, input_shape, dim, keepdim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -220,7 +217,6 @@ def test_min_row_major(device, input_shape, dim, keepdim):
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.skip(reason="Skipping std test due to issue #32830")
@@ -257,7 +253,6 @@ def test_std_row_major(device, input_shape, dim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.skip(reason="Skipping var test due to issue #32830")
@@ -294,7 +289,6 @@ def test_var_row_major(device, input_shape, dim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(

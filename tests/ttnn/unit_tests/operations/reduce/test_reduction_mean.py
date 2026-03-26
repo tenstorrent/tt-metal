@@ -9,8 +9,8 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, assert_allclose
-from models.common.utility_functions import torch_random, comp_allclose
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -39,7 +39,6 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
         frobenius_threshold=0.005,
         check_ulp=False if dim == -2 else True,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -51,7 +50,6 @@ def test_mean_scaling(device, shape, dim, keepdim):
     """
     torch_input_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim, dtype=torch.bfloat16)
-    torch_output_tensor = torch_output_tensor
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.fill_implicit_tile_padding(input_tensor, 42)  # garbage padding to test that mean removes it
@@ -68,7 +66,6 @@ def test_mean_scaling(device, shape, dim, keepdim):
         frobenius_threshold=0.004,
         check_ulp=True,
     )
-    # assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -94,7 +91,6 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
         frobenius_threshold=0.004,
         check_ulp=True,
     )
-    # assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block"])
@@ -134,4 +130,3 @@ def test_mean_shard(device, mem_config, keepdim):
         atol=0.002,
         frobenius_threshold=0.005,
     )
-    # assert_with_pcc(torch_output, tt_output_torch)

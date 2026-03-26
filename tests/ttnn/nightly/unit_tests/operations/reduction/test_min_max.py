@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from functools import partial
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize(
@@ -75,3 +76,21 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     if kind == "mean":
         comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)
     assert comparison_fn(tt_output, torch_output)
+    if kind == "mean":
+        assert_numeric_metrics(
+            torch_output,
+            tt_output,
+            pcc_threshold=0.9999,
+            rtol=0.006,
+            atol=0.008,
+            frobenius_threshold=0.006,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output,
+            tt_output,
+            pcc_threshold=0.999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )

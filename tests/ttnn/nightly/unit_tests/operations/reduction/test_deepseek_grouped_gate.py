@@ -454,7 +454,6 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
 
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
-
     logger.debug(f"torch_top_k_experts_indices: {torch_top_k_experts_indices[-1, -1, -1, :]}")
     logger.debug(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices[-1, -1, -1, :]}")
 

@@ -422,7 +422,6 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim3", [8])
 @pytest.mark.parametrize("dim4", [256])
 @pytest.mark.parametrize("dim5", [64])
-# @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4]) #transpose cannot handle N-D tensor for all dims
 @pytest.mark.parametrize("dim", [3, 4])
 @pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
@@ -494,7 +493,6 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim4", [1])
 @pytest.mark.parametrize("dim5", [128])
 @pytest.mark.parametrize("dim6", [64])
-# @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5]) transpose cannot handle N-D tensor for all dims
 @pytest.mark.parametrize("dim", [4, 5])
 @pytest.mark.parametrize("k", [50, 64])
 @pytest.mark.parametrize("largest", [True])

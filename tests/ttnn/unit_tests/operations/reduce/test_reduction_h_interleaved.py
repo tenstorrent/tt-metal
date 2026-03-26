@@ -67,7 +67,6 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         atol=8.0,
         frobenius_threshold=0.001,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -179,4 +178,3 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         atol=12.240,
         frobenius_threshold=0.009,
     )
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
