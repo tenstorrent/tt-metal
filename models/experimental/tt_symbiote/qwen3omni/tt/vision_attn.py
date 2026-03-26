@@ -1,15 +1,21 @@
 import ttnn
 
-from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
 from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
+
+# Long vision sequences (e.g. ~24k tokens) + mesh matmul can allocate multi-GB DRAM for QKV output.
+# Chunking caps peak activation memory (same logical result).
+_VISION_ATTN_SEQ_CHUNK = 4096
 
 
 class TTNNQwen3VLMoeVisionAttention(TTNNModule):
     """
-    TTNN implementation of Qwen3VLMoeVisionAttention.
-    Mirrors the PyTorch implementation but executes attention using TTNN kernels.
+    TTNN implementation of Qwen3VLMoeVisionAttention (image / video frames in the vision tower).
+
+    Mesh compatibility matches ``TTNNQwen3OmniAttention`` / audio attention: all-gather
+    sharded activations on the last dim before linear/rotary so head_dim is not split across
+    devices, and col-sharded output projection like thinker ``o_proj``.
     """
 
     def __init__(self):
@@ -44,7 +50,7 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
         new_attn.scaling = new_attn.head_dim**-0.5
 
         new_attn.qkv = TTNNLinear.from_torch(torch_attn.qkv)
-        new_attn.proj = TTNNLinear.from_torch(torch_attn.proj)
+        new_attn.proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.proj)
 
         return new_attn
 
@@ -70,6 +76,51 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        """Extract raw ttnn tensor, bypassing TorchTTNNTensor shard config."""
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        """All-gather sharded last dim so QKV / rotary see full features (thinker_attention pattern)."""
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    @staticmethod
+    def _last_hidden_dim(hidden_states) -> int:
+        return int(hidden_states.shape[-1])
+
+    def _leading_seq_len(self, hidden_states) -> int:
+        """Infer sequence length when mesh layouts differ (see ``TTNNQwenAudioAttentionOptimized``)."""
+        t = self._to_ttnn(hidden_states)
+        shape = t.shape
+        hs = self.hidden_size
+        if len(shape) == 2:
+            return int(shape[0])
+        if len(shape) == 3:
+            last = int(shape[-1])
+            if hs is not None and last == hs:
+                return int(shape[1])
+            if int(shape[0]) == 1:
+                return int(shape[1])
+        return int(shape[0])
 
     def rotate_half(self, x):
         d = x.shape[-1] // 2
@@ -98,12 +149,33 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
             tensor = raw
         return tensor
 
-    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None, position_embeddings=None, **kwargs):
-        """
-        hidden_states: (seq_len, hidden_size)
-        """
+    def _slice_along_seq(self, tensor, s: int, e: int):
+        """Slice ``tensor`` on sequence dimension ``[s, e)`` using the tensor's actual shape."""
+        t = self._to_ttnn(tensor)
+        rank = len(t.shape)
+        last = int(t.shape[-1])
+        if rank == 2:
+            return ttnn.slice(t, (s, 0), (e, last))
+        if rank == 3 and int(t.shape[0]) == 1:
+            return ttnn.slice(t, (0, s, 0), (1, e, last))
+        if rank == 4:
+            d1, d2, d3 = int(t.shape[1]), int(t.shape[2]), int(t.shape[3])
+            return ttnn.slice(t, (s, 0, 0, 0), (e, d1, d2, d3))
+        return ttnn.slice(t, (s, 0), (e, last))
 
-        seq_len = hidden_states.shape[0]
+    def _slice_rotary(self, cos_or_sin, s: int, e: int):
+        """Slice rotary embeddings on sequence axis, respecting per-device shard width."""
+        t = self._to_ttnn(cos_or_sin)
+        last = int(t.shape[-1])
+        return ttnn.slice(t, (s, 0), (e, last))
+
+    def _forward_chunk(
+        self,
+        hidden_states,
+        position_embeddings,
+        seq_len: int,
+    ):
+        """Run attention on one sequence chunk (``seq_len`` = tokens in this chunk)."""
 
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(
@@ -112,15 +184,12 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # QKV projection
         qkv = self.qkv(hidden_states)
-        # reshape to heads (unwrap so ttnn.reshape gets raw ttnn.Tensor)
         qkv = ttnn.reshape(
             self._to_raw_ttnn(qkv),
             (seq_len, 3, self.num_heads, self.head_dim),
         )
 
-        # split
         q = qkv[:, 0]
         k = qkv[:, 1]
         v = qkv[:, 2]
@@ -129,18 +198,14 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
 
         q, k = self.apply_rotary_pos_emb_vision(q, k, cos, sin)
 
-        # reshape to SDPA format
-        q = safe_permute(q, (1, 0, 2))
-        k = safe_permute(k, (1, 0, 2))
-        v = safe_permute(v, (1, 0, 2))
+        q = ttnn.permute(q, (1, 0, 2))
+        k = ttnn.permute(k, (1, 0, 2))
+        v = ttnn.permute(v, (1, 0, 2))
 
         q = ttnn.unsqueeze(q, 0)
         k = ttnn.unsqueeze(k, 0)
         v = ttnn.unsqueeze(v, 0)
 
-        # SDPA requires logical_shape[3] == padded_shape[3] on head_dim (no padding).
-        # When head_dim is not a multiple of TILE_SIZE, ttnn tiles add padding and SDPA fails.
-        # Pad Q,K,V to a tile-aligned head_dim so SDPA runs without fallback, then slice back.
         head_dim_padded = ((self.head_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         if head_dim_padded != self.head_dim:
             pad_size = head_dim_padded - self.head_dim
@@ -160,15 +225,53 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
             transpose_output=True,
         )
 
+        attn_output = self._to_raw_ttnn(attn_output)
         if head_dim_padded != self.head_dim:
             attn_output = attn_output[:, :, :, : self.head_dim]
 
-        # Under symbiote, attn_output can be TorchTTNNTensor; reshape expects raw ttnn.Tensor.
+        attn_output = self._to_ttnn(attn_output)
+        if self._is_distributed and int(attn_output.shape[-1]) != self.head_dim:
+            attn_output = self._maybe_all_gather(attn_output)
+
         attn_output = ttnn.reshape(
             self._to_raw_ttnn(attn_output),
             (seq_len, self.hidden_size),
         )
 
-        attn_output = self.proj(attn_output)
+        return self.proj(attn_output)
 
-        return attn_output
+    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None, position_embeddings=None, **kwargs):
+        """
+        hidden_states: (seq_len, hidden_size) or mesh layouts with sharded last dim.
+        """
+
+        expected_hidden = self.hidden_size
+        if self._last_hidden_dim(self._to_ttnn(hidden_states)) != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        hidden_states = self._to_ttnn(hidden_states)
+        if len(hidden_states.shape) == 3 and int(hidden_states.shape[0]) == 1:
+            hidden_states = ttnn.squeeze(hidden_states, 0)
+
+        seq_len = self._leading_seq_len(hidden_states)
+
+        cos, sin = position_embeddings
+
+        if seq_len <= _VISION_ATTN_SEQ_CHUNK:
+            cos_sin = (self._maybe_all_gather(cos), self._maybe_all_gather(sin))
+            return self._forward_chunk(hidden_states, cos_sin, seq_len)
+
+        out_chunks = []
+        for s in range(0, seq_len, _VISION_ATTN_SEQ_CHUNK):
+            e = min(s + _VISION_ATTN_SEQ_CHUNK, seq_len)
+            chunk_len = e - s
+            hs_chunk = self._slice_along_seq(hidden_states, s, e)
+            cos_chunk = self._slice_rotary(cos, s, e)
+            sin_chunk = self._slice_rotary(sin, s, e)
+            cos_sin = (self._maybe_all_gather(cos_chunk), self._maybe_all_gather(sin_chunk))
+            out_chunks.append(self._forward_chunk(hs_chunk, cos_sin, chunk_len))
+
+        if len(out_chunks) == 1:
+            return out_chunks[0]
+        raw_chunks = [self._to_raw_ttnn(c) for c in out_chunks]
+        return ttnn.concat(raw_chunks, dim=0)
