@@ -574,7 +574,7 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
             region_->processes[i].process_name[63] = '\0';
 
             region_->num_active_processes++;
-            return &region_->processes[i];
+            return &processe;
         }
     }
 
