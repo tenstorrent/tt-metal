@@ -48,10 +48,10 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
 
         // Update per-chip CB stats for this device
         uint32_t chip_id = device->id();
-        for (size_t i = 0; i < MAX_CHIPS_PER_DEVICE; i++) {
-            if (region_->chip_stats[i].chip_id == chip_id || region_->chip_stats[i].chip_id == 0) {
-                region_->chip_stats[i].chip_id = chip_id;
-                region_->chip_stats[i].cb_allocated.store(cb_allocated, std::memory_order_relaxed);
+        for (auto & chip_stat : region_->chip_stats) {
+            if (chip_stat.chip_id == chip_id || chip_stat.chip_id == 0) {
+                chip_stat.chip_id = chip_id;
+                chip_stat.cb_allocated.store(cb_allocated, std::memory_order_relaxed);
                 break;
             }
         }
