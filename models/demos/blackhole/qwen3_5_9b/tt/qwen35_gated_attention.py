@@ -279,6 +279,7 @@ class Qwen35GatedAttention:
                 use_optimized_concat=True,
                 memory_config=mc,
                 norm_weights_pre_offset=True,
+                cur_pos_tensor=position_tensor,
             )
             self.cache_pos += T
             return output

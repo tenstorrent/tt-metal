@@ -259,8 +259,16 @@ class Qwen35Model:
         position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
         cos, sin = self.rope.get_rot_mats(position_ids)
 
+        # Create cur_pos_tensor for SDPA decode (int32, shape [B])
+        cur_pos_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * B, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+
         for i, layer in enumerate(self.layers):
-            x = layer.forward(x, cos=cos, sin=sin, mode="decode")
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
         x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
         logits = ttnn.linear(x, self.lm_head_weight)
