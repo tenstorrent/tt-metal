@@ -106,6 +106,7 @@ struct WorkerToFabricEdmSenderBase {
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
+        volatile uint32_t* worker_teardown_sem_addr;
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
             // VC0: connection info is populated into the L1 conn table by device-init;
             // read it by eth channel index.
@@ -126,6 +127,9 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
+            // Teardown semaphore is reserved in the L1 connection table (16-byte aligned)
+            worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore));
         } else {
             // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
@@ -145,6 +149,9 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
             worker_free_slots_stream_id = STREAM_ID;
+            // VC2: teardown semaphore still passed as RT arg
+            worker_teardown_sem_addr =
+                reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         }
 
         // DEAD CODE
@@ -152,8 +159,7 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
+        // buffer_index: still read from RT arg for compat (dead code — init() ignores it)
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,

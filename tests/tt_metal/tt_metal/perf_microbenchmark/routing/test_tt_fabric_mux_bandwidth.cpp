@@ -158,8 +158,7 @@ void create_mux_kernel(
     mux_ct_args[12] = drainer_kernel_config->get_status_address();
     mux_ct_args[13] = drainer_kernel_config->get_num_buffers(default_channel_type);
 
-    // semaphores needed to build connection with drainer core using the build_from_args API
-    auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
+    // Teardown semaphore is now reserved in the L1 connection table — no allocation needed.
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
 
     auto memory_regions_to_clear = mux_kernel_config->get_memory_regions_to_clear();
@@ -191,7 +190,6 @@ void create_mux_kernel(
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},
-        worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
         mux_fabric_connection_rt_args);
 

@@ -548,14 +548,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
 }
 
 void append_worker_to_fabric_edm_sender_rt_args(
-    chan_id_t eth_channel,
-    size_t sender_worker_terminate_semaphore_id,
-    size_t sender_worker_buffer_index_semaphore_id,
-    std::vector<uint32_t>& args_out) {
-    const std::vector<uint32_t> values = {
-        eth_channel,
-        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
-        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
+    chan_id_t eth_channel, size_t sender_worker_buffer_index_semaphore_id, std::vector<uint32_t>& args_out) {
+    // Teardown semaphore is now reserved in the L1 connection table — no longer passed as RT arg.
+    // buffer_index_semaphore_id is dead code (init() ignores it) but kept for RT arg compat.
+    const std::vector<uint32_t> values = {eth_channel, static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -565,7 +561,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     ChipId chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
     chan_id_t eth_channel =
@@ -609,10 +604,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
                 connection_offset);
     }
 
-    const std::vector<uint32_t> values = {
-        eth_channel,
-        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
-        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
+    // Teardown semaphore is now reserved in the L1 connection table — no longer in RT args.
+    const std::vector<uint32_t> values = {eth_channel, static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }

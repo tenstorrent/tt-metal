@@ -174,40 +174,58 @@ void append_fabric_connection_rt_args(
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-    uint32_t worker_teardown_semaphore_id;
-    uint32_t worker_buffer_index_semaphore_id;
-    uint32_t worker_flow_control_semaphore_id;
-
-    if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
-        auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
-        worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
-
-        auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
-        worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
-    } else {
-        worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
-        worker_buffer_index_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
-    }
-
     if (core_type == CoreType::WORKER) {
+        // VC0/TENSIX: teardown semaphore is reserved in the L1 connection table.
+        // buffer_index_semaphore is dead code (init() ignores it) but kept for RT arg compat.
+        uint32_t worker_buffer_index_semaphore_id;
+        if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+            auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
+            worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+        } else {
+            worker_buffer_index_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        }
         append_worker_to_fabric_edm_sender_rt_args(
-            fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+            fabric_router_channel, worker_buffer_index_semaphore_id, worker_args);
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker
+        // VC2/ETH: all semaphores still allocated and passed via RT args.
+        uint32_t worker_teardown_semaphore_id;
+        uint32_t worker_buffer_index_semaphore_id;
+        uint32_t worker_flow_control_semaphore_id;
+
+        if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+            auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
+            worker_teardown_semaphore_id = teardown_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+
+            auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
+            worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+        } else {
+            worker_teardown_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+            worker_buffer_index_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        }
+
         const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
         // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
@@ -339,24 +357,12 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(Fabri
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// Teardown semaphore is reserved in the L1 connection table — no longer passed by caller.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
-    const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
-    TT_FATAL(
-        teardown_sem_ids.size() == dst_nodes.size(),
-        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
-        teardown_sem_ids.size(),
-        dst_nodes.size());
-    TT_FATAL(
-        buffer_index_sem_ids.size() == dst_nodes.size(),
-        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
-        buffer_index_sem_ids.size(),
-        dst_nodes.size());
+    const std::vector<uint32_t>& connection_link_indices) {
     TT_FATAL(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
@@ -395,10 +401,11 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
         const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-        // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
+        // Per-connection RT args: [eth_channel, buffer_idx_sem(dummy)]
+        // Teardown semaphore is now in the L1 connection table.
+        // buffer_index_sem is dead code (device reads and discards) — kept for RT arg compat.
         worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
+        worker_args.push_back(0);  // dummy buffer_index_sem — cleanup in follow-up PR
     }
 
     // 2D metadata
@@ -553,32 +560,6 @@ void append_routing_plane_connection_manager_rt_args(
         api_type,
         core_type,
         /*inject_defines=*/true);
-}
-
-// No-defines variant: allocates semaphores + computes RT args, but does NOT inject kernel defines.
-// Use with get_fabric_kernel_defines() when defines must be set before kernel compilation.
-template <typename ProgramOrDescriptor>
-void append_routing_plane_connection_rt_args_no_defines(
-    const FabricNodeId& src_fabric_node_id,
-    const std::vector<FabricNodeId>& dst_nodes,
-    const std::vector<uint32_t>& connection_link_indices,
-    ProgramOrDescriptor& worker_program_or_desc,
-    tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args,
-    FabricApiType api_type,
-    CoreType core_type) {
-    append_routing_plane_connection_manager_rt_args_impl(
-        src_fabric_node_id,
-        dst_nodes,
-        connection_link_indices,
-        worker_program_or_desc,
-        kernel_id,
-        worker_core,
-        worker_args,
-        api_type,
-        core_type,
-        /*inject_defines=*/false);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -737,28 +718,6 @@ template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Prog
     CoreType);
 
 template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
-    const FabricNodeId&,
-    const std::vector<FabricNodeId>&,
-    const std::vector<uint32_t>&,
-    tt::tt_metal::Program&,
-    tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
-    std::vector<uint32_t>&,
-    FabricApiType,
-    CoreType);
-
-template void append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
-    const FabricNodeId&,
-    const std::vector<FabricNodeId>&,
-    const std::vector<uint32_t>&,
-    tt::tt_metal::ProgramDescriptor&,
-    tt::tt_metal::KernelHandle&,
-    const CoreCoord&,
-    std::vector<uint32_t>&,
-    FabricApiType,
-    CoreType);
-
-template void append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::Program>(
     const FabricNodeId&,
     const std::vector<FabricNodeId>&,
     const std::vector<uint32_t>&,

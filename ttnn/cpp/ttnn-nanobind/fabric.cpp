@@ -237,71 +237,19 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
-        "fabric_connection_rt_args",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
-           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
-           const std::vector<uint32_t>& connection_link_indices,
-           tt::tt_metal::ProgramDescriptor& program_descriptor,
-           size_t kernel_idx,
-           tt::tt_metal::CoreCoord worker_core) {
-            std::vector<uint32_t> fabric_args;
-
-            tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
-            tt::tt_fabric::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
-                src_fabric_node_id,
-                dst_nodes,
-                connection_link_indices,
-                program_descriptor,
-                kernel_id,
-                worker_core,
-                fabric_args);
-
-            return fabric_args;
-        },
-        nb::arg("src_fabric_node_id"),
-        nb::arg("dst_nodes"),
-        nb::arg("connection_link_indices"),
-        nb::arg("program_descriptor"),
-        nb::arg("kernel_idx"),
-        nb::arg("worker_core"),
-        R"(
-            Set up fabric connections: allocate semaphores and compute runtime args.
-            Does NOT inject kernel defines — use get_fabric_kernel_defines() for that.
-
-            Use this when kernel defines must be set before compilation (e.g., blaze
-            eager-compile model), and connection setup happens after compilation.
-
-            Args:
-                src_fabric_node_id: FabricNodeId of the source chip
-                dst_nodes: List of FabricNodeIds of destination chips (one per route)
-                connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
-                program_descriptor: ProgramDescriptor to add semaphores to (mutated)
-                kernel_idx: Index of the kernel in the program descriptor
-                worker_core: Logical core coordinate of the worker
-
-            Returns:
-                List of runtime args to extend into per-core NCRISC runtime args.
-        )");
-
-    mod.def(
         "compute_fabric_connection_rt_args",
         &tt::tt_fabric::compute_fabric_connection_rt_args,
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
-        nb::arg("teardown_sem_ids"),
-        nb::arg("buffer_index_sem_ids"),
         R"(
             Compute fabric connection RT args without any PD mutation.
-            Pure computation — resolves routing and assembles the flat RT args vector
-            using caller-provided semaphore IDs. No PD needed.
+            Teardown semaphore is reserved in the L1 connection table — no caller allocation needed.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips
                 connection_link_indices: List of link indices (empty for auto-select)
-                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
-                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
 
             Returns:
                 List of runtime args for RoutingPlaneConnectionManager::build_from_args().

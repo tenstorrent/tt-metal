@@ -418,7 +418,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 void append_worker_to_fabric_edm_sender_rt_args(
     tt::tt_fabric::chan_id_t eth_channel,
-    size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 
@@ -427,7 +426,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     ChipId chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);

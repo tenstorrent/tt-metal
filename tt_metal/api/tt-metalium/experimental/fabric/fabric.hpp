@@ -82,14 +82,12 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     FabricApiType api_type = FabricApiType::Linear);
 
 // Compute fabric connection RT args without any PD mutation.
-// Pure computation — resolves routing + assembles RT args using caller-provided semaphore IDs.
+// Teardown semaphore is reserved in the L1 connection table — no caller allocation needed.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
-    const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids);
+    const std::vector<uint32_t>& connection_link_indices);
 
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
@@ -116,21 +114,6 @@ template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<eth_chan_directions>& attempted_directions,
-    const std::vector<uint32_t>& connection_link_indices,
-    ProgramOrDescriptor& worker_program_or_desc,
-    tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args,
-    FabricApiType api_type = FabricApiType::Linear,
-    CoreType core_type = CoreType::WORKER);
-
-// Like append_routing_plane_connection_manager_rt_args but does NOT inject kernel defines.
-// Use with get_fabric_kernel_defines() when defines must be set before kernel compilation
-// (e.g., blaze eager-compile model). Allocates semaphores and computes RT args only.
-template <typename ProgramOrDescriptor>
-void append_routing_plane_connection_rt_args_no_defines(
-    const FabricNodeId& src_fabric_node_id,
-    const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,

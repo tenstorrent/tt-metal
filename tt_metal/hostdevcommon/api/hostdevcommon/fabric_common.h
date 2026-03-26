@@ -544,6 +544,9 @@ struct fabric_aligned_connection_info_t {
     // 16-byte aligned semaphore address for flow control
     uint32_t worker_flow_control_semaphore;
     uint32_t padding_0[3];
+    // 16-byte aligned semaphore for teardown ack (EDM writes via noc_semaphore_inc)
+    uint32_t worker_teardown_semaphore;
+    uint32_t padding_1[3];
 };
 
 struct tensix_fabric_connections_l1_info_t {

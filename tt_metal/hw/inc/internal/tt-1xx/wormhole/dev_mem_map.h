@@ -141,7 +141,7 @@
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE \
     (MEM_TENSIX_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE + MEM_ROUTING_TABLE_PADDING)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 656        // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 912        // sizeof(tensix_fabric_connections_l1_info_t)
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
