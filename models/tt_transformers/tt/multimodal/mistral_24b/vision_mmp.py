@@ -10,7 +10,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
-from ttnn import ConcatMeshToTensor
 
 
 class TTMistral3PatchMerger(LightweightModule):
@@ -69,7 +68,7 @@ class TTMistral3PatchMerger(LightweightModule):
             image_grid = ttnn.unsqueeze(image_grid, dim=0)  # Add batch dimension
             # Reshape the grid to merge patches
             if self.args.num_devices > 1:
-                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ConcatMeshToTensor(self.device, dim=0))
+                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
                 image_grid_torch = image_grid_torch[0].unsqueeze(0)  # shape: [1, 1024, 30, 44]
                 image_grid_torch = image_grid_torch.to(dtype=torch.bfloat16)
             else:

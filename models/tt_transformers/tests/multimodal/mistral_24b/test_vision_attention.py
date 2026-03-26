@@ -14,7 +14,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_attention import (
     TtMistralImageAttention as TtLlamaImageAttention,
 )
-from ttnn import ConcatMeshToTensor
 
 
 @torch.no_grad()
@@ -107,7 +106,7 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     )
 
     tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t))
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))[
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_out.shape[-1]
     ]
     tt_output_torch = tt_output_torch.squeeze(0)
