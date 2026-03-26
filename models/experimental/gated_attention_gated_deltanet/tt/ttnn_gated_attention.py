@@ -136,6 +136,8 @@ def gated_attention_forward_ttnn(
     trace_attn_mask=None,
     trace_kv_pad_zeros=None,
     trace_staging_pos=None,
+    # Decode-optimized SDPA: pass cur_pos_tensor to use sdpa_decode (skips mask management)
+    cur_pos_tensor=None,
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -207,6 +209,7 @@ def gated_attention_forward_ttnn(
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
     # KV cache handling
+    _use_sdpa_decode = False
     if trace_new_k_buf is not None and trace_attn_mask is not None:
         # Trace-compatible mode: save new K/V to buffers AND write to staging position in cache.
         # The staging position (always unmasked) ensures SDPA sees the current token's K/V.
@@ -226,6 +229,18 @@ def gated_attention_forward_ttnn(
         value_states = kv_cache_value
         new_key = kv_cache_key
         new_value = kv_cache_value
+        S_total = kv_cache_key.shape[2]
+        is_causal = False
+        segmented_attn_mask = None
+    elif kv_cache_key is not None and cache_pos is not None and cur_pos_tensor is not None and T == 1:
+        # Decode with SDPA decode variant: write K/V at cache_pos, attend with cur_pos_tensor.
+        # sdpa_decode reads cache[:, :, :cur_pos+1, :] internally — no slicing or mask needed.
+        ttnn.copy(key_states, kv_cache_key[:, :, cache_pos : cache_pos + T, :])
+        ttnn.copy(value_states, kv_cache_value[:, :, cache_pos : cache_pos + T, :])
+
+        new_key = kv_cache_key
+        new_value = kv_cache_value
+        _use_sdpa_decode = True
         S_total = kv_cache_key.shape[2]
         is_causal = False
         segmented_attn_mask = None
@@ -294,22 +309,34 @@ def gated_attention_forward_ttnn(
         segmented_attn_mask = None
 
     # Fused scaled dot-product attention
-    if trace_new_k_buf is not None:
-        _attn_mask = trace_attn_mask
-    elif past_key is not None and segmented_attn_mask is not None:
-        _attn_mask = segmented_attn_mask
+    if _use_sdpa_decode:
+        # Decode-optimized SDPA: reads cache[:, :, :cur_pos+1, :] internally
+        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+            query_states,
+            kv_cache_key,
+            kv_cache_value,
+            cur_pos_tensor=cur_pos_tensor,
+            scale=scaling,
+            program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
+            compute_kernel_config=_get_sdpa_compute_kernel_config(),
+        )
     else:
-        _attn_mask = None
-    attn_output = ttnn.transformer.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        attn_mask=_attn_mask,
-        is_causal=is_causal,
-        scale=scaling,
-        program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
-        compute_kernel_config=_get_sdpa_compute_kernel_config(),
-    )
+        if trace_new_k_buf is not None:
+            _attn_mask = trace_attn_mask
+        elif past_key is not None and segmented_attn_mask is not None:
+            _attn_mask = segmented_attn_mask
+        else:
+            _attn_mask = None
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=_attn_mask,
+            is_causal=is_causal,
+            scale=scaling,
+            program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
+            compute_kernel_config=_get_sdpa_compute_kernel_config(),
+        )
     ttnn.deallocate(query_states)
 
     # Convert from [B, H, T, D] back to [B, T, H*D]

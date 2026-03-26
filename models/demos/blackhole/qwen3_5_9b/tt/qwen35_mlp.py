@@ -27,21 +27,23 @@ class Qwen35MLP:
             packer_l1_acc=True,
         )
 
-        def load_weight(name):
+        def load_weight(name, dtype=ttnn.bfloat8_b):
             """Load 2D weight, transpose to [in, out] for ttnn.linear."""
             t = state_dict[f"{prefix}.{name}"].T.contiguous()
             return ttnn.as_tensor(
                 t,
-                dtype=ttnn.bfloat8_b,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=weight_cache_path / f"{prefix}.{name}" if weight_cache_path else None,
             )
 
-        self.w1 = load_weight("gate_proj.weight")
+        # Gate and up projections use bfloat4_b (halves memory bandwidth for these large matmuls).
+        # Down projection stays at bfloat8_b (on the critical accuracy path).
+        self.w1 = load_weight("gate_proj.weight", dtype=ttnn.bfloat4_b)
         self.w2 = load_weight("down_proj.weight")
-        self.w3 = load_weight("up_proj.weight")
+        self.w3 = load_weight("up_proj.weight", dtype=ttnn.bfloat4_b)
 
     def forward(self, x):
         T = x.shape[1] if len(x.shape) >= 3 else 1
