@@ -530,14 +530,14 @@ std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::g
     for (size_t i = 0; i < MAX_PROCESSES; i++) {
         if (region_->processes[i].pid.load(std::memory_order_relaxed) != 0) {
             ProcessInfo info;
-            info.pid = region_->processes[i].pid.load(std::memory_order_relaxed);
-            info.dram_allocated = region_->processes[i].dram_allocated.load(std::memory_order_relaxed);
-            info.l1_allocated = region_->processes[i].l1_allocated.load(std::memory_order_relaxed);
-            info.l1_small_allocated = region_->processes[i].l1_small_allocated.load(std::memory_order_relaxed);
-            info.trace_allocated = region_->processes[i].trace_allocated.load(std::memory_order_relaxed);
-            info.cb_allocated = region_->processes[i].cb_allocated.load(std::memory_order_relaxed);
-            info.timestamp = region_->processes[i].last_update_timestamp.load(std::memory_order_relaxed);
-            info.process_name = std::string(region_->processes[i].process_name);
+            info.pid = processe.pid.load(std::memory_order_relaxed);
+            info.dram_allocated = processe.dram_allocated.load(std::memory_order_relaxed);
+            info.l1_allocated = processe.l1_allocated.load(std::memory_order_relaxed);
+            info.l1_small_allocated = processe.l1_small_allocated.load(std::memory_order_relaxed);
+            info.trace_allocated = processe.trace_allocated.load(std::memory_order_relaxed);
+            info.cb_allocated = processe.cb_allocated.load(std::memory_order_relaxed);
+            info.timestamp = processe.last_update_timestamp.load(std::memory_order_relaxed);
+            info.process_name = std::string(processe.process_name);
             result.push_back(info);
         }
     }
