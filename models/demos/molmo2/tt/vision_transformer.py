@@ -96,8 +96,6 @@ class VisionTransformer(LightweightModule):
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
         num_devices = mesh_device.get_num_devices() if is_mesh_device else 1
 
-        # Keep interfaces DRAM-based, but use L1 width-sharded intermediates on T3K.
-        # Patch-embed activations are large for single-core L1 but map well to width sharding.
         self.patch_embed_compute_memory_config = (
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_mesh_device and num_devices >= 8 else ttnn.DRAM_MEMORY_CONFIG
         )
@@ -165,6 +163,49 @@ class VisionTransformer(LightweightModule):
                 dtype=dtype,
             )
             self.blocks.append(block)
+
+    @staticmethod
+    def _max_divisor_at_most(n: int, limit: int) -> int:
+        for d in range(limit, 0, -1):
+            if n % d == 0:
+                return d
+        return 1
+
+    def _patch_embed_matmul_1d_program_config(self, num_m_rows: int):
+        tile = ttnn.TILE_SIZE
+        m_pad = ttnn.core.roundup(num_m_rows, tile)
+        k_el = self.patch_size * self.patch_size * 3
+        n_el = self.hidden_dim
+        k_pad = ttnn.core.roundup(k_el, tile)
+        n_pad = ttnn.core.roundup(n_el, tile)
+        k_tiles = k_pad // tile
+        n_tiles = n_pad // tile
+        gs = self.mesh_device.compute_with_storage_grid_size()
+        gx, gy = gs.x, gs.y
+        num_cores = gx * gy
+        if n_tiles // num_cores < 1:
+            gy = max(1, n_tiles // gx)
+            num_cores = gx * gy
+        per_core_m = m_pad // tile
+        per_core_n = ttnn.core.divup(n_pad, tile * num_cores)
+        in0_block_w = self._max_divisor_at_most(k_tiles, 8)
+        max_sb = 8
+        out_subblock_w = max(i for i in range(1, max_sb + 1) if per_core_n % i == 0)
+        out_subblock_h = max(
+            (h for h in range(1, max_sb + 1) if per_core_m % h == 0 and h * out_subblock_w <= max_sb),
+            default=1,
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
 
     def interpolate_pos_embedding(
         self,
@@ -273,10 +314,10 @@ class VisionTransformer(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # TTNN: linear projection -- x @ patch_embed_weight
-        # x: [1, 1, B*N, 588],  patch_embed_weight: [1, 1, 588, 1152]
-        # On T3K, keep intermediates sharded in L1 for better bandwidth/latency.
-        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=self.patch_embed_compute_memory_config)
+        mm_kwargs = {"memory_config": self.patch_embed_compute_memory_config}
+        if self.patch_embed_compute_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            mm_kwargs["program_config"] = self._patch_embed_matmul_1d_program_config(batch_size * num_patches)
+        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, **mm_kwargs)
         ttnn.deallocate(x_ttnn)
 
         # Add bias

@@ -13,9 +13,8 @@ The Molmo2 ViT uses standard multi-head attention with:
 On a multi-device mesh, tensor parallelism matches Molmo2 text attention:
 - Column-parallel fused QKV (heads sharded along the fused projection dim)
 - Row-parallel output projection with all-reduce
-Prefill ViT does not use forward_decode-style L1 width-sharded linears: those assume
-very small M (e.g. one decode token); native seq_len ~729 hits width-sharded matmul
-output spec limits. DRAM linears preserve PCC and correctness.
+QKV and output linears use L1 width-sharded outputs with MatmulMultiCoreReuseMultiCast1DProgramConfig
+so per_core_M spans the full padded sequence height (width-sharded shard spec).
 """
 
 import math
@@ -245,6 +244,51 @@ class VisionAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        self.qkv_proj_out_dim = 3 * self.num_heads_per_device * self.padded_head_dim
+        self.wo_in_dim = self.num_heads_per_device * self.padded_head_dim
+        self.l1_width_sharded = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+
+    @staticmethod
+    def _max_divisor_at_most(n: int, limit: int) -> int:
+        for d in range(limit, 0, -1):
+            if n % d == 0:
+                return d
+        return 1
+
+    def _l1_linear_1d_program_config(self, num_m_rows: int, k_elements: int, n_elements: int):
+        tile = ttnn.TILE_SIZE
+        m_pad = ttnn.core.roundup(num_m_rows, tile)
+        k_pad = ttnn.core.roundup(k_elements, tile)
+        n_pad = ttnn.core.roundup(n_elements, tile)
+        k_tiles = k_pad // tile
+        n_tiles = n_pad // tile
+        gs = self.mesh_device.compute_with_storage_grid_size()
+        gx, gy = gs.x, gs.y
+        num_cores = gx * gy
+        if n_tiles // num_cores < 1:
+            gy = max(1, n_tiles // gx)
+            num_cores = gx * gy
+        per_core_m = m_pad // tile
+        per_core_n = ttnn.core.divup(n_pad, tile * num_cores)
+        in0_block_w = self._max_divisor_at_most(k_tiles, 8)
+        max_sb = 8
+        out_subblock_w = max(i for i in range(1, max_sb + 1) if per_core_n % i == 0)
+        out_subblock_h = max(
+            (h for h in range(1, max_sb + 1) if per_core_m % h == 0 and h * out_subblock_w <= max_sb),
+            default=1,
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through attention.
@@ -262,16 +306,15 @@ class VisionAttention(LightweightModule):
         if seq_len > 2048 and seq_len % 2048 == 0:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
-        # QKV projection — DRAM for prefill (see module docstring); matches PCC
+        pc_qkv = self._l1_linear_1d_program_config(seq_len, self.hidden_dim, self.qkv_proj_out_dim)
         qkv = ttnn.linear(
             x,
             self.wqkv,
+            bias=self.bqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.l1_width_sharded,
+            program_config=pc_qkv,
         )
-
-        # Add bias
-        qkv = qkv + self.bqkv
 
         # Reshape back if needed
         if seq_len > 2048 and seq_len % 2048 == 0:
@@ -279,7 +322,8 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x)
 
-        # Split Q, K, V and reshape to heads (per-device head count when tensor-parallel)
+        qkv = ttnn.to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG)
+
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=heads,
@@ -322,14 +366,18 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024 and seq_len % 1024 == 0:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
+        pc_wo = self._l1_linear_1d_program_config(seq_len, self.wo_in_dim, self.hidden_dim)
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.l1_width_sharded,
+            program_config=pc_wo,
         )
 
         ttnn.deallocate(attn_output)
+
+        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
 
         if self.use_tensor_parallel:
             output = ttnn.all_reduce(
@@ -339,7 +387,6 @@ class VisionAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Add output bias (full hidden_dim; after all-reduce when tensor-parallel)
         output = output + self.bo
 
         if seq_len > 1024 and seq_len % 1024 == 0:
