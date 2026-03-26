@@ -2758,6 +2758,7 @@ void ControlPlane::validate_requested_intermesh_connections(
     if (strict_binding) {
         return;
     }
+    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
     for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
         auto src_mesh_id = MeshId(src_mesh);
         for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
@@ -2772,8 +2773,7 @@ void ControlPlane::validate_requested_intermesh_connections(
                     port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
                                            std::to_string(ports[i].port_id.second);
                 }
-                TT_FATAL(
-                    false,
+                const std::string msg = fmt::format(
                     "Requested {} channels between {} and {}, but only have {} physical links. "
                     "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
                     "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
@@ -2784,6 +2784,12 @@ void ControlPlane::validate_requested_intermesh_connections(
                     dst_mesh,
                     ports.size(),
                     port_directions_str);
+                if (inter_mesh_relaxed) {
+                    log_warning(
+                        tt::LogFabric, "Inter-mesh channel request exceeds physical links (policy relaxed): {}", msg);
+                } else {
+                    TT_THROW("{}", msg);
+                }
             }
         }
     }
