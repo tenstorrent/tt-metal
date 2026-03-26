@@ -8,31 +8,6 @@ from .inference import tokens_to_tensor, create_causal_mask, round_up
 from .ttml_operators import Exp, Clip, Min
 
 
-def compute_rewards_advantages(ctx: InferenceCtx, answers: List[float], completions: List[List[int]]):
-    assert len(answers) == len(completions)
-
-    completions_strs = [ctx.tokenizer.decode(c, skip_special_tokens=True) for c in completions]
-
-    guesses: List[float | None] = [extract_hash_answer(s) for s in completions_strs]
-
-    rewards_np = np.zeros(len(completions), dtype=np.float32)
-    for i, (g, a) in enumerate(zip(guesses, answers)):
-        if g is None or a is None:
-            rewards_np[i] = 0.0
-            continue
-        rewards_np[i] = 1.0 if abs(g - a) < 1e-3 else 0.0  # or -1.0 for wrong if you prefer
-
-    advantages_np = np.zeros_like(rewards_np)
-    G = ctx.group_size
-    for start in range(0, len(rewards_np), G):
-        end = min(start + G, len(rewards_np))
-        rg = rewards_np[start:end]
-        mu = float(rg.mean())
-        advantages_np[start : start + G] = rg - mu
-
-    return rewards_np, advantages_np
-
-
 def compute_grpo_loss(
     nlog_probs_old: ttml.autograd.Tensor,
     nlog_probs_new: ttml.autograd.Tensor,
