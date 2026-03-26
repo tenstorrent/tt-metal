@@ -55,12 +55,6 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-
-    const uint32_t cHtWt = cHt * cWt;
-    const auto scalar = momentum;
-    const auto packed_scalar_momentum =
-        any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
-
     constexpr size_t num_reader_args = 11;
     constexpr size_t num_writer_args = 13;
     constexpr size_t num_kernel_args = 3;
@@ -78,6 +72,11 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
             continue;
         }
+
+        uint32_t cHtWt = cHt * cWt;
+        const auto scalar = momentum;
+        const auto packed_scalar_momentum =
+            any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
         std::array reader_runtime_args = {
             packed_scalar_momentum,
             batch_mean_tensor.buffer()->address(),
