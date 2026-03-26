@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/device_impl.hpp"
-#include "profiler/memory_stats_shm.hpp"
+#include "impl/device/device_impl.hpp"
+#include "impl/memory_tracking/memory_stats_shm.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <chrono>
 #include <mutex>

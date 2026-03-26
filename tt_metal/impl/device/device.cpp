@@ -35,8 +35,8 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
-#include "profiler/memory_stats_shm.hpp"
-#include "profiler/shm_tracking_processor.hpp"
+#include "memory_tracking/memory_stats_shm.hpp"
+#include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"

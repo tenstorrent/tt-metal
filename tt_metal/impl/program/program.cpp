@@ -49,7 +49,7 @@
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
-#include "impl/profiler/memory_stats_shm.hpp"
+#include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
