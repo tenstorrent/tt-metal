@@ -10,6 +10,12 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/tensor.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -48,8 +54,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
@@ -95,6 +99,11 @@ void kernel_main() {
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(15));
+    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(16));
+
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
     constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
@@ -107,52 +116,46 @@ void kernel_main() {
     if constexpr (extract_shard_sub_blocks) {
         constexpr uint32_t cb_id_in2 =
             get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        noc_shard_read_start_addr = get_read_ptr(cb_id_in2);
+        experimental::CircularBuffer cb_in2(cb_id_in2);
+        noc_shard_read_start_addr = cb_in2.get_read_ptr();
     }
 
 #else
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+#ifndef IN0_SHARDED
+#ifdef INTERMEDIATE_CB_READ
+    constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
+    experimental::CircularBuffer cb_helper(in0_intermediate_cb_index);
+#endif  // INTERMEDIATE_CB_READ
+#endif
 #endif  // IN0_SHARDED
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
+    experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
-    *(in0_mcast_receiver_semaphore_addr_ptr) = VALID;
+    receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
-
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
-
-    const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
 
 #ifdef IN0_SHARDED
-    uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+    uint32_t in0_start_address = cb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
-        cb_reserve_back(cb_id_sparsity, 1);
-        l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
+        cb_sparsity.reserve_back(1);
+        l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
 
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
-            noc_async_read_barrier();
+            noc.async_read_barrier();
         }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
@@ -163,14 +166,19 @@ void kernel_main() {
                 if constexpr (get_batch_from_reader) {
 #ifndef SKIP_MCAST
                     // First broadcast this to other cores
-                    noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                    noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
-                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
-                    noc_semaphore_set_multicast(
-                        in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
-                    noc_async_writes_flushed();
+                    sender_sem.wait(in0_mcast_num_dests);
+                    sender_sem.set(0);
+                    receiver_sem.set(is_batch_valid ? VALID : IGNORE_BATCH);
+                    receiver_sem.set_multicast(
+                        noc,
+                        in0_mcast_dest_noc_start_x,
+                        in0_mcast_dest_noc_start_y,
+                        in0_mcast_dest_noc_end_x,
+                        in0_mcast_dest_noc_end_y,
+                        in0_mcast_num_cores);
+                    noc.async_writes_flushed();
                     // Reset the semaphore value to VALID
-                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                    receiver_sem.set(VALID);
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
@@ -205,22 +213,19 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                        cb_in0.reserve_back(in0_block_num_tiles);
 #ifndef IN0_SHARDED
 
 #ifdef INTERMEDIATE_CB_READ
-                        constexpr uint32_t in0_intermediate_cb_index =
-                            get_named_compile_time_arg_val("cb_in0_intermediate");
-                        cb_reserve_back(in0_intermediate_cb_index, one_tile);
-                        uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
+                        cb_helper.reserve_back(one_tile);
 #endif  // INTERMEDIATE_CB_READ
 
-                        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                        uint32_t in0_write_offset = 0;
 
 #ifndef SKIP_MCAST
                         uint32_t in0_start_address =
-                            l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif                                          // SKIP_MCAST
+                            cb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
+#endif                                               // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -229,13 +234,23 @@ void kernel_main() {
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
 #ifndef INTERMEDIATE_CB_READ
-                                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                                    noc.async_read(
+                                        s0,
+                                        cb_in0,
+                                        in0_single_tile_size_bytes,
+                                        {.page_id = in0_tensor_tile_id},
+                                        {.offset_bytes = in0_write_offset});
 #else
-                                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_helper);
-                                    noc_async_read_barrier();
+                                    noc.async_read(
+                                        s0,
+                                        cb_helper,
+                                        in0_single_tile_size_bytes,
+                                        {.page_id = in0_tensor_tile_id},
+                                        {.offset_bytes = 0});
+                                    noc.async_read_barrier();
                                     memcpy(
-                                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in0),
-                                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                                        /*dst=*/reinterpret_cast<void*>(cb_in0.get_write_ptr() + in0_write_offset),
+                                        /*src=*/reinterpret_cast<const void*>(cb_helper.get_write_ptr()),
                                         /*size=*/in0_single_tile_size_bytes);
 #endif  // INTERMEDIATE_CB_READ
                                 }
@@ -243,20 +258,22 @@ void kernel_main() {
                                 // Zero out padded regions for the very last tile
                                 if constexpr (in0_last_ktile_w > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                                        noc_async_read_barrier();
+                                        noc.async_read_barrier();
                                         const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(
+                                            cb_in0.get_write_ptr() + in0_write_offset);
                                     }
                                 }
                                 if constexpr (in0_last_ktile_h > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                                        noc_async_read_barrier();
+                                        noc.async_read_barrier();
                                         const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
+                                            cb_in0.get_write_ptr() + in0_write_offset);
                                     }
                                 }
 
-                                l1_write_addr_in0 += in0_single_tile_size_bytes;
+                                in0_write_offset += in0_single_tile_size_bytes;
                                 in0_tensor_tile_id += in0_tensor_stride_w;
                             }
                             in0_tensor_row_start_tile_id += in0_tensor_stride_h;
@@ -264,27 +281,33 @@ void kernel_main() {
                         in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
 
                         // Barrier! make sure the reads are done
-                        noc_async_read_barrier();
+                        noc.async_read_barrier();
 #else
                         if constexpr (extract_shard_sub_blocks) {
-                            uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                            uint32_t l1_write_addr_in0 = cb_in0.get_write_ptr();
 
 #ifndef SKIP_MCAST
                             in0_start_address =
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif  // SKIP_MCAST
 
-                            uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
+                            experimental::UnicastEndpoint self_ep;
+                            uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
 
                             for (uint32_t i = 0; i < in0_block_h; i++) {
-                                noc_async_read(noc_shard_read_addr, l1_write_addr_in0, shard_read_width);
+                                noc.async_read(
+                                    self_ep,
+                                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_in0),
+                                    shard_read_width,
+                                    {.noc_x = my_x[0], .noc_y = my_y[0], .addr = noc_shard_read_l1_addr},
+                                    {});
 
                                 l1_write_addr_in0 += shard_read_width;
-                                noc_shard_read_addr += shard_read_stride;
+                                noc_shard_read_l1_addr += shard_read_stride;
                             }
 
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
                         }
 #endif  // IN0_SHARDED
 
@@ -292,18 +315,23 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
-                        noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                        noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+                        sender_sem.wait(in0_mcast_num_dests);
+                        sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
-
+                        experimental::MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_async_write_multicast(
-                            in0_start_address,
-                            in0_multicast_data_addr,
+                        noc.async_write_multicast(
+                            experimental::CoreLocalMem<uint32_t>(in0_start_address),
+                            mcast_dst,
                             in0_block_size_bytes,
                             in0_mcast_num_cores,
+                            {},
+                            {.noc_x_start = in0_mcast_dest_noc_start_x,
+                             .noc_y_start = in0_mcast_dest_noc_start_y,
+                             .noc_x_end = in0_mcast_dest_noc_end_x,
+                             .noc_y_end = in0_mcast_dest_noc_end_y,
+                             .addr = in0_start_address},
                             true);
 
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
@@ -312,24 +340,27 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
                         // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV
                         // latency which means data could be changed before write is issued.
-                        noc_async_writes_flushed();
+                        noc.async_writes_flushed();
 #endif  // ARCH_BLACKHOLE
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_semaphore_set_multicast(
-                            in0_mcast_receiver_semaphore_addr,
-                            in0_mcast_receiver_semaphore_noc_addr,
+                        receiver_sem.set_multicast(
+                            noc,
+                            in0_mcast_dest_noc_start_x,
+                            in0_mcast_dest_noc_start_y,
+                            in0_mcast_dest_noc_end_x,
+                            in0_mcast_dest_noc_end_y,
                             in0_mcast_num_cores);
 #endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths
-                        cb_push_back(cb_id_in0, in0_block_num_tiles);
+                        cb_in0.push_back(in0_block_num_tiles);
 #ifdef INTERMEDIATE_CB_READ
                         // Clean up helper CB
-                        cb_push_back(in0_intermediate_cb_index, one_tile);
-                        cb_wait_front(in0_intermediate_cb_index, one_tile);
-                        cb_pop_front(in0_intermediate_cb_index, one_tile);
+                        cb_helper.push_back(one_tile);
+                        cb_helper.wait_front(one_tile);
+                        cb_helper.pop_front(one_tile);
 #endif  // INTERMEDIATE_CB_READ
                     }
                 }
@@ -356,17 +387,17 @@ void kernel_main() {
         if (in0_B == 1 && in1_B > 1) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    cb_in0.reserve_back(in0_block_num_tiles);
+                    cb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     // For completeness, we empty the sparsity CB if it was reserved earlier
     if constexpr (batchB > 0) {
-        cb_push_back(cb_id_sparsity, 1);
-        cb_wait_front(cb_id_sparsity, 1);
-        cb_pop_front(cb_id_sparsity, 1);
+        cb_sparsity.push_back(1);
+        cb_sparsity.wait_front(1);
+        cb_sparsity.pop_front(1);
     }
 }
