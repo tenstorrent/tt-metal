@@ -13,8 +13,9 @@ action_proj_out, and dual forward paths (video + action).
 
 from __future__ import annotations
 
-import torch
+import gc
 import os
+import torch
 from loguru import logger
 
 import ttnn
@@ -35,11 +36,19 @@ from .attention_wan import WanAttention
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
 
 
+def _safe_deallocate_tensor(tensor: ttnn.Tensor | None, label: str = "") -> None:
+    if tensor is None:
+        return
+    try:
+        ttnn.deallocate(tensor)
+    except Exception as e:
+        logger.warning("Failed to deallocate{}: {}", f" {label}" if label else "", e)
+
+
 # Lingbot-VA config (from reference model.py)
 DIM = 3072  # num_attention_heads * attention_head_dim
 FFN_DIM = 14336
 NUM_HEADS = 24
-HEAD_DIM = 128
 IN_CHANNELS = 48
 OUT_CHANNELS = 48
 ACTION_DIM = 30
@@ -431,6 +440,38 @@ class WanTransformer3DModel(Module):
         )
         self._attn_caches: dict[str, list[dict | None]] = {}
 
+    def cleanup_all(self) -> None:
+        """Release cached TTNN tensors and attention cache state (nanobind / device memory hygiene)."""
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception as e:
+            logger.warning("cleanup_all: synchronize_device failed: {}", e)
+
+        for cache_name in list(self._attn_caches.keys()):
+            try:
+                self.clear_cache(cache_name)
+            except Exception as e:
+                logger.warning("cleanup_all: clear_cache({}) failed: {}", cache_name, e)
+        self._attn_caches.clear()
+
+        for key, rope_triple in list(self.cached_rope_features.items()):
+            try:
+                cos_t, sin_t, mat_t = rope_triple
+                _safe_deallocate_tensor(cos_t, "cached rope cos")
+                _safe_deallocate_tensor(sin_t, "cached rope sin")
+                _safe_deallocate_tensor(mat_t, "cached rope trans_mat")
+            except Exception as e:
+                logger.warning("cleanup_all: rope cache entry {}: {}", key, e)
+        self.cached_rope_features.clear()
+
+        gc.collect()
+
+    def __enter__(self) -> WanTransformer3DModel:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_all()
+
     def clear_cache(self, cache_name: str) -> None:
         for block in self.blocks:
             if hasattr(block.attn1, "clear_cache"):
@@ -567,6 +608,7 @@ class WanTransformer3DModel(Module):
         logger.debug("Preparing rope features for shape {}", grid_id.shape)
         grid_id_tt = bf16_tensor(grid_id, device=self.mesh_device)
         rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)  # each [1, L, 128]
+        _safe_deallocate_tensor(grid_id_tt, "prepare_rope_features grid_id")
         B, L, D = rope_cos_tt.shape
         rope_cos_11LD = ttnn.reshape(rope_cos_tt, (1, 1, L, D))
         rope_sin_11LD = ttnn.reshape(rope_sin_tt, (1, 1, L, D))
@@ -652,6 +694,8 @@ class WanTransformer3DModel(Module):
             temb_host = ttnn.to_torch(ttnn.get_device_tensors(temb_i)[0])
             proj_host = ttnn.to_torch(ttnn.get_device_tensors(proj_i)[0])
             ts_to_proj[t_val.item()] = (temb_host, proj_host)
+            _safe_deallocate_tensor(temb_i, "per-token temb_i")
+            _safe_deallocate_tensor(proj_i, "per-token proj_i")
 
         temb_sample = next(iter(ts_to_proj.values()))
         D_temb = temb_sample[0].shape[-1]
@@ -915,6 +959,10 @@ class WanTransformer3DModel(Module):
                         _spatial_to_bnc(attn1_out[0]),
                         os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
                     )
+                _safe_deallocate_tensor(cached_k_tt, "block cached_k")
+                _safe_deallocate_tensor(cached_v_tt, "block cached_v")
+                _safe_deallocate_tensor(k_cur, "block k_cur")
+                _safe_deallocate_tensor(v_cur, "block v_cur")
             else:
                 spatial_1BND = block(
                     spatial_1BND=spatial_1BND,

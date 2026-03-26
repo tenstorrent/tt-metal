@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -64,7 +63,6 @@ from reference.utils import (
     load_tokenizer,
     load_vae,
     logger,
-    save_async,
     WanVAEStreamingWrapper,
 )
 
@@ -88,14 +86,6 @@ OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
 OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
-# Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
-# Use a distinct name from inference_torch so the two scripts never share the same VAE cache.
-VAE_ENC_CACHE_FILENAME = "vae_encoded_obs_ttnn.pt"
-# Cache file for text (prompt) embeddings; if present and prompt matches, skip running the text encoder.
-# Must differ from inference_torch's filename: otherwise the torch script can load this (TTNN) cache and
-# use TTNN embeddings, so transformer outputs would match even though the cache files on disk differ later.
-TEXT_EMB_CACHE_FILENAME = "text_emb_cache_ttnn.pt"
-
 # Seed for reproducible inference (latents/actions init, etc.).
 REPRODUCIBLE_SEED = 42
 
@@ -106,6 +96,43 @@ def _set_seed(seed: int = REPRODUCIBLE_SEED) -> None:
     torch.manual_seed(seed)
 
 
+def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None:
+    """Best-effort recursive teardown of TTNN runtime config objects."""
+    if obj is None:
+        return
+    if _visited is None:
+        _visited = set()
+    oid = id(obj)
+    if oid in _visited:
+        return
+    _visited.add(oid)
+
+    if isinstance(obj, dict):
+        for v in list(obj.values()):
+            _release_ttnn_runtime_configs(v, _visited)
+        return
+    if isinstance(obj, (list, tuple, set)):
+        for v in list(obj):
+            _release_ttnn_runtime_configs(v, _visited)
+        return
+
+    d = getattr(obj, "__dict__", None)
+    if not isinstance(d, dict):
+        return
+
+    for _, v in list(d.items()):
+        _release_ttnn_runtime_configs(v, _visited)
+
+    hints = ("program_config", "memory_config", "compute_kernel_config", "kernel_config", "sharded_memory_config")
+    for name in list(d.keys()):
+        lname = name.lower()
+        if any(h in lname for h in hints):
+            try:
+                setattr(obj, name, None)
+            except Exception:
+                pass
+
+
 class _TTTransformerAdapter:
     """Wraps TTNN WanTransformer3DModel to match the PyTorch transformer call interface used in _infer_impl."""
 
@@ -114,6 +141,14 @@ class _TTTransformerAdapter:
 
     def clear_cache(self, cache_name):
         self._tt_model.clear_cache(cache_name)
+
+    def cleanup_all(self):
+        if hasattr(self._tt_model, "cleanup_all"):
+            self._tt_model.cleanup_all()
+
+    def deallocate_weights(self):
+        if hasattr(self._tt_model, "deallocate_weights"):
+            self._tt_model.deallocate_weights()
 
     def create_empty_cache(
         self,
@@ -332,33 +367,27 @@ def _load_models_phase1(config, load_text_encoder=True):
 
 
 def _free_tt_model(models: dict, key: str) -> None:
-    """Remove a TT model from the models dict and run gc to free device memory."""
-    if key in models:
-        del models[key]
+    """Remove a TT model from models with best-effort cleanup before deletion."""
+    obj = models.pop(key, None)
+    if obj is not None:
+        _release_ttnn_runtime_configs(obj)
+        try:
+            if hasattr(obj, "cleanup_all"):
+                obj.cleanup_all()
+        except Exception as e:
+            logger.warning("cleanup_all failed for %s: %s", key, e)
+        try:
+            if hasattr(obj, "deallocate_weights"):
+                obj.deallocate_weights()
+        except Exception as e:
+            logger.warning("deallocate_weights failed for %s: %s", key, e)
+        del obj
     gc.collect()
 
 
 def _try_load_text_emb_cache(config, prompt, device, dtype):
-    """
-    Load text embeddings from cache if present and prompt matches. Returns (prompt_embeds, negative_prompt_embeds)
-    or (None, None) on cache miss or error. Avoids loading the TT text encoder when cache hits.
-    """
-    cache_path = getattr(config, "text_emb_cache_path", None)
-    if not cache_path or not os.path.isfile(cache_path):
-        return None, None
-    prompt_list = [prompt] if isinstance(prompt, str) else prompt
-    try:
-        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
-        if cached.get("prompt") != prompt_list or "prompt_embeds" not in cached:
-            return None, None
-        logger.info("Loading text embeddings from cache: %s", cache_path)
-        prompt_embeds = cached["prompt_embeds"].to(device=device, dtype=dtype)
-        neg = cached.get("negative_prompt_embeds")
-        negative_prompt_embeds = neg.to(device=device, dtype=dtype) if neg is not None else None
-        return prompt_embeds, negative_prompt_embeds
-    except Exception as e:
-        logger.warning("Failed to load text emb cache: %s", e)
-        return None, None
+    """No-op cache helper: embedding caches are disabled for demo generation."""
+    return None, None
 
 
 def _load_text_encoder_into_models(models: dict, config) -> None:
@@ -422,6 +451,33 @@ def _load_tt_vae_into_models(models: dict, config) -> None:
 
 def _free_tt_vae_from_models(models: dict, config) -> None:
     """Replace TT VAE in models with PyTorch wrappers and run gc to free device memory."""
+    old_streaming_vae = models.get("streaming_vae")
+    old_streaming_vae_half = models.get("streaming_vae_half")
+    if old_streaming_vae is not None:
+        _release_ttnn_runtime_configs(old_streaming_vae)
+        try:
+            if hasattr(old_streaming_vae, "cleanup_all"):
+                old_streaming_vae.cleanup_all()
+        except Exception as e:
+            logger.warning("cleanup_all failed for streaming_vae: %s", e)
+        try:
+            if hasattr(old_streaming_vae, "deallocate_weights"):
+                old_streaming_vae.deallocate_weights()
+        except Exception as e:
+            logger.warning("deallocate_weights failed for streaming_vae: %s", e)
+    if old_streaming_vae_half is not None and old_streaming_vae_half is not old_streaming_vae:
+        _release_ttnn_runtime_configs(old_streaming_vae_half)
+        try:
+            if hasattr(old_streaming_vae_half, "cleanup_all"):
+                old_streaming_vae_half.cleanup_all()
+        except Exception as e:
+            logger.warning("cleanup_all failed for streaming_vae_half: %s", e)
+        try:
+            if hasattr(old_streaming_vae_half, "deallocate_weights"):
+                old_streaming_vae_half.deallocate_weights()
+        except Exception as e:
+            logger.warning("deallocate_weights failed for streaming_vae_half: %s", e)
+
     models["streaming_vae"] = WanVAEStreamingWrapper(models["vae"])
     if config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
         models["streaming_vae_half"] = WanVAEStreamingWrapper(models["vae_half"])
@@ -475,6 +531,22 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
     last_hidden = tt_outputs[-1]
     prompt_embeds = ttnn.to_torch(last_hidden).float()
+    try:
+        ttnn.synchronize_device(mesh_device)
+    except Exception as e:
+        logger.warning("synchronize_device failed after text encoder pass: %s", e)
+    try:
+        ttnn.deallocate(tt_input)
+    except Exception as e:
+        logger.warning("Failed to deallocate tt_input: %s", e)
+    try:
+        ttnn.deallocate(tt_mask)
+    except Exception as e:
+        logger.warning("Failed to deallocate tt_mask: %s", e)
+    try:
+        ttnn.deallocate(last_hidden)
+    except Exception as e:
+        logger.warning("Failed to deallocate text encoder output: %s", e)
     while prompt_embeds.dim() > 3:
         prompt_embeds = prompt_embeds.squeeze(0)
     prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
@@ -497,24 +569,8 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
     prompt = [prompt] if isinstance(prompt, str) else prompt
     batch_size = len(prompt)
 
-    cache_path = getattr(config, "text_emb_cache_path", None)
-    if cache_path and os.path.isfile(cache_path):
-        try:
-            cached = torch.load(cache_path, map_location="cpu", weights_only=False)
-            if cached.get("prompt") == prompt and "prompt_embeds" in cached:
-                logger.info("Loading text embeddings from cache: %s", cache_path)
-                prompt_embeds = cached["prompt_embeds"].to(device=device, dtype=dtype)
-                neg = cached.get("negative_prompt_embeds")
-                negative_prompt_embeds = neg.to(device=device, dtype=dtype) if neg is not None else None
-                return prompt_embeds, negative_prompt_embeds
-        except Exception as e:
-            logger.warning("Failed to load text emb cache: %s", e)
-
     if "text_encoder" not in models:
-        raise RuntimeError(
-            "Text encoder was freed after phase 1; text embeddings must be loaded from cache. "
-            "Ensure text_emb_cache_path exists and matches the current prompt, or run with cache populated first."
-        )
+        raise RuntimeError("Text encoder was freed before prompt encoding.")
     prompt_embeds = _get_t5_prompt_embeds(
         models, prompt=prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
     )
@@ -526,21 +582,6 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
             models, prompt=negative_prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
         )
 
-    if cache_path:
-        try:
-            torch.save(
-                {
-                    "prompt": prompt,
-                    "prompt_embeds": prompt_embeds.cpu(),
-                    "negative_prompt_embeds": negative_prompt_embeds.cpu()
-                    if negative_prompt_embeds is not None
-                    else None,
-                },
-                cache_path,
-            )
-            logger.info("Saved text embeddings to cache: %s", cache_path)
-        except Exception as e:
-            logger.warning("Failed to save text emb cache: %s", e)
     return prompt_embeds, negative_prompt_embeds
 
 
@@ -666,14 +707,6 @@ def _encode_obs(models, state, obs):
     device = models["device"]
     dtype = models["dtype"]
 
-    # If cache exists, we never call streaming_vae.encode_chunk() (so after phase 2 we use
-    # PyTorch wrapper only for clear_cache; the actual encode was done by TT in phase 2).
-    cache_path = getattr(config, "vae_enc_cache_path", None)
-    if cache_path and os.path.isfile(cache_path):
-        logger.info("Loading VAE encode output from cache: %s", cache_path)
-        video_latent = torch.load(cache_path, map_location=device, weights_only=True)
-        return video_latent.to(dtype)
-
     env_type = models["env_type"]
     height = state["height"]
     width = state["width"]
@@ -727,12 +760,6 @@ def _encode_obs(models, state, obs):
     video_latent = torch.cat(mu_norm.split(1, dim=0), dim=-1)
     video_latent = video_latent.to(device)
 
-    if cache_path:
-        try:
-            torch.save(video_latent.cpu(), cache_path)
-            logger.info("Saved VAE encode output to cache: %s", cache_path)
-        except Exception as e:
-            logger.warning("Failed to save VAE encode cache: %s", e)
     return video_latent
 
 
@@ -749,7 +776,9 @@ def _reset_state(models, state, prompt):
     logger.info("Reset.")
     state["use_cfg"] = False
     state["frame_st_id"] = 0
-    state["init_latent"] = None
+    # Keep precomputed init latent when available (run_generate phase-2 preload).
+    if "init_latent" not in state:
+        state["init_latent"] = None
 
     transformer.clear_cache(cache_name)
     streaming_vae.clear_cache()
@@ -807,9 +836,7 @@ def _reset_state(models, state, prompt):
             state["negative_prompt_embeds"] = negative_prompt_embeds
             state["_prompt_embeds_prompt"] = prompt_list
 
-    state["exp_name"] = f"{prompt}_{time.strftime('%Y%m%d_%H%M%S')}" if prompt else "default"
-    state["exp_save_root"] = os.path.join(save_root, "real", state["exp_name"])
-    os.makedirs(state["exp_save_root"], exist_ok=True)
+    # No intermediate file dumps; keep runtime state in memory only.
 
 
 def _infer_impl(models, state, obs, frame_st_id=0):
@@ -827,7 +854,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     action_per_frame = state["action_per_frame"]
     action_mask = state["action_mask"]
 
-    if frame_st_id == 0:
+    if frame_st_id == 0 and state.get("init_latent") is None:
         init_latent = _encode_obs(models, state, obs)
         state["init_latent"] = init_latent
 
@@ -857,7 +884,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     action_timesteps = F.pad(action_timesteps, (0, 1), mode="constant", value=0)
 
     use_cfg = state["use_cfg"]
-    init_latent = state["init_latent"]
+    init_latent = state.get("init_latent")
     patch_size = config.patch_size
 
     with torch.no_grad():
@@ -881,7 +908,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=False,
-                dump_iter=i,
+                dump_iter=None,
             )
             if models.get("transformer_is_tt", False) and video_noise_pred.dtype != torch.float32:
                 video_noise_pred = video_noise_pred.float()
@@ -932,7 +959,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=True,
-                dump_iter=i,
+                dump_iter=None,
             )
             if models.get("transformer_is_tt", False):
                 if action_noise_pred.dtype != torch.float32:
@@ -950,8 +977,6 @@ def _infer_impl(models, state, obs, frame_st_id=0):
             actions[:, :, 0:1] = action_cond if frame_st_id == 0 else actions[:, :, 0:1]
 
     actions[:, ~action_mask] *= 0
-    save_async(latents, os.path.join(state["exp_save_root"], f"latents_{frame_st_id}.pt"))
-    save_async(actions, os.path.join(state["exp_save_root"], f"actions_{frame_st_id}.pt"))
     actions_out = _postprocess_action(models, state, actions)
     return actions_out, latents
 
@@ -962,10 +987,6 @@ def _compute_kv_cache(models, state, obs):
     cache_name = models["cache_name"]
 
     transformer.clear_pred_cache(cache_name)
-    save_async(
-        obs["obs"],
-        os.path.join(state["exp_save_root"], f"obs_data_{state['frame_st_id']}.pt"),
-    )
     latent_model_input = _encode_obs(models, state, obs)
     if state["frame_st_id"] == 0:
         latent_model_input = (
@@ -1035,8 +1056,20 @@ def _load_tt_vae_decoder_into_models(models: dict, config) -> None:
 
 def _free_tt_vae_decoder_from_models(models: dict) -> None:
     """Remove TT VAE decoder from models and run gc to free device memory."""
-    if "vae_decoder_tt" in models:
-        del models["vae_decoder_tt"]
+    vae_decoder_tt = models.pop("vae_decoder_tt", None)
+    if vae_decoder_tt is not None:
+        _release_ttnn_runtime_configs(vae_decoder_tt)
+        try:
+            if hasattr(vae_decoder_tt, "cleanup_all"):
+                vae_decoder_tt.cleanup_all()
+        except Exception as e:
+            logger.warning("cleanup_all failed for vae_decoder_tt: %s", e)
+        try:
+            if hasattr(vae_decoder_tt, "deallocate_weights"):
+                vae_decoder_tt.deallocate_weights()
+        except Exception as e:
+            logger.warning("deallocate_weights failed for vae_decoder_tt: %s", e)
+        del vae_decoder_tt
     gc.collect()
     logger.info("Freed TT VAE decoder from device.")
 
@@ -1095,41 +1128,32 @@ def run_inference(
     config.rank = 0
     config.world_size = 1
     if save_dir is None:
-        save_dir = _SCRIPT_DIR / "out_inference"
+        save_dir = _SCRIPT_DIR
     config.save_root = str(save_dir)
-    config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
-    config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
 
-    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
+    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
     models = _load_models_phase1(config, load_text_encoder=False)
     state = {}
     prompt = message.get("prompt", "")
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
-    prompt_embeds, neg_embeds = _try_load_text_emb_cache(config, prompt, models["device"], models["dtype"])
-    if prompt_embeds is not None:
-        state["prompt_embeds"] = prompt_embeds
-        state["negative_prompt_embeds"] = neg_embeds
-        state["_prompt_embeds_prompt"] = prompt_list
-    else:
-        _load_text_encoder_into_models(models, config)
-        prompt_embeds, neg_embeds = _encode_prompt(
-            models,
-            state,
-            prompt,
-            do_classifier_free_guidance=(config.guidance_scale > 1),
-            max_sequence_length=512,
-        )
-        state["prompt_embeds"] = prompt_embeds
-        state["negative_prompt_embeds"] = neg_embeds
-        state["_prompt_embeds_prompt"] = prompt_list
-        _free_tt_model(models, "text_encoder")
+    _load_text_encoder_into_models(models, config)
+    prompt_embeds, neg_embeds = _encode_prompt(
+        models,
+        state,
+        prompt,
+        do_classifier_free_guidance=(config.guidance_scale > 1),
+        max_sequence_length=512,
+    )
+    state["prompt_embeds"] = prompt_embeds
+    state["negative_prompt_embeds"] = neg_embeds
+    state["_prompt_embeds_prompt"] = prompt_list
+    _free_tt_model(models, "text_encoder")
 
-    # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
+    # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
-    if not (getattr(config, "vae_enc_cache_path", None) and os.path.isfile(config.vae_enc_cache_path)):
-        _load_tt_vae_into_models(models, config)
-        _encode_obs(models, state, message)
-        _free_tt_vae_from_models(models, config)
+    _load_tt_vae_into_models(models, config)
+    state["init_latent"] = _encode_obs(models, state, message)
+    _free_tt_vae_from_models(models, config)
 
     # Phase 3: load TT transformer and run inference.
     _load_transformer_into_models(models, config)
@@ -1171,42 +1195,33 @@ def run_generate(
     config.rank = 0
     config.world_size = 1
     config.save_root = str(save_dir)
-    config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
-    config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
     config.input_img_path = str(images_dir)
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks
 
-    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
+    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder.
     models = _load_models_phase1(config, load_text_encoder=False)
     state = {}
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
-    prompt_embeds, neg_embeds = _try_load_text_emb_cache(config, prompt, models["device"], models["dtype"])
-    if prompt_embeds is not None:
-        state["prompt_embeds"] = prompt_embeds
-        state["negative_prompt_embeds"] = neg_embeds
-        state["_prompt_embeds_prompt"] = prompt_list
-    else:
-        _load_text_encoder_into_models(models, config)
-        prompt_embeds, neg_embeds = _encode_prompt(
-            models,
-            state,
-            prompt,
-            do_classifier_free_guidance=(config.guidance_scale > 1),
-            max_sequence_length=512,
-        )
-        state["prompt_embeds"] = prompt_embeds
-        state["negative_prompt_embeds"] = neg_embeds
-        state["_prompt_embeds_prompt"] = prompt_list
-        _free_tt_model(models, "text_encoder")
+    _load_text_encoder_into_models(models, config)
+    prompt_embeds, neg_embeds = _encode_prompt(
+        models,
+        state,
+        prompt,
+        do_classifier_free_guidance=(config.guidance_scale > 1),
+        max_sequence_length=512,
+    )
+    state["prompt_embeds"] = prompt_embeds
+    state["negative_prompt_embeds"] = neg_embeds
+    state["_prompt_embeds_prompt"] = prompt_list
+    _free_tt_model(models, "text_encoder")
 
-    # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
+    # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
     init_obs = _load_init_obs(config, config.input_img_path)
-    if not (getattr(config, "vae_enc_cache_path", None) and os.path.isfile(config.vae_enc_cache_path)):
-        _load_tt_vae_into_models(models, config)
-        _encode_obs(models, state, init_obs)
-        _free_tt_vae_from_models(models, config)
+    _load_tt_vae_into_models(models, config)
+    state["init_latent"] = _encode_obs(models, state, init_obs)
+    _free_tt_vae_from_models(models, config)
 
     # Phase 3: load TT transformer and run generation.
     _load_transformer_into_models(models, config)
@@ -1226,17 +1241,49 @@ def run_generate(
 
     # Free all TT sub-modules and close the mesh device so the decoder runs on a fresh device
     # with full memory (avoids OOM from fragmented/leftover allocations).
-    transformer = models["transformer"]
-    transformer.clear_cache(models["cache_name"])
-    del models["transformer"]
+    transformer = models.get("transformer")
+    if transformer is not None:
+        _release_ttnn_runtime_configs(transformer)
+        try:
+            transformer.clear_cache(models["cache_name"])
+        except Exception as e:
+            logger.warning("transformer.clear_cache failed: %s", e)
+        try:
+            if hasattr(transformer, "cleanup_all"):
+                transformer.cleanup_all()
+        except Exception as e:
+            logger.warning("transformer.cleanup_all failed: %s", e)
+        try:
+            if hasattr(transformer, "deallocate_weights"):
+                transformer.deallocate_weights()
+        except Exception as e:
+            logger.warning("transformer.deallocate_weights failed: %s", e)
+        models.pop("transformer", None)
+        del transformer
     if models.get("streaming_vae_half"):
-        models["streaming_vae_half"].clear_cache()
+        _release_ttnn_runtime_configs(models["streaming_vae_half"])
+        try:
+            if hasattr(models["streaming_vae_half"], "cleanup_all"):
+                models["streaming_vae_half"].cleanup_all()
+            if hasattr(models["streaming_vae_half"], "deallocate_weights"):
+                models["streaming_vae_half"].deallocate_weights()
+        except Exception as e:
+            logger.warning("streaming_vae_half cleanup failed: %s", e)
         del models["streaming_vae_half"]
     if models.get("streaming_vae"):
-        models["streaming_vae"].clear_cache()
+        _release_ttnn_runtime_configs(models["streaming_vae"])
+        try:
+            if hasattr(models["streaming_vae"], "cleanup_all"):
+                models["streaming_vae"].cleanup_all()
+            if hasattr(models["streaming_vae"], "deallocate_weights"):
+                models["streaming_vae"].deallocate_weights()
+        except Exception as e:
+            logger.warning("streaming_vae cleanup failed: %s", e)
         del models["streaming_vae"]
     models.pop("text_encoder", None)
     gc.collect()
+    gc.collect()
+    _release_ttnn_runtime_configs(models)
     gc.collect()
     mesh_device = models["mesh_device"]
     ttnn.synchronize_device(mesh_device)
@@ -1319,7 +1366,7 @@ def main() -> None:
         "--save-dir",
         type=str,
         default="",
-        help="Dir for internal saves (latents_*.pt, actions_*.pt) or demo.mp4 when --generate. Default: evaluation/robotwin/out_inference.",
+        help="Output directory for generated demo.mp4. Default: tests/demo/.",
     )
     parser.add_argument(
         "--generate",
@@ -1334,7 +1381,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    save_dir = args.save_dir or str(_SCRIPT_DIR / "out_inference")
+    save_dir = args.save_dir or str(_SCRIPT_DIR)
     images_dir = Path(args.images_dir) if args.images_dir else _REPO_ROOT / "example" / "robotwin"
 
     if args.generate:
@@ -1403,14 +1450,13 @@ def main() -> None:
         return
 
     print("\nRunning inference (reset + infer one chunk)...")
-    print("Internal saves (latents_*.pt, actions_*.pt):", save_dir)
+    print("Output directory:", save_dir)
     result = run_inference(message, args.checkpoint, save_dir=save_dir)
     print("=" * 60)
     print("Inference result")
     print("=" * 60)
     if "action" in result:
         action = result["action"]
-        torch.save(torch.tensor(action), _SCRIPT_DIR / "action_.pt")
         print("action shape:", action.shape, "dtype:", action.dtype)
         if args.output:
             np.save(args.output, action)

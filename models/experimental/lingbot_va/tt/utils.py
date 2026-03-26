@@ -11,10 +11,12 @@ from the reference (PyTorch) checkpoints.
 
 from __future__ import annotations
 
+import gc
 import os
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
@@ -42,7 +44,15 @@ from .transformer_wan import (
 
 if TYPE_CHECKING:
     from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
-    from models.tt_dit.parallel.manager import CCLManager
+
+
+def _safe_deallocate_tensor(tensor, label: str = "") -> None:
+    if tensor is None:
+        return
+    try:
+        ttnn.deallocate(tensor)
+    except Exception as e:
+        logger.warning("Failed to deallocate{}: {}", f" {label}" if label else "", e)
 
 
 # Lazy import to avoid loading reference/diffusers when only load_transformer_from_state_dict is used
@@ -357,6 +367,37 @@ class WanVAEStreamingWrapper:
     def clear_cache(self):
         self.feat_cache = [None] * self.enc_conv_num
 
+    def cleanup_all(self) -> None:
+        """Synchronize device, reset streaming feat cache, and encourage GC (does not unload weights)."""
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception as e:
+            logger.warning("WanVAEStreamingWrapper.cleanup_all: synchronize_device failed: {}", e)
+        self.clear_cache()
+        gc.collect()
+
+    def deallocate_weights(self) -> None:
+        """Unload TTNN parameters from device (call before closing the mesh)."""
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception as e:
+            logger.warning("WanVAEStreamingWrapper.deallocate_weights: synchronize_device failed: {}", e)
+        try:
+            self.encoder.deallocate_weights()
+        except Exception as e:
+            logger.warning("WanVAEStreamingWrapper.deallocate_weights: encoder failed: {}", e)
+        try:
+            self.quant_conv.deallocate_weights()
+        except Exception as e:
+            logger.warning("WanVAEStreamingWrapper.deallocate_weights: quant_conv failed: {}", e)
+        gc.collect()
+
+    def __enter__(self) -> WanVAEStreamingWrapper:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_all()
+
     def encode_chunk(self, x_chunk):
         # Full chunk is self-contained; reset causal feat_cache each call. (If you ever split one
         # sequence across multiple encode_chunk calls and need T continuity, add an opt-out flag.)
@@ -373,15 +414,22 @@ class WanVAEStreamingWrapper:
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
         )
-        out, logical_h = self.encoder(video_BTHWC, logical_h, feat_cache=self.feat_cache, feat_idx=feat_idx)
-        enc = self.quant_conv(out, logical_h)
-        # Safety: clamp unpad to tensor H if logical_h ever disagrees with sharded shape
-        enc_h = enc.shape[2]
-        enc = conv_unpad_height(enc, min(logical_h, enc_h))
-        ttnn.synchronize_device(self.mesh_device)
-        enc = ttnn.to_torch(enc)
-        enc = enc.permute(0, 4, 1, 2, 3)
-        return enc
+        enc_tt = None
+        out_tt = None
+        try:
+            out_tt, logical_h = self.encoder(video_BTHWC, logical_h, feat_cache=self.feat_cache, feat_idx=feat_idx)
+            enc_tt = self.quant_conv(out_tt, logical_h)
+            enc_h = enc_tt.shape[2]
+            enc_tt = conv_unpad_height(enc_tt, min(logical_h, enc_h))
+            ttnn.synchronize_device(self.mesh_device)
+            enc = ttnn.to_torch(enc_tt)
+            enc = enc.permute(0, 4, 1, 2, 3)
+            return enc
+        finally:
+            _safe_deallocate_tensor(video_BTHWC, "encode_chunk video_BTHWC")
+            _safe_deallocate_tensor(out_tt, "encode_chunk encoder out")
+            _safe_deallocate_tensor(enc_tt, "encode_chunk enc")
+            gc.collect()
 
 
 def load_vae_decoder(
@@ -442,6 +490,32 @@ class WanVAEDecoderWrapper:
             vae_model, mesh_device, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
 
+    def cleanup_all(self) -> None:
+        """Synchronize device and encourage GC (does not unload weights)."""
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception as e:
+            logger.warning("WanVAEDecoderWrapper.cleanup_all: synchronize_device failed: {}", e)
+        gc.collect()
+
+    def deallocate_weights(self) -> None:
+        """Unload TTNN decoder parameters from device (call before closing the mesh)."""
+        try:
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception as e:
+            logger.warning("WanVAEDecoderWrapper.deallocate_weights: synchronize_device failed: {}", e)
+        try:
+            self.decoder.deallocate_weights()
+        except Exception as e:
+            logger.warning("WanVAEDecoderWrapper.deallocate_weights: decoder failed: {}", e)
+        gc.collect()
+
+    def __enter__(self) -> WanVAEDecoderWrapper:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_all()
+
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """Decode latents (B, C, T, H, W) to video (B, C, T, H, W). Latents are normalized with mean/std before calling."""
         latents = latents.to(self.vae.dtype)
@@ -454,19 +528,25 @@ class WanVAEDecoderWrapper:
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
         )
-        tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
-        ttnn.synchronize_device(self.mesh_device)
-        video_torch = ttnn.to_torch(tt_video_BCTHW)
-        video_torch = video_torch[:, :, :, :new_logical_h, :]
-        ps = getattr(self.vae.config, "patch_size", None)
-        if ps and ps > 1:
-            B, Cp, T_out, H_out, W_out = video_torch.shape
-            channels = Cp // (ps * ps)
-            video_torch = video_torch.view(B, channels, ps, ps, T_out, H_out, W_out)
-            video_torch = video_torch.permute(0, 1, 4, 5, 3, 6, 2).contiguous()
-            video_torch = video_torch.view(B, channels, T_out, H_out * ps, W_out * ps)
-        video_torch = video_torch.clamp(-1.0, 1.0)
-        return video_torch
+        tt_video_BCTHW = None
+        try:
+            tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
+            ttnn.synchronize_device(self.mesh_device)
+            video_torch = ttnn.to_torch(tt_video_BCTHW)
+            video_torch = video_torch[:, :, :, :new_logical_h, :]
+            ps = getattr(self.vae.config, "patch_size", None)
+            if ps and ps > 1:
+                B, Cp, T_out, H_out, W_out = video_torch.shape
+                channels = Cp // (ps * ps)
+                video_torch = video_torch.view(B, channels, ps, ps, T_out, H_out, W_out)
+                video_torch = video_torch.permute(0, 1, 4, 5, 3, 6, 2).contiguous()
+                video_torch = video_torch.view(B, channels, T_out, H_out * ps, W_out * ps)
+            video_torch = video_torch.clamp(-1.0, 1.0)
+            return video_torch
+        finally:
+            _safe_deallocate_tensor(tt_latents_BTHWC, "decode latents")
+            _safe_deallocate_tensor(tt_video_BCTHW, "decode video")
+            gc.collect()
 
 
 __all__ = [
@@ -475,7 +555,6 @@ __all__ = [
     "load_text_encoder",
     "load_vae_encoder",
     "load_vae_decoder",
-    "_local_path",
     "patchify",
     "WanVAEStreamingWrapper",
     "WanVAEDecoderWrapper",

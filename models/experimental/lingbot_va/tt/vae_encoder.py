@@ -2,7 +2,7 @@ import os
 import ttnn
 import torch
 from models.common.utility_functions import is_blackhole
-from models.tt_dit.layers.module import Module
+from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.models.vae.vae_wan2_1 import (
     WanCausalConv3d,
     WanAttentionBlock,
@@ -11,7 +11,6 @@ from models.tt_dit.models.vae.vae_wan2_1 import (
 )
 from models.experimental.lingbot_va.tt.residual_block import WanResidualBlock
 from models.experimental.lingbot_va.tt.residual_down_block import WanResidualDownBlock
-from models.tt_dit.layers.module import ModuleList
 from models.tt_dit.layers.normalization import RMSNorm
 from models.tt_dit.utils.conv3d import count_convs
 
@@ -77,7 +76,6 @@ class WanVAEEncoder(Module):
     ) -> None:
         super().__init__()
 
-        # assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
         self.dim_mult = dim_mult
