@@ -53,7 +53,8 @@ def _parse_args(default_run_name: str = "grpo_training"):
 
 
 def _archive_configs(output_dir: str, repo_root: str):
-    shutil.copy2(__file__, output_dir)
+    grpo_src = os.path.join(repo_root, "tt-train/sources/examples/grpo")
+    shutil.copytree(grpo_src, os.path.join(output_dir, "grpo_source"), dirs_exist_ok=True)
     for cfg_dir in ["tt-train/configs/model_configs", "tt-train/configs/training_configs"]:
         src = os.path.join(repo_root, cfg_dir)
         dst = os.path.join(output_dir, os.path.basename(cfg_dir))
