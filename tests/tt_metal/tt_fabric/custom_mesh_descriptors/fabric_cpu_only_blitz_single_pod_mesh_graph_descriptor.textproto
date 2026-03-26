@@ -1,12 +1,9 @@
-# Duplicate of models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
-# for fabric-cpu-only-tests-impl.yaml — edit here without changing the demo copy.
-
 # --- Meshes ---------------------------------------------------------------
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2

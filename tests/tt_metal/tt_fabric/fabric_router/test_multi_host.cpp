@@ -473,8 +473,10 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
 }
 
 TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
-        log_info(tt::LogTest, "This test is only for GALAXY");
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+            tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is for Blackhole Galaxy (e.g. SP4 GLX mock) or UBB Galaxy");
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -482,11 +484,11 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
-    const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
+    const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
     auto control_plane = make_control_plane(
-        quad_galaxy_mesh_graph_desc_path.string(),
+        mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
@@ -549,8 +551,10 @@ TEST(MultiHost, TestBHGalaxyTorusXYControlPlaneQueries) {
 }
 
 TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
-        log_info(tt::LogTest, "This test is only for GALAXY");
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+            tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is for Blackhole Galaxy (e.g. SP4 GLX mock) or UBB Galaxy");
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -602,8 +606,10 @@ TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
 }
 
 TEST(MultiHost, Test32x4QuadGalaxyFabric1DSanity) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
-        log_info(tt::LogTest, "This test is only for GALAXY");
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+            tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is for Blackhole Galaxy (e.g. SP4 GLX mock) or UBB Galaxy");
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -1230,23 +1236,23 @@ TEST(MultiHost, TestBHBlitzPipelineFabric1DSanity) {
     }
 }
 
-TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyControlPlaneInit) {
-    const std::filesystem::path triple_pod_16x8_quad_bh_galaxy_mesh_graph_desc_path =
+TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyControlPlaneInit) {
+    const std::filesystem::path triple_pod_32x4_quad_bh_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/triple_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
 
     auto control_plane = make_control_plane(
-        triple_pod_16x8_quad_bh_galaxy_mesh_graph_desc_path.string(),
+        triple_pod_32x4_quad_bh_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     expect_galaxy_corner_folding_check(*control_plane);
 
-    check_asic_mapping_against_golden("TestTriplePod16x8QuadBHGalaxyControlPlaneInit");
+    check_asic_mapping_against_golden("TestTriplePod32x4QuadBHGalaxyControlPlaneInit");
 }
 
-TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyFabric2DSanity) {
+TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -1267,7 +1273,7 @@ TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyFabric2DSanity) {
     }
 }
 
-TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyFabric1DSanity) {
+TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric1DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
