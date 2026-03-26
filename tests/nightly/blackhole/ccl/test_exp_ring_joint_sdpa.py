@@ -1,0 +1,467 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Exp Ring Joint Attention SDPA Tests for Blackhole
+
+Tests the experimental ring joint attention op accuracy and determinism using
+shapes tuned to the op's core constraint: ceil(N_local / q_chunk_size) == sdpa_cols,
+where sdpa_cols = full_grid.x - 1 (last column reserved for CCL MUX).
+
+BH hardware constants are hardcoded to handle firmware differences across versions.
+Perf tests are included but skipped on CI.
+"""
+
+import os
+import torch
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+import ttnn
+from ttnn.operations.ccl import Topology
+from loguru import logger
+import pytest
+
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+
+
+# ============================================================================
+# HARDWARE CONFIGURATION CONSTANTS
+# ============================================================================
+
+# Grid dimensions (hardcoded to handle firmware differences across versions)
+GALAXY_GRID_COLS = 12
+GALAXY_GRID_ROWS = 10
+NON_GALAXY_GRID_COLS = 11
+NON_GALAXY_GRID_ROWS = 10
+
+# SDPA core columns: last column reserved for CCL MUX
+GALAXY_SDPA_COLS = GALAXY_GRID_COLS - 1  # 11
+NON_GALAXY_SDPA_COLS = NON_GALAXY_GRID_COLS - 1  # 10
+
+# Galaxy mesh configuration
+GALAXY_DEVICE_COUNT = 32
+GALAXY_TP_SIZE = 4
+GALAXY_SP_SIZE = 8
+
+# Shape constraint: N_local = sdpa_cols * Q_CHUNK_SIZE
+# This ensures ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols (one Q chunk per SDPA core column).
+Q_CHUNK_SIZE = 224
+K_CHUNK_SIZE = 512
+
+# Accuracy thresholds (matching the unit test)
+DEFAULT_PCC_THRESHOLD = 0.9993
+DEFAULT_MAX_MSE = 8e-5
+
+BATCH_SIZE = 1
+HEAD_DIM = 128
+HEADS_PER_DEVICE = 10  # After TP split
+
+
+# ============================================================================
+# HARDWARE DETECTION
+# ============================================================================
+
+
+def detect_devices_without_opening():
+    """Count available TT devices without opening them."""
+    import glob
+
+    return len(glob.glob("/dev/tenstorrent/*"))
+
+
+def calculate_mesh_config(num_devices):
+    """
+    Calculate mesh configuration based on available devices.
+
+    Returns:
+        sp_size: Sequence parallel size (devices per ring)
+        tp_size: Tensor parallel size (number of rings)
+        arch_type: Architecture type string
+    """
+    if num_devices == GALAXY_DEVICE_COUNT:
+        sp_size = GALAXY_SP_SIZE
+        tp_size = GALAXY_TP_SIZE
+        arch_type = "galaxy_4x8"
+    else:
+        sp_size = num_devices
+        tp_size = 1
+        arch_type = f"single_ring_{num_devices}x1"
+    return sp_size, tp_size, arch_type
+
+
+# ============================================================================
+# TEST CONFIGURATION GENERATION
+# ============================================================================
+
+
+def generate_test_configs():
+    """
+    Generate (b, nh, total_seq, d, q_chunk, k_chunk) tuples tuned for available hardware.
+
+    Shapes satisfy: ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols
+    - Non-galaxy: N_local = 10 * 224 = 2240, total_seq = 2240 * sp_size
+    - Galaxy:     N_local = 11 * 224 = 2464 ... but practical shape uses N_local = 2368
+                  (11 Q chunks via ceiling division, matching 11 sdpa_cols on galaxy)
+
+    NOTE: Uses detect_devices_without_opening() to avoid holding device locks
+    during pytest collection, which would block subprocess profiling.
+    """
+    num_devices = detect_devices_without_opening()
+    if num_devices < 2:
+        return [], []
+
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    is_galaxy = arch_type.startswith("galaxy")
+
+    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS
+    # N_local designed so ceil(N_local / Q_CHUNK_SIZE) == sdpa_cols
+    N_local = sdpa_cols * Q_CHUNK_SIZE  # exact: 11*224=2464 galaxy, 10*224=2240 non-galaxy
+    total_seq = N_local * sp_size  # already aligned to 32*sp_size
+    total_heads = HEADS_PER_DEVICE * tp_size
+
+    config = (BATCH_SIZE, total_heads, total_seq, HEAD_DIM, Q_CHUNK_SIZE, K_CHUNK_SIZE)
+    config_id = f"{arch_type}-seq{total_seq}-h{total_heads}-q{Q_CHUNK_SIZE}-k{K_CHUNK_SIZE}"
+    return [config], [config_id]
+
+
+# ============================================================================
+# CORE EXECUTION FUNCTION
+# ============================================================================
+
+
+def run_exp_ring_joint_sdpa_nightly(
+    b,
+    nh,
+    total_seq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    pcc_threshold=DEFAULT_PCC_THRESHOLD,
+    max_mse=DEFAULT_MAX_MSE,
+    do_check=True,
+    num_iterations=1,
+    num_links=2,
+    num_workers_per_link=5,
+    num_buffers_per_channel=32,
+):
+    """
+    Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
+
+    `total_seq` must already satisfy the shape constraint:
+        ceil((total_seq / sp_size) / q_chunk_size) == sdpa_cols
+
+    When `num_iterations > 1`, checks that all outputs are bitwise equal (determinism).
+    When `num_iterations == 1`, checks accuracy against PyTorch SDPA reference.
+    """
+    num_devices = detect_devices_without_opening()
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+
+    if sp_size < 2:
+        pytest.skip(f"Exp ring joint attention requires ≥2 devices in ring, got sp_size={sp_size}")
+
+    is_galaxy = arch_type.startswith("galaxy")
+
+    use_ring = sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+    sp_axis = 1  # column axis for sequence parallel (ring axis)
+    tp_axis = 0  # row axis for tensor parallel
+
+    mesh_shape = ttnn.MeshShape(tp_size, sp_size)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+    try:
+        if tp_size > 1 and nh % tp_size != 0:
+            pytest.skip(f"num_heads ({nh}) must be divisible by TP size ({tp_size})")
+
+        # Hardcoded grid sizes to handle firmware differences
+        if is_galaxy:
+            sdpa_compute_grid = (GALAXY_SDPA_COLS, GALAXY_GRID_ROWS)
+        else:
+            sdpa_compute_grid = (NON_GALAXY_SDPA_COLS, NON_GALAXY_GRID_ROWS)
+
+        full_compute_grid = mesh_device.compute_with_storage_grid_size()
+
+        # Sub-device covering all cores (needed for CCL)
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+        # Input tensors — bfloat16-rounded so reference matches hardware precision
+        torch.manual_seed(1234)
+        Q = fa_rand(b, nh, total_seq, d).bfloat16().float()
+        K = fa_rand(b, nh, total_seq, d).bfloat16().float()
+        V = fa_rand(b, nh, total_seq, d).bfloat16().float()
+
+        # Sharding: SP axis → sequence dim (2), UP axis → heads dim (1)
+        sdpa_input_shard_dims = [None, None]
+        sdpa_input_shard_dims[sp_axis] = 2
+        if tp_size > 1:
+            sdpa_input_shard_dims[tp_axis] = 1
+
+        tt_Q = ttnn.from_torch(
+            Q,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_K = ttnn.from_torch(
+            K,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_V = ttnn.from_torch(
+            V,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+
+        # Joint inputs: zero-length (WAN 2.2 style — pure self-attention via ring infra)
+        joint_seq_len = 0
+        sdpa_joint_shard_dims = [None, None]
+        if tp_size > 1:
+            sdpa_joint_shard_dims[tp_axis] = 1
+
+        tt_joint_Q = ttnn.from_torch(
+            torch.zeros(b, nh, joint_seq_len, d, dtype=torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+        tt_joint_K = ttnn.from_torch(
+            torch.zeros(b, nh, joint_seq_len, d, dtype=torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+        tt_joint_V = ttnn.from_torch(
+            torch.zeros(b, nh, joint_seq_len, d, dtype=torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+            ),
+        )
+
+        # Persistent K/V output buffers: after all-gather, each device holds the full sequence.
+        # Not sharded on the ring (sp) axis; sharded on heads (tp) axis if tp_size > 1.
+        kv_shard_dims = [None, None]
+        if tp_size > 1:
+            kv_shard_dims[tp_axis] = 1
+
+        persistent_buffer_k = ttnn.from_torch(
+            torch.zeros(b, nh, total_seq, d),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+        persistent_buffer_v = ttnn.from_torch(
+            torch.zeros(b, nh, total_seq, d),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # Mesh composer dims for converting output back to torch
+        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+
+        reference_output = None
+        last_tt_out_torch = None
+
+        for i in range(num_iterations):
+            # Fresh semaphores per iteration (one per link)
+            ccl_semaphores = [
+                ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_links)
+            ]
+
+            ttnn.synchronize_device(mesh_device)
+
+            tt_out, _tt_joint_out, _tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+                tt_Q,
+                tt_K,
+                tt_V,
+                tt_joint_Q,
+                tt_joint_K,
+                tt_joint_V,
+                persistent_output_buffer_k=persistent_buffer_k,
+                persistent_output_buffer_v=persistent_buffer_v,
+                joint_strategy="rear",
+                logical_n=total_seq,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_semaphores,
+                num_links=num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
+
+            tt_out_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )
+            # total_seq is already aligned so no padding to strip, but slice for safety
+            tt_out_torch = tt_out_torch[:, :, :total_seq, :]
+            last_tt_out_torch = tt_out_torch
+
+            if num_iterations > 1:
+                if reference_output is None:
+                    reference_output = tt_out_torch
+                elif not torch.equal(reference_output, tt_out_torch):
+                    diff_mask = reference_output != tt_out_torch
+                    num_diffs = diff_mask.sum().item()
+                    max_diff = (reference_output - tt_out_torch).abs().max().item()
+                    pytest.fail(
+                        f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
+                        f"{num_diffs} differing elements, max_diff={max_diff}"
+                    )
+
+        if num_iterations > 1:
+            logger.info(f"Exp ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
+            return
+
+        if not do_check:
+            return
+
+        # Accuracy check against PyTorch SDPA reference.
+        # joint_seq_len=0 so this is pure non-causal SDPA over the full sequence.
+        gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
+        gt_out = gt[:, :, :total_seq, :]
+
+        out_pass, out_pcc = comp_pcc(gt_out, last_tt_out_torch, pcc_threshold)
+        mse = ((gt_out - last_tt_out_torch) ** 2).mean().item()
+        logger.info(f"PCC: {out_pcc}, MSE: {mse:.2e}")
+
+        assert out_pass, f"PCC {out_pcc} below threshold {pcc_threshold}"
+        assert mse <= max_mse, f"MSE {mse:.2e} exceeds threshold {max_mse:.2e}"
+
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+# ============================================================================
+# TEST PARAMETERS
+# ============================================================================
+
+TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs()
+
+
+# ============================================================================
+# TESTS
+# ============================================================================
+
+
+# === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_exp_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+    """Performance sweep test — run locally, skipped on CI."""
+    run_exp_ring_joint_sdpa_nightly(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
+
+
+# === TEST 2: ACCURACY VERIFICATION ===
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+    """
+    Accuracy verification: 1 iteration, compare against PyTorch SDPA reference.
+
+    Thresholds (matching exp ring joint unit tests):
+    - PCC >= 0.9993
+    - MSE <= 8e-5
+    """
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        max_mse=DEFAULT_MAX_MSE,
+    )
+
+
+# === TEST 3: DETERMINISM VERIFICATION ===
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_exp_ring_joint_attention_sdpa_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+    """
+    Determinism verification: run 10 times with same inputs, verify all outputs are bitwise equal.
+    """
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        num_iterations=10,
+    )
