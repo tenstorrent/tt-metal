@@ -84,6 +84,8 @@ def test_masked_bincount(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
+    assert sp_axis == 0
+
     logger.info(
         f"Testing masked_bincount: {mesh_device.shape=}, {sp_dim=}, {topk=}, "
         f"{n_routed_experts=}, {num_dispatch_groups=}"
