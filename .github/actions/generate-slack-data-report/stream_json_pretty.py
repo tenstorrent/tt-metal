@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -54,11 +55,12 @@ def main() -> int:
     assistant_chars = 0
     assistant_buffer = ""
     last_assistant_snapshot = ""
+    last_printed_preview = ""
     final_marker_seen = False
     final_marker = "===FINAL_REPORT_MD==="
 
     def flush_assistant(force: bool = False) -> None:
-        nonlocal assistant_buffer
+        nonlocal assistant_buffer, last_printed_preview
         while assistant_buffer:
             split_idx = -1
             for punct in ("\n", ".", "!", "?"):
@@ -81,7 +83,11 @@ def main() -> int:
 
             preview = normalize_for_log(chunk)
             if preview:
+                # Skip exact duplicate preview lines.
+                if preview == last_printed_preview:
+                    continue
                 print(f"[assistant] {preview}", flush=True)
+                last_printed_preview = preview
 
     with raw_path.open("w", encoding="utf-8") as raw_out:
         for line in sys.stdin:
@@ -124,6 +130,18 @@ def main() -> int:
                         # Older snapshot replayed; ignore.
                         delta = ""
                     else:
+                        # Some models emit corrected near-duplicate snapshots
+                        # (for example spacing tweaks). Suppress those.
+                        if last_assistant_snapshot:
+                            similarity = SequenceMatcher(
+                                None,
+                                normalize_for_log(last_assistant_snapshot),
+                                normalize_for_log(text),
+                            ).ratio()
+                            if similarity >= 0.985:
+                                delta = ""
+                                last_assistant_snapshot = text
+                                continue
                         overlap = overlap_suffix_prefix(last_assistant_snapshot, text)
                         delta = text[overlap:]
                     last_assistant_snapshot = text
