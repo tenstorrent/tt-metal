@@ -1105,8 +1105,8 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
 std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
     int device_id, size_t num_devices) const {
-    (void)device_id;    // For now, mesh programs have the same layout on all devices
-    (void)num_devices;  // Not currently used for filtering
+    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
+    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
 
     std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
 
