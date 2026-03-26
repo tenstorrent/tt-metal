@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 
+using tt::tt_metal::Alignment;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
@@ -31,6 +32,18 @@ TEST(TensorToHashTest, HostTensorsWithIdenticalMetadataShareHash) {
     Tensor a = Tensor::from_vector(data, spec);
     Tensor b = Tensor::from_vector(data, spec);
     EXPECT_EQ(a.to_hash(), b.to_hash());
+}
+
+TEST(TensorToHashTest, DifferentAlignmentChangesHash) {
+    // Construct tensors directly (not via from_vector, which rebuilds TensorSpec and drops alignment).
+    const TensorSpec spec_a(
+        ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}, Alignment({32})));
+    const TensorSpec spec_b(
+        ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}, Alignment({64})));
+    const std::vector<float> data(32 * 64, 0.F);  // large enough for either alignment's padded shape
+    Tensor a(tt::tt_metal::HostBuffer(data), spec_a);
+    Tensor b(tt::tt_metal::HostBuffer(data), spec_b);
+    EXPECT_NE(a.to_hash(), b.to_hash());
 }
 
 TEST(TensorToHashTest, WithTensorTopologyChangesHash) {
