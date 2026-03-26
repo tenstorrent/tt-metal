@@ -649,13 +649,13 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
     for (auto & chip_stat : region_->chip_stats) {
         if (chip_stat.chip_id != 0) {
             ChipInfo info;
-            info.chip_id = region_->chip_stats[i].chip_id;
-            info.is_remote = (region_->chip_stats[i].is_remote != 0);
-            info.dram_allocated = region_->chip_stats[i].dram_allocated.load(std::memory_order_relaxed);
-            info.l1_allocated = region_->chip_stats[i].l1_allocated.load(std::memory_order_relaxed);
-            info.l1_small_allocated = region_->chip_stats[i].l1_small_allocated.load(std::memory_order_relaxed);
-            info.trace_allocated = region_->chip_stats[i].trace_allocated.load(std::memory_order_relaxed);
-            info.cb_allocated = region_->chip_stats[i].cb_allocated.load(std::memory_order_relaxed);
+            info.chip_id = chip_stat.chip_id;
+            info.is_remote = (chip_stat.is_remote != 0);
+            info.dram_allocated = chip_stat.dram_allocated.load(std::memory_order_relaxed);
+            info.l1_allocated = chip_stat.l1_allocated.load(std::memory_order_relaxed);
+            info.l1_small_allocated = chip_stat.l1_small_allocated.load(std::memory_order_relaxed);
+            info.trace_allocated = chip_stat.trace_allocated.load(std::memory_order_relaxed);
+            info.cb_allocated = chip_stat.cb_allocated.load(std::memory_order_relaxed);
             result.push_back(info);
         }
     }
